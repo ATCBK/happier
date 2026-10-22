@@ -16198,6 +16198,9 @@ export async function startDaemonSessionControlRuntime(
           currentServerHttpBaseUrl: params.serverBaseUrl,
           acquirePluginRuntimeRegistryLease: acquireDaemonPluginRuntimeRegistryLease,
           resolvePluginExecutionOriginContext: () => params.resolveCurrentMachineExecutionOriginContext?.() ?? null,
+          resolveAccountPluginExecutionSelection: async (pluginId, registry, signal) =>
+            await params.getApiMachineForSessions()?.resolveAccountPluginExecutionSelection(pluginId, registry, signal)
+              ?? { kind: 'unavailable', code: 'plugin_account_execution_unavailable' },
           prepareRequesterAccountContext: async ({ authorization, purpose, signal, verifyWorkspaceSyncPrepareCurrent, verifyServiceMoveChildCurrent }) => {
             const privatePurpose = purpose ?? { kind: 'external_action' as const };
             let executeManagedFiniteWake: ((request: ManagedMachinePolicyRequest) => Promise<ActionExecuteResult>) | undefined;

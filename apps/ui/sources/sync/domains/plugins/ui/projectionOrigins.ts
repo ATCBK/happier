@@ -5,6 +5,7 @@ import {
     type PluginMachineExecutionOriginV1,
 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { PluginUiResourceBindingCapabilityV1Schema, type PluginUiResourceBindingCapabilityV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginUiProjectionModel } from './projection';
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
@@ -35,6 +36,8 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
     sourceCustody: PluginSourceCustodyV1 | null;
     executionTargetDefault: boolean;
     executionTargetAutoPick?: boolean;
+    /** This producer's surface capability, independent of Account renderer custody. */
+    resourceCapability?: PluginUiResourceBindingCapabilityV1;
 }>;
 
 export type PluginUiAccountExecutableOrigin = Readonly<{
@@ -162,6 +165,7 @@ function parseContributionSupplies(supplies: readonly unknown[]): PluginUiContri
         if (!origin) return [];
         const facts = asRecord(supply);
         const custody = facts?.sourceCustody == null ? null : PluginSourceCustodyV1Schema.safeParse(facts.sourceCustody);
+        const resourceCapability = PluginUiResourceBindingCapabilityV1Schema.safeParse(facts?.resourceCapability);
         const parsed: PluginUiContributionSupplyV1 = {
             ...origin,
             occurrenceId: readString(facts?.occurrenceId),
@@ -169,6 +173,7 @@ function parseContributionSupplies(supplies: readonly unknown[]): PluginUiContri
             sourceCustody: custody?.success ? custody.data : null,
             executionTargetDefault: facts?.executionTargetDefault === true,
             ...(facts?.executionTargetAutoPick === false ? { executionTargetAutoPick: false } : {}),
+            ...(resourceCapability.success ? { resourceCapability: resourceCapability.data } : {}),
         };
         installProof(parsed, contributionOriginProof, origin);
         installProof(parsed, parsedSupplyProof, parsed);
@@ -292,7 +297,9 @@ function retainCanonicalSupply(previous: PluginUiContributionSupplyV1, next: Plu
         && previous.serverIdentityId === next.serverIdentityId && previous.unavailableReasonCode === next.unavailableReasonCode
         && previous.generation === next.generation && previous.interactionEnabled === next.interactionEnabled && previous.phase === next.phase
         && previous.occurrenceId === next.occurrenceId && previous.pluginVersion === next.pluginVersion
-        && previous.executionTargetDefault === next.executionTargetDefault && previous.executionTargetAutoPick === next.executionTargetAutoPick) return previous;
+        && previous.executionTargetDefault === next.executionTargetDefault && previous.executionTargetAutoPick === next.executionTargetAutoPick
+        && previous.resourceCapability?.readable === next.resourceCapability?.readable
+        && previous.resourceCapability?.dynamic === next.resourceCapability?.dynamic) return previous;
     if (executionOrigin === next.executionOrigin && sourceCustody === next.sourceCustody) return next;
     const retained = { ...next, executionOrigin, sourceCustody };
     const origin = readProof<PluginUiContributionOriginV1>(asRecord(next), contributionOriginProof)!;

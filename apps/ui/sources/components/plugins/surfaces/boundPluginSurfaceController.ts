@@ -215,6 +215,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     projectionGeneration?: number | string | null;
     /** Exact occurrence of the plugin that owns this mounted surface. */
     occurrenceId?: string | null;
+    /** Admitted Machine supplier lease for transport; never Account caller custody. */
+    daemonOccurrenceId?: string | null;
     /** Current Account-rendered surface custody from the Availability projection. */
     accountExecutionOrigin?: PluginUiAccountExecutableOrigin;
     /**
@@ -530,8 +532,8 @@ export function resolveBoundPluginSurfaceContext(
  *
  * Caller provenance is deliberately not part of this transport binding. A local
  * host Action remains locally executable while the daemon is unavailable, but a
- * mounted plugin caller must still carry the exact producer-owned materialization
- * that made the surface current.
+ * mounted plugin caller separately retains the source that made the surface
+ * current. Account custody never substitutes for the supplying Machine's lease.
  */
 function resolveDaemonBinding(facts: BoundPluginSurfaceFacts): Readonly<{
     machineId: string;
@@ -541,7 +543,7 @@ function resolveDaemonBinding(facts: BoundPluginSurfaceFacts): Readonly<{
     const machineId = typeof facts.machineId === 'string' && facts.machineId.trim().length > 0
         ? facts.machineId
         : null;
-    const occurrenceId = facts.occurrenceId?.trim();
+    const occurrenceId = (facts.daemonOccurrenceId ?? facts.occurrenceId)?.trim();
     if (!machineId || !occurrenceId) {
         return null;
     }
@@ -1557,6 +1559,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             // Custody facts, not that allocation, identify the controller.
             stableJsonStringify(facts.targetSourceCustody ?? null),
             facts.occurrenceId,
+            facts.daemonOccurrenceId,
             stableJsonStringify(facts.accountExecutionOrigin ?? null),
             facts.readCurrentUiContext,
             stableJsonStringify(facts.executionOrigin ?? null),

@@ -33,6 +33,7 @@ export type ExternalActionRpcRegistrationOptions = Readonly<{
   externalActionMachineRequestPrivateKey?: string | Uint8Array;
   acquirePluginRuntimeRegistryLease?: Parameters<typeof executeExternalAction>[0]['acquirePluginRuntimeRegistryLease'];
   resolvePluginExecutionOriginContext?: Parameters<typeof executeExternalAction>[0]['resolvePluginExecutionOriginContext'];
+  resolveAccountPluginExecutionSelection?: Parameters<typeof executeExternalAction>[0]['resolveAccountPluginExecutionSelection'];
 }>;
 
 /** Shared Action-owner dependencies; transport adapters add only identity facts. */
@@ -47,6 +48,7 @@ export type ExternalActionIngressOwner = Readonly<Pick<
   | 'externalActionMachineRequestPrivateKey'
   | 'acquirePluginRuntimeRegistryLease'
   | 'resolvePluginExecutionOriginContext'
+  | 'resolveAccountPluginExecutionSelection'
 >>;
 
 function forbidden() {
@@ -152,6 +154,7 @@ export function registerExternalActionRpcHandler(
       currentMachineId: options.machineId,
       ...(options.sessionId === undefined ? {} : { currentSessionId: options.sessionId }),
       currentServerId: options.currentServerId,
+      currentAccountId: accountId,
       currentServerHttpBaseUrl: options.currentServerHttpBaseUrl,
       prepareRequesterAccountContext: options.prepareRequesterAccountContext,
       currentInstallationId: installationId,
@@ -168,6 +171,7 @@ export function registerExternalActionRpcHandler(
       executor: options.executor,
       acquirePluginRuntimeRegistryLease: options.acquirePluginRuntimeRegistryLease,
       resolvePluginExecutionOriginContext: options.resolvePluginExecutionOriginContext,
+      resolveAccountPluginExecutionSelection: options.resolveAccountPluginExecutionSelection,
       executionAuthorization: request.executionAuthorization,
       externalActionMachineRequestPrivateKey: options.externalActionMachineRequestPrivateKey,
       transportRequestId: context?.transportRequestId,

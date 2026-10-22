@@ -157,7 +157,7 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine', 'avai
             machineId, pluginId: manifest.id, sourceCustody,
         } };
         const { PluginProjectionV2Schema, RPC_METHODS } = await import('@happier-dev/protocol');
-        const { TriageScanResultV1Schema } = await import('@happier-dev/triage-protocol/v1');
+        const { TriageScanResultV1Schema, TriageListInstancesResultV1Schema } = await import('@happier-dev/triage-protocol/v1');
         const { DaemonPluginUiTargetedContributionsReadResponseSchema,
             DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema,
         } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
@@ -204,10 +204,14 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine', 'avai
                     inputSchema: action.inputSchema, outputSchema: action.resultSchema });
             }
             if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) {
-                expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload)).toMatchObject({
-                    machineId, expectedContributorOccurrenceId: occurrenceId,
-                    qualifiedActionId: `${manifest.id}/triage/scan-github`,
-                });
+                const invocation = DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload);
+                expect(invocation).toMatchObject({ machineId, expectedContributorOccurrenceId: occurrenceId });
+                if (invocation.qualifiedActionId === `${manifest.id}/triage/list-github-instances`) {
+                    expect(invocation.invocation).toMatchObject({ kind: 'mountedPluginSurface',
+                        mountedBinding: { pluginId: manifest.id, occurrenceId } });
+                    return { ok: true, result: TriageListInstancesResultV1Schema.parse({ kind: 'complete', candidates: [], failures: [] }) };
+                }
+                expect(invocation.qualifiedActionId).toBe(`${manifest.id}/triage/scan-github`);
                 return { ok: true, result: scanResult };
             }
             throw new Error(`Unexpected Machine method ${request.method}`);
@@ -343,6 +347,44 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine', 'avai
                         expect.objectContaining({ source: { pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 },
                             health: expect.objectContaining({ kind: 'walkFinished' }) }),
                     ]) } });
+                    // The exact Settings Action shares the real schema/RPC dispatcher
+                    // with the aggregate, while keeping its own mounted GitHub caller.
+                    // This establishes the controller contract, not physical Host or
+                    // Administration-selection readiness.
+                    const { readReusableDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+                    const { readPluginSurfaceMountBinding } = await import('@/components/plugins/surfaces/pluginSurfaceMountBinding');
+                    const cached = readReusableDaemonMergedProjectionCacheEntry({ machineId,
+                        serverId: lifetime.scope.serverId, accountLifetime: lifetime });
+                    expect(cached?.kind).toBe('ready');
+                    if (cached?.kind !== 'ready') throw new Error('Expected the current Machine projection');
+                    const exact = cached.inputs.pluginUiProjection;
+                    const page = Object.values(exact.settingsPagesById).find(row => row.pluginId === GITHUB_PLUGIN_ID
+                        && row.descriptorId === GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.settingsPageId);
+                    if (!page) throw new Error('Expected the authored GitHub Settings page');
+                    const mounted = readPluginSurfaceMountBinding({ descriptor: page, renderer: page.renderer });
+                    if (mounted?.kind !== 'destination') throw new Error('Expected the Settings destination binding');
+                    const action = exact.actionsById[`${GITHUB_PLUGIN_ID}/triage/list-github-instances`];
+                    if (!action?.occurrenceId) throw new Error('Expected exact GitHub Action custody');
+                    let current = true;
+                    const settingsController = createBoundPluginSurfaceController({ facts: {
+                        pluginId: page.pluginId, contributionId: mounted.destinationBinding.destination.localId,
+                        surfaceId: page.id, placement: mounted.destinationBinding.surfaceContextPlacement,
+                        platform: 'web', channel: 'internal', machineId, serverId: lifetime.scope.serverId,
+                        accountLifetime: lifetime, occurrenceId: action.occurrenceId,
+                        executionOrigin: action.executionOrigin, pluginUiProjection: exact,
+                        resolveContributedAction: createPluginUiProjectedActionResolver(exact.actionsById),
+                        interactionEnabled: true, daemonInteractionEnabled: true,
+                    }, binding: { executeHostAction: scopedHomeActionExecutor(lifetime.scope),
+                        isExecutionOriginCurrent: () => current } });
+                    try {
+                        expect(await settingsController.dispatchAction('triage/list-github-instances', { v: 1 }))
+                            .toEqual({ kind: 'complete', candidates: [], failures: [] });
+                        const before = packaged.machineRpc.mock.calls.length;
+                        current = false;
+                        expect(await settingsController.dispatchAction('triage/list-github-instances', { v: 1 }))
+                            .toMatchObject({ code: 'unavailable', diagnostics: ['plugin_surface_contributed_action_unavailable'] });
+                        expect(packaged.machineRpc.mock.calls).toHaveLength(before);
+                    } finally { settingsController.dispose(); }
                 }
             } else {
                 const created = TriageTaskWriteResultV1Schema.parse(await dispatch('tasks/create-v1', {

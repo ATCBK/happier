@@ -8,6 +8,12 @@ import { normalizePluginSourceCustody, pluginSourceCustodyEqual } from '@/plugin
 import { listComposerSurfaceDeclarations } from '@/plugins/projection/registry/composer';
 import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
 
+export type MountedAccountPluginExecutionSelectionResolver = (
+    pluginId: string,
+    registry: ResolvedExecutablePluginRuntimeRegistry,
+    signal?: AbortSignal,
+) => Promise<PluginAccountExecutionSelectionV1>;
+
 /**
  * Convert a mounted UI or client Action binding into invocation provenance only
  * after matching its admitted Machine runtime lease or current Account Action
@@ -63,7 +69,7 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
     const accountSourceCustody = binding.sourceCustody;
     if (accountSourceCustody?.kind === 'account_release' || binding.declarationDigest !== undefined) {
         const resolveSelection = input.resolveAccountExecutionSelection;
-        if (!resolveSelection || !accountSourceCustody || binding.materializationRef !== undefined || invocation?.kind !== 'clientPluginAction') {
+        if (!resolveSelection || !accountSourceCustody || binding.materializationRef !== undefined) {
             return Object.freeze({ status: 'unavailable' as const });
         }
         const matchesAccountDeclaration = (selection: PluginAccountExecutionSelectionV1): boolean => {
@@ -71,8 +77,13 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
                 || (binding.pluginVersion !== undefined && binding.pluginVersion !== selection.manifest.version)
                 || (binding.declarationDigest !== undefined
                     && binding.declarationDigest !== computePluginAccountBundledDeclarationDigestV1(selection.manifest))) return false;
-            const declaration = selection.manifest.contributes.actions?.find(action => action.id === binding.contributionLocalId);
-            if (declaration?.execution.target !== 'account') return false;
+            const contributions = selection.manifest.contributes;
+            const declaredCaller = invocation?.kind === 'clientPluginAction'
+                ? contributions.actions?.some(action => action.id === binding.contributionLocalId && action.execution.target === 'account')
+                : invocation?.kind === 'mountedPluginSurface' && [
+                    ...contributions.ui.views, ...contributions.ui.settingsPages,
+                ].some(surface => surface.id === binding.contributionLocalId);
+            if (!declaredCaller) return false;
             if (accountSourceCustody.kind === 'account_release') {
                 return pluginSourceCustodyEqual(accountSourceCustody, selection.sourceCustody);
             }

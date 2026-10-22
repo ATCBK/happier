@@ -29,7 +29,7 @@ import {
 } from './reader';
 
 const readerStore = createPluginAccountAvailabilityReaderStore({
-    hostBundledUi: readHostBundledPluginUiDeclarations(BUNDLED_PLUGIN_UI_APP_ARTIFACTS),
+    loadHostBundledUi: () => readHostBundledPluginUiDeclarations(BUNDLED_PLUGIN_UI_APP_ARTIFACTS),
 });
 
 function subscribeToReactProjection(listener: () => void): () => void {

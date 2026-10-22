@@ -32,6 +32,7 @@ import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelC
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
 import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
+import { readSelectedPluginUiResourceCapability } from './resourceCapability';
 import { normalizeStrictJsonValue, projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     publishPluginUiContributionSupplies,
@@ -1720,6 +1721,7 @@ function derivePluginUiProjectionUnion(
     // source facts are retained separately, including offline supplying copies.
     const normalizedSupplies = new Map<PluginUiContributionOriginV1, Readonly<{
         occurrenceId: string | null;
+        resourceCapability: ReturnType<typeof readSelectedPluginUiResourceCapability>;
         supply: PluginUiContributionSupplyV1;
     }>>();
     const publishFirstAdmitted = <T>(member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>, map: Record<string, T>, key: string, value: T, origin: PluginUiContributionOriginV1,
@@ -1738,16 +1740,19 @@ function derivePluginUiProjectionUnion(
         const normalized = normalizedSupplies.get(origin);
         const prepared = supplyFacts?.get(member);
         const cached = prepared?.facts.get(sourceEntry);
-        let supply = cached ?? (normalized?.occurrenceId === occurrenceId ? normalized.supply : undefined);
+        const resourceCapability = cached?.resourceCapability ?? readSelectedPluginUiResourceCapability(sourceEntry);
+        let supply = cached ?? (normalized?.occurrenceId === occurrenceId
+            && normalized.resourceCapability.readable === resourceCapability.readable
+            && normalized.resourceCapability.dynamic === resourceCapability.dynamic ? normalized.supply : undefined);
         if (!supply) {
             const rawSupply: PluginUiContributionSupplyV1 = { ...origin, occurrenceId,
                 pluginVersion: installed?.version ?? null, sourceCustody,
                 executionTargetDefault: installed?.executionTarget?.default === 'installation',
-                executionTargetAutoPick: installed?.executionTarget?.autoPick };
+                executionTargetAutoPick: installed?.executionTarget?.autoPick, resourceCapability };
             const parsedSupply = readPluginUiContributionSupplies({ hostSupplies: [rawSupply] })[0];
             if (!parsedSupply) return;
             supply = retainPluginUiProjectionValue(prepared?.previousFacts?.get(sourceEntry), parsedSupply) as PluginUiContributionSupplyV1;
-            normalizedSupplies.set(origin, { occurrenceId, supply });
+            normalizedSupplies.set(origin, { occurrenceId, resourceCapability, supply });
         }
         if (!cached) prepared?.facts.set(sourceEntry, supply);
         const supplies = publishPluginUiContributionSupplies([...readPluginUiContributionSupplies(previous), supply]);

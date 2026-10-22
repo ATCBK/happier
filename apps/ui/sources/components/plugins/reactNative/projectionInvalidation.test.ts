@@ -13,6 +13,7 @@ import {
 import { getPluginUiClientExecutableComposition } from './clientExecutableContributions';
 import { createPluginUiCommonJsLoaderBackend } from './commonJsLoaderBackend';
 import { PluginContributesV2Schema } from '@happier-dev/protocol';
+import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import { settleAppShellPluginRuntimeUpdate } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
@@ -106,6 +107,35 @@ function createRetirableAccountLifetime(): Readonly<{
 }
 
 describe('plugin UI React Native runtime projection invalidation owner', () => {
+    it('validates a retained source graph only when its bundles change, while rechecking currentness', () => {
+        const cache = createPluginReactNativeBundleCache();
+        const modules = createPluginReactNativeModuleRegistry();
+        const owner = createPluginUiReactNativeRuntimeProjectionReconciler({ cache, surfaceModules: modules });
+        const source = owner.createSource();
+        const neighbour = owner.createSource();
+        let current = true;
+        const entry = bundle(identity(12));
+        const projection = model(12, [entry]);
+        const parse = vi.spyOn(PluginUiArtifactsManifestEntryV2Schema, 'safeParse');
+        try {
+            source.update({ projection, accountLifetime: null, isCurrent: () => current });
+            expect(parse).toHaveBeenCalledTimes(1);
+            for (let index = 0; index < 20; index += 1) {
+                neighbour.update({ projection: model(index), accountLifetime: null, isCurrent: () => true });
+                source.update({ projection, accountLifetime: null, isCurrent: () => current });
+            }
+            expect(parse).toHaveBeenCalledTimes(1);
+            const nextIdentity = identity(13);
+            cache.putInstalledArtifact({ identity: nextIdentity, format: 'plainJs', bytes: new Uint8Array([1]) });
+            source.update({ projection: model(13, [bundle(nextIdentity)]), accountLifetime: null, isCurrent: () => current });
+            expect(parse).toHaveBeenCalledTimes(2);
+            expect(cache.readInstalledArtifact(nextIdentity)).not.toBeNull();
+            current = false;
+            neighbour.update({ projection: model(21), accountLifetime: null, isCurrent: () => true });
+            expect(cache.readInstalledArtifact(nextIdentity)).toBeNull();
+        } finally { parse.mockRestore(); source.dispose(); neighbour.dispose(); }
+    });
+
     it('retains an exact Account registration while settling the next complete set and replaces changed Account custody', async () => {
         const composition = getPluginUiClientExecutableComposition();
         const cache = createPluginReactNativeBundleCache();

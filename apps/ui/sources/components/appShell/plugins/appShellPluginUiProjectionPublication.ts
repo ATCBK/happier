@@ -1,5 +1,6 @@
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { shallow } from 'zustand/shallow';
 
 import type { PluginAccountAvailabilityReader, PluginAccountInstalledPluginsAdmission } from '@/sync/domains/plugins/availability/reader';
 import { arePluginUiMaterializationsEquivalent, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -359,7 +360,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
             if (!sources || sources.accountLifetime !== accountLifetime || !isCurrent(accountLifetime)
                 || currentness.serverId !== sources.activeServerId) return;
             const current = currentnessReports.get(machineId);
-            if (current?.accountLifetime === accountLifetime && current.currentness === currentness) return;
+            if (current?.accountLifetime === accountLifetime && shallow(current.currentness, currentness)) return;
             currentnessReports = new Map(currentnessReports).set(machineId, Object.freeze({ accountLifetime, currentness }));
             publishDerived();
         },

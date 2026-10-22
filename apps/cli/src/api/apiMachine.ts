@@ -15,6 +15,7 @@ import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/a
 import { MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
 import { publishMachineMetadataOnce, readOpenedMachineMetadataSnapshot } from './machine/machineMetadataPublication';
 import type { MachineMetadataFieldReadV1, MachineMetadataFieldPortV1 } from '@happier-dev/protocol/machines/machineMetadataFieldV1';
+import type { MountedAccountPluginExecutionSelectionResolver } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import { registerDaemonMachineResourcesPolicyRpcHandlers, type DaemonMachineResourcesPolicyRoutes } from '@/rpc/handlers/daemonMachineResourcesPolicy';
 import { registerDaemonMachineGuardRpcHandlers, type DaemonMachineGuardRoutes } from '@/rpc/handlers/daemonMachineGuard';
 import { projectMachineAgentInventoryFromCliSnapshot } from '@/capabilities/snapshots/machineAgentInventory';
@@ -733,6 +734,15 @@ export class ApiMachineClient {
         } catch { return null; }
     }
 
+    /** Both mounted Action ingresses read the same current installed Account custody. */
+    readonly resolveAccountPluginExecutionSelection: MountedAccountPluginExecutionSelectionResolver = async (pluginId, registry, signal) => {
+        const unavailable = { kind: 'unavailable' as const, code: 'plugin_account_execution_unavailable' as const };
+        const runtime = await this.resolveInstalledAccountRuntime(signal ?? new AbortController().signal);
+        if (!runtime || !await runtime.isCurrent()) return unavailable;
+        const { readCurrentMountedAccountPluginExecutionSelection } = await import('@/plugins/runtime/accountPluginActivationSource');
+        return await readCurrentMountedAccountPluginExecutionSelection({ pluginId, registry, runtime, ...(signal ? { signal } : {}) });
+    };
+
     /** Trusted host custody delegates to the actual registered PTY owners. */
     async cleanupRequesterMachineTerminals(input: Parameters<MachineRpcLifecycleRegistration['cleanupRequesterMachineTerminals']>[0]) {
         let incomplete = false;
@@ -1371,27 +1381,7 @@ export class ApiMachineClient {
                 resolveCurrentTarget: async ({ signal }) => await resolveCurrentMachineExecutionOriginContext(signal),
             },
             daemonContributionRegistryProjection: {
-                resolveAccountPluginExecutionSelection: async (pluginId, registry, signal) => {
-                    const unavailable = { kind: 'unavailable' as const, code: 'plugin_account_execution_unavailable' as const };
-                    const runtime = await this.resolveInstalledAccountRuntime(signal ?? new AbortController().signal);
-                    if (!runtime || !await runtime.isCurrent()) return unavailable;
-                    const { computePluginAccountBundledDeclarationDigestV1, computePluginAccountBundledCustodyIdV1 } =
-                        await import('@happier-dev/protocol/plugins/availability');
-                    const { readCurrentAccountPluginExecutionSelection } = await import('@/plugins/runtime/accountPluginActivationSource');
-                    const declaration = registry.contributes.pluginDeclarations?.find(plugin =>
-                        plugin.pluginId === pluginId && plugin.sourceSpec.kind === 'bundled');
-                    const bundled = declaration ? {
-                        manifest: declaration.manifest,
-                        sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const,
-                            packageName: declaration.sourceSpec.locator,
-                            declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest) } },
-                        custodyId: computePluginAccountBundledCustodyIdV1({ packageName: declaration.sourceSpec.locator,
-                            manifest: declaration.manifest, artifacts: declaration.generatedUiArtifactsManifest?.entries ?? [] }),
-                    } : undefined;
-                    const selection = await readCurrentAccountPluginExecutionSelection({ pluginId, credentials: runtime.credentials,
-                        serverUrl: runtime.serverHttpBaseUrl, ...(bundled ? { bundled } : {}), ...(signal ? { signal } : {}) });
-                    return await runtime.isCurrent() ? selection : unavailable;
-                },
+                resolveAccountPluginExecutionSelection: this.resolveAccountPluginExecutionSelection,
                 requestCurrentIntent: async request => {
                     const reportUnavailable: NonNullable<typeof request.reportUnavailable> = reason => {
                         logger.debug('[RPC] Target Action current intent unavailable', {

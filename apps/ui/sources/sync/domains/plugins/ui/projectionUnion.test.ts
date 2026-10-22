@@ -20,7 +20,7 @@ import { getInstalledPluginUiClientExecutableComposition } from '@/components/pl
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 import { createPluginUiProjectedActionResolver } from './projection';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
-import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import { createPluginAccountAvailabilityReader, readPluginUiAccountActionDeclaration } from '@/sync/domains/plugins/availability/reader';
 import { resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolvePluginSurfaceDestinationOpen } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 
@@ -110,6 +110,15 @@ it('retains current Account Actions through installed composition without replac
     }, [clientBundleId]: { ...accountBundle, id: clientBundleId, contributionId: 'machine-client', hostAccountOrigin: undefined,
         occurrenceId: 'machine:current', [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: machineOrigin } } };
     const executableProjection = mergeInstalledPluginUiProjections([installed], runtimeWithExecutableGraph)!;
+    const decodeDeclaration = vi.spyOn(PluginPortableReleaseManifestV1Schema, 'safeParse');
+    try {
+        const composedAction = executableProjection.actionsById['happier.fixture/read']!;
+        const selected = reader.readCurrentAccountExecution(manifest.id);
+        if (selected.kind !== 'available') throw new Error('Missing admitted bundled declaration');
+        const declarations = Array.from({ length: 100 }, () => readPluginUiAccountActionDeclaration(composedAction));
+        expect(decodeDeclaration).not.toHaveBeenCalled();
+        expect(declarations.every(declaration => declaration === selected.manifest.contributes.actions[0])).toBe(true);
+    } finally { decodeDeclaration.mockRestore(); }
     const executables = resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: executableProjection }, platform: 'web' });
     expect(executables).toHaveLength(2);
     expect(executables).toEqual(expect.arrayContaining([

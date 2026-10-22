@@ -37,7 +37,9 @@ export type PluginUiReactNativeRuntimeProjectionReconciler = Readonly<{
     createSource: () => PluginUiReactNativeRuntimeProjectionSource;
 }>;
 
-type SourceSnapshot = PluginUiReactNativeRuntimeProjectionSourceInput;
+type SourceSnapshot = PluginUiReactNativeRuntimeProjectionSourceInput & Readonly<{
+    identities: readonly PluginReactNativeBundleCacheIdentity[];
+}>;
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -49,7 +51,7 @@ function readNonEmptyString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
-function isCurrentSnapshot(snapshot: SourceSnapshot): boolean {
+function isCurrentSnapshot(snapshot: PluginUiReactNativeRuntimeProjectionSourceInput): boolean {
     try {
         return snapshot.projection !== null
             && snapshot.isCurrent()
@@ -70,13 +72,12 @@ export function createPluginUiReactNativeRuntimeProjectionReconciler(
 ): PluginUiReactNativeRuntimeProjectionReconciler {
     const sources = new Map<symbol, SourceSnapshot | null>();
 
-    const reconcile = (): void => {
-        const identitiesByCacheKey = new Map<string, PluginReactNativeBundleCacheIdentity>();
-
-        for (const snapshot of sources.values()) {
-            if (!snapshot || !isCurrentSnapshot(snapshot) || !snapshot.projection) continue;
-
-            for (const bundle of Object.values(snapshot.projection.reactNativeBundlesById)) {
+    // Normalized bundle maps are immutable. Derive each source's identities on
+    // publication; a neighboring source update does not revalidate its graphs.
+    const readIdentities = (projection: PluginUiProjectionModel | null): readonly PluginReactNativeBundleCacheIdentity[] => {
+        const identities: PluginReactNativeBundleCacheIdentity[] = [];
+        if (projection) {
+            for (const bundle of Object.values(projection.reactNativeBundlesById)) {
                 const entry = readRecord(bundle);
                 const runtime = readRecord(entry?.runtime);
                 const decision = readRecord(runtime?.decision);
@@ -111,7 +112,19 @@ export function createPluginUiReactNativeRuntimeProjectionReconciler(
                 ) {
                     continue;
                 }
-                identitiesByCacheKey.set(cacheKey, identity);
+                identities.push(identity);
+            }
+        }
+        return identities;
+    };
+
+    const reconcile = (): void => {
+        const identitiesByCacheKey = new Map<string, PluginReactNativeBundleCacheIdentity>();
+        for (const snapshot of sources.values()) {
+            // Authority can retire without replacing the immutable declaration.
+            if (!snapshot || !isCurrentSnapshot(snapshot)) continue;
+            for (const identity of snapshot.identities) {
+                identitiesByCacheKey.set(derivePluginReactNativeBundleCacheKey(identity), identity);
             }
         }
 
@@ -138,7 +151,10 @@ export function createPluginUiReactNativeRuntimeProjectionReconciler(
                         reconcile();
                     }) ?? null;
                 }
-                sources.set(sourceId, input);
+                const previous = sources.get(sourceId);
+                const identities = previous && previous.projection?.reactNativeBundlesById === input.projection?.reactNativeBundlesById
+                    ? previous.identities : readIdentities(input.projection);
+                sources.set(sourceId, { ...input, identities });
                 reconcile();
             };
 

@@ -45,10 +45,13 @@ export function isPluginSurfaceMachineBound(params: Readonly<{
     if (declaredExecution?.contributionPoints === true
         || params.projection?.installedPackagesById[params.pluginId]?.declaresContributionPoints === true) return true;
     // The same Resource methods also serve Account-owned borrowed host reads.
-    // Only the selected member's declared daemon Resource capability implies a target.
+    // A declared daemon Resource capability implies demand for a target. For an
+    // Account renderer, suppliers carry that declaration; only Administration's
+    // selected supplier can grant the mounted transport its capability.
     // requiredHostMethods is the renderer's compatibility minimum, not an
     // inventory of the selected member's declared daemon Resource reads.
-    if (readSelectedPluginUiResourceCapability(params.surface).readable) return true;
+    if (readSelectedPluginUiResourceCapability(params.surface).readable
+        || readPluginUiContributionSupplies(params.surface).some(supply => supply.resourceCapability?.readable)) return true;
     if (methods.some(method => method === 'readStoredImage' || method === 'watchLiveStream'
         || method === 'statOpenableContent' || method === 'readOpenableContent'
         || method === 'selectActionInput')) return true;

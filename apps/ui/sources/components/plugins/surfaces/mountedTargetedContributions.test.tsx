@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
@@ -189,6 +189,68 @@ describe('useMountedTargetedContributions', () => {
         expect(rendered.getCurrent().pluginUiProjection).toBe(next.inputs.pluginUiProjection);
         expect(rendered.getCurrent().preparedTargetedSurfaceMounts).toBe(prepared);
         expect(targetedReadMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps Account callee custody beside an ordinary mounted Machine source through Action dispatch', async () => {
+        clearDaemonMergedProjectionCacheForTests();
+        const { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection, readPluginAccountAvailability } = await import('@/sync/domains/plugins/availability/projection');
+        onTestFinished(clearPluginAccountAvailabilityProjection);
+        const { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
+        const { readPluginUiAccountExecutableOrigin } = await import('../reactNative/executableModuleHost');
+        const { createPluginUiProjectedActionResolver } = await import('@/sync/domains/plugins/ui/projection');
+        const { dispatchPluginSurfaceAction } = await import('./pluginSurfaceActionDispatch');
+        const lifetime = captureActiveServerAccountScopeLifetime()!;
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'acme.triage',
+            version: '1.0.0', displayName: 'Aggregate', runtime: { apiVersion: 1 }, contributes: { actions: [{
+                id: 'aggregate', title: 'Aggregate', scopes: ['global'], surfaces: ['ui'], placementBindings: [],
+                dangerLevel: 'safe', execution: { target: 'account', account: { artifactId: 'aggregate', exportName: 'activate' } },
+            }] } });
+        replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: { availabilityCursor: 1,
+            materializations: [], snapshots: [], intentReads: [{ pluginId: manifest.id,
+                response: PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ availabilityCursor: 1,
+                    hostingCapability: { enabled: false }, intent: { pluginId: manifest.id, desiredVersion: manifest.version,
+                        enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: 'current' },
+                    release: { ref: { pluginId: manifest.id, version: manifest.version }, normalizedManifest: manifest,
+                        archiveDigestSha256: `sha256:${'a'.repeat(64)}`, collectionContracts: [], uiSlots: [],
+                        packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+                    uiArtifacts: [], packageAssets: [] }) }] } });
+        const accountAction = readPluginAccountAvailability(lifetime.scope).readAccountUiProjection()?.actionsById['acme.triage/aggregate'];
+        if (!accountAction || !readPluginUiAccountExecutableOrigin(accountAction)) throw new Error('Expected admitted Account callee custody');
+        const machineId = 'machine-selected-source';
+        const action = { id: 'scan', pluginId: 'acme.source', occurrenceId: 'source-selected', title: 'Scan',
+            scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe', execution: { target: 'daemon' },
+            available: true, authorization: { generation: { targetGeneration: 'source-selected', desiredGeneration: 'source-selected',
+                appliedGeneration: 'source-selected' }, resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } };
+        describeMock.mockResolvedValue({ supported: true, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 49,
+            actionsById: { 'acme.source/scan': action, 'acme.triage/aggregate': { ...action, ...manifest.contributes.actions[0],
+                pluginId: manifest.id, occurrenceId: 'occurrence-a' } } }) });
+        const cached = await loadDaemonMergedProjectionCacheEntry({ machineId, serverId: focusedHomeId, accountLifetime: lifetime });
+        if (cached?.kind !== 'ready') throw new Error('Expected exact ready Machine inputs');
+        targetedReadMock.mockResolvedValue({ supported: true, targetedContributions: snapshot('occurrence-a'), targetedSurfaceMounts: [] });
+        const rendered = await renderHook(() => useMountedTargetedContributions({ machineId, serverId: focusedHomeId,
+            pluginId: manifest.id, mountedOccurrenceId: 'occurrence-a', enabled: true }));
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const mounted = rendered.getCurrent();
+        expect(mounted.phase).toBe('ready');
+        expect(mounted.projectionInputs).toBe(cached.inputs);
+        expect(mounted.pluginUiProjection?.actionsById['acme.source/scan']).toMatchObject({ occurrenceId: 'source-selected', execution: { target: 'daemon' } });
+        // Machine declarations cannot replace the independently admitted Account callee.
+        const mountedAccountAction = mounted.pluginUiProjection?.actionsById['acme.triage/aggregate'];
+        expect(mountedAccountAction?.execution.target).toBe('account');
+        expect(mountedAccountAction && readPluginUiAccountExecutableOrigin(mountedAccountAction))
+            .toEqual(readPluginUiAccountExecutableOrigin(accountAction));
+        const requests: string[] = [];
+        const result = await dispatchPluginSurfaceAction({ action: { pluginId: 'acme.source', localId: 'scan' }, input: {},
+            expectedContributorOccurrenceId: 'source-selected', invocationSurface: 'ui',
+            pluginUiProjection: mounted.pluginUiProjection,
+            resolveContributedAction: createPluginUiProjectedActionResolver(mounted.pluginUiProjection?.actionsById),
+            contributedAction: { machineId, serverId: focusedHomeId, execute: async (target, request) => {
+                expect(target).toBe(machineId);
+                requests.push(request.expectedContributorOccurrenceId);
+                return { supported: true, result: { ok: true, result: { rows: ['selected source'] } } };
+            } } });
+        expect(result).toEqual({ ok: true, result: { rows: ['selected source'] } });
+        expect(requests).toEqual(['source-selected']);
     });
 
     it('keeps exact retained presentation when the target settles before full projection, without granting retained schemas', async () => {

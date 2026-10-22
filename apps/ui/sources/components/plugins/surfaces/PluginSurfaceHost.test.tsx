@@ -11673,14 +11673,22 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         }
     });
 
-    it.each(['browser', 'app', 'app-auto'] as const)('finishes an installed Resource read across unchanged Machine and workspace publications (%s)', async placementKind => {
-        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, { serverIdentityId: 'srv_server_1' });
+    it.each(['browser', 'app', 'app-auto', 'account'] as const)('finishes an installed Resource read across unchanged Machine and workspace publications (%s)', async placementKind => {
+        const census = ['machine_1', 'machine-1', 'settings-machine'].map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, (path, init) => {
+            if (path === '/v1/machines') return Response.json(census);
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => census.find(machine => machine.id === id) ?? null);
+            const exact = /^\/v1\/machines\/([^/]+)$/.exec(path);
+            if (exact) return Response.json({ machine: census.find(machine => machine.id === decodeURIComponent(exact[1]!)) ?? null });
+            return undefined;
+        }, { serverIdentityId: 'srv_server_1' });
         await primeGeneratedArtifact();
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         const { WorkspaceNavigationProvider } = await import('@/components/appShell/workspace/WorkspaceNavigationContext');
         const { createWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
         const { storage } = await import('@/sync/domains/state/storage');
-        const { unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
+        const { unionPluginUiProjections, mergeInstalledPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
         const { readCurrentAppShellPluginUiExecutionOriginCandidates } = await import('@/components/appShell/plugins/committedPluginUiProjection');
         const { setPluginMachineExecutionOriginPreference, readPluginMachineExecutionTargetPreference } = await import('@/sync/domains/machines/administration/selectionPreferences');
         const pluginId = 'acme.browser';
@@ -11698,37 +11706,66 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                 occurrenceId: fixture.mountedTarget.occurrenceId });
         const directProjection = { ...projection, installedPackagesById: { ...projection.installedPackagesById,
             [pluginId]: { ...projection.installedPackagesById[pluginId]!, executionOrigin: sourceOrigin,
-                sourceCustody: fixture.mountedTarget.sourceCustody } },
+                sourceCustody: fixture.mountedTarget.sourceCustody, declaresContributionPoints: false } },
             surfacePlacementsById: { [basePlacement.id]: basePlacement }, resourcesById: {
             status: { id: 'status', pluginId, resourceKind: 'config' as const, scope: 'global' as const },
         } };
         const machineIds = placementKind === 'app-auto' ? ['machine_1', 'machine-1', 'settings-machine'] : ['machine_1'];
         const now = Date.now();
-        const resourceProjection = placementKind === 'browser' ? directProjection : unionPluginUiProjections(machineIds.map(machineId => {
+        let resourceProjection = placementKind === 'browser' ? directProjection : unionPluginUiProjections(machineIds.map(machineId => {
             const executionOrigin = { ...sourceOrigin, sourceRef: { ...sourceOrigin.sourceRef, machineId } };
             return { machineId, serverId: 'server_1', serverIdentityId: 'srv_server_1',
                 projection: { ...directProjection, installedPackagesById: { ...directProjection.installedPackagesById,
                     [pluginId]: { ...directProjection.installedPackagesById[pluginId]!, executionOrigin } } },
                 phase: 'current' as const, interactionEnabled: true, selectableExecutionOrigins: [executionOrigin] };
         }), new Map([[pluginId, sourceOrigin]])).pluginUiProjection!;
+        if (placementKind === 'account') {
+            const scope = pluginSurfaceAccountLifetime.value!.scope;
+            const artifactGraph = projection.reactNativeBundlesById['reactNativeBundle:acme.browser:native-panel']!.artifactGraph;
+            const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+                availabilityCursor: 1, hostingCapability: { enabled: false },
+                intent: { pluginId, desiredVersion: '3.2.1', enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+                release: { ref: { pluginId, version: '3.2.1' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                    normalizedManifest: PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: pluginId, version: '3.2.1',
+                        displayName: 'External Account Resource', engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 },
+                        contributes: { actions: [{ id: 'read-page', title: 'Read page', scopes: ['global'], surfaces: ['ui'],
+                            placementBindings: [], dangerLevel: 'safe', execution: { target: 'account',
+                                account: { artifactId: generatedIdentity.artifactId, exportName: 'renderSurface' } },
+                            inputSchema: { type: 'object' }, resultSchema: { type: 'object' } }],
+                            ui: { renderers: [{ id: 'native-panel', kind: 'reactNative', artifact: generatedIdentity.artifactId,
+                            requiredHostMethods: ['context', 'readResource'] }], views: [{ id: 'native-panel', container: 'appPage',
+                            title: 'Account page', target: { kind: 'app' }, renderer: 'native-panel' }] } } }),
+                    collectionContracts: [], uiSlots: [{ contributionId: 'native-panel', artifactId: generatedIdentity.artifactId,
+                        tier: 'reactNative', platform: 'web', artifactDigest: generatedIdentity.artifactDigest, hostUiApiRange: '^1.0.0', artifactGraph }],
+                    packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+                packageAssets: [], uiArtifacts: [],
+            });
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 1,
+                intentReads: [{ pluginId, response }], materializations: [], snapshots: [] } });
+            const accountProjection = readPluginAccountAvailability(scope).readAccountUiProjection();
+            if (!accountProjection) throw new Error('Expected Account declaration projection');
+            resourceProjection = mergeInstalledPluginUiProjections([accountProjection], resourceProjection)!;
+        }
         const placement = resourceProjection.surfacePlacementsById[basePlacement.id]!;
         if (placementKind !== 'browser') {
             const previousTargets = storage.getState().settings.machineAdministrationTargetsLocalV1;
             onTestFinished(() => storage.setState({ settings: { ...storage.getState().settings,
                 machineAdministrationTargetsLocalV1: previousTargets } }));
             const scope = pluginSurfaceAccountLifetime.value!.scope;
-            replacePluginAccountAvailabilityProjection({ scope,
+            if (placementKind !== 'account') replacePluginAccountAvailabilityProjection({ scope,
                 snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] } });
             storage.setState({ settings: { ...storage.getState().settings,
-                machineAdministrationTargetsLocalV1: placementKind === 'app' ? setPluginMachineExecutionOriginPreference(
+                machineAdministrationTargetsLocalV1: placementKind === 'app' || placementKind === 'account' ? setPluginMachineExecutionOriginPreference(
                     storage.getState().settings.machineAdministrationTargetsLocalV1, pluginId, sourceOrigin) : {} } });
-            if (placementKind === 'app-auto') storage.getState().applyMachines(machineIds.map((id, index) =>
+            if (placementKind === 'app-auto' || placementKind === 'account') storage.getState().applyMachines(machineIds.map((id, index) =>
                 createMachineFixture({ id, active: true, activeAt: now - index })), false, { sourceServerId: 'server_1' });
         }
         const firstRead = createDeferred<{ supported: true; result: { ok: true; contentType: string; digest: string; bytesBase64: string } }>();
         resourceReadMock.mockReturnValue(firstRead.promise);
+        let latestSnapshot: ReturnType<typeof useLivePluginResource>['resource'] | undefined;
         function ResourcePanel() {
             const snapshot = useLivePluginResource('status').resource;
+            latestSnapshot = snapshot;
             return React.createElement('Text', null, snapshot.value ? new TextDecoder().decode(snapshot.value.bytes) : snapshot.pending);
         }
         reactNativeSurfaceRuntime.enabled = true;
@@ -11753,10 +11790,19 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const screen = await renderScreen(render(false));
         try {
             await vi.waitFor(() => expect(resourceReadMock, JSON.stringify({ text: screen.getTextContent(),
+                resourceError: latestSnapshot?.error,
+                machineExecutionReady: (reactNativeSurfaceProps.at(-1) as { renderContext?: RenderContext })?.renderContext?.surface.machineExecutionReady,
                 rendered: reactNativeSurfaceProps.length,
                 diagnostics: screen.findAll(node => typeof node.props.testID === 'string' && node.props.testID.includes('diagnostic'))
                     .map(node => node.props.testID) })).toHaveBeenCalled());
             const initial = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+            if (placementKind === 'account') {
+                expect(placement.hostAccountOrigin).toBeDefined();
+                expect(placement.occurrenceId).not.toBe(fixture.mountedTarget.occurrenceId);
+                expect(resourceReadMock).toHaveBeenCalledWith('machine_1', expect.objectContaining({
+                    expectedCallerOccurrenceId: fixture.mountedTarget.occurrenceId,
+                }));
+            }
             expect(initial.signal.aborted).toBe(false);
             if (placementKind === 'app-auto') {
                 expect(readCurrentAppShellPluginUiExecutionOriginCandidates(pluginId).sourceCandidates).toHaveLength(3);

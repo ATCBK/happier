@@ -102,7 +102,7 @@ import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/inst
 import { PluginContextServiceError } from '@/plugins/runtime/context/errors';
 import type { DeclaredDaemonPluginSecretAdministrationPort } from '@/plugins/runtime/context/secrets';
 import { createPluginInvocationLifetime } from '@/plugins/runtime/invocation/lifetime';
-import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
+import { deriveMountedPluginInvocationCaller, type MountedAccountPluginExecutionSelectionResolver } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import {
     assertLocalSettingsDeclarationsAccessible,
     flattenLocalSettingsFields,
@@ -123,11 +123,7 @@ import {
 
 export type DaemonContributionRegistryProjectionRegistrationOptions = Readonly<{
     /** Account caller provenance is read from the captured authenticated Home, never a Machine occurrence. */
-    resolveAccountPluginExecutionSelection?: (
-        pluginId: string,
-        registry: ResolvedExecutablePluginRuntimeRegistry,
-        signal?: AbortSignal,
-    ) => Promise<import('@happier-dev/protocol/plugins/availability').PluginAccountExecutionSelectionV1>;
+    resolveAccountPluginExecutionSelection?: MountedAccountPluginExecutionSelectionResolver;
     /** The connected machine binds approval requests to its current Account custody. */
     requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
     resolveCaptureRegistry?: () => MachineLiveStreamCaptureRegistry | null;

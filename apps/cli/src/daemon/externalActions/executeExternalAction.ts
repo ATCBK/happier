@@ -17,7 +17,7 @@ import { reconcileExternalActionTarget } from './reconcileExternalActionTarget';
 import { projectExternalActionRequesterHttpAuthorization, resolveExternalActionAccountInvocationSurface } from '@/api/externalActionExecutionAuthorization';
 import type { ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import type { ManagedMachinePolicyRequest } from '../startup/managedMachineActionAdapter';
-import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
+import { deriveMountedPluginInvocationCaller, type MountedAccountPluginExecutionSelectionResolver } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services/actionCaller';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { isOriginalOwnAccountActionCustody, isOriginalSessionInputAccountActionCustody } from "../sessionEncryption/requesterAccountActionProjection";
@@ -160,6 +160,7 @@ export async function executeExternalAction(input: Readonly<{
   acquirePluginRuntimeRegistryLease?: () => Promise<PluginRuntimeRegistryLease>;
   /** Live receiving Home/Machine identity from the canonical machine owner. */
   resolvePluginExecutionOriginContext?: Parameters<typeof deriveMountedPluginInvocationCaller>[0]['resolveExecutionOriginContext'];
+  resolveAccountPluginExecutionSelection?: MountedAccountPluginExecutionSelectionResolver;
   /** Host-owned ingress classification; never accepted from an external envelope. */
   surface?: 'ui' | 'cli' | 'mcp';
   /** Home-minted invocation authority relayed or exchanged at admission. */
@@ -572,6 +573,20 @@ export async function executeExternalAction(input: Readonly<{
           registry: pluginRuntimeLease.registry,
           resolveCurrentPluginMaterializationRef: pluginRuntimeLease.resolveCurrentPluginMaterializationRef,
           resolveExecutionOriginContext: input.resolvePluginExecutionOriginContext,
+          resolveAccountExecutionSelection: async pluginId => {
+            const runtime = readRequesterAccountActionContext(requesterContext?.authorization);
+            if (runtime) {
+              const { readCurrentMountedAccountPluginExecutionSelection } = await import('@/plugins/runtime/accountPluginActivationSource');
+              return await readCurrentMountedAccountPluginExecutionSelection({ pluginId, registry: pluginRuntimeLease!.registry,
+                runtime, ...(input.signal ? { signal: input.signal } : {}) });
+            }
+            // A foreign requester cannot borrow the custodian's enabled selection.
+            if (accountPrincipal?.accountId && accountPrincipal.accountId !== input.currentAccountId) {
+              return { kind: 'unavailable', code: 'plugin_account_execution_unavailable' };
+            }
+            return await input.resolveAccountPluginExecutionSelection?.(pluginId, pluginRuntimeLease!.registry, input.signal)
+              ?? { kind: 'unavailable', code: 'plugin_account_execution_unavailable' };
+          },
         });
       }
       if (mountedCaller.status !== 'available' || !await mountedCaller.isMountedCallerCurrent()) {

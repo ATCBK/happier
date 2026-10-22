@@ -5,7 +5,7 @@ import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
     PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactReadActionOutputV1Schema,
     PluginAvailabilityIntentsListActionOutputV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
-    resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, normalizePluginReleaseFactsV1,
+    resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, computePluginAccountBundledDeclarationDigestV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, normalizePluginReleaseFactsV1,
     type PluginAvailabilityIntentReadActionOutputV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import { createPluginUiArtifactArchiveV1, decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1,
     type PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plugins/ui';
@@ -27,6 +27,7 @@ import type { PluginDaemonModuleNamespace } from './types';
 import { bindPluginRuntimeSourceAuthority, resolvePluginSourceCustody } from './sourceAuthority';
 import { loadPluginModule } from './loadPluginModule';
 import type { BundledActivationSourceSelectionOptions } from './bundledActivationSource';
+import type { ResolvedExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
 
 type AccountBundledSelection = Parameters<typeof resolvePluginAccountExecutionSelectionV1>[0]['bundled'];
 type AccountReadBinding = Readonly<{ credentials: StoredCredentials; serverUrl: string; signal?: AbortSignal }>;
@@ -65,6 +66,30 @@ export async function readCurrentAccountPluginExecutionSelection(input: AccountR
 }>): Promise<PluginAccountExecutionSelectionV1> {
     return resolvePluginAccountExecutionSelectionV1({ pluginId: input.pluginId, intentRead: await readIntent(input),
         ...(input.bundled ? { bundled: input.bundled } : {}) });
+}
+
+/** Mounted callers use the authenticated runtime's Account, independently of the Machine plugin source. */
+export async function readCurrentMountedAccountPluginExecutionSelection(input: Readonly<{
+    pluginId: string;
+    registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes'>;
+    runtime: Readonly<{ credentials: StoredCredentials; serverHttpBaseUrl: string; isCurrent(): Promise<boolean> }>;
+    signal?: AbortSignal;
+}>): Promise<PluginAccountExecutionSelectionV1> {
+    const unavailable = { kind: 'unavailable' as const, code: 'plugin_account_execution_unavailable' as const };
+    if (!await input.runtime.isCurrent()) return unavailable;
+    const declaration = input.registry.contributes.pluginDeclarations?.find(plugin =>
+        plugin.pluginId === input.pluginId && plugin.sourceSpec.kind === 'bundled');
+    const bundled = declaration ? {
+        manifest: declaration.manifest,
+        sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const,
+            packageName: declaration.sourceSpec.locator,
+            declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest) } },
+        custodyId: computePluginAccountBundledCustodyIdV1({ packageName: declaration.sourceSpec.locator,
+            manifest: declaration.manifest, artifacts: declaration.generatedUiArtifactsManifest?.entries ?? [] }),
+    } : undefined;
+    const selection = await readCurrentAccountPluginExecutionSelection({ pluginId: input.pluginId, credentials: input.runtime.credentials,
+        serverUrl: input.runtime.serverHttpBaseUrl, ...(bundled ? { bundled } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+    return await input.runtime.isCurrent() ? selection : unavailable;
 }
 
 export type AccountPluginActivationSourcesInput = Readonly<{

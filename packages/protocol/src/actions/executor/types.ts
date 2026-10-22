@@ -154,6 +154,7 @@ import type {
   ApprovalRequestOriginV1,
 } from '../../approvals/approvalRequestV1.js';
 import type { PluginSourceCustodyV1 } from '../../plugins/runtime/sourceCustody.js';
+import type { DaemonPluginStructuredMessageActionMountedBinding } from '../../plugins/actions/daemonInvocationV1.js';
 import type {
 } from '../../prompts/library/promptAssetsV1.js';
 import type { ProviderConnectionId } from '../../providers/ids.js';
@@ -410,6 +411,9 @@ export type ActionPluginCaller = Readonly<{
   occurrenceId?: string;
   /** Durable source custody for owners that freeze replay provenance. */
   sourceCustody?: PluginSourceCustodyV1;
+  /** Live Account declaration correspondence; durable approvals project their own closed caller shape. */
+  pluginVersion?: DaemonPluginStructuredMessageActionMountedBinding['pluginVersion'];
+  declarationDigest?: DaemonPluginStructuredMessageActionMountedBinding['declarationDigest'];
   /**
    * Exact host-stamped materialization for a live plugin Action edge. Durable
    * approval replay carries only the persisted plugin/contribution identity;

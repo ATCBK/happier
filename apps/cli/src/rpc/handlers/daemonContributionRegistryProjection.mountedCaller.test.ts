@@ -24,9 +24,13 @@ import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1
 import { registerDaemonContributionRegistryProjectionHandler } from './daemonContributionRegistryProjection';
 
 describe('mounted caller admission through the real contributed Action RPC', () => {
-    it.each(['ui', 'cli'] as const)('admits an external Account Action caller from %s to a plugin-only source and refuses changed custody before effects', async executionSurface => {
+    it.each(['ui', 'cli', 'page'] as const)('admits an external Account caller from %s to its declared source surface and refuses changed custody before effects', async callerSurface => {
+        const executionSurface = callerSurface === 'cli' ? 'cli' : 'ui';
+        const contributionLocalId = callerSurface === 'page' ? 'page' : 'aggregate';
         const pluginId = 'com.acme.account-aggregate';
         const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: pluginId, entrypoints: {}, contributes: {
+            ui: { renderers: [{ id: 'panel', kind: 'declarative', root: { kind: 'text', text: 'Account page' } }],
+                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'panel' }] },
             actions: [{ id: 'aggregate', title: 'Aggregate', scopes: ['global'], surfaces: ['ui', 'cli'], dangerLevel: 'safe',
                 placementBindings: [], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }],
         } }));
@@ -74,7 +78,7 @@ describe('mounted caller admission through the real contributed Action RPC', () 
         const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
             manifest: createPluginManifestV2Fixture({ id: 'com.acme.machine-source', contributes: {
                 actions: [{ id: 'read', title: 'Read source', scopes: ['global'],
-                    surfaces: TriageSourcesContributionProtocolV1.operations.scan.declaration.surfaces,
+                    surfaces: callerSurface === 'page' ? ['ui'] : TriageSourcesContributionProtocolV1.operations.scan.declaration.surfaces,
                     placementBindings: [], dangerLevel: 'safe',
                     execution: { target: 'daemon' }, inputSchema: { type: 'object', additionalProperties: false },
                     resultSchema: { type: 'object', additionalProperties: true } },
@@ -108,19 +112,31 @@ describe('mounted caller admission through the real contributed Action RPC', () 
             const targetOccurrence = fixture.registry.readPluginOccurrenceId?.('com.acme.machine-source');
             if (!handler || !targetOccurrence) throw new Error('Expected source Action RPC');
             expect(fixture.registry.readPluginOccurrenceId?.(pluginId)).toBeNull();
-            const clientActionBinding = { pluginId, contributionLocalId: 'aggregate', occurrenceId: 'invoking-process-occurrence',
+            const clientActionBinding = { pluginId, contributionLocalId, occurrenceId: 'invoking-process-occurrence',
                 sourceCustody: { kind: 'account_release' as const, pluginId, version: manifest.version, archiveDigestSha256: digest } };
             const run = (binding = clientActionBinding, input: Record<string, unknown> = {}, localId = 'read', presentUserIntent?: 'confirmed') => handler({ machineId: 'reading-machine',
                 qualifiedActionId: `com.acme.machine-source/${localId}`, expectedContributorOccurrenceId: targetOccurrence,
-                executionSurface, invocation: { kind: 'clientPluginAction', clientActionBinding: binding }, input,
+                executionSurface, invocation: callerSurface === 'page'
+                    ? { kind: 'mountedPluginSurface', mountedBinding: binding }
+                    : { kind: 'clientPluginAction', clientActionBinding: binding }, input,
                 ...(presentUserIntent ? { presentUserIntent } : {}) });
             // The physical UI/CLI origin does not expose this role as a root Action.
-            expect(await handler({ machineId: 'reading-machine', qualifiedActionId: 'com.acme.machine-source/read',
+            if (callerSurface !== 'page') expect(await handler({ machineId: 'reading-machine', qualifiedActionId: 'com.acme.machine-source/read',
                 expectedContributorOccurrenceId: targetOccurrence, executionSurface, input: {} }))
                 .toMatchObject({ ok: false, code: 'plugin_action_unavailable' });
             expect(await run()).toEqual({ ok: true, result: { reads: 1, writes: 0, caller: { kind: 'plugin', pluginId,
-                contribution: { id: 'aggregate', qualifiedId: `${pluginId}/aggregate` }, occurrenceId: clientActionBinding.occurrenceId,
+                contribution: { id: contributionLocalId, qualifiedId: `${pluginId}/${contributionLocalId}` }, occurrenceId: clientActionBinding.occurrenceId,
                 sourceCustody: clientActionBinding.sourceCustody, originSurface: executionSurface } } });
+            if (callerSurface === 'page') {
+                digest = `sha256:${'b'.repeat(64)}`;
+                expect(await run()).toEqual({ ok: false, code: 'plugin_mounted_caller_unavailable' });
+                digest = clientActionBinding.sourceCustody.archiveDigestSha256;
+                enabled = false;
+                expect(await run()).toEqual({ ok: false, code: 'plugin_mounted_caller_unavailable' });
+                enabled = true;
+                expect(await run()).toMatchObject({ ok: true, result: { reads: 2 } });
+                return;
+            }
             for (const [index, override] of [{ disabledSurfaces: ['plugin'] }, { enabled: false }, {}].entries()) {
                 setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'account-source-policy', settingsVersion: index + 1,
                     loadedAtMs: index + 1, settingsSecretsReadKeys: [], settings: accountSettingsParse({ actionsSettingsV1: {

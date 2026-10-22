@@ -3,8 +3,6 @@ import {
     type PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
-import type { PluginUiPhysicalSurfacePlacementProjection } from './projection';
-
 const NO_PLUGIN_UI_RESOURCE_CAPABILITY = Object.freeze({
     readable: false,
     dynamic: false,
@@ -23,9 +21,9 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
  * never raise the selected member's capabilities by being considered here.
  */
 export function readSelectedPluginUiResourceCapability(
-    selectedSurface: (Pick<PluginUiPhysicalSurfacePlacementProjection, 'renderer'> & Readonly<{ runtime?: unknown }>) | null | undefined,
+    selectedSurface: unknown,
 ): PluginUiResourceBindingCapabilityV1 {
-    const runtime = asRecord(selectedSurface?.runtime);
+    const runtime = asRecord(asRecord(selectedSurface)?.runtime);
     const parsed = PluginUiResourceBindingCapabilityV1Schema.safeParse(
         runtime?.resourceCapability,
     );

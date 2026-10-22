@@ -12,6 +12,8 @@ describe('Account nested Action caller provenance', () => {
     it('uses current Account declaration custody without a Machine occurrence and retires changed or disabled callers', async () => {
         const pluginId = 'com.acme.portable';
         const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: pluginId, entrypoints: {}, contributes: {
+            ui: { renderers: [{ id: 'panel', kind: 'declarative', root: { kind: 'text', text: 'Portable page' } }],
+                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'panel' }] },
             actions: [{ id: 'aggregate', title: 'Aggregate', scopes: ['global'], surfaces: ['cli'], dangerLevel: 'safe',
                 placementBindings: [], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }],
         } }));
@@ -56,6 +58,18 @@ describe('Account nested Action caller provenance', () => {
                 contribution: { id: 'aggregate', qualifiedId: `${pluginId}/aggregate` }, occurrenceId: binding.occurrenceId,
                 sourceCustody: binding.sourceCustody, originSurface: 'cli' });
             expect(await caller.isMountedCallerCurrent()).toBe(true);
+            const deriveSurface = (callerBinding: DaemonPluginStructuredMessageActionMountedBinding) => deriveMountedPluginInvocationCaller({
+                request: { machineId: 'reading-machine', invocationSurface: 'ui', invocation: {
+                    kind: 'mountedPluginSurface', mountedBinding: { ...callerBinding, contributionLocalId: 'page' },
+                } }, registry, resolveAccountExecutionSelection, resolveExecutionOriginContext,
+            });
+            const pageCaller = await deriveSurface(binding);
+            expect(pageCaller.status).toBe('available');
+            if (pageCaller.status !== 'available') throw new Error('Expected portable Account page caller');
+            expect(pageCaller.caller).toMatchObject({ occurrenceId: binding.occurrenceId, sourceCustody: binding.sourceCustody,
+                contribution: { id: 'page', qualifiedId: `${pluginId}/page` }, originSurface: 'ui' });
+            expect(pageCaller.caller).not.toHaveProperty('executionOrigin');
+            expect(await pageCaller.isMountedCallerCurrent()).toBe(true);
             expect(await derive('aggregate', binding, 'different-machine')).toEqual({ status: 'unavailable' });
             receivingMachineId = 'replacement-machine';
             expect(await caller.isMountedCallerCurrent()).toBe(false);
@@ -70,6 +84,7 @@ describe('Account nested Action caller provenance', () => {
                 resolveExecutionOriginContext,
             })).toEqual({ status: 'unavailable' });
             archiveDigestSha256 = `sha256:${'b'.repeat(64)}`;
+            expect(await pageCaller.isMountedCallerCurrent()).toBe(false);
             expect(await caller.isMountedCallerCurrent()).toBe(false);
             expect(await derive()).toEqual({ status: 'unavailable' });
             enabled = true;
@@ -78,6 +93,9 @@ describe('Account nested Action caller provenance', () => {
                 declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest),
                 sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'invoking-app-bundle' } } };
             const bundledCaller = await derive('aggregate', bundledBinding);
+            expect((await deriveSurface(bundledBinding)).status).toBe('available');
+            expect(await deriveSurface({ ...bundledBinding, declarationDigest: `sha256:${'e'.repeat(64)}` }))
+                .toEqual({ status: 'unavailable' });
             expect(bundledCaller.status).toBe('available');
             if (bundledCaller.status !== 'available') throw new Error('Expected bundled Account caller');
             expect(bundledCaller.caller).not.toHaveProperty('materialization');

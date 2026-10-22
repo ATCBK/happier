@@ -264,6 +264,12 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
         projection: null, skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, accountLifetime: lifetime, ready: false,
     }));
     const standaloneBasis = React.useRef<PluginUiProjectionModel | null | undefined>(undefined);
+    const committedProjectionCleanup = React.useRef<(() => void) | null>(null);
+    // The live publication supplies fresh facts through its subscription;
+    // executable diagnostics do not change the committed reader's identity.
+    const standaloneProjection = props.publication ? null : props.value.pluginUiProjection;
+    const standalonePhase = props.publication ? null : props.value.phase;
+    const standaloneDeclarationReady = props.publication ? undefined : props.declarationReady;
     const published = props.publication?.getSnapshot();
     const currentDeclarations = React.useMemo<AppShellPluginUiDeclarationSources>(() => {
         if (!props.publication) return standaloneDeclarations;
@@ -282,8 +288,8 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
     }), [currentDeclarations]);
     React.useLayoutEffect(() => {
         if (!props.publication) {
-            const ready = props.declarationReady !== false && isCurrentAccountLifetime(lifetime);
-            const projection = ready ? props.value.pluginUiProjection : null;
+            const ready = standaloneDeclarationReady !== false && isCurrentAccountLifetime(lifetime);
+            const projection = ready ? standaloneProjection : null;
             const skillSourceIdentity = standaloneSkills.publish(projection);
             // Publish projection, identity and original lifetime together. A
             // generation-only preparation never withdraws an in-flight read.
@@ -291,15 +297,15 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
                 && previous.accountLifetime === lifetime && previous.ready === ready ? previous
                 : Object.freeze({ projection, skillSourceIdentity, accountLifetime: lifetime, ready }));
         }
-        if (!props.publication && standaloneBasis.current !== props.value.pluginUiProjection) {
-            standaloneBasis.current = props.value.pluginUiProjection;
-            standaloneCandidates.publish(props.value.pluginUiProjection, [],
-                Object.keys(props.value.pluginUiProjection?.installedPackagesById ?? {}));
+        if (!props.publication && standaloneBasis.current !== standaloneProjection) {
+            standaloneBasis.current = standaloneProjection;
+            standaloneCandidates.publish(standaloneProjection, [],
+                Object.keys(standaloneProjection?.installedPackagesById ?? {}));
         }
         const read = (input?: AppShellPluginUiProjectionRead) => {
             if (!lifetime?.isCurrent() || (input && !areServerAccountScopesEqual(input.scope, lifetime.scope))) return null;
-            if (!props.publication) return input?.declarationsOnly || props.value.phase === 'current'
-                ? props.value.pluginUiProjection : null;
+            if (!props.publication) return input?.declarationsOnly || standalonePhase === 'current'
+                ? standaloneProjection : null;
             const snapshot = props.publication.getSnapshot();
             if (snapshot.accountLifetime !== lifetime) return null;
             return input?.declarationsOnly || snapshot.accountUiProjection !== null || snapshot.projectionUnion.phase === 'current'
@@ -309,11 +315,17 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
             if (!lifetime?.isCurrent() || (input && !areServerAccountScopesEqual(input.scope, lifetime.scope))) return null;
             if (!props.publication) return standaloneCandidates.getSnapshot().get(pluginId) ?? null;
             const snapshot = props.publication.getSnapshot();
-            return snapshot.accountLifetime === props.value.accountLifetime
+            return snapshot.accountLifetime === lifetime
                 ? snapshot.candidateFactsByPluginId.get(pluginId) ?? null : null;
         };
-        return publishCommittedAppShellPluginUiProjection(read, readCandidates, props.publication?.subscribe);
-    }, [lifetime, props.publication, props.value, props.declarationReady, standaloneCandidates, standaloneSkills]);
+        // The publication owner replaces the incumbent binding atomically.
+        // Withdrawing it before replacement would notify readers twice.
+        committedProjectionCleanup.current = publishCommittedAppShellPluginUiProjection(read, readCandidates, props.publication?.subscribe);
+    }, [lifetime, props.publication, standaloneProjection, standalonePhase, standaloneDeclarationReady, standaloneCandidates, standaloneSkills]);
+    React.useLayoutEffect(() => () => {
+        committedProjectionCleanup.current?.();
+        committedProjectionCleanup.current = null;
+    }, []);
     return (
         <AppShellPluginUiDeclarationProjectionContext.Provider value={declarationSources}>
             <AppShellPluginUiProjectionContext.Provider value={props.value}>

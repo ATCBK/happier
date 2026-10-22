@@ -907,7 +907,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         }, signature: { alg: 'Ed25519', keyId: 'home-key', valueBase64Url: Buffer.alloc(64).toString('base64url') } },
                         target: { custodianAccountId: 'account-1', brokerMachineId: openedRequest.targetMachineId,
                             endpointId: 'b'.repeat(64), endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } } }),
-                        admitConsumer: async () => true,
+                        admitConsumer: async () => ({ ok: true }),
                         openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'relay',
                             retire: async () => undefined, close: async () => { carrierClosed = true; } }),
                         // The carrier is the network boundary; serve the real
@@ -1544,12 +1544,13 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                 )).toMatchObject({ outcome: 'unavailable', code: 'plugin_action_handler_missing' });
                 await expect(runtimeRegistry.activateContributionsOnDemand([{
                     pluginId: 'acme.managed.runtime', family: 'actions', localId: 'run',
-                }])).resolves.toEqual([expect.objectContaining({
-                    pluginId: 'acme.managed.runtime',
-                    diagnostics: expect.arrayContaining([
-                        expect.objectContaining({ code: 'plugin_source_missing' }),
-                    ]),
-                })]);
+                }])).resolves.toEqual([]);
+                // A declaration without a committed occurrence cannot acquire
+                // executable custody, even when its system dependency is ready.
+                expect(runtimeRegistry.activatedPluginIds.has('acme.managed.runtime')).toBe(false);
+                expect(runtimeRegistry.targetActionInvocations?.evaluateCatalogPolicy(
+                    'acme.managed.runtime', 'run',
+                )).toMatchObject({ outcome: 'unavailable', code: 'plugin_action_handler_missing' });
                 const executable = await runtimeRegistry.managedDependencies?.resolveExecutable(
                     { kind: 'managedDependency', id: 'runtime' },
                     'acme.managed.runtime',

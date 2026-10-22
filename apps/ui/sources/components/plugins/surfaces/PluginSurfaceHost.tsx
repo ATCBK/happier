@@ -149,6 +149,7 @@ import type {
 } from '@/sync/domains/plugins/ui/projection';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import {
+    createInstalledPluginUiProjectionPublication,
     readPluginUiContributionOrigin,
     readPluginUiContributionSupplies,
     readPluginUiProjectionEntryExecutionOrigin,
@@ -2521,17 +2522,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                 : props.pluginUiProjection ?? null
     );
     const installedPackagesById = mountedPluginUiProjection?.installedPackagesById;
-    // The raw V2 Action map is the sole target source for the bound surface.
-    // This closure is an exact lookup over that producer-owned snapshot, not a
-    // second action registry or a synthesized legacy descriptor.
-    // The bound controller reads this lookup through its existing current
-    // resolver ref. Replacing the immutable map therefore needs neither a
-    // catalog-wide content key nor a replacement controller/facade.
-    const mountedProjectedActions = mountedPluginUiProjection?.actionsById;
-    const resolveContributedAction = React.useMemo(
-        () => createPluginUiProjectedActionResolver(mountedProjectedActions),
-        [mountedProjectedActions],
-    );
     const projectionInteractionEnabled = selectedEmbeddedRenderer
         ? props.projectionInteractionEnabled !== false
             && selectedEmbeddedRenderer.availability.state === 'available'
@@ -2650,8 +2640,17 @@ function PluginSurfaceHostMount(props: Readonly<(
         ?? null;
     // Action and SurfaceContext text belong to this exact mounted source,
     // independently of another replica's aggregate presentation declarations.
-    const mountedPresentationUiProjection = currentMountedTargetRead
-        ? currentMountedTargetRead.pluginUiProjection : mountedPluginUiProjection;
+    const pointlessProjectionPublication = React.useMemo(
+        () => createInstalledPluginUiProjectionPublication(), [accountLifetime, machineId, serverId],
+    );
+    const pointlessMachineProjection = pointlessTargetedContributions && mountedMachineProjection.phase === 'ready'
+        ? mountedMachineProjection.inputs?.pluginUiProjection ?? null : null;
+    const mountedPresentationUiProjection = React.useMemo(() => currentMountedTargetRead
+        ? currentMountedTargetRead.pluginUiProjection
+        : pointlessMachineProjection
+            ? pointlessProjectionPublication.publish(mountedPluginUiProjection ? [mountedPluginUiProjection] : [], pointlessMachineProjection)
+            : mountedPluginUiProjection,
+    [currentMountedTargetRead, mountedPluginUiProjection, pointlessMachineProjection, pointlessProjectionPublication]);
     // Daemon-owned interaction needs only the current target slice: a page is
     // never gated on the whole-machine describe. Machine projection inputs
     // (actions, composer attachments, child mounts) are used when present and
@@ -2855,7 +2854,9 @@ function PluginSurfaceHostMount(props: Readonly<(
             : ephemeralBinding
                 ? ephemeralBinding.surface.resourceCapability
         : selectedSurfaceBinding
-        ? readSelectedPluginUiResourceCapability(descriptor)
+        ? accountExecutionOrigin
+            ? pluginExecution.selectedSupply?.resourceCapability
+            : readSelectedPluginUiResourceCapability(descriptor)
         : undefined;
     const accountLocalInteractionEnabled = accountLifetime?.isCurrent() === true;
     // The Availability projection rematerializes an equivalent bound reader on
@@ -3057,6 +3058,9 @@ function PluginSurfaceHostMount(props: Readonly<(
             serverId,
             projectionGeneration,
             occurrenceId: accountExecutionOrigin?.custodyId ?? mountedTarget?.occurrenceId ?? null,
+            daemonOccurrenceId: accountUnionMount
+                ? (needsMachineExecution ? pluginExecution.selectedSupply : presentationSupply)?.occurrenceId
+                : undefined,
             ...(accountExecutionOrigin ? { accountExecutionOrigin } : {}),
             executionOrigin,
             resourceCapability,
@@ -3070,8 +3074,17 @@ function PluginSurfaceHostMount(props: Readonly<(
             interactionEnabled: localControllerInteractionEnabled && surfacePlatformSupported,
             daemonInteractionEnabled: daemonOwnedInteractionEnabled
                 && surfacePlatformSupported
-                && mountedTargetReady,
+                && mountedTargetReady
+                && (pointlessTargetedContributions === null || mountedMachineProjection.phase === 'ready'),
         });
+    // Resolve Actions from the same scoped publication as the controller: exact
+    // Machine sources plus independently admitted Account callees. A different
+    // plugin's app-wide Run-on selection cannot replace this mount's source.
+    const mountedProjectedActions = baseControllerFacts.pluginUiProjection?.actionsById;
+    const resolveContributedAction = React.useMemo(
+        () => createPluginUiProjectedActionResolver(mountedProjectedActions),
+        [mountedProjectedActions],
+    );
     const publishedActionSelection = targetedMount?.actionInputSelectionFactsKey
         ?? composerMount?.actionInputSelectionFactsKey
         ?? ephemeralMount?.actionInputSelectionFactsKey

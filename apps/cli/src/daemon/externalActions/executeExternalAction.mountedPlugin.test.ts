@@ -22,6 +22,8 @@ import { registerExternalActionRpcHandler } from '@/rpc/handlers/externalAction'
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, parseExternalActionDaemonDispatchResultV1 } from '@happier-dev/protocol';
 import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/rpc';
 import type { RpcHandler } from '@/api/rpc/types';
+import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
+import { readCurrentMountedAccountPluginExecutionSelection } from '@/plugins/runtime/accountPluginActivationSource';
 
 // Network and on-disk machine credentials are the only replaced boundaries.
 vi.mock('axios', () => ({ default: { post: vi.fn(), get: vi.fn() } }));
@@ -70,11 +72,22 @@ async function mountedFixture(pluginId = 'acme.mounted', contributionLocalId = '
 }
 
 describe('external Action mounted plugin admission', () => {
-  it('admits the real Inspector source binding through the Account relay RPC into normal approval, retaining retirement checks', async () => {
+  it.each(['machine', 'account'] as const)('admits the real Inspector %s binding through the Account relay RPC into normal approval, retaining retirement checks', async placement => {
     const { fixture, invocation } = await bundledMountedFixture('happier.inspector', 'inspector-page');
     // FIX-LIVE3 captured a source-only binding for inspector-page, not the
     // materialized synthetic binding used by the prior direct-ingress tests.
-    const { materializationRef: _materialization, ...mountedBinding } = invocation.mountedBinding;
+    const { materializationRef: _materialization, ...machineBinding } = invocation.mountedBinding;
+    const declaration = fixture.registry.contributes.pluginDeclarations?.find(plugin => plugin.pluginId === 'happier.inspector');
+    if (!declaration) throw new Error('Expected admitted Inspector declaration');
+    let enabled = true;
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: { availabilityCursor: 1,
+      hostingCapability: { enabled: false }, intent: { pluginId: 'happier.inspector', desiredVersion: null, enabled,
+        offlineUiHosting: 'disabled', writableCollections: [], revision: '1' }, release: null, uiArtifacts: [], packageAssets: [] } }));
+    const mountedBinding = placement === 'machine' ? machineBinding : {
+      pluginId: 'happier.inspector', contributionLocalId: 'inspector-page', occurrenceId: 'app-account-custody',
+      pluginVersion: declaration.manifest.version, declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest),
+      sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'account-app' } },
+    };
     const target = { kind: 'machine' as const, machineId: 'machine-1' };
     const authentication = { kind: 'account' as const, tokenEpoch: 0 };
     const envelope = { v: 1 as const, requestId: 'inspector-relay', target,
@@ -98,6 +111,10 @@ describe('external Action mounted plugin admission', () => {
         return lease;
       },
       resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
+      resolveAccountPluginExecutionSelection: (pluginId: string) => readCurrentMountedAccountPluginExecutionSelection({
+        pluginId, registry: fixture.registry, runtime: { credentials: { token: 'fixture', encryption: null },
+          serverHttpBaseUrl: 'https://account-caller.test', isCurrent: async () => true },
+      }),
     };
     registerExternalActionRpcHandler({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, options);
     const run = async () => {
@@ -116,7 +133,8 @@ describe('external Action mounted plugin admission', () => {
       return parsed.prepared.response.execution;
     };
     expect(await run()).toEqual({ ok: false, errorCode: 'approval_rejected', error: 'approval_rejected' });
-    fixture.registry.fencePluginConsumers?.(['happier.inspector']);
+    if (placement === 'machine') fixture.registry.fencePluginConsumers?.(['happier.inspector']);
+    else enabled = false;
     expect(await run()).toMatchObject({ ok: false, errorCode: 'plugin_mounted_caller_unavailable' });
   });
 

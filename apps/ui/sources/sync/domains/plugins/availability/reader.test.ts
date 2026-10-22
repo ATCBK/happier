@@ -13,6 +13,8 @@ import {
 import {
     createPluginAccountAvailabilityReader,
     createPluginAccountAvailabilityReaderStore,
+    readHostBundledPluginUiDeclarations,
+    readPluginUiAccountActionDeclaration,
     type PluginAccountAvailabilitySnapshot,
 } from './reader';
 import { normalizePluginUiDestinationBindingV1, PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
@@ -20,7 +22,7 @@ import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/ar
 import { admitDeclarativeStaticModel } from '@/components/plugins/surfaces/declarativeStaticModel';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
-import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
+import { readPluginUiAccountExecutableOrigin } from '@/sync/domains/plugins/ui/projectionOrigins';
 
 const scope = { serverId: 'srv-local-a', accountId: 'account-a' } as const;
 
@@ -118,6 +120,172 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('keeps equal replacement publications quiet while publishing cursor, refresh-status and scope changes', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const createSnapshot = () => snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response: intentRead() }] });
+        store.replace({ scope, snapshot: createSnapshot() });
+        const reader = store.bind(scope);
+        const previous = store.getSnapshot();
+        const observation = reader.getObservationSnapshot();
+        const notify = vi.fn();
+        const unsubscribe = store.subscribe(notify);
+
+        store.replace({ scope: { ...scope }, snapshot: createSnapshot() });
+        expect(notify).not.toHaveBeenCalled();
+        expect(store.getSnapshot()).toBe(previous);
+        expect(reader.getObservationSnapshot()).toBe(observation);
+
+        store.replace({ scope, snapshot: createSnapshot(), failedPluginIds: ['com.acme.fixture'] });
+        expect(notify).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot()?.stalePluginIds).toEqual(['com.acme.fixture']);
+        const failed = store.getSnapshot();
+        store.replace({ scope, snapshot: createSnapshot(), failedPluginIds: ['com.acme.fixture'] });
+        expect(notify).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot()).toBe(failed);
+
+        store.replace({ scope, snapshot: createSnapshot() });
+        expect(notify).toHaveBeenCalledTimes(2);
+        store.replace({ scope, snapshot: { ...createSnapshot(), availabilityCursor: 43 } });
+        expect(notify).toHaveBeenCalledTimes(3);
+        expect(reader.getObservationSnapshot()).not.toBe(observation);
+        store.replace({ scope: { ...scope, accountId: 'account-b' }, snapshot: createSnapshot() });
+        expect(notify).toHaveBeenCalledTimes(4);
+        expect(reader.readMaterializations()).toEqual({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
+        unsubscribe();
+    });
+
+    it('publishes retirement and clearing once per real transition and restores retired authority on replacement', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const notify = vi.fn();
+        const unsubscribe = store.subscribe(notify);
+        store.clear();
+        expect(notify).not.toHaveBeenCalled();
+        const value = snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response: intentRead() }] });
+        store.replace({ scope, snapshot: value });
+        const reader = store.bind(scope);
+        store.retire(['com.acme.fixture']);
+        const retired = store.getSnapshot();
+        expect(notify).toHaveBeenCalledTimes(2);
+        expect(reader.readCurrentSettingsDeclaration({ pluginId: 'com.acme.fixture' }).kind).toBe('unavailable');
+        store.retire(['com.acme.fixture']);
+        expect(notify).toHaveBeenCalledTimes(2);
+        expect(store.getSnapshot()).toBe(retired);
+        store.replace({ scope, snapshot: value });
+        expect(notify).toHaveBeenCalledTimes(3);
+        expect(reader.readCurrentSettingsDeclaration({ pluginId: 'com.acme.fixture' }).kind).toBe('available');
+        store.clear();
+        expect(notify).toHaveBeenCalledTimes(4);
+        expect(reader.getObservationSnapshot()).toBeNull();
+        store.clear();
+        expect(notify).toHaveBeenCalledTimes(4);
+        unsubscribe();
+    });
+
+    it('acquires app-owned bundled declarations only on first publication and updates pre-bound readers', () => {
+        const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
+        const bundle = {
+            pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, entriesById: {}, artifactGraphs: [],
+        };
+        let acquisitions = 0;
+        const input = {
+            hostBundledUi: undefined,
+            loadHostBundledUi: () => { acquisitions += 1; return [bundle]; },
+        };
+        const store = createPluginAccountAvailabilityReaderStore(input);
+        const reader = store.bind(scope);
+        expect(reader.readCurrentAccountExecutionDeclarations()).toEqual([]);
+        expect(reader.readBundledAccountDeclarationDigest(manifest.id)).toBeNull();
+        expect(reader.readCurrentArtifact({ pluginId: manifest.id, ...hostedSlot, platform: 'web' }).kind).toBe('unavailable');
+        store.clear();
+        store.retire([manifest.id]);
+        expect(acquisitions).toBe(0);
+
+        const published: string[] = [];
+        const unsubscribe = reader.subscribe(() => published.push(reader.readCurrentAccountExecution(manifest.id).kind));
+        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', manifest });
+        expect(reader.readCurrentAccountExecutionDeclarations()).toHaveLength(1);
+        expect(published).toEqual(['available']);
+        expect(acquisitions).toBe(1);
+
+        bundle.normalizedManifest.displayName = 'Caller mutation';
+        bundle.packageName = '@happier-dev/plugins-replaced';
+        store.clear();
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', manifest: { displayName: 'Fixture' } });
+        expect(reader.readCurrentAccountExecutionDeclarations()[0]?.manifest.displayName).toBe('Fixture');
+        expect(acquisitions).toBe(1);
+        store.retire([manifest.id]);
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentAccountExecutionDeclarations()).toEqual([]);
+        unsubscribe();
+    });
+    it('keeps deferred acquisition failures unpublished and permits the publisher to retry', () => {
+        const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
+        let ready = false;
+        const input = {
+            hostBundledUi: undefined,
+            loadHostBundledUi: () => {
+                if (!ready) throw new Error('Bundled inventory unavailable');
+                return [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+                    packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, entriesById: {} }];
+            },
+        };
+        const store = createPluginAccountAvailabilityReaderStore(input);
+        const reader = store.bind(scope);
+        const published: string[] = [];
+        const unsubscribe = reader.subscribe(() => published.push(reader.readCurrentAccountExecution(manifest.id).kind));
+        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        expect(() => store.replace({ scope, snapshot: empty })).toThrow('Bundled inventory unavailable');
+        expect(store.getSnapshot()).toBeNull();
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(published).toEqual([]);
+        ready = true;
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('available');
+        expect(published).toEqual(['available']);
+        unsubscribe();
+    });
+    it('consumes compiled first-party custody without hashing during publication or reads', () => {
+        const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
+        const packageName = '@happier-dev/plugins-fixture';
+        const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
+            artifactId: 'fixture', tier: 'reactNative', entry: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest,
+            files: [{ relativePath: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+        });
+        const expected = availability.computePluginAccountBundledCustodyV1({ packageName, manifest, artifacts: [graph] });
+        const custody = vi.spyOn(availability, 'computePluginAccountBundledCustodyV1');
+        onTestFinished(() => custody.mockRestore());
+        const accountCustody = { ...expected };
+        const store = createPluginAccountAvailabilityReaderStore({ loadHostBundledUi: () => readHostBundledPluginUiDeclarations([{
+            pluginId: manifest.id, releaseVersion: manifest.version, artifactId: graph.artifactId,
+            tier: graph.tier, digest: graph.digest, artifactGraph: graph, files: [],
+            uiDeclaration: { pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName,
+                normalizedManifest: manifest, entriesById: {}, artifactGraphs: [graph], accountCustody },
+        }]) });
+        const reader = store.bind(scope);
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({
+            kind: 'available', manifest, custodyId: expected.custodyId,
+        });
+        accountCustody.custodyId = 'later caller mutation';
+        expect(reader.readBundledAccountDeclarationDigest(manifest.id)).toBe(expected.declarationDigest);
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ custodyId: expected.custodyId });
+        store.clear();
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ custodyId: expected.custodyId });
+        store.retire([manifest.id]);
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentAccountExecutionDeclarations()).toEqual([]);
+        expect(custody).not.toHaveBeenCalled();
+    });
     it('defers bundled execution custody until Account availability is admitted', () => {
         const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
         const packageName = '@happier-dev/plugins-fixture';
@@ -273,6 +441,10 @@ describe('Plugin Account Availability reader', () => {
         store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response: changed }], materializations: [], snapshots: [] }) });
         const changedAction = reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`];
         expect(changedAction?.occurrenceId).not.toBe(custodyId);
+        if (!changedAction) throw new Error('Missing replaced Account Action');
+        const changedDeclaration = readPluginUiAccountActionDeclaration(changedAction);
+        expect(changedDeclaration).not.toBe(declarations[0]);
+        expect(changedDeclaration?.inputSchema).toEqual({ type: 'object', additionalProperties: false });
         expect(readPluginUiAccountExecutableOrigin(changedAction)?.sourceCustody).toMatchObject({ version: '2.0.0' });
         store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id,
             response: { ...changed, intent: { ...changed.intent!, enabled: false } } }], materializations: [], snapshots: [] }) });

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectExternalActionHttpError } from '@happier-dev/protocol/actions/externalActionApi';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -11,7 +12,7 @@ import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spaw
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { executeOriginalAccountActionTransport } = await import('./externalActionAccountTransport');
+const { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction } = await import('./externalActionAccountTransport');
 let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
 let serverId: string;
 const path = '/v1/actions/plugins.uninstall';
@@ -39,6 +40,59 @@ async function execute() {
 }
 
 describe('captured Account Action response decoding', () => {
+    it('preserves Account page declaration correspondence through the real Machine Action envelope', async () => {
+        homes.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
+            id: 'machine-1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            installationId: 'installation-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        })] });
+        const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
+            pluginVersion: '1.0.0', declarationDigest: `sha256:${'c'.repeat(64)}`,
+            sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app' } } };
+        homes.answer(serverId, path, { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            expect(envelope.pluginInvocation).toEqual({ kind: 'mountedPluginSurface', mountedBinding });
+            return { body: { v: 1, actionId: binding.actionId, requestId: envelope.requestId,
+                execution: { ok: true, result: { completed: true } } } };
+        } });
+        if (!account) throw new Error('Expected captured Account');
+        expect(await executeOriginalAccountMachineAction({ account, machineId: 'machine-1', actionId: binding.actionId,
+            requestId: binding.requestId, input: {}, actionCaller: { kind: 'plugin', ...mountedBinding } })).toMatchObject({ ok: true, result: { completed: true } });
+    });
+    it('carries an Account surface declaration through Action dispatch and the canonical executor into the Machine envelope', async () => {
+        const { createActionExecutor } = await import('@happier-dev/protocol/actions');
+        const { createActionExecutorBoundaryFixture } = await import('@/dev/testkit/fixtures/actionExecutorBoundary');
+        const { dispatchPluginSurfaceAction } = await import('@/components/plugins/surfaces/pluginSurfaceActionDispatch');
+        const capturedAccount = account;
+        if (!capturedAccount) throw new Error('Expected captured Account');
+        homes.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
+            id: 'machine-1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            installationId: 'installation-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        })] });
+        const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
+            pluginVersion: '1.0.0', declarationDigest: `sha256:${'c'.repeat(64)}`,
+            sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app' } } };
+        let receivedInvocation: unknown;
+        homes.answer(serverId, '/v1/actions/plugins.list', { select: body => {
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            receivedInvocation = envelope.pluginInvocation;
+            return { body: { v: 1, actionId: 'plugins.list', requestId: envelope.requestId,
+                execution: { ok: true, result: { ok: true, kind: 'plugins_list', plugins: [] } } } };
+        } });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            // The native plugin-management effect leaves through its real HTTP adapter.
+            pluginsDevLoopAction: async ({ actionId, input, context }) => {
+                const result = await executeOriginalAccountMachineAction({ account: capturedAccount, machineId: 'machine-1',
+                    requestId: 'page-dispatch', actionId, input, actionCaller: context.actionCaller });
+                return result.ok ? result.result : result;
+            },
+        }));
+        expect(await dispatchPluginSurfaceAction({ callerPluginId: mountedBinding.pluginId, callerContributionLocalId: 'page',
+            callerBinding: mountedBinding, action: 'plugins.list', input: {}, hostAction: { execute: executor.execute } }))
+            .toEqual({ ok: true, result: { ok: true, kind: 'plugins_list', plugins: [] } });
+        expect(receivedInvocation).toEqual({ kind: 'mountedPluginSurface', mountedBinding });
+    });
     it.each(['action_not_admitted', 'action_outcome_unknown'] as const)('preserves request correlation for %s and refuses a mismatched reply', async code => {
         const refusal = projectExternalActionHttpError(code, binding.requestId);
         homes.answer(serverId, path, { status: refusal.statusCode, body: refusal.payload });

@@ -286,6 +286,7 @@ type DaemonExternalActionApi = Readonly<{
   executor: ExternalActionExecutor;
   acquirePluginRuntimeRegistryLease?: Parameters<typeof executeExternalAction>[0]['acquirePluginRuntimeRegistryLease'];
   resolvePluginExecutionOriginContext?: Parameters<typeof executeExternalAction>[0]['resolvePluginExecutionOriginContext'];
+  resolveAccountPluginExecutionSelection?: Parameters<typeof executeExternalAction>[0]['resolveAccountPluginExecutionSelection'];
   resolvePatExecutor?: Parameters<typeof registerDaemonExternalActionRoute>[1]['resolvePatExecutor'];
   mintExecutionAuthorization?: Parameters<typeof registerDaemonExternalActionRoute>[1]['mintExecutionAuthorization'];
   externalActionMachineRequestPrivateKey?: Parameters<typeof registerDaemonExternalActionRoute>[1]['externalActionMachineRequestPrivateKey'];
@@ -1245,6 +1246,7 @@ export function createDaemonControlApp({
             executor: externalActionApi.executor,
             acquirePluginRuntimeRegistryLease: externalActionApi.acquirePluginRuntimeRegistryLease,
             resolvePluginExecutionOriginContext: externalActionApi.resolvePluginExecutionOriginContext,
+            resolveAccountPluginExecutionSelection: externalActionApi.resolveAccountPluginExecutionSelection,
             signal: lifetime.signal,
           });
           if (execution.kind === 'invalid_request') {

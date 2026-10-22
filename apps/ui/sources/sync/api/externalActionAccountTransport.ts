@@ -267,6 +267,8 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
         pluginInvocation = { kind: 'mountedPluginSurface', mountedBinding: {
             pluginId: caller.pluginId, contributionLocalId: caller.contributionLocalId, occurrenceId: caller.occurrenceId,
             sourceCustody: caller.sourceCustody,
+            ...(caller.pluginVersion === undefined ? {} : { pluginVersion: caller.pluginVersion }),
+            ...(caller.declarationDigest === undefined ? {} : { declarationDigest: caller.declarationDigest }),
             ...(caller.materialization ? { materializationRef: caller.materialization } : {}),
         } };
     }

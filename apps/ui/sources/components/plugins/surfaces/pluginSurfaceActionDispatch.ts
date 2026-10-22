@@ -1514,6 +1514,7 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
     clientCaller: Extract<NonNullable<DispatchPluginSurfaceActionInput['invocation']>, { kind: 'clientPluginAction' }>['clientActionBinding'] | null,
     actionId: ActionId): ActionExecutorContext {
     const sourceCustody = input.callerSourceCustody ?? caller?.mountedBinding.sourceCustody;
+    const declarationBinding = caller?.mountedBinding ?? clientCaller;
     const { sessionListAccess, ...hostContext } = input.hostAction?.context ?? {};
     // A mounted read belongs to one invocation. Re-derive it at each entry;
     // a nested autonomous Action cannot retain its parent's UI read scope.
@@ -1543,6 +1544,8 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
                     pluginId: caller?.pluginId ?? clientCaller!.pluginId,
                     contributionLocalId: caller?.contributionLocalId ?? clientCaller!.contributionLocalId,
                     occurrenceId: caller?.occurrenceId ?? clientCaller!.occurrenceId,
+                    ...(declarationBinding?.pluginVersion === undefined ? {} : { pluginVersion: declarationBinding.pluginVersion }),
+                    ...(declarationBinding?.declarationDigest === undefined ? {} : { declarationDigest: declarationBinding.declarationDigest }),
                     ...(sourceCustody === undefined
                         ? {}
                         : { sourceCustody }),

@@ -30,6 +30,30 @@ function currentness(projection: PluginUiProjectionModel): PluginUiProjectionCur
 }
 
 describe('AppShell projection source publication', () => {
+    it('does not republish equivalent Machine currentness wrappers and still withdraws changed authority', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+            activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+        const report = currentness(translationProjection(1, 'First'));
+        owner.publishMachineCurrentness('machine', null, report);
+        const first = owner.getSnapshot();
+        let publications = 0;
+        const stop = owner.subscribe(() => { publications += 1; });
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                owner.publishMachineCurrentness('machine', null, { ...report });
+            }
+            expect(publications).toBe(0);
+            expect(owner.getSnapshot()).toBe(first);
+            owner.publishMachineCurrentness('machine', null, {
+                ...report, phase: 'retainedOffline', interactionEnabled: false,
+            });
+            expect(publications).toBe(1);
+            expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(false);
+        } finally { stop(); owner.dispose(); }
+    });
+
     it('publishes the prepared Skills identity atomically and retains it across runtime generation changes', () => {
         const owner = createAppShellPluginUiProjectionPublication();
         const pluginId = 'acme.publication';

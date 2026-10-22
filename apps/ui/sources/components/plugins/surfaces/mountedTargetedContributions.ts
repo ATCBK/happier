@@ -168,8 +168,8 @@ export function useMountedTargetedContributions(params: Readonly<{
     const accountOrigin = React.useMemo(() => params.accountExecutionOrigin, [accountOriginKey]);
     const active = params.enabled && Boolean(machineId || accountOrigin) && Boolean(pluginId);
     const accountLifetime = active ? params.accountLifetime : null;
-    const accountAvailability = React.useMemo(() => accountOrigin && accountLifetime
-        ? readPluginAccountAvailability(accountLifetime.scope) : null, [accountOrigin, accountLifetime]);
+    const accountAvailability = React.useMemo(() => accountLifetime
+        ? readPluginAccountAvailability(accountLifetime.scope) : null, [accountLifetime]);
     const [accountRevision, refreshAccount] = React.useReducer((revision: number) => revision + 1, 0);
     const projectionScope = React.useMemo(() => (
         active && machineId ? { machineId, serverId: serverId || null } : null
@@ -223,8 +223,8 @@ export function useMountedTargetedContributions(params: Readonly<{
         // Retained text is only presentation. The absent live input map still
         // refuses selectors/Actions; no retained schema gains authority.
         const runtime = projectionInputs?.pluginUiProjection ?? targetPublication.retainedPresentation;
-        const account = accountOrigin ? accountAvailability?.readAccountUiProjection() ?? null : null;
-        const pluginUiProjection = accountOrigin ? installedPublication.publish(account ? [account] : [], runtime) : runtime;
+        const account = accountAvailability?.readAccountUiProjection() ?? null;
+        const pluginUiProjection = installedPublication.publish(account ? [account] : [], runtime);
         let childrenChanged = false;
         for (const child of childPublications.entries) {
             const actionInputSelectionFactsKey = child.selection.publish({ pluginProjectionById: projectionInputs?.pluginProjectionById,
@@ -244,7 +244,7 @@ export function useMountedTargetedContributions(params: Readonly<{
                 translationsByPluginId: pluginUiProjection?.translationsByPluginId,
                 targetedContributions: targetPublication.current, targetPluginId: pluginId }),
         };
-    }, [accountAvailability, accountLifetime, accountOrigin, childPublications, installedPublication, pluginId, projectionScope, selectionPublication, targetPublication]);
+    }, [accountAvailability, accountLifetime, childPublications, installedPublication, pluginId, projectionScope, selectionPublication, targetPublication]);
 
     React.useEffect(() => {
         if (!active || !accountLifetime) return;
@@ -260,11 +260,14 @@ export function useMountedTargetedContributions(params: Readonly<{
         };
         const unsubscribeProjection = projectionScope
             ? subscribeDaemonMergedProjectionSummary(projectionScope, updateSources) : () => {};
-        const unsubscribeAccount = accountAvailability?.subscribe(() => { updateSources(); refreshAccount(); });
+        const unsubscribeAccount = accountAvailability?.subscribe(() => {
+            updateSources();
+            if (accountOrigin) refreshAccount();
+        });
         const retirement = accountLifetime.onRetire(updateSources);
         updateSources();
         return () => { unsubscribeProjection(); unsubscribeAccount?.(); retirement.dispose(); };
-    }, [accountAvailability, accountLifetime, active, projectionScope, readCurrentSources, targetKey]);
+    }, [accountAvailability, accountLifetime, accountOrigin, active, projectionScope, readCurrentSources, targetKey]);
 
     React.useEffect(() => {
         if (!active || !accountLifetime) return;
