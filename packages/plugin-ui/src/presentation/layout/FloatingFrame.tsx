@@ -21,6 +21,7 @@ import {
   useCompanionPointerDragSession,
   type UseCompanionPointerDragSessionParams,
 } from '../interaction/useCompanionPointerDragSession.js';
+import { isHappierFocusVisible } from '../interaction/focusVisible.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import { HAPPIER_PRESENCE_CAPSULE_HEIGHT } from '../copresence/PresenceCapsule.js';
 import {
@@ -306,6 +307,9 @@ export function FloatingFrame(props: FloatingFrameProps) {
   const [touchPointer, setTouchPointer] = useState(primaryPointerCannotHover);
   const environmentTheme = useOptionalHappierUiTheme();
   const [focused, setFocused] = useState(false);
+  // The body's ring marks keyboard focus on the frame itself (arrow keys move it). A focused control
+  // inside draws its own ring, and a pointer press never leaves one (focusVisible.ts).
+  const [frameFocusVisible, setFrameFocusVisible] = useState(false);
   const [bodyNode, setBodyNode] = useState<View | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -567,8 +571,14 @@ export function FloatingFrame(props: FloatingFrameProps) {
     Platform.OS === 'web' ? { dataSet: value } : {};
   const frameEventHandlers = {
     onKeyDown,
-    onFocus: () => setFocused(true),
-    onBlur: () => setFocused(false),
+    onFocus: (event: { target: unknown; currentTarget: unknown }) => {
+      setFocused(true);
+      setFrameFocusVisible(event.target === event.currentTarget && isHappierFocusVisible(event.target));
+    },
+    onBlur: () => {
+      setFocused(false);
+      setFrameFocusVisible(false);
+    },
     onPointerEnter: (event: WebPointerEvent<HTMLElement> | NativePointerEvent) => {
       if ('pointerType' in event && event.pointerType === 'touch') setTouchPointer(true);
       setHovered(true);
@@ -651,7 +661,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
             borderRadius: HAPPIER_FLOATING_FRAME_METRICS.bodyRadius,
             overflow: 'hidden',
           },
-          focused && props.colors?.focusRing
+          frameFocusVisible && props.colors?.focusRing
             ? ({
                 outlineWidth: 2,
                 outlineStyle: 'solid',

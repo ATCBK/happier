@@ -295,6 +295,33 @@ describe('FloatingFrame', () => {
     view.unmount();
   });
 
+  it('rings its body only for keyboard focus on the frame itself, never after a pointer press on a control', () => {
+    const { view, byId } = mount({ colors: { focusRing: 'rgb(0, 122, 255)' } }, 'tab');
+    const ringed = () => byId('frame-body').style.outlineStyle === 'solid';
+
+    // A pointer press on a source control focuses it (React Native Web reports every focus).
+    act(() => {
+      document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      byId('take-control').focus();
+    });
+    expect(byId('frame-controls').style.opacity).toBe('1');
+    expect(ringed()).toBe(false);
+
+    // Keyboard focus on a control: the control draws its own ring; the body does not add a second one.
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      byId('close').focus();
+    });
+    expect(ringed()).toBe(false);
+
+    // Keyboard focus on the frame itself (arrow keys move it): the body shows the ring.
+    act(() => {
+      byId('frame').focus();
+    });
+    expect(ringed()).toBe(true);
+    view.unmount();
+  });
+
   it('settles beside obstacles, and asks to dock when no floating placement fits', () => {
     const orb: FrameRect = {
       x: AVAILABLE.x + AVAILABLE.width - 60,
