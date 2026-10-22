@@ -3189,6 +3189,11 @@ export type GeneratedActions = Readonly<{
       readonly list: (input: PublicActionInputById["workflow.definition.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.list">>;
       readonly update: (input: PublicActionInputById["workflow.definition.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.update">>;
     }> ;
+    readonly discussion: Readonly<{
+      readonly round: Readonly<{
+        readonly project: (input: PublicActionInputById["workflow.discussion.round.project"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.discussion.round.project">>;
+      }> ;
+    }> ;
     readonly events: Readonly<{
       readonly list: (input: PublicActionInputById["workflow.events.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.events.list">>;
     }> ;
@@ -5625,6 +5630,11 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         import: (input: PublicActionInputById["workflow.definition.import"], options?: ActionExecutionOptions) => execute("workflow.definition.import", input, options),
         list: (input: PublicActionInputById["workflow.definition.list"], options?: ActionExecutionOptions) => execute("workflow.definition.list", input, options),
         update: (input: PublicActionInputById["workflow.definition.update"], options?: ActionExecutionOptions) => execute("workflow.definition.update", input, options),
+      },
+      discussion: {
+        round: {
+          project: (input: PublicActionInputById["workflow.discussion.round.project"], options?: ActionExecutionOptions) => execute("workflow.discussion.round.project", input, options),
+        },
       },
       events: {
         list: (input: PublicActionInputById["workflow.events.list"], options?: ActionExecutionOptions) => execute("workflow.events.list", input, options),

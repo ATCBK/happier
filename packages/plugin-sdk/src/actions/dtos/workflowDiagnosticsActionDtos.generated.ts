@@ -65,6 +65,9 @@ export type WorkflowDiagnosticsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -314,6 +317,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -424,6 +428,9 @@ export type WorkflowDiagnosticsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -673,6 +680,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';

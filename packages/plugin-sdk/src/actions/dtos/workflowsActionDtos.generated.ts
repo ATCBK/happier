@@ -891,6 +891,9 @@ export type WorkflowsActionInputById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: unknown;
                 defaultFrom?: 'origin_session' | undefined;
@@ -1167,6 +1170,9 @@ export type WorkflowsActionInputById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -1416,6 +1422,7 @@ export type WorkflowsActionInputById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -1497,6 +1504,9 @@ export type WorkflowsActionInputById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -1746,6 +1756,7 @@ export type WorkflowsActionInputById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -2212,6 +2223,9 @@ export type WorkflowsActionInputById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -2461,6 +2475,7 @@ export type WorkflowsActionInputById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -2576,6 +2591,9 @@ export type WorkflowsActionInputById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -2825,6 +2843,7 @@ export type WorkflowsActionInputById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -3118,6 +3137,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -3367,6 +3389,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -4151,6 +4174,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -4400,6 +4426,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -5240,6 +5267,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     };
                     selections: {
                         value: {
@@ -5868,6 +5896,9 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -6117,6 +6148,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -7029,6 +7061,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     };
                     selections: {
                         value: {
@@ -7657,6 +7690,9 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -7906,6 +7942,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -8039,6 +8076,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -8288,6 +8328,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -13026,6 +13067,9 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -13275,6 +13319,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -13355,6 +13400,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -13604,6 +13652,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -13706,6 +13755,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -13955,6 +14007,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -14057,6 +14110,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -14306,6 +14362,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -14403,6 +14460,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -14652,6 +14712,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -14742,6 +14803,9 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -14991,6 +15055,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -15072,6 +15137,9 @@ export type WorkflowsActionResultById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
                 defaultFrom?: 'origin_session' | undefined;
@@ -15321,6 +15389,7 @@ export type WorkflowsActionResultById = {
                     kind: 'item';
                     field: 'value';
                     path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -15406,6 +15475,9 @@ export type WorkflowsActionResultById = {
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
                     multiple?: boolean | undefined;
+                    minItems?: number | undefined;
+                    uniqueItems?: boolean | undefined;
+                    conflictsWith?: string[] | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
                     defaultFrom?: 'origin_session' | undefined;
@@ -15655,6 +15727,7 @@ export type WorkflowsActionResultById = {
                         kind: 'item';
                         field: 'value';
                         path?: (string | number)[] | undefined;
+                        roster?: string | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -15956,6 +16029,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -16205,6 +16281,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -16311,6 +16388,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -16560,6 +16640,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -16880,6 +16961,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -17129,6 +17213,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -17235,6 +17320,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -17484,6 +17572,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -17806,6 +17895,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -18055,6 +18147,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -18161,6 +18254,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -18410,6 +18506,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -18732,6 +18829,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -18981,6 +19081,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -19087,6 +19188,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -19336,6 +19440,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -19823,6 +19928,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -20072,6 +20180,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -20178,6 +20287,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -20427,6 +20539,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -20759,6 +20872,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -21008,6 +21124,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -21114,6 +21231,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -21363,6 +21483,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -21685,6 +21806,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -21934,6 +22058,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -22040,6 +22165,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -22289,6 +22417,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -22611,6 +22740,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -22860,6 +22992,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -22966,6 +23099,9 @@ export type WorkflowsActionResultById = {
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
                         multiple?: boolean | undefined;
+                        minItems?: number | undefined;
+                        uniqueItems?: boolean | undefined;
+                        conflictsWith?: string[] | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
                         defaultFrom?: 'origin_session' | undefined;
@@ -23215,6 +23351,7 @@ export type WorkflowsActionResultById = {
                             kind: 'item';
                             field: 'value';
                             path?: (string | number)[] | undefined;
+                            roster?: string | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';

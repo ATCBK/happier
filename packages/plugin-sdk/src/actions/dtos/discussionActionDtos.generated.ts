@@ -512,6 +512,11 @@ export type DiscussionActionInputById = {
                 };
             } | undefined;
         } | undefined;
+        project?: {
+            machineId: string;
+            directory: string;
+            workspaceRefId?: string | undefined;
+        } | undefined;
     };
     readonly "discussion.list": {
         state?: 'active' | 'archived' | undefined;
@@ -2238,7 +2243,7 @@ export type DiscussionActionResultById = {
         } | undefined;
     } | {
         status: 'asked';
-        mode: 'ask';
+        mode: 'ask' | 'fresh_opinions';
         discussion: {
             serverId: string;
             discussionId: string;
@@ -2252,19 +2257,16 @@ export type DiscussionActionResultById = {
             messageId: string;
         };
         grantedAccountIds: string[];
+        runId?: string | undefined;
     } | {
         grantedAccountIds: string[];
         status: 'pending';
-        stage: 'ask' | 'grant' | 'create' | 'invite';
+        stage: 'ask' | 'workflow' | 'grant' | 'create' | 'invite';
         errorCode: string;
         discussion?: {
             serverId: string;
             discussionId: string;
         } | undefined;
-    } | {
-        status: 'unavailable';
-        reason: 'fresh_opinions_unavailable';
-        mode: 'fresh_opinions';
     };
     readonly "discussion.list": {
         discussions: {

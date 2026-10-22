@@ -518,6 +518,9 @@ export type WorkflowAuthoringActionInputById = {
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
                 multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
                 enum?: string[] | undefined;
                 default?: unknown;
                 defaultFrom?: 'origin_session' | undefined;
