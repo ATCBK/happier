@@ -1,3 +1,4 @@
+import { isClaudeSidechainRuntimeEvidence } from '../utils/sessionHookAttribution';
 import type { ConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
 
 import { parseProviderResetAt, parseProviderTimestampMs } from '@/daemon/connectedServices/quotas/normalization';
@@ -124,6 +125,8 @@ function containsRateLimitEvidence(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return [
     value.error,
+    value.errors,
+    value.result,
     value.code,
     value.type,
     value.kind,
@@ -144,6 +147,8 @@ function containsClaudeUsageLimitEvidence(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return [
     value.error,
+    value.errors,
+    value.result,
     value.code,
     value.type,
     value.kind,
@@ -221,6 +226,8 @@ function containsTransientThrottleEvidence(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return [
     value.error,
+    value.errors,
+    value.result,
     value.code,
     value.type,
     value.kind,
@@ -244,6 +251,8 @@ function containsProviderCapacityEvidence(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return [
     value.error,
+    value.errors,
+    value.result,
     value.code,
     value.type,
     value.kind,
@@ -452,8 +461,14 @@ function markSidechainSourcedUsageDetails(
   record: Record<string, unknown> | null,
   details: NormalizedProviderUsageLimitDetailsV1 | null,
 ): NormalizedProviderUsageLimitDetailsV1 | null {
-  if (!details || record?.isSidechain !== true) return details;
+  if (!details || !isClaudeSidechainRuntimeEvidence(record)) return details;
   return { ...details, sourcedFromSidechain: true };
+}
+
+/** Availability telemetry does not establish that the parent operation failed. */
+export function mapClaudeProviderFailureToUsageDetails(event: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
+  if (!isRecord(event) || isClaudeSidechainRuntimeEvidence(event)) return null;
+  return mapSyntheticClaudeApiErrorToUsageDetails(event);
 }
 
 export function mapClaudeRateLimitEventToUsageDetails(event: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
@@ -569,10 +584,15 @@ export function readClaudeRateLimitEventWindows(event: unknown): readonly Normal
   })];
 }
 
-/** Passive quota evidence: the windows of an allowed Claude `rate_limit_event`. */
+/** Availability is quota evidence even when an optional allowance is rejected. */
 export function mapClaudeRateLimitEventToQuotaEvidence(event: unknown): readonly NormalizedProviderUsageLimitDetailsV1[] {
   const record = isRecord(event) ? event : null;
+  if (record && record.type !== 'rate_limit_event' && isClaudeSidechainRuntimeEvidence(record)) {
+    const details = mapSyntheticClaudeApiErrorToUsageDetails(record);
+    return details ? [{ ...details, sourcedFromSidechain: true }] : [];
+  }
   const info = isRecord(record?.rate_limit_info) ? record.rate_limit_info : null;
   const status = readString(info?.status);
-  return status === 'allowed' || status === 'allowed_warning' ? readClaudeRateLimitEventWindows(event) : [];
+  return status === 'allowed' || status === 'allowed_warning' || status === 'rejected'
+    ? readClaudeRateLimitEventWindows(event) : [];
 }

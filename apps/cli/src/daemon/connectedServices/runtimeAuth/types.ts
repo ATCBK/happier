@@ -56,6 +56,8 @@ export type ConnectedServiceRuntimeFailureClassification = Readonly<{
   providerLimitId?: string | null;
   sourceProviderAccountId?: string | null;
   sourceProviderOrganizationId?: string | null;
+  /** Exact public issue associated with this accepted runtime failure. */
+  runtimeIssueFingerprint?: string | null;
   sourceAccountLabel?: string | null;
   failingAccessTokenFingerprint?: string | null;
   action?: Readonly<{ kind: 'open_url'; url: string }> | null;

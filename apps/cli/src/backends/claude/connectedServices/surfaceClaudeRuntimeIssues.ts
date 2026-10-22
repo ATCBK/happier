@@ -1,4 +1,6 @@
+import { isClaudeSidechainRuntimeEvidence } from '../utils/sessionHookAttribution';
 import {
+    buildUsageLimitIssueFingerprint,
     readConnectedServiceLimitCategoryV1,
     type ConnectedServiceQuotaSnapshotV1,
     type ConnectedServiceLimitCategoryV1,
@@ -99,7 +101,8 @@ function beginConnectedClaudeTurnFailure(
     session: RuntimeIssueSession,
     issue: SessionRuntimeIssueV1,
     logPrefix: string,
-): void {
+): string | undefined {
+    let runtimeIssueFingerprint: string | undefined;
     try {
         // `failTurn` commits the local terminal transition synchronously before its returned
         // promise waits for the durable session-event write. Connected Services recovery must
@@ -111,6 +114,10 @@ function beginConnectedClaudeTurnFailure(
             provider: 'claude',
             issue,
             allocateWhenIdle: true,
+            suppressUntrustedDuplicate: true,
+            onFailureTurn: ({ issue: acceptedIssue }) => {
+                runtimeIssueFingerprint = buildUsageLimitIssueFingerprint(acceptedIssue);
+            },
         });
         void Promise.resolve(settlement).catch((error) => {
             logger.debug(`${logPrefix} Failed to persist Claude terminal turn failure`, error);
@@ -118,6 +125,7 @@ function beginConnectedClaudeTurnFailure(
     } catch (error) {
         logger.debug(`${logPrefix} Failed to begin Claude terminal turn failure`, error);
     }
+    return runtimeIssueFingerprint;
 }
 
 export function isClaudeRuntimeAuthRecoveryContinuing(error: unknown): boolean {
@@ -163,6 +171,7 @@ function buildRuntimeAuthRecoveryProjectionDeduperKey(input: Readonly<{
         profileId: input.classification?.profileId ?? null,
         groupId: input.classification?.groupId ?? null,
         kind: input.classification?.kind ?? null,
+        runtimeIssueFingerprint: input.classification?.runtimeIssueFingerprint ?? null,
         sourceProviderAccountId: input.classification?.sourceProviderAccountId ?? null,
         sourceProviderOrganizationId: input.classification?.sourceProviderOrganizationId ?? null,
         limitCategory: input.classification?.limitCategory ?? null,
@@ -521,6 +530,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     // turn-failure + recovery triggering is parent-turn-only.
     const sidechainSourced = details.sourcedFromSidechain === true;
     const occurredAt = Date.now();
+    let runtimeIssueFingerprint: string | undefined;
     if (!sidechainSourced) {
         const issue = buildClaudeRateLimitRuntimeIssue({
             details,
@@ -529,7 +539,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
             occurredAt,
         });
         if (selection) {
-            beginConnectedClaudeTurnFailure(session, issue, logPrefix);
+            runtimeIssueFingerprint = beginConnectedClaudeTurnFailure(session, issue, logPrefix);
         } else {
             await session.client.sessionTurnLifecycle?.failTurn?.({
                 provider: 'claude',
@@ -539,10 +549,13 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
         }
     }
     const enrichedDetails = await enrichedDetailsPromise;
-    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
+    const classifiedFailure = classifyClaudeConnectedServiceRuntimeAuthFailure({
         details: enrichedDetails,
         selection,
     });
+    const classification = classifiedFailure
+        ? { ...classifiedFailure, ...(runtimeIssueFingerprint ? { runtimeIssueFingerprint } : {}) }
+        : null;
     if (!classification) return;
     const observedLimitedWindow = options?.observedWindows?.find((window) => (
         resolveClaudeQuotaProviderLimitId(window) === resolveClaudeQuotaProviderLimitId(enrichedDetails)
@@ -593,23 +606,6 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     });
 }
 
-function isSubagentScopedRuntimeAuthEvidence(error: unknown): boolean {
-    // Incident 2026-06-12 cmq8y3nlx: a SUBAGENT transcript row ("Please run /login · API Error:
-    // 401 Invalid authentication credentials", transient — auth was actually fine) was classified
-    // as a session-level auth failure and the daemon restarted the healthy parent session,
-    // killing all in-flight work. Subagent-scoped evidence describes a SUBAGENT request, not the
-    // parent session's credentials: it must not fail the parent turn and must not drive
-    // runtime-auth recovery. A REAL persistent auth failure also hits the parent's own requests
-    // (shared credentials), which still routes to recovery. Mirrors the sidechain gating for
-    // usage-limit evidence (Jun-11 H-B / FIX-3 in surfaceClaudeRateLimitRuntimeIssue).
-    const record = error && typeof error === 'object' && !Array.isArray(error)
-        ? error as Record<string, unknown>
-        : null;
-    if (!record) return false;
-    if (record.isSidechain === true) return true;
-    const parentToolUseId = record.parent_tool_use_id ?? record.parentToolUseId;
-    return typeof parentToolUseId === 'string' && parentToolUseId.trim().length > 0;
-}
 
 function containsClaudeOAuthRevocationText(value: unknown, depth = 0): boolean {
     if (depth > 5 || value === null || value === undefined) return false;
@@ -644,7 +640,7 @@ export async function surfaceClaudeRuntimeAuthFailure(
     error: unknown,
     logPrefix: string,
 ): Promise<boolean> {
-    const subagentScoped = isSubagentScopedRuntimeAuthEvidence(error);
+    const subagentScoped = isClaudeSidechainRuntimeEvidence(error);
     const definitiveSubagentOAuthRevocation = subagentScoped
         && containsDefinitiveClaudeOAuthRevocationEvidence(error);
     if (subagentScoped && !definitiveSubagentOAuthRevocation) return false;
@@ -682,10 +678,13 @@ export async function surfaceClaudeRuntimeAuthFailure(
     // The provider has already rejected this exact turn. Begin its local terminal transition
     // before asking Connected Services to repair the account, but do not let the terminal event's
     // durable write prevent the recovery owner from receiving the rejection.
-    if (!subagentScoped) {
-        beginConnectedClaudeTurnFailure(session, issue, logPrefix);
-    }
-    const classification = await enrichClaudeRuntimeEvidenceWithAccountIdentity(initialClassification);
+    const runtimeIssueFingerprint = !subagentScoped
+        ? beginConnectedClaudeTurnFailure(session, issue, logPrefix)
+        : undefined;
+    const classification = {
+        ...await enrichClaudeRuntimeEvidenceWithAccountIdentity(initialClassification),
+        ...(runtimeIssueFingerprint ? { runtimeIssueFingerprint } : {}),
+    };
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
         switchesThisTurn: 0,

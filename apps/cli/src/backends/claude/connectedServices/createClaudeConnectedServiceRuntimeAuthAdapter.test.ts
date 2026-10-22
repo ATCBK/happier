@@ -61,12 +61,11 @@ describe('createClaudeConnectedServiceRuntimeAuthAdapter', () => {
         record,
       },
       error: {
-        type: 'rate_limit_event',
-        rate_limit_info: {
-          status: 'rejected',
-          rateLimitType: 'weekly',
-          utilization: 100,
-        },
+        type: 'assistant',
+        isApiErrorMessage: true,
+        apiErrorStatus: 429,
+        error: 'rate_limit_error',
+        providerLimitId: 'weekly',
       },
     });
 

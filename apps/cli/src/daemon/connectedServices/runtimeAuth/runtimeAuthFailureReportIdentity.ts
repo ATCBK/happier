@@ -17,6 +17,7 @@ type StableRuntimeAuthFailureClassificationIdentity = Readonly<{
   providerLimitId: string | null;
   sourceProviderAccountId: string | null;
   sourceProviderOrganizationId?: string;
+  runtimeIssueFingerprint?: string;
   recoveryActionKind: string | null;
   resetsAtMsBucket: number | null;
   /**
@@ -46,6 +47,7 @@ export function readStableRuntimeAuthFailureClassificationIdentity(
     : null;
   return {
     kind: parsed.kind,
+    ...(parsed.runtimeIssueFingerprint ? { runtimeIssueFingerprint: parsed.runtimeIssueFingerprint } : {}),
     serviceId: parsed.serviceId,
     profileId: parsed.profileId,
     groupId: parsed.groupId,

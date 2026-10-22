@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
-import { mapClaudeRateLimitEventToUsageDetails } from './mapClaudeRateLimitEventToUsageDetails';
+import { mapClaudeProviderFailureToUsageDetails } from './mapClaudeRateLimitEventToUsageDetails';
 import { resolveClaudeConnectedServiceRuntimeAuthSwitchPlan } from './claudeConnectedServiceRuntimeAuthSwitchPlan';
 import { resolveClaudeSharedGroupHotApplyTarget } from './claudeSharedGroupHotApplyTarget';
 import { materializeClaudeSharedGroupRuntimeAuth } from './materializeClaudeSharedGroupRuntimeAuth';
@@ -119,7 +119,7 @@ export function createClaudeConnectedServiceRuntimeAuthAdapter(): ConnectedServi
       });
       if (authClassification) return attachClaudeSourceAccountIdentity(authClassification, input);
 
-      const details = mapClaudeRateLimitEventToUsageDetails(input.error);
+      const details = mapClaudeProviderFailureToUsageDetails(input.error);
       // The raw payload rides along even when details mapped, so the classifier can recover reset
       // timing the mapper could not place in the details (INC-4).
       return attachClaudeSourceAccountIdentity(classifyClaudeConnectedServiceRuntimeAuthFailure({

@@ -1,3 +1,5 @@
+import type { notifyDaemonConnectedServiceRuntimeAuthFailure } from '@/daemon/controlClient';
+import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +28,7 @@ import {
   surfaceClaudeRateLimitRuntimeIssue,
 } from './surfaceClaudeRuntimeIssues';
 
-const mockNotifyDaemonConnectedServiceRuntimeAuthFailure = vi.hoisted(() => vi.fn(async () => ({})));
+const mockNotifyDaemonConnectedServiceRuntimeAuthFailure = vi.hoisted(() => vi.fn<(input: Parameters<typeof notifyDaemonConnectedServiceRuntimeAuthFailure>[0]) => Promise<unknown>>(async () => ({})));
 const mockNotifyDaemonConnectedServiceQuotaSnapshot = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock('@/daemon/controlClient', () => ({
   notifyDaemonConnectedServiceRuntimeAuthFailure: mockNotifyDaemonConnectedServiceRuntimeAuthFailure,
@@ -116,6 +118,35 @@ function restoreClaudeSelectionEnv(previous: string | undefined): void {
 }
 
 describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
+  it('reports duplicate Claude observers once and a fresh begun turn again', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    const mutations: SessionTurnMutationV1[] = [];
+    let sequence = 0;
+    const lifecycle = createSessionTurnLifecycle({
+      sessionId: 'claude-observer-occurrences', createId: () => String(++sequence),
+      enqueueSessionTurn: async (mutation) => { mutations.push(mutation); },
+    });
+    const session = { client: { sessionId: 'claude-observer-occurrences', sessionTurnLifecycle: lifecycle } };
+    const details = {
+      v: 1 as const, resetAtMs: null, retryAfterMs: null, limitCategory: 'usage_limit' as const,
+      quotaScope: 'account' as const, recoverability: 'wait' as const, planType: null,
+      utilization: null, overage: null, action: null, connectedService: null,
+    };
+    try {
+      await lifecycle.beginTurn({ provider: 'claude' });
+      await surfaceClaudeRateLimitRuntimeIssue(session, details, '[test]');
+      await surfaceClaudeRateLimitRuntimeIssue(session, details, '[test]');
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledTimes(1);
+      await lifecycle.beginTurn({ provider: 'claude' });
+      await surfaceClaudeRateLimitRuntimeIssue(session, details, '[test]');
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledTimes(2);
+      const fingerprints = mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mock.calls.map(([input]) => sanitizeConnectedServiceRuntimeFailureClassification(input.classification)?.runtimeIssueFingerprint);
+      expect(fingerprints[0]).toEqual(expect.any(String));
+      expect(fingerprints[1]).not.toBe(fingerprints[0]);
+      expect(mutations.filter((mutation) => mutation.action === 'fail')).toHaveLength(2);
+    } finally { restoreClaudeSelectionEnv(previousSelectionEnv); }
+  });
+
   it('publishes a primary rejection after the previous turn completed', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     const mutations: SessionTurnMutationV1[] = [];
@@ -920,7 +951,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         connectedService: null,
       }, '[claude-test]');
 
-      expect(failTurn).toHaveBeenCalledWith({
+      expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'claude',
         allocateWhenIdle: true,
         issue: expect.objectContaining({
@@ -933,7 +964,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
             recoverability: 'retry',
           },
         }),
-      });
+      }));
       const issue = (failTurn.mock.calls[0]?.[0] as { issue?: Record<string, unknown> } | undefined)?.issue;
       expect(issue).not.toHaveProperty('usageLimit');
     } finally {
@@ -967,7 +998,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         connectedService: null,
       }, '[claude-test]');
 
-      expect(failTurn).toHaveBeenCalledWith({
+      expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'claude',
         allocateWhenIdle: true,
         issue: expect.objectContaining({
@@ -981,7 +1012,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
             retryAfterMs: 2_000,
           }),
         }),
-      });
+      }));
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
     }
@@ -1013,7 +1044,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         connectedService: null,
       }, '[claude-test]');
 
-      expect(failTurn).toHaveBeenCalledWith({
+      expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'claude',
         allocateWhenIdle: true,
         issue: expect.objectContaining({
@@ -1037,7 +1068,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
             },
           }),
         }),
-      });
+      }));
       expect(mockNotifyDaemonConnectedServiceQuotaSnapshot).toHaveBeenCalledWith({
         sessionId: 'sess_native_claude',
         serviceId: 'claude-subscription',
@@ -1097,7 +1128,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         connectedService: null,
       }, '[claude-test]');
 
-      expect(failTurn).toHaveBeenCalledWith({
+      expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'claude',
         allocateWhenIdle: true,
         issue: expect.objectContaining({
@@ -1109,7 +1140,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
             recoverability: 'retry',
           },
         }),
-      });
+      }));
       const issue = (failTurn.mock.calls[0]?.[0] as { issue?: Record<string, unknown> } | undefined)?.issue;
       expect(issue).not.toHaveProperty('usageLimit');
       expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();

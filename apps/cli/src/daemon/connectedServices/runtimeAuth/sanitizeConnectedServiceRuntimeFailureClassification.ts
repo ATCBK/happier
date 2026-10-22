@@ -168,6 +168,7 @@ export function sanitizeConnectedServiceRuntimeFailureClassification(
 
   return {
     kind,
+    ...(readBoundedString(value.runtimeIssueFingerprint) ? { runtimeIssueFingerprint: readBoundedString(value.runtimeIssueFingerprint) } : {}),
     ...(limitCategory ? { limitCategory } : {}),
     serviceId,
     profileId: readNullableString(value.profileId),

@@ -1,9 +1,54 @@
+import type { Query, SDKMessage, SDKAssistantMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import { claudeRemoteAgentSdk } from './claudeRemoteAgentSdk';
 import { makeMode } from './claudeRemoteAgentSdk.testkit';
 
 describe('claudeRemoteAgentSdk stream events', () => {
+    it('keeps rejected allowance availability and sidechain errors out of parent failure recovery', async () => {
+        let sent = false;
+        const failures: unknown[] = [];
+        const quota: unknown[] = [];
+        // The external Agent SDK query is the boundary; stream admission and mapping remain real.
+        const query: Pick<Query, typeof Symbol.asyncIterator | 'close' | 'setPermissionMode' | 'setModel' | 'setMaxThinkingTokens' | 'supportedCommands' | 'supportedModels'> = {
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'overage', utilization: 1, overageStatus: 'rejected', overageDisabledReason: 'org_level_disabled' } } as SDKMessage;
+                const sidechainError = {
+                    type: 'assistant', parent_tool_use_id: 'child-task', isApiErrorMessage: true, apiErrorStatus: 429,
+                    error: 'rate_limit', uuid: '00000000-0000-4000-8000-000000000001', session_id: 'native-main',
+                    message: {
+                        id: 'child-message', type: 'message', role: 'assistant', model: 'claude',
+                        content: [], container: null, context_management: null, stop_reason: 'end_turn', stop_sequence: null,
+                        usage: { input_tokens: 0, output_tokens: 0, cache_creation: null,
+                            cache_creation_input_tokens: null, cache_read_input_tokens: null, inference_geo: null,
+                            iterations: null, server_tool_use: null, service_tier: null, speed: null },
+                    },
+                } satisfies SDKAssistantMessage & { isApiErrorMessage: boolean; apiErrorStatus: number };
+                yield sidechainError;
+                yield { type: 'result', subtype: 'success', is_error: false, session_id: 'native-main', result: 'completed', num_turns: 1, total_cost_usd: 0, duration_ms: 1, duration_api_ms: 1 } as SDKMessage;
+            },
+            close() {}, async setPermissionMode() {}, async setModel() {}, async setMaxThinkingTokens() {},
+            supportedCommands: async () => [], supportedModels: async () => [],
+        };
+        // Only consumed SDK controls are implemented at this external process boundary.
+        const createQuery = () => query as Query;
+        await claudeRemoteAgentSdk({
+            sessionId: null, transcriptPath: null, path: '/tmp', claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }), isAborted: () => false,
+            nextMessage: async () => {
+                if (sent) return null;
+                sent = true;
+                return { message: 'hello', mode: makeMode({ claudeRemoteAgentSdkEnabled: true }) };
+            },
+            onReady() {}, onSessionFound() {}, onMessage() {},
+            onRateLimitEvent: async (details) => { failures.push(details); },
+            onQuotaEvidence: async (windows) => { quota.push(...windows); },
+            createQuery,
+        });
+        expect(failures).toEqual([]);
+        expect(quota.length).toBeGreaterThan(0);
+    });
+
     const runAgentSdkStreamForCompactionEvents = async (
         streamMessages: unknown[],
         options?: Readonly<{ initialMessage?: string }>,

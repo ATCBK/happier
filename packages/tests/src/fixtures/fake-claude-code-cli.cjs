@@ -845,7 +845,10 @@ async function runSdkStreamUntilEof() {
           uuid: randomUUID(),
           session_id: sessionId,
         });
-        emitSdk({ ...createResultSuccess(), subtype: 'error_during_execution', is_error: true, errors: ['Usage limit reached'], result: 'Usage limit reached' });
+        // The failed parent result carries its own supported pipe-epoch reset evidence.
+        // The preceding availability event can describe an unrelated optional allowance.
+        const failureText = `Claude AI usage limit reached|${Math.floor(resetAtMs / 1000)}`;
+        emitSdk({ ...createResultSuccess(), subtype: 'error_during_execution', is_error: true, errors: [failureText], result: failureText });
         continue;
       }
       const acceptSignal = process.env.HAPPIER_E2E_FAKE_CLAUDE_CONTINUATION_ACCEPT_SIGNAL;
