@@ -1,4 +1,4 @@
-import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import { normalizeSpawnSessionErrorDetail, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { readConnectedServiceMaterializationIdentityV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/connectedServiceMaterializationIdentityV1';
 import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
 import { buildSpawnedFirstTurnLocalId, buildSessionSpawnInitialInputLocalIdV1 } from '@happier-dev/protocol/sessions/messages/spawnedFirstTurn';
@@ -1464,8 +1464,12 @@ export async function createSpawnedSession(
   if (!acceptedWithoutSessionId && !hasDirectSessionId) {
     // Runtime readiness can fail after the Home committed the Session. Reuse
     // the authenticated creation proof; row existence does not admit a runner.
-    const existingCreation = await rejoinExistingCreation(true);
-    if (existingCreation) return existingCreation;
+    // A typed launch refusal is terminal even when the physical launch nonce
+    // and committed row succeeded before native startup failed.
+    if (normalizeSpawnSessionErrorDetail(spawnResponseRecord?.errorDetail)?.kind !== 'launch_error') {
+      const existingCreation = await rejoinExistingCreation(true);
+      if (existingCreation) return existingCreation;
+    }
     const responseError = typeof spawnResponseRecord?.errorMessage === 'string' && spawnResponseRecord.errorMessage.trim().length > 0
       ? spawnResponseRecord.errorMessage
       : typeof spawnResponseRecord?.error === 'string' && spawnResponseRecord.error.trim().length > 0
@@ -1490,8 +1494,10 @@ export async function createSpawnedSession(
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (settledSpawn.type === 'error') {
-    const existingCreation = await rejoinExistingCreation(true);
-    if (existingCreation) return existingCreation;
+    if (settledSpawn.errorDetail?.kind !== 'launch_error') {
+      const existingCreation = await rejoinExistingCreation(true);
+      if (existingCreation) return existingCreation;
+    }
     if (
       acceptedWithoutSessionId
       && !hasRetryableSpawnNonce

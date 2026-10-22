@@ -33,11 +33,16 @@ import { accountSettingsParse, createActionExecutor } from '@happier-dev/protoco
 import { buildSessionMetadataEnvelopeCreateFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
 
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('durable creation after daemon startup refusal', () => {
-    it('preserves the same creation refusal after its runner exits before native startup despite published Activity and hostPid', async () => {
+    it.each([
+        [null, 'returned'], [null, 'nonce'],
+        ['plugin_mcp_preparation_unavailable', 'returned'], ['plugin_mcp_preparation_unavailable', 'nonce'],
+    ] as const)('preserves the same creation refusal (%s, %s) after its runner exits before native startup despite published Activity and hostPid', async (preparationCode, settlementKind) => {
         const home = await mkdtemp(join(tmpdir(), 'happier-native-startup-failure-'));
         const sessionId = 'c1234567890123456789012345';
         const machineId = 'machine-native-startup-failure';
@@ -50,6 +55,7 @@ describe('durable creation after daemon startup refusal', () => {
         const tracked = new Map<number, TrackedSession>();
         let launches = 0;
         let admittedInputs = 0;
+        let nativeStartupFailure: Extract<SpawnSessionResult, { type: 'error' }> | null = null;
         const unknownRequests: string[] = [];
         resetServerFeaturesClientForTests();
         // HTTP/authentication and the OS child process are the only replaced
@@ -78,7 +84,8 @@ describe('durable creation after daemon startup refusal', () => {
                 const child = spawn(process.execPath, ['-e', 'process.exit(1)'], { stdio: 'ignore' });
                 runners.push(child);
                 if (!child.pid) throw new Error('Missing fixture runner pid');
-                tracked.set(child.pid, { pid: child.pid, startedBy: 'daemon', happySessionId: sessionId, childProcess: child });
+                tracked.set(child.pid, { pid: child.pid, startedBy: 'daemon', happySessionId: sessionId,
+                    childProcess: child, processStartTimeMs: Date.now() });
                 const fields = buildSessionMetadataEnvelopeCreateFields({ credentials, accountEncryptionMode: 'plain',
                     storedContentMode: 'plain', agentState: null, metadata: {
                         ...buildCommittedLaunchMetadata({ options, directory: home }), hostPid: child.pid,
@@ -93,7 +100,11 @@ describe('durable creation after daemon startup refusal', () => {
                 return { type: 'success', sessionId };
             },
             stopSession: async () => ({ status: 'not_found' }),
-        }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()] }) });
+        }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()],
+            readStartupFailure: async () => preparationCode ? classifyPrimarySessionRuntimeIssue({
+                cause: 'session_error', error: { code: preparationCode }, occurredAt: Date.now(),
+            }) : null,
+        }) });
         const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
             sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {}, serverId: 'fixture-home',
             serverHttpBaseUrl: 'https://fixture.example.test',
@@ -101,12 +112,24 @@ describe('durable creation after daemon startup refusal', () => {
             sessionSpawnDirectTargetTransport: { machineId,
                 prepare: async () => ({ ok: true, directory: home, directoryKind: 'managed', directoryCreationRequired: false, checkout: null }),
                 spawnedSession: { spawn: async (request, options) => {
-                    try { return await handler(request, options); }
+                    try {
+                        const result = await handler(request, options);
+                        if (settlementKind === 'nonce' && result.type === 'error') {
+                            nativeStartupFailure = result;
+                            return { success: true, status: 'pending', sessionIdStatus: 'pending', spawnNonce: request.spawnNonce };
+                        }
+                        return result;
+                    }
                     catch (error) { expect(error).toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED }); throw error; }
                 },
                     // The physical launch nonce is already successful; the
                     // subsequent native startup refusal belongs to the Action.
-                    resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId }) },
+                    resolveSpawnSessionByNonce: async () => {
+                        if (settlementKind === 'returned') return { status: 'success', sessionId };
+                        if (!nativeStartupFailure?.errorCode) throw new Error('Missing native startup settlement');
+                        return { status: 'error', errorCode: nativeStartupFailure.errorCode,
+                            errorMessage: nativeStartupFailure.errorMessage, errorDetail: nativeStartupFailure.errorDetail };
+                    } },
             } }));
         const input = { creationKey: 'native-exit', executionTarget: { serverId: 'fixture-home', machineId },
             directory: { kind: 'managed' as const },
@@ -120,13 +143,15 @@ describe('durable creation after daemon startup refusal', () => {
         try {
             await invoke();
             const first = await operations.handlers.getV2({ operationId: 'native-startup-1', waitForTerminal: true });
+            const launchError = { code: preparationCode ?? 'SPAWN_FAILED', message: preparationCode
+                ? SESSION_PREPARATION_FAILURE_PREVIEWS[preparationCode] : 'Agent runner exited before native Session startup completed' };
             expect(first).toMatchObject({ kind: 'found', operation: { result: { type: 'error', code: 'spawn_failed',
-                launchError: { code: 'SPAWN_FAILED', message: 'Agent runner exited before native Session startup completed' } } } });
+                launchError } } });
             expect(launches).toBe(1);
             await invoke();
             expect(await operations.handlers.getV2({ operationId: 'native-startup-2', waitForTerminal: true }))
                 .toMatchObject({ kind: 'found', operation: { result: { type: 'error', code: 'spawn_failed',
-                    launchError: { code: 'SPAWN_FAILED', message: 'Agent runner exited before native Session startup completed' } } } });
+                    launchError } } });
             expect(launches).toBe(1);
             expect(admittedInputs).toBe(0);
             expect(row).toMatchObject({ id: sessionId });
