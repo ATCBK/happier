@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { observeProjectServicePlacementActualV1, type ProjectServicePlacementGetResultV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { storage } from '@/sync/domains/state/storage';
@@ -116,7 +117,8 @@ type ServiceActual = Extract<ProjectServicePlacementGetResultV1, { status: 'read
 /** Projection only: reads the same launcher store and parked inventory watches as the SOURCE feed.
  * The protocol observation owner selects accepted endpoints and proves native provenance. */
 function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceState: LocalServiceLauncherState | null) {
-    const enabled = input.launcherState === undefined && input.scope === 'workspace' && Boolean(input.workspaceRefId && input.serverId);
+    const presented = useLayoutPresentationActive();
+    const enabled = presented && input.launcherState === undefined && input.scope === 'workspace' && Boolean(input.workspaceRefId && input.serverId);
     const { binding } = useServerCredentialAccountScopeBinding(input.serverId ?? '');
     const rows = storage(state => enabled ? readCurrentProjectAccountRows(state) : null);
     const canObserve = enabled && binding?.isCurrent() === true && rows?.status === 'ready' && rows.coverage === 'complete'

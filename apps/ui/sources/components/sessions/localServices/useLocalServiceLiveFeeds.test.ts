@@ -1,4 +1,6 @@
 import { act } from 'react-test-renderer';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { LocalServiceLaunchTargetV1Schema, type LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -30,7 +32,7 @@ afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServi
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
-  it.each(['watch', 'home-reconnect', 'home-reconnect-invalid', 'daemon-restart'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
+  it.each(['watch', 'home-reconnect', 'home-reconnect-invalid', 'daemon-restart', 'visibility'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
     home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
       path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
         { id: 'source', revokedAt: null, replacedByMachineId: null },
@@ -49,25 +51,41 @@ describe('Project Services source feed plus actual native binding', () => {
       sourceClass: { kind: 'managed_service', managedServiceId: 'native-instance' }, serviceState: 'healthy',
       state: 'available', unavailableReason: undefined, readiness: 'ready', actions: ['manage'] });
     const watches: Array<(value: unknown) => void> = [];
+    const watchSignals: AbortSignal[] = [];
     let running = false;
-    remote.mockImplementation(async ({ method, machineId, payload }: {
-      method: string; machineId: string; payload: { projection?: 'managed_bindings' };
+    remote.mockImplementation(async ({ method, machineId, payload, signal }: {
+      method: string; machineId: string; payload: { projection?: 'managed_bindings' }; signal: AbortSignal;
     }) => {
-      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise((resolve, reject) =>
-        watches.push(value => value instanceof Error ? reject(value) : resolve(value)));
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+        watchSignals.push(signal);
+        return new Promise((resolve, reject) => watches.push(value => value instanceof Error ? reject(value) : resolve(value)));
+      }
       if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
         snapshot: { v: 1, machineId, updatedAt: running ? 2 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
       return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
     });
+    let presented = true;
+    const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, { active: presented, children });
     const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
-      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }));
+      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }), { wrapper });
     const readRows = () => buildLocalServiceRows({ inventoryRows: [],
       launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
       rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
     try {
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
       await vi.waitFor(() => expect(watches).toHaveLength(1));
-      if (recovery !== 'watch') {
+      if (recovery === 'visibility') {
+        presented = false;
+        await hook.rerender();
+        expect(watchSignals.every(signal => signal.aborted)).toBe(true);
+        const readsWhileClosed = remote.mock.calls.length;
+        await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+        expect(remote.mock.calls).toHaveLength(readsWhileClosed);
+        running = true;
+        presented = true;
+        await hook.rerender();
+        await vi.waitFor(() => expect(watches).toHaveLength(2));
+      } else if (recovery !== 'watch') {
         // Non-timeout transport failure or invalid reply, without navigating the Services page.
         await act(async () => { watches[0]!(recovery !== 'home-reconnect-invalid'
           ? new RpcError('Transport unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) : { invalid: true }); });
