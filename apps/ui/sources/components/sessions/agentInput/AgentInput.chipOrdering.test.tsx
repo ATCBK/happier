@@ -1,6 +1,7 @@
 import React from 'react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactTestRendererJSON } from 'react-test-renderer';
+import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 import { renderScreen as renderPanelScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
@@ -147,6 +148,43 @@ describe('AgentInput (chip ordering)', () => {
         expect(permissionIndex).toBeGreaterThanOrEqual(0);
         expect(recipientIndex).toBeGreaterThan(permissionIndex);
         expect(deliveryIndex).toBeGreaterThan(recipientIndex);
+    }, 90_000);
+
+    it('does not rebuild the control rows or action menu when only the composer text changes', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const renderRecipientChip = vi.fn(() => React.createElement('Pressable', { testID: 'agent-input-recipient-chip' }));
+        const buildRecipientMenuAction = vi.fn((): readonly ActionListItem[] => []);
+        const stableProps = {
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompleteKinds: [],
+            autocompleteSuggestions: async () => [],
+            onPermissionClick: () => {},
+            agentType: 'codex' as const,
+            // A writable Session also offers the reset-start send chip, whose press sends the live text.
+            sessionId: 'session-typing',
+            sessionAddress: { sessionId: 'session-typing', serverId: 'home' },
+            resetStartEnabled: true,
+            extraActionChips: [{
+                key: 'participants-recipient',
+                controlId: 'recipient' as const,
+                render: renderRecipientChip,
+                collapsedAction: buildRecipientMenuAction,
+            }],
+        };
+        const screen = await renderScreen(React.createElement(AgentInput, { ...stableProps, value: '' }));
+        expect(screen.findByTestId('agent-input-reset-start')).not.toBeNull();
+        expect(renderRecipientChip).toHaveBeenCalled();
+        expect(buildRecipientMenuAction).toHaveBeenCalled();
+        renderRecipientChip.mockClear();
+        buildRecipientMenuAction.mockClear();
+
+        await screen.update(React.createElement(AgentInput, { ...stableProps, value: 'h' }));
+        await screen.update(React.createElement(AgentInput, { ...stableProps, value: 'he' }));
+
+        expect(renderRecipientChip).not.toHaveBeenCalled();
+        expect(buildRecipientMenuAction).not.toHaveBeenCalled();
     }, 90_000);
 
 });

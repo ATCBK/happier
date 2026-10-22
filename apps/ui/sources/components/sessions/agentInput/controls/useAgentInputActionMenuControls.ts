@@ -73,7 +73,7 @@ export function useAgentInputActionMenuControls(params: Readonly<{
 }> {
     const dismissActionMenu = React.useCallback(() => {
         params.setShowActionMenu(false);
-    }, [params]);
+    }, [params.setShowActionMenu]);
 
     const blurComposerInput = React.useCallback(() => {
         params.inputRef.current?.blur?.();

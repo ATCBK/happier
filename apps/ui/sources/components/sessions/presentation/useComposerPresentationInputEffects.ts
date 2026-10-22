@@ -23,8 +23,22 @@ type ComposerPresentationInputRuntime = {
     /** React mount state; strict-effect probes must not retire the exact scope. */
     mounted: boolean;
     decorations: Map<string, AgentInputComposerDecoration>;
+    /** Render projection of `decorations`; reset on every decoration change. */
+    decorationsProjection: readonly AgentInputComposerDecoration[] | null;
     locks: Map<string, ComposerPresentationInputLockLease>;
 };
+
+const NO_DECORATIONS: readonly AgentInputComposerDecoration[] = [];
+
+/**
+ * The composer editor treats a new decorations array as a presentation change and redraws, so
+ * renders that change no decoration must return the same projection.
+ */
+function decorationsProjectionFor(runtime: ComposerPresentationInputRuntime): readonly AgentInputComposerDecoration[] {
+    if (runtime.decorations.size === 0) return NO_DECORATIONS;
+    runtime.decorationsProjection ??= [...runtime.decorations.values()];
+    return runtime.decorationsProjection;
+}
 
 export type ComposerPresentationInputEffects = Readonly<{
     composerDecorations: readonly AgentInputComposerDecoration[];
@@ -99,6 +113,7 @@ export function useComposerPresentationInputEffects(input: Readonly<{
             retired: false,
             mounted: false,
             decorations: new Map(),
+            decorationsProjection: null,
             locks: new Map(),
         };
     }
@@ -119,6 +134,7 @@ export function useComposerPresentationInputEffects(input: Readonly<{
         const runtime = runtimeRef.current;
         if (!runtime || !isRuntimeLive(runtime)) return;
         const id = effectIdentity({ owner: update.owner, key: update.key });
+        runtime.decorationsProjection = null;
         if (update.decorations === null) {
             runtime.decorations.delete(id);
         } else {
@@ -158,6 +174,7 @@ export function useComposerPresentationInputEffects(input: Readonly<{
         runtime.retired = true;
         runtime.mounted = false;
         runtime.decorations.clear();
+        runtime.decorationsProjection = null;
         runtime.locks.clear();
         publishProjection(runtime);
     }, [publishProjection]);
@@ -175,6 +192,7 @@ export function useComposerPresentationInputEffects(input: Readonly<{
         return () => {
             runtime.mounted = false;
             runtime.decorations.clear();
+            runtime.decorationsProjection = null;
             runtime.locks.clear();
             notifyComposerPresentationTargetChanged(runtime.ref);
         };
@@ -182,7 +200,7 @@ export function useComposerPresentationInputEffects(input: Readonly<{
 
     const runtime = runtimeRef.current;
     return {
-        composerDecorations: runtime && !runtime.retired ? [...runtime.decorations.values()] : [],
+        composerDecorations: runtime && !runtime.retired ? decorationsProjectionFor(runtime) : NO_DECORATIONS,
         composerInputLock: runtime && !runtime.retired ? inputLockForRuntime(runtime) : null,
         readComposerInputLock,
         setComposerDecorations,

@@ -13,7 +13,7 @@ import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressE
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
-import { TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS, isLargeTextInputValueLength } from './largeTextInputPolicy';
+import { TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS, containsLikelyNonWhitespace, isLargeTextInputValueLength } from './largeTextInputPolicy';
 import { createComposerEditorController, type ComposerEditorDocument } from './composerEditor/composerEditorController.web';
 import { ComposerChipView } from './composerEditor/ComposerChipView.web';
 import { ComposerChipHoverCard, type ComposerChipHoverTarget } from './composerEditor/ComposerChipHoverCard.web';
@@ -131,7 +131,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         return text;
     };
     const notifyCaret = () => { for (const listener of caretListeners.current) listener(); };
-    const measure = () => {
+    const measureContentHeight = () => {
         const host = hostRef.current;
         if (!host) return;
         const height = Math.ceil(host.scrollHeight);
@@ -139,20 +139,33 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             lastContentHeight.current = height;
             currentProps.current.onContentHeightChange?.(height);
         }
-        notifyCaret();
     };
-    const reportState = (document: ComposerEditorDocument, changed: boolean) => {
+    const measure = () => { measureContentHeight(); notifyCaret(); };
+    const reportState = (document: ComposerEditorDocument, changed: boolean, composing: boolean) => {
         const latest = currentProps.current;
-        const inputState = { text: document.text, selection: document.selection };
-        latest.onStateChange?.(inputState);
-        if (changed) latest.onReferencesChange?.(document.references);
-        latest.onSelectionChange?.(document.selection);
         const dom = controllerRef.current?.editor.view.dom;
         if (dom) {
             if (document.text.length === 0) dom.setAttribute('data-empty', 'true');
             else dom.removeAttribute('data-empty');
         }
-        if (changed) {
+        // Editor reports are always followed by the controller's caret notification.
+        measureContentHeight();
+        // Uncommitted IME text stays inside the editor: reporting every pinyin/kana update
+        // re-rendered the composer and wrote the draft per composition keystroke. The controller
+        // settles the composition with one committed report. The exception is crossing the send
+        // button's emptiness edge (`resolveLiveInputTextStatus().hasText`): Gboard composes every
+        // word, so holding the first word into an empty field would keep send disabled.
+        if (composing) {
+            const parentText = pending.current ?? lastEmitted.current;
+            if (!changed || containsLikelyNonWhitespace(document.text) === containsLikelyNonWhitespace(parentText)) return;
+        }
+        const inputState = { text: document.text, selection: document.selection };
+        latest.onStateChange?.(inputState);
+        if (changed) latest.onReferencesChange?.(document.references);
+        latest.onSelectionChange?.(document.selection);
+        // Text the parent already holds is not re-emitted: it would never be confirmed by a
+        // differing `value`, leaving the next genuine external value misread as stale.
+        if (changed && (pending.current !== null || document.text !== lastEmitted.current)) {
             if (isLargeTextInputValueLength(document.text.length)) {
                 pending.current = document.text; clearTimer();
                 timer.current = setTimeout(() => { if (pending.current !== null) emit(pending.current); }, TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS);
@@ -161,7 +174,6 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                 textLength: document.text.length, selection: document.selection, valueLength: latest.value.length,
                 liveTextLength: document.text.length, pendingTextLength: pending.current?.length });
         }
-        measure();
     };
     const makeOptions = () => ({
         text: currentProps.current.value,
@@ -169,8 +181,8 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         decorations: currentProps.current.decorations ?? EMPTY_DECORATIONS,
         attachmentIds: currentProps.current.attachmentIds,
         editable: currentProps.current.editable,
-        onChange: (document: ComposerEditorDocument) => reportState(document, true),
-        onSelection: (document: ComposerEditorDocument) => reportState(document, false),
+        onChange: (document: ComposerEditorDocument, composing: boolean) => reportState(document, true, composing),
+        onSelection: (document: ComposerEditorDocument, composing: boolean) => reportState(document, false, composing),
         onCaretChange: notifyCaret,
         onFocus: () => currentProps.current.onFocus?.(),
         onBlur: () => currentProps.current.onBlur?.(),
@@ -247,7 +259,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         if (!controller) return;
         const live = controller.read().text;
         if (props.value === lastEmitted.current) confirmed.current = true;
-        const stale = props.value !== live && (!confirmed.current || pending.current !== null);
+        // Live text ahead of our own confirmed emission is a held IME composition, not an
+        // external value: adopting it would replay the older text when the composition settles.
+        const stale = props.value !== live
+            && (!confirmed.current || pending.current !== null || props.value === lastEmitted.current);
         if (!stale) {
             const external = live !== props.value;
             controller.update(makeOptions());
@@ -264,8 +279,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             autocapitalize: 'sentences', autocorrect: 'on', autocomplete: 'off',
             'data-empty': controller.read().text.length === 0 ? 'true' : undefined,
         };
+        // Every render reaches here; unchanged attributes are not rewritten.
         for (const [name, value] of Object.entries(attributes)) {
-            if (value === undefined) dom.removeAttribute(name); else dom.setAttribute(name, value);
+            if (value === undefined) { if (dom.hasAttribute(name)) dom.removeAttribute(name); }
+            else if (dom.getAttribute(name) !== value) dom.setAttribute(name, value);
         }
         if (!controller.editor.view.composing && props.initialScrollY !== undefined && Number.isFinite(props.initialScrollY) && props.initialScrollY >= 0) {
             const key = props.scrollRestoreToken ?? `scroll:${props.initialScrollY}`;

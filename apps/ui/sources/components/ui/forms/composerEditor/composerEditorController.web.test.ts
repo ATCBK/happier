@@ -197,6 +197,40 @@ describe('real DOM composer editing', () => {
     expect(controller.read().references[0].start).toBe(1);
   });
 
+  it('drops a composition-time controlled echo once a newer value applies directly', async () => {
+    const controller = create({ text: '' });
+    controller.editor.view.dom.dispatchEvent(
+      new CompositionEvent('compositionstart', { bubbles: true }),
+    );
+    // An intermediate echo arrives while composing and is deferred.
+    controller.update({ text: 'n' });
+    controller.editor.view.dispatch(controller.editor.state.tr.insertText('你'));
+    controller.editor.view.dom.dispatchEvent(
+      new CompositionEvent('compositionend', { bubbles: true }),
+    );
+    // The parent's newer value lands before the settle microtask runs.
+    controller.update({ text: '你!' });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(controller.read().text).toBe('你!');
+  });
+
+  it('reuses the document projection when a controlled echo rebinds equal references', () => {
+    const ref = reference();
+    const controller = create({ text: `${ref.token} explain`, references: [ref] });
+    controller.editor.view.dispatch(controller.editor.state.tr.insertText('x'));
+    const current = controller.read();
+    const map = vi.spyOn(documentMapping, 'mapComposerDoc');
+    try {
+      // The parent echoes the reported document back with fresh reference copies.
+      controller.update({
+        text: current.text,
+        references: current.references.map((entry) => ({ ...entry })),
+      });
+      expect(controller.read()).toEqual(current);
+      expect(map).not.toHaveBeenCalled();
+    } finally { map.mockRestore(); }
+  });
+
   it('preserves differently labelled occurrences of the same identity through delete and undo', () => {
     const first = reference();
     const second = reference('session:auth', 'Renamed', first.end + 1);

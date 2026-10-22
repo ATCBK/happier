@@ -228,6 +228,7 @@ import { useLocalSetting } from '@/sync/store/hooks';
 import type { AcpConfigOptionOverridesV1, ComposerRefV1 } from '@happier-dev/protocol';
 import { composerRefV1Key } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
+import { useEventCallback } from '@/hooks/ui/useEventCallback';
 import { WebDropTargetView } from '@/components/workspaces/files/repositoryTree/WebDropTargetView';
 import { readExternalFileDragItems, type WebFileDragEvent } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
 import { useEntityDragDropRuntime, useEntityDropDomBinding, readWindowBounds, measureWindowBounds,
@@ -2883,6 +2884,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const resetStartAvailable = props.resetStartEnabled === true && submitEnabled
         && props.sessionId !== undefined && props.sessionAddress !== undefined
         && !props.armedContinuationTarget;
+    // `handleSend` follows the live text; the chip only sends on press, so typing must not rebuild
+    // the chip array (and with it every control row and the action menu).
+    const sendFromResetStartChip = useEventCallback(handleSend);
     const extraActionChips = React.useMemo<readonly AgentInputExtraActionChip[]>(() => {
         if (!resetStartAvailable || !props.sessionId || !props.sessionAddress) return props.extraActionChips ?? [];
         const key = 'resetStart';
@@ -2903,11 +2907,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <ActivitySpinner size="small" accessibilityLabel={t('usage.board.page.loading')} />
                 }>
                     <LazyResetStartPicker sessionId={props.sessionId!} serverId={props.sessionAddress!.serverId}
-                        onSelect={reset => { requestClose(); handleSend({ resetStart: reset }); }} />
+                        onSelect={reset => { requestClose(); sendFromResetStartChip({ resetStart: reset }); }} />
                 </React.Suspense>,
             },
         }];
-    }, [resetStartAvailable, props.extraActionChips, props.sessionId, props.sessionAddress, sendActionDisabled, handleSend]);
+    }, [resetStartAvailable, props.extraActionChips, props.sessionId, props.sessionAddress, sendActionDisabled, sendFromResetStartChip]);
     const {
         activeSelectionOverlay,
         activeExtraCollapsedPopoverChip,
@@ -3385,6 +3389,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [canStopFromComposer, handleComposerAbortShortcut, handleComposerFocusShortcut, isInputFocused, dictationEditable, controlsOnly, props.surfacePresented, openPromptPicker, promptLibraryAvailable]);
     useKeyboardShortcutHandlers(keyboardShortcutHandlers);
 
+    // Identity-stable handlers: these feed the action-menu and control-row memos, which an inline
+    // arrow would invalidate on every keystroke render.
+    const handleStopFromComposer = React.useCallback(() => {
+        void handleAbortPress();
+    }, [handleAbortPress]);
+    const openCollapsedExtraChipOptionsPopover = React.useCallback((chipKey: string | null) => {
+        if (!chipKey) {
+            closeSelectionOverlay('collapsedExtra');
+            return;
+        }
+        openSelectionOverlay('collapsedExtra', 'actionMenu', chipKey);
+    }, [closeSelectionOverlay, openSelectionOverlay]);
+    const handleToggleExtraChipCollapsedPopover = React.useCallback((chipKey: string) => {
+        toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
+    }, [toggleSelectionOverlay]);
+    const blurComposerInput = React.useCallback(() => {
+        inputRef.current?.blur();
+    }, []);
     const {
         handleActionMenuPress,
         actionMenuActions,
@@ -3424,13 +3446,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         resumeSessionId: props.resumeSessionId,
         sessionId: props.sessionId,
         extraActionChips,
-        openCollapsedOptionsPopover: (chipKey) => {
-            if (!chipKey) {
-                closeSelectionOverlay('collapsedExtra');
-                return;
-            }
-            openSelectionOverlay('collapsedExtra', 'actionMenu', chipKey);
-        },
+        openCollapsedOptionsPopover: openCollapsedExtraChipOptionsPopover,
         sessionModeLabel: sessionModeChipControl?.label ?? null,
         sessionModeChipInteraction,
         onSessionModeChange: props.onAcpSessionModeChange,
@@ -3440,9 +3456,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onResumeClick: handleResumePress,
         onFileViewerPress: props.onFileViewerPress,
         canStop: canStopFromComposer,
-        onStop: () => {
-            void handleAbortPress();
-        },
+        onStop: handleStopFromComposer,
         hasProfile,
         hasEnvVars,
         hasAgent,
@@ -3463,9 +3477,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         ...(compactControls ? { containedControlIds: AGENT_INPUT_COMPACT_CONTROL_IDS } : {}),
         chips: extraActionChips,
         overlayAnchorRef,
-        onToggleExtraChipCollapsedPopover: (chipKey) => {
-            toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
-        },
+        onToggleExtraChipCollapsedPopover: handleToggleExtraChipCollapsedPopover,
         themeTint: chipTint,
         showChipLabels: readOnly || showChipLabels,
         showAutoHideChipLabels: readOnly || showAutoHideChipLabels,
@@ -3513,7 +3525,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onRemoveFolder: props.onRemoveFolder,
         resumeChipAnchorRef,
         onResumePress: handleResumePress,
-        blurInput: () => inputRef.current?.blur(),
+        blurInput: blurComposerInput,
         resumeSessionId: props.resumeSessionId,
         resumeIsChecking: props.resumeIsChecking,
         onAbort: props.onAbort,

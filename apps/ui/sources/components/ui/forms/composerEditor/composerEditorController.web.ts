@@ -26,8 +26,13 @@ export type ComposerEditorControllerOptions = Readonly<{
     decorations?: readonly ComposerEditorDecoration[];
     attachmentIds?: readonly string[];
     editable?: boolean;
-    onChange?: (document: ComposerEditorDocument) => void;
-    onSelection?: (document: ComposerEditorDocument) => void;
+    /**
+     * `composing` reports an uncommitted IME composition: the document is provisional until the
+     * composition ends, after which one settled (`composing: false`) report carries the
+     * committed document.
+     */
+    onChange?: (document: ComposerEditorDocument, composing: boolean) => void;
+    onSelection?: (document: ComposerEditorDocument, composing: boolean) => void;
     onKeyDown?: (event: KeyboardEvent, document: ComposerEditorDocument) => boolean;
     onPasteFiles?: (event: ClipboardEvent) => boolean;
     onFocus?: () => void;
@@ -36,6 +41,15 @@ export type ComposerEditorControllerOptions = Readonly<{
     onOpenLink?: (url: string) => void;
     renderChip?: ComposerChipRenderer;
 }>;
+
+/** Projection-relevant equality: the projection recomputes `start`/`end` from the document. */
+function sameBinding(left: ComposerEditorReference, right: ComposerEditorReference): boolean {
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)] as Array<keyof ComposerEditorReference>);
+    for (const key of keys) {
+        if (key !== 'start' && key !== 'end' && left[key] !== right[key]) return false;
+    }
+    return true;
+}
 
 function drawDropCaret(): HTMLElement {
     const caret = document.createElement('span');
@@ -51,8 +65,13 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
     let composing = false;
     let compositionText: string | null = null;
     let deferred: ComposerEditorControllerOptions | null = null;
+    // The deferred value's text echoed the editor's own text (before or during the composition).
+    let deferredEcho = false;
+    // A document change was reported as composing and still needs its settled report.
+    let heldChange = false;
     let dropOffset: number | null = null;
     let mounted = false;
+    const isComposing = () => composing || editor.view.composing;
     let previousAttachmentIds = new Set(initial.attachmentIds ?? []);
     const removedAttachmentIds = new Set<string>();
     const bindings = new WeakMap<ProseMirrorNode, ComposerEditorReference>();
@@ -154,7 +173,7 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
                     },
                 },
                 appendTransaction(transactions, _previous, state) {
-                    if (!transactions.some(transaction => transaction.docChanged)) return null;
+                    if (removedAttachmentIds.size === 0 || !transactions.some(transaction => transaction.docChanged)) return null;
                     const removals: Array<{ from: number; to: number }> = [];
                     state.doc.descendants((node, position) => {
                         if (node.type.name === 'composerReference' && isRemovedAttachment(node)) removals.push({ from: position, to: position + node.nodeSize });
@@ -172,7 +191,7 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
         editor.view.dispatch(editor.state.tr.replaceSelection(new Slice(content, 0, 0)).scrollIntoView());
     };
     const clipboard = (event: ClipboardEvent, cut: boolean) => {
-        if (composing || editor.view.composing || !event.clipboardData) return false;
+        if (isComposing() || !event.clipboardData) return false;
         const current = read();
         const { start, end } = current.selection;
         if (start === end) return false;
@@ -193,10 +212,13 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
         content: { type: 'doc', content: [{ type: 'paragraph' }] },
         editable: initial.editable !== false,
         injectCSS: false,
+        // The core Delete extension only emits `delete` events (a deferred combined transform per
+        // document change); nothing here listens to them.
+        enableCoreExtensions: { delete: false },
         editorProps: {
             attributes: { 'data-happier-text-input': 'true' },
             handleKeyDown(_view, event) {
-                if (composing || editor.view.composing || event.isComposing || event.keyCode === 229) return false;
+                if (isComposing() || event.isComposing || event.keyCode === 229) return false;
                 if (options.onKeyDown?.(event, read())) return true;
                 if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight')
                     && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -250,11 +272,17 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
                             const next = deferred;
                             deferred = null;
                             const current = read();
-                            update(next.text === compositionText
+                            // An echo of the editor's own text is older than the committed
+                            // composition: keep the live document and apply only presentation.
+                            update(deferredEcho
                                 ? { ...next, text: current.text, references: current.references }
                                 : next);
                         }
                         compositionText = null;
+                        if (heldChange && !isComposing()) {
+                            heldChange = false;
+                            options.onChange?.(read(), false);
+                        }
                     });
                     return false;
                 },
@@ -269,14 +297,21 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
                 return true;
             },
         },
-        onUpdate: () => { if (!applyingExternal) options.onChange?.(read()); options.onCaretChange?.(); },
+        onUpdate: () => {
+            if (!applyingExternal) {
+                // A settled report supersedes anything held during the composition.
+                heldChange = isComposing();
+                options.onChange?.(read(), heldChange);
+            }
+            options.onCaretChange?.();
+        },
         onSelectionUpdate: ({ transaction }) => {
             // TipTap emits selectionUpdate before update for the same edit. The
             // combined change already carries its selection; cursor-only changes
             // (including replacing a selection with equal text) still need reporting.
             const reportsChange = !transaction.getMeta('preventUpdate') && !transaction.before.eq(editor.state.doc);
             if (!reportsChange) {
-                if (!applyingExternal) options.onSelection?.(read());
+                if (!applyingExternal) options.onSelection?.(read(), isComposing());
                 options.onCaretChange?.();
             }
         },
@@ -285,15 +320,20 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
     });
 
     function bind(doc: ProseMirrorNode, text: string, references: readonly ComposerEditorReference[]) {
-        mappedDocument = null;
         const bound = boundComposerEditorReferences(text, references);
         let index = 0;
+        let changed = false;
         doc.descendants(node => {
             if (node.type.name === 'composerReference') {
                 const reference = bound[index++];
-                if (reference) bindings.set(node, reference);
+                if (!reference) return;
+                const previous = bindings.get(node);
+                if (!previous || !sameBinding(previous, reference)) changed = true;
+                bindings.set(node, reference);
             }
         });
+        // A controlled echo rebinding equal references keeps the projection it would rebuild.
+        if (changed) mappedDocument = null;
     }
     function replaceDocument(text: string, references: readonly ComposerEditorReference[], selection?: ComposerEditorSelection, history = false) {
         const next = editor.schema.nodeFromJSON(composerTextToDoc(text, references));
@@ -316,7 +356,14 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
         for (const refresh of chipRefreshers) refresh();
     }
     function update(next: ComposerEditorControllerOptions) {
-        if (composing || editor.view.composing) { deferred = next; return; }
+        if (isComposing()) {
+            deferred = next;
+            deferredEcho = next.text === compositionText || next.text === mapping().text;
+            return;
+        }
+        // Applied directly, this value supersedes an echo deferred during the composition; the
+        // settle microtask must not replay that older value over it.
+        deferred = null;
         if (next.attachmentIds) {
             const ids = new Set(next.attachmentIds);
             for (const id of previousAttachmentIds) if (!ids.has(id)) removedAttachmentIds.add(id);
@@ -347,7 +394,8 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
     return {
         editor, read, update,
         setTextAndSelection(text: string, selection: ComposerEditorSelection) {
-            if (composing || editor.view.composing) return;
+            if (isComposing()) return;
+            deferred = null;
             const previous = read();
             const references = reconcileStructuredInputMentionsWithTextChange({
                 previousText: previous.text,
@@ -356,10 +404,10 @@ export function createComposerEditorController(element: HTMLElement, initial: Co
                 mentions: previous.references.map(reference => ({ ...reference, tokenText: reference.token })),
             }).map(({ tokenText: _tokenText, ...reference }) => reference);
             replaceDocument(text, references, selection, true);
-            options.onChange?.(read());
+            options.onChange?.(read(), false);
         },
         setSelection(selection: ComposerEditorSelection) {
-            if (composing || editor.view.composing) return;
+            if (isComposing()) return;
             const current = mapping();
             editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc,
                 current.offsetToPosition(selection.start), current.offsetToPosition(selection.end))));

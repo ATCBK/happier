@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installFormsCommonModuleMocks } from './formsTestHelpers';
+import type { TiptapEditorHTMLElement } from '@tiptap/core';
 import type { MultiTextInputHandle, MultiTextInputProps } from './MultiTextInput.web';
 import { TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS, TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from './largeTextInputPolicy';
 
@@ -194,6 +195,64 @@ describe('MultiTextInput web surface', () => {
         await act(async () => { view.input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); });
         await act(async () => view.ref.current?.setSelection({ start: 2, end: 2 }));
         expect(onSelectionChange).not.toHaveBeenCalled();
+    });
+
+    it('keeps uncommitted IME composition inside the editor and reports the committed document once', async () => {
+        const onChangeText = vi.fn(), onStateChange = vi.fn(), onSelectionChange = vi.fn();
+        const view = await render({ value: 'hi ', onChangeText, onStateChange, onSelectionChange });
+        const editor = (view.input as TiptapEditorHTMLElement).editor!;
+        const compose = async (text: string, from: number, to = from) => {
+            await act(async () => { editor.view.dispatch(editor.state.tr.insertText(text, from, to)); });
+        };
+        await act(async () => { view.input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); });
+        await compose('n', 4);
+        await compose('i', 5);
+        // The parent re-rendering with its last confirmed value must not roll the composition back.
+        await view.update({ value: 'hi ' });
+        expect(view.ref.current?.getText()).toBe('hi ni');
+        expect(onChangeText).not.toHaveBeenCalled();
+        expect(onStateChange).not.toHaveBeenCalled();
+        expect(onSelectionChange).not.toHaveBeenCalled();
+
+        await compose('你', 4, 6);
+        await act(async () => {
+            view.input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+            await Promise.resolve();
+        });
+        expect(onChangeText.mock.calls).toEqual([['hi 你']]);
+        expect(onStateChange.mock.calls).toEqual([[{ text: 'hi 你', selection: { start: 4, end: 4 } }]]);
+
+        await view.update({ value: 'hi 你' });
+        await compose('!', 5);
+        expect(onChangeText.mock.calls).toEqual([['hi 你'], ['hi 你!']]);
+    });
+
+    it('reports a held composition when it crosses the send button emptiness edge', async () => {
+        const onChangeText = vi.fn();
+        const view = await render({ value: '', onChangeText });
+        const editor = (view.input as TiptapEditorHTMLElement).editor!;
+        const compose = async (text: string, from: number, to = from) => {
+            await act(async () => { editor.view.dispatch(editor.state.tr.insertText(text, from, to)); });
+        };
+        await act(async () => { view.input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); });
+        // Whitespace-only is still empty to the send button: held.
+        await compose(' ', 1);
+        expect(onChangeText).not.toHaveBeenCalled();
+        // Gboard composes every word, so the first real word must enable send while composing.
+        await compose('ni', 2);
+        expect(onChangeText.mock.calls).toEqual([[' ni']]);
+        await view.update({ value: ' ni' });
+        await compose('hao', 4);
+        expect(onChangeText).toHaveBeenCalledOnce();
+        expect(view.ref.current?.getText()).toBe(' nihao');
+
+        await compose('你好', 2, 7);
+        await act(async () => {
+            view.input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+            await Promise.resolve();
+        });
+        expect(onChangeText.mock.calls).toEqual([[' ni'], [' 你好']]);
+        expect(view.ref.current?.getText()).toBe(' 你好');
     });
 
     it('forwards shortcut metadata with the live text and selection, and allows focus and blur through the handle', async () => {

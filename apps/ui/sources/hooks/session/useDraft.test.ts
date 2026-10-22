@@ -494,6 +494,63 @@ describe('useDraft', () => {
     }
   });
 
+  it('keeps the debounced remote flush scheduled by an edit until the autosave interval elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await renderHarness({ initialSessionId: 's1' });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+      flushSessionDraftSpy.mockClear();
+
+      await act(async () => {
+        harness.getCurrent().setDraftValue('draft-1 edited');
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+      expect(flushSessionDraftSpy).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(flushSessionDraftSpy).toHaveBeenCalledWith(expect.objectContaining({
+        address: { kind: 'session', sessionId: 's1' },
+      }));
+      harness.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the debounced remote flush of an edit when the route is refocused before it elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await renderHarness({ initialSessionId: 's1' });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+      flushSessionDraftSpy.mockClear();
+
+      await act(async () => {
+        harness.getCurrent().setDraftValue('draft-1 edited');
+      });
+      isFocused = false;
+      await act(async () => harness.getCurrent().rerender());
+      isFocused = true;
+      await act(async () => harness.getCurrent().rerender());
+      await flushHookEffects({ cycles: 1, turns: 1 });
+      expect(harness.getCurrent().value).toBe('draft-1 edited');
+      expect(flushSessionDraftSpy).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(flushSessionDraftSpy).toHaveBeenCalledWith(expect.objectContaining({
+        address: { kind: 'session', sessionId: 's1' },
+      }));
+      harness.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes composer edits to the local canonical replica in the input event', async () => {
     const harness = await renderHarness({ initialSessionId: 's2' });
     writeExistingSessionDraftSpy.mockClear();

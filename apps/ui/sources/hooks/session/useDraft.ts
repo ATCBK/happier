@@ -273,14 +273,18 @@ export function useDraft(
     }, []);
 
     const adoptPersistedDraftText = useCallback((draft: string) => {
+        // The replica already holds the live text (a load re-run on refocus, or a remote value equal
+        // to it): there is nothing to adopt, and a debounced flush of that text must stay scheduled.
+        if (latestValue.current === draft) {
+            lastSavedValue.current = draft;
+            return;
+        }
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
             saveTimeoutRef.current = null;
         }
-        if (latestValue.current !== draft) {
-            latestValue.current = draft;
-            onChange(draft);
-        }
+        latestValue.current = draft;
+        onChange(draft);
         lastSavedValue.current = draft;
         if (resolvedSessionId) autosaveSkip.current = { sessionId: resolvedSessionId, value: draft };
     }, [onChange, resolvedSessionId]);
