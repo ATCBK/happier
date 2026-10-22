@@ -204,12 +204,7 @@ export async function markLiveActivityTargetEnded(
     const response = await fetchLiveActivityTargetRoute(
         target,
         `${LIVE_ACTIVITY_TARGETS_PATH}/${encodeURIComponent(normalizedTargetId)}`,
-        {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        },
+        { method: 'DELETE' },
     );
 
     if (!response.ok) {
