@@ -15,6 +15,7 @@ import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks
 export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string; sessionId: string; serverId?: string | null }>) {
     const router = useRouter();
     const cockpit = useSessionCockpitSurfaceNavigation();
+    const switchSurface = cockpit?.switchSurface;
     const { width } = useWindowDimensions();
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
@@ -22,8 +23,8 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
     const paneSupportsMultiPane = paneLayout ? paneLayout.multiPaneEnabled && paneLayout.deviceType !== 'phone' : null;
     const onNavigate = React.useCallback((tabId: 'files' | 'git') => {
         const surface = tabId === 'files' ? 'browse' : 'git';
-        if (cockpit) {
-            cockpit.switchSurface(surface);
+        if (switchSurface) {
+            switchSurface(surface);
             return;
         }
         const single = paneSupportsMultiPane !== null ? !paneSupportsMultiPane : resolvePaneLayout({
@@ -39,6 +40,6 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
         if (single) {
             router.push(resolveSessionRoutePathForSurface(params.sessionId, surface, { serverId: params.serverId }));
         }
-    }, [cockpit, deviceType, multiPaneEnabled, paneSupportsMultiPane, params.serverId, params.sessionId, router, width]);
+    }, [switchSurface, deviceType, multiPaneEnabled, paneSupportsMultiPane, params.serverId, params.sessionId, router, width]);
     return useWorkspaceFilePaneNavigation(params.scopeId, onNavigate);
 }

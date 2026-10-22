@@ -29,6 +29,28 @@ function useNavigation() {
 function Wrapper({ children }: React.PropsWithChildren) { return <AppPaneProvider>{children}</AppPaneProvider>; }
 
 describe('session file pane navigation', () => {
+    it('retains Files commands across unrelated cockpit changes and follows a replaced surface command', async () => {
+        const destinations: string[] = [];
+        const switchSurface = (surface: string) => { destinations.push(surface); };
+        let navigation = { switchSurface, returnToPreviousSurface: () => {} };
+        function CockpitWrapper({ children }: React.PropsWithChildren) {
+            return <AppPaneProvider><SessionCockpitSurfaceNavigationProvider value={navigation}>{children}</SessionCockpitSurfaceNavigationProvider></AppPaneProvider>;
+        }
+        const hook = await renderHook(useNavigation, { wrapper: CockpitWrapper });
+        try {
+            const openFiles = hook.getCurrent().navigation.openFiles;
+            navigation = { switchSurface, returnToPreviousSurface: () => {} };
+            await hook.rerender();
+            expect(hook.getCurrent().navigation.openFiles).toBe(openFiles);
+            await act(async () => { openFiles(); });
+            expect(destinations).toEqual(['browse']);
+            navigation = { switchSurface: surface => { destinations.push(`current:${surface}`); }, returnToPreviousSurface: () => {} };
+            await hook.rerender();
+            await act(async () => { hook.getCurrent().navigation.openFiles(); });
+            expect(destinations).toEqual(['browse', 'current:browse']);
+        } finally { await hook.unmount(); }
+    });
+
     it('keeps the addressed server when opening Files and Changes on a phone', async () => {
         push.mockClear();
         const hook = await renderHook(useNavigation, { wrapper: Wrapper });
