@@ -307,7 +307,12 @@ export async function readClaudeJsonlSessionWorkingDirectory(params: Readonly<{
             offsetBytes,
             maxBytes: TITLE_SCAN_CHUNK_MAX_BYTES,
             maxItems: TITLE_SCAN_CHUNK_MAX_ITEMS,
+        }).catch((error: unknown) => {
+            if (!isPluginError(error) || error.code !== 'JSONL_RECORD_TOO_LARGE') throw error;
+            console.warn(`[claude] Working-directory scan stopped: ${error.message}`);
+            return null;
         });
+        if (!page) return null;
         for (const line of page.items) {
             const cwd = isRecord(line.value) && typeof line.value.cwd === 'string'
                 ? line.value.cwd.trim()

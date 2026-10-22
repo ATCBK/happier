@@ -156,17 +156,23 @@ export async function readCodexRolloutHead(
       offsetBytes,
       maxBytes: pageMaxBytes,
       maxItems: bounds.includeTitles === false ? 1 : CODEX_TITLE_SCAN_CHUNK_MAX_ITEMS,
-      // One read per page: the scanner opens the file once per chunk it pulls,
-      // and this read is performed for every row a candidate chunk returns.
+      // One native read per advisory page, through the shared scanner owner.
       chunkBytes: pageMaxBytes,
       // A single record may never cost more than what is left of the traversal
       // budget. Without this the scanner follows one multi-megabyte line for up
       // to its own 8 MB oversize allowance, which is the whole read's cost bound
       // escaping through one pathological record.
       maxOversizeLineBytes: remainingTraversalBytes,
-      fileSystem,
+      signal: bounds.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(bounds),
+    }).catch((error: unknown) => {
+      if (!isPluginError(error) || error.code !== 'JSONL_RECORD_TOO_LARGE') throw error;
+      // This is advisory metadata, not a transcript completion claim.
+      console.warn(`[codex] Rollout title scan stopped: ${error.message}`);
+      return null;
     });
     throwIfCodexExternalSessionInvocationStopped(bounds);
+    if (!page) break;
 
     for (const line of page.items) {
       throwIfCodexExternalSessionInvocationStopped(bounds);
