@@ -519,7 +519,12 @@ async function machineRpcWithServerTransport<R, A>(
                     physicalReadOwnsCustody = true;
                     return releaseCustody;
                 },
-                resolve: async sharedSignal => await runOperation(
+                onIssued: () => {
+                    onIssued?.();
+                    socketRpcAbortScope.issued = true;
+                    params.onDispatched?.();
+                },
+                resolve: async (sharedSignal, notifyIssued) => await runOperation(
                 'scoped',
                 async (timeoutMs) => {
                     try {
@@ -558,9 +563,7 @@ async function machineRpcWithServerTransport<R, A>(
                                 if (!isMachineCurrent() || (!usePlaintextTransport && context.encryption?.getMachineEncryption(context.machineId) !== machineEncryption)) {
                                     throw createRpcCallError({ error: 'Machine encryption context changed before dispatch', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
                                 }
-                                onIssued?.();
-                                socketRpcAbortScope.issued = true;
-                                params.onDispatched?.();
+                                notifyIssued();
                             },
                             signal: sharedSignal,
                             ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),

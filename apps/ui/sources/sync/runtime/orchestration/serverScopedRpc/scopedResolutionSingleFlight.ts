@@ -15,6 +15,8 @@ type ReadPartitionScope = ReadScope | readonly ReadScope[];
 export type ScopedPhysicalReadOptions = ScopedReadOptions & Readonly<{
     /** Register physical custody or a selected batch item before dispatch/borrower retirement. */
     onPhysicalAcquire?: (signal: AbortSignal) => (() => void | Promise<void>) | void;
+    /** Each live borrower observes issuance without owning the shared physical continuation. */
+    onIssued?: () => void;
 }>;
 
 /** Ordered existing references partition pending work without assigning identities to them. */
@@ -68,14 +70,15 @@ function abortReason(signal: AbortSignal): unknown {
 
 /** Pending work only: parsing, admission, retry cadence and retained data belong to domain owners. */
 export type ScopedResolutionSingleFlight<T> = Readonly<{
-    run: (key: string, resolve: (signal: AbortSignal) => Promise<T>, options?: ScopedPhysicalReadOptions) => Promise<T>;
+    run: (key: string, resolve: (signal: AbortSignal, onIssued: () => void) => Promise<T>, options?: ScopedPhysicalReadOptions) => Promise<T>;
     /** Forget joins after a write/wake without cancelling incumbent operations or their publication fences. */
     invalidate: (scope?: ReadPartitionScope) => void;
     reset: () => void;
 }>;
 
 export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleFlight<T> {
-    type Flight = { result: Promise<T>; abort: AbortController; waiters: number; settled: boolean };
+    type Flight = { result: Promise<T>; abort: AbortController; waiters: number; settled: boolean;
+        issued: boolean; issuanceListeners?: Set<() => void> };
     const defaultScope = {};
     const partitions = createReadPartitions<Map<string, Flight>>();
 
@@ -106,12 +109,16 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
                 }
                 const operation = Promise.resolve().then(() => {
                     throwIfAborted(abort.signal);
-                    return resolve(abort.signal);
+                    return resolve(abort.signal, () => {
+                        created.issued = true;
+                        for (const listener of [...(created.issuanceListeners ?? [])]) listener();
+                        throwIfAborted(abort.signal);
+                    });
                 });
                 // Also disposes a selected capture when its final borrower
                 // leaves before the deferred resolver gets a chance to run.
                 const result = dispose ? operation.finally(dispose) : operation;
-                flight = { result, abort, waiters: 0, settled: false };
+                flight = { result, abort, waiters: 0, settled: false, issued: false };
                 const created = flight;
                 partition.set(key, created);
                 const finish = () => { created.settled = true; forget(created); };
@@ -124,6 +131,7 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
                 const leave = () => {
                     if (left) return;
                     left = true;
+                    read.issuanceListeners?.delete(onIssued);
                     options.signal?.removeEventListener('abort', onAbort);
                     read.waiters -= 1;
                     if (read.waiters === 0 && !read.settled) {
@@ -137,8 +145,15 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
                     leave();
                     reject(reason);
                 };
+                const onIssued = () => {
+                    if (left) return;
+                    try { options.onIssued?.(); }
+                    catch (error) { leave(); reject(error); }
+                };
+                if (options.onIssued) (read.issuanceListeners ??= new Set()).add(onIssued);
                 options.signal?.addEventListener('abort', onAbort, { once: true });
                 if (options.signal?.aborted) onAbort();
+                else if (read.issued) onIssued();
                 void read.result.then(value => {
                     if (left) return;
                     leave();

@@ -3,6 +3,64 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScopedResolutionSingleFlight } from './scopedResolutionSingleFlight';
 
 describe('scoped pending read ownership', () => {
+    it.each(['throw', 'abort'] as const)('isolates a first borrower that refuses issuance by %s', async refusal => {
+        const reads = createScopedResolutionSingleFlight<number>();
+        const controller = new AbortController();
+        const refused = new Error('Borrower retired before issuance');
+        const dispatched: string[] = [];
+        const request = vi.fn(async (_signal: AbortSignal, onIssued: () => void) => {
+            onIssued();
+            dispatched.push('physical');
+            return 42;
+        });
+        const first = reads.run('row', request, { signal: controller.signal, onIssued: () => {
+            if (refusal === 'abort') controller.abort(refused);
+            else throw refused;
+        } });
+        const second = reads.run('row', request, { onIssued: () => dispatched.push('second') });
+        expect(await Promise.allSettled([first, second])).toEqual([
+            { status: 'rejected', reason: refused }, { status: 'fulfilled', value: 42 },
+        ]);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(dispatched).toEqual(['second', 'physical']);
+    });
+
+    it('prevents physical dispatch when its final borrower refuses issuance', async () => {
+        const reads = createScopedResolutionSingleFlight<number>();
+        const dispatched = vi.fn();
+        const refused = new Error('Borrower retired before issuance');
+        await expect(reads.run('row', async (_signal, onIssued) => {
+            onIssued();
+            dispatched();
+            return 42;
+        }, { onIssued: () => { throw refused; } })).rejects.toBe(refused);
+        expect(dispatched).not.toHaveBeenCalled();
+    });
+
+    it('marks a post-issuance joiner as issued and detaches its cancellation without replay', async () => {
+        const reads = createScopedResolutionSingleFlight<number>();
+        const issued = vi.fn();
+        const controller = new AbortController();
+        let finish!: (value: number) => void;
+        let physicalSignal: AbortSignal | null = null;
+        const request = vi.fn(async (signal: AbortSignal, onIssued: () => void) => {
+            physicalSignal = signal;
+            onIssued();
+            return await new Promise<number>(resolve => { finish = resolve; });
+        });
+        const first = reads.run('row', request);
+        await Promise.resolve();
+        const joined = reads.run('row', request, { signal: controller.signal, onIssued: issued });
+        const cancelled = expect(joined).rejects.toMatchObject({ name: 'AbortError' });
+        expect(issued).toHaveBeenCalledTimes(1);
+        controller.abort();
+        await cancelled;
+        expect(physicalSignal).toHaveProperty('aborted', false);
+        finish(42);
+        await expect(first).resolves.toBe(42);
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
     it('owns a prepared physical resource before its first borrower leaves, while keeping a survivor alive', async () => {
         const reads = createScopedResolutionSingleFlight<number>();
         const caller = new AbortController();

@@ -10,7 +10,8 @@ export type AdmittedMachineRpcReadBinding = Readonly<{
 export type MachineRpcReadAdmissionInput<T> = Readonly<{
     binding: AdmittedMachineRpcReadBinding;
     signal?: AbortSignal;
-    resolve(signal: AbortSignal): Promise<T>;
+    resolve(signal: AbortSignal, onIssued: () => void): Promise<T>;
+    onIssued?: () => void;
     onPhysicalAcquire(signal: AbortSignal): () => void | Promise<void>;
 }>;
 
@@ -27,7 +28,7 @@ export function createMachineRpcReadAdmission(question: readonly unknown[]): Mac
         async run<T>(input: MachineRpcReadAdmissionInput<T>): Promise<T> {
             return await admittedReads.run(JSON.stringify([...question, input.binding.key]),
                 input.resolve, { signal: input.signal, scope: input.binding.scope,
-                    onPhysicalAcquire: input.onPhysicalAcquire }) as T;
+                    onPhysicalAcquire: input.onPhysicalAcquire, onIssued: input.onIssued }) as T;
         },
     };
 }
@@ -39,15 +40,17 @@ export async function runAdmittedMachineRpcRead<T>(input: Readonly<{
     admission?: MachineRpcReadAdmission;
     binding: AdmittedMachineRpcReadBinding;
     signal?: AbortSignal;
-    resolve(signal?: AbortSignal): Promise<T>;
+    resolve(signal: AbortSignal | undefined, onIssued: () => void): Promise<T>;
+    onIssued?: () => void;
     onPhysicalAcquire(signal: AbortSignal): () => void | Promise<void>;
 }>): Promise<T> {
-    if (!input.admission) return await input.resolve(input.signal);
+    if (!input.admission) return await input.resolve(input.signal, () => input.onIssued?.());
     input.binding.assertCurrent();
     const result = await input.admission.run({
         binding: input.binding,
         signal: input.signal,
         resolve: input.resolve,
+        onIssued: input.onIssued,
         onPhysicalAcquire: input.onPhysicalAcquire,
     });
     input.binding.assertCurrent();
