@@ -21,7 +21,8 @@ describe('host input declarations read in the viewer’s language', () => {
     const fields = localizeBuiltinInputHints(descriptor.inputs!).fields;
     expect(fields.find(field => field.path === 'colourBy')!.title).toBe(t('usage.board.charts.inputColourBy'));
     expect(fields.find(field => field.path === 'style')!.options!.find(option => option.value === 'sky')!.label).toBe(t('usage.board.charts.inputSky'));
-    expect(fields.find(field => field.path === 'style')!.options!.map(option => option.value)).toEqual(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight']);
+    expect(fields.find(field => field.path === 'style')!.options!.map(option => option.value)).toEqual(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight',
+      'ninetyPlanets', 'streakThread', 'weeksSkyline', 'daysOnSurface', 'ringedStreaks', 'aroundPeriod']);
   });
   it('localizes the current Usage inputs’ titles, choices and placeholders (F4 D-11)', () => {
     const fields = localizeBuiltinInputHints({
