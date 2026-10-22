@@ -24,7 +24,7 @@ export type SessionAttachmentsMessageMetaV1 = Readonly<z.infer<typeof SessionAtt
 
 type StructuredInputImageInput = Readonly<{
   id?: string;
-  type: 'localImage'; kind: 'image'; localPath: string; path: string;
+  type: 'localImage'; kind: 'localImage'; localPath: string; path: string;
   provenance?: Readonly<{ kind: string }>;
   name: string; mimeType?: string; sizeBytes: number; sha256?: string;
 }>;
@@ -39,7 +39,7 @@ export type UploadedAttachment = Readonly<{
 /** Shared projection for ordinary uploads and target-owned issued selections. */
 export function buildUploadedAttachment(args: Omit<UploadedAttachment, 'structuredInput'>): UploadedAttachment {
   const structuredInput: StructuredInputImageInput | undefined = args.mimeType?.toLowerCase().startsWith('image/')
-    ? { ...(args.id ? { id: args.id } : {}), type: 'localImage', kind: 'image', localPath: args.path, path: args.path,
+    ? { ...(args.id ? { id: args.id } : {}), type: 'localImage', kind: 'localImage', localPath: args.path, path: args.path,
       provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND },
       name: args.name, mimeType: args.mimeType, sizeBytes: args.sizeBytes,
       ...(args.sha256 ? { sha256: args.sha256 } : {}) }

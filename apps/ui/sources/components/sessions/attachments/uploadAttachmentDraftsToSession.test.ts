@@ -131,7 +131,7 @@ describe('uploadAttachmentDraftsToSession', () => {
                     structuredInput: {
                         id: 'd1',
                         type: 'localImage',
-                        kind: 'image',
+                        kind: 'localImage',
                         localPath: '.happier/uploads/messages/m1/12345678-file.png',
                         path: '.happier/uploads/messages/m1/12345678-file.png',
                         provenance: { kind: 'sessionAttachmentUpload' },
