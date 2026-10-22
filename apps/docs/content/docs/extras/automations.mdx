@@ -128,10 +128,9 @@ as Workflows. Run now is separate from resuming the automatic schedule.
 **Writes here** lists active Runs by their accepted destination, even when
 another Session started them, alongside enabled schedules targeting this
 Session. Active rows identify this Session's writers as **step N · title**, show
-their last observed step status, and retain the overall Run progress. A completed
-iteration is not a claim that a repeating step has finished all its work; a step
-without an observation has no guessed status. Active rows open the Run, and a
-visible working row also shows the existing live workflow map. Step numbers match
+the overall Run progress and status, and open the Run to inspect individual step
+outcomes. A completed iteration is not a claim that a repeating step has finished
+all its work. A visible working row also shows the existing live workflow map. Step numbers match
 the editor and Run map, including steps inside containers; nested workflows use
 their own numbering. The global **Work**
 sidebar has a **Scheduled** group with destination links. A pending next

@@ -163,7 +163,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     } });
     const word = status.word;
     const destinationProgress = props.destinationSessionId
-        ? describeWorkflowRunDestinationProgress(summary.stepProgress, props.destinationSessionId, { saidStatus: word }) : [];
+        ? describeWorkflowRunDestinationProgress(summary.stepProgress, props.destinationSessionId) : [];
     const starterLabel = summary.startedBy === 'trigger' ? t('workflows.list.startedByTrigger')
         : summary.startedBy === 'agent' ? t('workflows.list.startedByAgent') : null;
     // A Writes-here row leads with the step that writes into this Session, then the Run's aggregate

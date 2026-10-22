@@ -8,6 +8,7 @@ import {
     serializeWorkflowStoredContentEnvelopeV1,
 } from '@happier-dev/protocol';
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { t } from '@/text';
 
 import { createDeferred, flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
@@ -152,21 +153,13 @@ describe('opened habit History result', () => {
         expect(screen.getTextContent()).not.toContain('workflows.run.stopping');
     });
     it('leads a Writes-here Run with its destination step, then aggregate progress, and never repeats the Run\'s word', async () => {
-        // Orchestrator ruling 2026-10-11 (DESIGN-SESSION #16): step first, aggregate kept, no start time;
-        // a step observation is said only when it adds to the Run's own trailing status word.
+        // FIX-VIEWER-D item 3 supersedes DESIGN-SESSION #16's differing step-state copy:
+        // the lean row keeps destination identity and progress, with one Run status.
         const { home } = await initializeRun();
-        const { describeWorkflowRunDestinationProgress } = await import('@/components/workflows/presentation/workflowRunProgress');
-        const { describeWorkflowInvocationLifecycle } = await import('@/components/workflows/presentation/workflowLifecyclePresentation');
         const progress = { completed: 1, total: 3, destinations: [
             { sourceKey: '$root', blockId: 'notes', sessionIds: ['writes-here'], ordinal: 2, name: 'Draft the notes',
                 observation: { recordId: 'notes-record', sequence: '1', attempt: '0', contentRevision: '1', lifecycle: 'running' as const } },
         ] };
-        const running = describeWorkflowInvocationLifecycle('running').label;
-        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: running }))
-            .toEqual(['sessionWork.scheduled.step(ordinal=2,title=Draft the notes)']);
-        // A differing observation is the plain state word, never a labelled "Observed:" fragment.
-        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: 'another word' }))
-            .toEqual(['sessionWork.scheduled.step(ordinal=2,title=Draft the notes) · ' + running]);
         const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
             stepProgress: progress };
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
@@ -175,8 +168,27 @@ describe('opened habit History result', () => {
         const text = screen.getTextContent();
         expect(text.indexOf('sessionWork.scheduled.step')).toBeGreaterThan(-1);
         expect(text.indexOf('sessionWork.scheduled.step')).toBeLessThan(text.indexOf('workflows.list.stepsProgress'));
+        expect(text).not.toContain('workflows.invocationState.running');
         // The fixture Run started on Sep 8; a Writes-here row says what writes here, not when the Run began.
         expect(text).not.toMatch(/Sep(?:tember)? 8/);
+    });
+    it.each(['work', 'list'] as const)('uses the Run outcome alone when a destination step last failed (%s)', async (presentation) => {
+        const { home } = await initializeRun();
+        const summary = createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'interrupted', revision: 4,
+            stepProgress: { completed: 0, total: 1, destinations: [
+                { sourceKey: '$root', blockId: 'notes', sessionIds: ['writes-here'], ordinal: 1, name: 'Draft the notes',
+                    observation: { recordId: 'notes-record', sequence: '1', attempt: '0', contentRevision: '1', lifecycle: 'failed' } },
+            ] } });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
+            presentation={presentation} destinationSessionId="writes-here" />);
+        const text = screen.getTextContent();
+        expect(text).toContain('sessionWork.scheduled.step(ordinal=1,title=Draft the notes)');
+        expect(text).toContain(t('workflows.list.stepsProgress', summary.stepProgress!));
+        expect(text.split('workflows.runState.interrupted')).toHaveLength(2);
+        expect(text).not.toContain('workflows.invocationState.failed');
+        expect(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel)
+            .not.toContain('workflows.invocationState.failed');
     });
     it('lists a Run once when an open trigger History already shows it', async () => {
         const { home } = await initializeRun();
@@ -200,7 +212,7 @@ describe('opened habit History result', () => {
         await flushHookEffects({ cycles: 40 });
         expect(scoped.findAllHostsByTestId('workflow-run-row:habit-run')).toHaveLength(1);
     });
-    it('keeps each destination writer and its observed progress beside aggregate Run progress', async () => {
+    it('keeps each destination writer beside aggregate progress with the Run status alone', async () => {
         const { home, serve } = await initializeRun();
         const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
             stepProgressCurrentness: { recordId: 'root-record', attempt: '0', contentRevision: '8' },
@@ -228,13 +240,14 @@ describe('opened habit History result', () => {
             <SessionWritesHereSection sessionId="second-session" serverId={home.id} />
         </WorkViewportContext.Provider>);
         expect(first.getTextContent()).toContain('Check');
-        expect(first.getTextContent()).toContain('workflows.invocationState.completed');
+        expect(first.getTextContent()).not.toContain('workflows.invocationState.completed');
         expect(first.getTextContent()).not.toContain('Report');
-        expect(first.getTextContent()).toContain('workflows.review.waitTitle');
+        expect(first.getTextContent()).toContain('Wait');
+        expect(first.getTextContent()).not.toContain('workflows.review.waitTitle');
         expect(first.getTextContent()).not.toContain('workflows.invocationState.waiting_for_review');
         expect(second.getTextContent()).toContain('Report');
         expect(second.getTextContent()).toContain('Follow up');
-        expect(second.getTextContent()).toContain('workflows.invocationState.running');
+        expect(second.getTextContent()).not.toContain('workflows.invocationState.running');
         expect(second.getTextContent()).not.toContain('workflows.invocationState.pending');
         expect(second.getTextContent()).not.toContain('workflows.list.observedProgress');
         for (const screen of [first, second]) {
