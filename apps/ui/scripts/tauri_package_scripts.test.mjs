@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import plist from 'plist';
 import { tmpdir } from 'node:os';
 import { prepareTauriEntitlements } from './prepareTauriEntitlements.mjs';
+import { buildStackTauriDevConfig } from '../../stack/scripts/utils/tauri/dev_runtime.mjs';
 
 test('native tray, menu-bar and quit contracts pass through the real Rust owners', async () => {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -100,7 +101,7 @@ test('apps/ui Tauri channel configs leave HTML5 file drag-and-drop available to 
   }
 });
 
-test('apps/ui macOS Tauri bundles declare microphone privacy and hardened-runtime access', async (t) => {
+test('apps/ui macOS Tauri bundles declare camera and microphone privacy and hardened-runtime access', async (t) => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
   const srcTauriDir = join(packageRoot, 'src-tauri');
@@ -118,18 +119,30 @@ test('apps/ui macOS Tauri bundles declare microphone privacy and hardened-runtim
     new URL('../../../scripts/pipeline/release/bun-standalone.entitlements.plist', import.meta.url),
     'utf8',
   ));
-  assert.deepEqual(entitlements, { ...runtime, 'com.apple.security.device.audio-input': true });
+  assert.deepEqual(entitlements, {
+    ...runtime,
+    'com.apple.security.device.audio-input': true,
+    'com.apple.security.device.camera': true,
+  });
 
-  assert.equal(config?.bundle?.macOS?.hardenedRuntime, true);
-  assert.equal(config?.bundle?.macOS?.entitlements, './Entitlements.plist');
-  assert.equal(Object.hasOwn(config?.bundle?.macOS ?? {}, 'infoPlist'), false);
-  assert.equal(
-    infoPlist.NSMicrophoneUsageDescription,
-    'Happier uses your microphone for voice conversations and dictation.',
-  );
-  assert.equal(typeof infoPlist.NSSpeechRecognitionUsageDescription, 'string');
-  assert.ok(infoPlist.NSSpeechRecognitionUsageDescription.trim().length > 0);
-  assert.equal(entitlements['com.apple.security.device.audio-input'], true);
+  for (const key of ['NSCameraUsageDescription', 'NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription']) {
+    assert.equal(typeof infoPlist[key], 'string', key);
+    assert.ok(infoPlist[key].trim().length > 0, key);
+  }
+
+  // Channel overlays and the stack dev merger must retain the shared macOS
+  // declarations; Tauri automatically merges src-tauri/Info.plist into the app.
+  for (const channel of ['tauri.conf.json', 'tauri.preview.conf.json', 'tauri.publicdev.conf.json']) {
+    const overlayConfig = JSON.parse(await readFile(join(srcTauriDir, channel), 'utf8'));
+    const effectiveConfig = buildStackTauriDevConfig({
+      baseConfig: config,
+      overlayConfig,
+      env: { HAPPIER_STACK_STACK: 'camera-contract' },
+    });
+    assert.equal(effectiveConfig?.bundle?.macOS?.hardenedRuntime, true, channel);
+    assert.equal(effectiveConfig?.bundle?.macOS?.entitlements, './Entitlements.plist', channel);
+    assert.equal(Object.hasOwn(effectiveConfig?.bundle?.macOS ?? {}, 'infoPlist'), false, channel);
+  }
 });
 
 test('apps/ui Tauri config runs beforeBuildCommand/beforeDevCommand via node wrapper (works on Windows CI)', async () => {

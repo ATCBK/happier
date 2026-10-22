@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>NSCameraUsageDescription</key>
+  <string>Happier uses your camera to scan QR codes and connect your devices.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Happier uses your microphone for voice conversations and dictation.</string>
   <key>NSSpeechRecognitionUsageDescription</key>

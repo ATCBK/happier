@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import plist from 'plist';
 
 // The release policy owns Bun runtime permissions. Desktop adds only its
-// application permission, and Tauri uses the result for the app and sidecars.
+// application permissions, and Tauri uses the result for the app and sidecars.
 export async function prepareTauriEntitlements({
   outputPath = new URL('../src-tauri/Entitlements.plist', import.meta.url),
 } = {}) {
@@ -13,6 +13,7 @@ export async function prepareTauriEntitlements({
   const entitlements = {
     ...runtime,
     'com.apple.security.device.audio-input': true,
+    'com.apple.security.device.camera': true,
   };
   const generated = plist.build(entitlements).replace(
     '<plist version="1.0">',
