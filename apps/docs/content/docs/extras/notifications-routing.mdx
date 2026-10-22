@@ -33,6 +33,8 @@ This is the default behavior for normal notification taps and for the `Answer` a
 
 ## What happens when you press a notification action
 
+The Android background-action behavior below is an unreleased development candidate, not a verified stable-release capability.
+
 On the mobile app, current interactive notification actions are:
 
 - **Permission requests**: `Allow`, `Deny`
@@ -40,7 +42,9 @@ On the mobile app, current interactive notification actions are:
 
 Their behavior is intentionally different:
 
-- `Allow` and `Deny` open the app, send the permission response when it is safe to do so, and then open the session
+- On Android builds with background notification actions available, `Allow` and `Deny` send the permission response without opening Happier or switching the selected server. A successful response does not navigate away from your current screen.
+- If Android background registration is unavailable, fails, or times out, the buttons retain foreground behavior. The same guarded executor handles live responses in the app; it does not automatically navigate to the session.
+- On iOS, `Allow` and `Deny` retain their foreground behavior: open the app, send the permission response when safe, and open the session.
 - `Answer` opens the app directly on the session so you can answer in context
 
 User-action requests include cases such as:
@@ -51,6 +55,8 @@ User-action requests include cases such as:
 Happier does **not** currently try to send freeform or multiple-choice answers directly from the notification itself. The action button is a fast path back into the correct session.
 
 ## Server-aware safety rules
+
+The navigation rules below apply to ordinary taps, `Answer`, and iOS permission actions. Android `Allow` / `Deny` use the separate rules in the next section.
 
 ### 1) Server is already active
 
@@ -94,12 +100,36 @@ After you choose **Add & Use**, Happier continues to the original session automa
 
 Notification actions are convenient, but permission responses are security-sensitive.
 
-That is why Happier only auto-sends a permission response when it can prove that the targeted server is:
+For the foreground navigation flow above, Happier only auto-sends a permission response when the targeted server is:
 
 - already active, or
 - already saved locally and can be switched to explicitly
 
 If the server is unknown, Happier falls back to navigation and review instead of silently performing the approval.
+
+## Android permission action safety and recovery
+
+Android permission actions require a saved server with matching URL, saved credentials, and a non-empty session and request ID. They use the saved profile's canonical server identity and authenticated account scope, including when that server is inactive. They never add an unknown server, change the selected server, or queue an automatic approval for later sign-in.
+
+The existing account-scoped session RPC resolves session access and encryption without a mounted UI. An account hint, when present in the notification, must match the saved credentials. Older payloads do not include that hint: for those, authenticated session access and the CLI's live request validation remain the authority. Expired or missing requests must be reviewed in the session; the app does not infer success from transport delivery alone.
+
+Notification permission actions use a one-shot authenticated connection even while normal app networking is paused in the background. The connection closes after the action or when its execution deadline expires, even if native encryption has stalled; it does not resume background sync or change the active server. A late connection cannot send an expired action. The session lookup retains the same authenticated-origin checks and encryption handling as other account-scoped requests.
+
+The foreground listener and background task share one request coordinator. Its device-local journal is keyed by server, account, session, and request, not notification ID. Concurrent identical decisions share work; a conflicting decision cannot overwrite it. The journal records issuance before the RPC emits. Only an explicit application acknowledgement of success is confirmed. Rejection, timeout, or an older acknowledgement without a result is not reported as approval success.
+
+Issued decisions are never automatically retried, including after restart or a lost acknowledgement. A saved cold-start notification response is an observation, not fresh permission to send again. Pre-issuance failures do not authorize later automatic replay; open the session to inspect and respond to the current request. This is conservative replay protection, not an exactly-once network guarantee.
+
+If Android opens Happier from a terminated state but only exposes a saved response (with no live listener or background task handling the press), the saved response does not send the approval. Open the session and handle its current request normally in the app. This also applies to the foreground fallback when background registration is unavailable.
+
+If an action cannot be confirmed, a generic recovery notice is saved for when Happier is active. The notice does not open the app from the background and does not reveal session content. Open the relevant server/session yourself to check the current request before responding again. The journal stores only scope/request identifiers, decision, state, and timestamp, never tokens or tool arguments. It does not evict issued records to make space: at its bounded capacity, or if storage fails, notification actions fail closed and require in-app review.
+
+The candidate journal retains at most 512 request records. Once full, it disables notification approvals for new requests until a safe retention strategy is implemented; restarting does not free space. There is no automatic eviction, and clearing replay-protection storage is not a safe workaround. Use the normal in-app permission controls instead.
+
+### Native build and lifecycle limits
+
+Background actions require a new Android build containing `expo-task-manager`; they cannot be delivered as an OTA-only change to an older binary. The native runtime version is bumped for that dependency. Registration is attempted once per runtime with a bounded wait. A late native completion is safe because any delivered response still uses the shared coordinator.
+
+Expo SDK 54 documents Android action-task delivery in background and terminated states. It does not replace the foreground listener. OS force-stop, battery restrictions, and native delivery still need physical-device validation; JavaScript tests cannot prove that another app remains on screen or that the OS starts the task. Normal notification taps, `Answer`, web startup, and iOS foreground behavior are unchanged.
 
 ## Prerequisites
 

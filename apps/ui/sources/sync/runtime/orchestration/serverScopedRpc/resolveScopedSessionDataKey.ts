@@ -61,6 +61,7 @@ async function fetchSessionCryptoContext(params: Readonly<{
   sessionId: string;
   decryptEncryptionKey: (value: string) => Promise<Uint8Array | null>;
   timeoutMs: number;
+  networkMode?: 'background-task';
 }>): Promise<ScopedSessionCryptoContext> {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs)) : null;
@@ -79,6 +80,7 @@ async function fetchSessionCryptoContext(params: Readonly<{
         ...(controller ? { signal: controller.signal } : {}),
       },
       timeoutMs: params.timeoutMs,
+      networkMode: params.networkMode,
     });
     if (!response.ok) {
       if (isAuthenticationResponseStatus(response.status)) {
@@ -121,6 +123,7 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<{
   sessionId: string;
   decryptEncryptionKey: (value: string) => Promise<Uint8Array | null>;
   timeoutMs?: number;
+  networkMode?: 'background-task';
 }>): Promise<ScopedSessionCryptoContext> {
   const sessionId = normalizeId(params.sessionId);
   const serverId = normalizeId(params.serverId);
@@ -137,13 +140,17 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<{
   // server, the session and the bearer token, and the token determines the credentials
   // behind the caller's `decryptEncryptionKey`, so a joiner can only ever adopt a result
   // computed from its own inputs.
-  return await sessionCryptoContextResolutions.run(keyCacheKey, async () => {
+  // A foreground resolution may be waiting for app resume. OS task work must
+  // not join that paused flight; the resulting authenticated cache is shared.
+  const flightKey = params.networkMode === 'background-task' ? `${keyCacheKey}:background-task` : keyCacheKey;
+  return await sessionCryptoContextResolutions.run(flightKey, async () => {
     const context = await fetchSessionCryptoContext({
       serverUrl: params.serverUrl,
       token,
       sessionId,
       decryptEncryptionKey: params.decryptEncryptionKey,
       timeoutMs,
+      networkMode: params.networkMode,
     });
     // Cache only stable outcomes; transient fetch failures should be retried.
     if (context.encryptionMode !== 'unknown') {

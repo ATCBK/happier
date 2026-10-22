@@ -3877,6 +3877,7 @@ export const es: TranslationStructure = {
   },
 
     notifications: {
+        permissionActionNeedsReview: "No se pudo confirmar la respuesta de permiso de la notificación. Abre la sesión y revisa la solicitud actual antes de volver a responder.",
       actions: {
         allow: 'Permitir',
         deny: 'Denegar',

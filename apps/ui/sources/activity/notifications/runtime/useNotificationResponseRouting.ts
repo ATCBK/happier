@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import * as React from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { normalizeServerUrl, setActiveServerAndSwitch, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { getActiveServerUrl, listServerProfiles } from '@/sync/domains/server/serverProfiles';
@@ -12,8 +12,10 @@ import {
     getPendingNotificationAction,
     setPendingNotificationAction,
 } from '@/sync/domains/pending/pendingNotificationAction';
-import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { withTimeout } from '@/utils/timing/time';
 import { navigateToSessionRoute } from '@/hooks/session/navigateToSessionRoute';
+import { executeNotificationPermissionAction, isNotificationPermissionAction } from './notificationPermissionActions';
 
 import { isUnsafeNotificationServerUrl, parseNotificationTap } from '../notificationRouting';
 
@@ -51,6 +53,23 @@ export function useNotificationResponseRouting(params: Readonly<{
 
         if (Platform.OS === 'web') return;
 
+        let disposed = false;
+        const showRecoveryIfActive = async () => {
+            if (disposed || Platform.OS !== 'android' || AppState.currentState !== 'active') return;
+            try {
+                const [{ consumeNotificationPermissionRecoveryNeeded }, { Modal }, { t }] = await withTimeout(
+                    () => Promise.all([import('./notificationPermissionJournal'), import('@/modal'), import('@/text')]),
+                    EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS,
+                    'notification recovery UI module load',
+                );
+                if (!disposed && AppState.currentState === 'active' && consumeNotificationPermissionRecoveryNeeded()) {
+                    Modal.alert(t('common.error'), t('notifications.permissionActionNeedsReview'));
+                }
+            } catch {
+                console.warn('[notifications] Permission action recovery unavailable');
+            }
+        };
+
         const performPermissionAction = async (actionParams: {
             sessionId: string;
             requestId: string;
@@ -72,7 +91,22 @@ export function useNotificationResponseRouting(params: Readonly<{
         };
 
         const pendingAction = getPendingNotificationAction();
-        if (pendingAction) {
+        if (pendingAction && Platform.OS === 'android') {
+            // Old versions queued actions across server switches. Do not replay an
+            // old decision when adopting background actions: require in-app review.
+            clearPendingNotificationAction();
+            fireAndForget(withTimeout(
+                () => import('./notificationPermissionJournal'), EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, 'notification recovery module load',
+            ).then(({ markNotificationPermissionRecoveryNeeded }) => {
+                markNotificationPermissionRecoveryNeeded();
+            }), {
+                tag: 'notificationPermissionRecovery',
+                logToConsole: false,
+                onError: () => { console.warn('[notifications] Permission action recovery storage unavailable'); },
+            });
+            console.warn('[notifications] Saved permission action requires in-app review');
+        }
+        if (pendingAction && Platform.OS !== 'android') {
             const active = normalizeServerUrl(getActiveServerUrl());
             if (normalizeServerUrl(pendingAction.serverUrl) === active) {
                 clearPendingNotificationAction();
@@ -102,12 +136,20 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
         }
 
-        const maybeRedirectFromResponse = (response: unknown, defaultActionIdentifier: string) => {
+        const maybeRedirectFromResponse = (response: unknown, defaultActionIdentifier: string, allowExecution = true) => {
             const parsed = parseNotificationTap({
                 response,
                 defaultActionIdentifier,
             });
             if (!parsed) return;
+
+            // Registration controls native foregrounding, not callback ownership.
+            // The task does not receive every foreground press. Both paths must
+            // invoke the same guarded executor before navigation/server switching.
+            if (Platform.OS === 'android' && isNotificationPermissionAction(parsed)) {
+                fireAndForget(executeNotificationPermissionAction(parsed, { allowExecution }).then(showRecoveryIfActive), { tag: 'notificationPermissionAction' });
+                return;
+            }
 
             if (parsed.dedupeKey) {
                 const handled = handledNotificationResponseKeysRef.current;
@@ -270,7 +312,10 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
         };
 
-        let disposed = false;
+        const recoverySubscription = Platform.OS === 'android'
+            ? AppState.addEventListener('change', (state) => { if (state === 'active') void showRecoveryIfActive(); })
+            : null;
+        void showRecoveryIfActive();
         let subscription: { remove: () => void } | null = null;
         void loadExpoNotifications()
             .then((Notifications) => {
@@ -278,8 +323,8 @@ export function useNotificationResponseRouting(params: Readonly<{
                 const defaultActionIdentifier = Notifications.DEFAULT_ACTION_IDENTIFIER;
                 void Notifications.getLastNotificationResponseAsync()
                     .then(async (response) => {
-                        if (!response) return;
-                        maybeRedirectFromResponse(response, defaultActionIdentifier);
+                        if (disposed || !response) return;
+                        maybeRedirectFromResponse(response, defaultActionIdentifier, false);
                         const clearLastNotificationResponseAsync = (Notifications as ExpoNotificationsWithClear).clearLastNotificationResponseAsync;
                         if (typeof clearLastNotificationResponseAsync === 'function') {
                             await clearLastNotificationResponseAsync();
@@ -296,6 +341,7 @@ export function useNotificationResponseRouting(params: Readonly<{
         return () => {
             disposed = true;
             subscription?.remove();
+            recoverySubscription?.remove();
         };
     }, [params.enabled]);
 }

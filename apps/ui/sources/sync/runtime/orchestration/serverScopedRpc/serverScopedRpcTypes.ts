@@ -62,6 +62,10 @@ export type ScopedSocketConnectParams = Readonly<{
     serverUrl: string;
     token: string;
     timeoutMs: number;
+    /** One-shot OS task connection, independent of foreground pooling/pause. */
+    networkMode?: 'background-task';
+    /** Owns a one-shot background socket through connection and RPC preparation. */
+    signal?: AbortSignal;
 }>;
 
 export type ScopedSocketClient = Readonly<{

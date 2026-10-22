@@ -3995,6 +3995,7 @@ export const pt: TranslationStructure = {
   },
 
     notifications: {
+        permissionActionNeedsReview: "Não foi possível confirmar a resposta à solicitação de permissão da notificação. Abra a sessão e verifique a solicitação atual antes de responder novamente.",
       actions: {
         allow: 'Permitir',
         deny: 'Negar',

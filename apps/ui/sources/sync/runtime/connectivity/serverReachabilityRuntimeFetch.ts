@@ -43,6 +43,8 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
     init: RequestInit;
     timeoutMs?: number;
     signal?: AbortSignal;
+    /** Explicit OS task work; do not resume the app's foreground supervisors. */
+    networkMode?: 'background-task';
 }>): Promise<Response> {
     const headers = new Headers(params.init.headers ?? {});
     const explicitAuthHeader = headers.get('Authorization') ?? '';
@@ -81,13 +83,15 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
         }
     }
 
-    await waitForServerReachable({
-        serverUrl: params.serverUrl,
-        token: effectiveToken,
-        signal: params.signal ?? (params.init.signal ?? undefined),
-        timeoutMs: typeof params.timeoutMs === 'number' ? params.timeoutMs : readServerReachabilityWaitTimeoutMs(),
-        acceptAuthFailed: true,
-    });
+    if (params.networkMode !== 'background-task') {
+        await waitForServerReachable({
+            serverUrl: params.serverUrl,
+            token: effectiveToken,
+            signal: params.signal ?? (params.init.signal ?? undefined),
+            timeoutMs: typeof params.timeoutMs === 'number' ? params.timeoutMs : readServerReachabilityWaitTimeoutMs(),
+            acceptAuthFailed: true,
+        });
+    }
 
     try {
         const requestUrl = hasAuth ? withConnectedServiceReaderSupport(params.url) : params.url;

@@ -1,6 +1,6 @@
 import { isLoopbackHostname, PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
 
-import { normalizeServerUrl } from '@/sync/domains/server/activeServerSwitch';
+import { canonicalizeServerUrl as normalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { coerceRelativeRoute } from '@/utils/path/routeUtils';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,8 +79,15 @@ function readNotificationId(params: Readonly<{ response: unknown }>): string | n
 
 function readNotificationData(params: Readonly<{ response: unknown }>): unknown {
     if (!isRecord(params.response)) return null;
-    const notification = (params.response as any).notification;
-    return notification?.request?.content?.data;
+    const notification = params.response.notification;
+    if (!isRecord(notification) || !isRecord(notification.request) || !isRecord(notification.request.content)) return null;
+    const content = notification.request.content;
+    // SDK 54 task callbacks receive native content before the response listener's
+    // mapNotificationContent conversion. Receipts are still ignored by action ID.
+    if (typeof content.dataString === 'string') {
+        try { return JSON.parse(content.dataString); } catch { return null; }
+    }
+    return content.data;
 }
 
 export type ParsedNotificationTap = Readonly<{
@@ -90,6 +97,7 @@ export type ParsedNotificationTap = Readonly<{
     isOpenAction: boolean;
     route: string | null;
     serverUrl: string | null;
+    accountId?: string | null;
     permissionAction: Readonly<{ action: 'allow' | 'deny'; sessionId: string; requestId: string }> | null;
 }>;
 
@@ -131,6 +139,7 @@ export function parseNotificationTap(params: Readonly<{
         isOpenAction,
         route,
         serverUrl,
+        accountId: isRecord(data) && typeof data.accountId === 'string' ? data.accountId.trim() : null,
         permissionAction: resolvedPermissionAction,
     };
 }

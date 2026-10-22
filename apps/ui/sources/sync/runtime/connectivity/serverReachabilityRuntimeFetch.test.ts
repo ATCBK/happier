@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe('runtimeFetchWithServerReachability', () => {
-    it('refuses authenticated cross-origin requests (prevents token leakage)', async () => {
+    it.each([undefined, 'background-task'] as const)('refuses authenticated cross-origin requests in %s mode (prevents token leakage)', async (networkMode) => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
 
         const runtimeFetchMock = vi.fn(async () => {
@@ -33,6 +33,7 @@ describe('runtimeFetchWithServerReachability', () => {
                 serverUrl: 'https://api.example.test',
                 token: 'token-a',
                 url: 'https://other.example.test/v1/account/profile',
+                networkMode,
                 init: {
                     method: 'GET',
                     headers: {
@@ -45,7 +46,7 @@ describe('runtimeFetchWithServerReachability', () => {
         expect(runtimeFetchMock).not.toHaveBeenCalled();
     });
 
-    it('redacts URLs in authenticated request errors (prevents query-string leakage)', async () => {
+    it.each([undefined, 'background-task'] as const)('redacts URLs in authenticated request errors in %s mode (prevents query-string leakage)', async (networkMode) => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
 
         const runtimeFetchMock = vi.fn(async () => {
@@ -66,6 +67,7 @@ describe('runtimeFetchWithServerReachability', () => {
                 serverUrl: `file:///tmp/server?token=${secret}`,
                 token: 'token-a',
                 url: `file:///tmp/target?token=${secret}`,
+                networkMode,
                 init: { method: 'GET' },
             });
         } catch (error) {
@@ -162,7 +164,7 @@ describe('runtimeFetchWithServerReachability', () => {
         expect(runtimeFetchMock.mock.calls.some(([input]) => String(input).endsWith('/health'))).toBe(false);
     });
 
-    it('marks the server offline when the main request fails', async () => {
+    it.each([undefined, 'background-task'] as const)('marks an online server offline when the main request fails in %s mode', async (networkMode) => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '50';
 
         const runtimeFetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -182,11 +184,20 @@ describe('runtimeFetchWithServerReachability', () => {
         }));
 
         const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
+        // Background tasks do not create foreground supervisors. Establish one through
+        // a normal request so both modes exercise an existing online connection.
+        await runtimeFetchWithServerReachability({
+            serverUrl: 'https://api.example.test',
+            token: 'token-a',
+            url: 'https://api.example.test/v1/sessions',
+            init: { method: 'GET' },
+        });
         await expect(
             runtimeFetchWithServerReachability({
                 serverUrl: 'https://api.example.test',
                 token: 'token-a',
                 url: 'https://api.example.test/v1/account/profile',
+                networkMode,
                 init: {
                     method: 'GET',
                     headers: {
@@ -204,6 +215,54 @@ describe('runtimeFetchWithServerReachability', () => {
         unsubscribe();
 
         expect(latestPhase).toBe('offline');
+    });
+
+    it.each([
+        { networkMode: undefined, signalOwner: 'request' },
+        { networkMode: undefined, signalOwner: 'caller' },
+        { networkMode: 'background-task', signalOwner: 'request' },
+        { networkMode: 'background-task', signalOwner: 'caller' },
+    ] as const)('does not report intentional cancellation as offline in $networkMode mode ($signalOwner signal)', async ({ networkMode, signalOwner }) => {
+        const controller = new AbortController();
+        const cancellation = new DOMException('Request cancelled', 'AbortError');
+        vi.doMock('@/utils/system/runtimeFetch', () => ({
+            runtimeFetch: vi.fn(async (input: RequestInfo | URL) => {
+                if (new URL(String(input)).pathname === '/v1/sessions') {
+                    controller.abort();
+                    throw cancellation;
+                }
+                return new Response(null, { status: 200 });
+            }),
+            resetRuntimeFetch: () => {},
+            setRuntimeFetch: () => {},
+        }));
+
+        const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
+        const target = { serverUrl: 'https://api.example.test', token: 'token-a' };
+        // Establish real online reachability through the network boundary first.
+        await runtimeFetchWithServerReachability({
+            ...target,
+            url: `${target.serverUrl}/v1/account/profile`,
+            init: { method: 'GET' },
+        });
+        const { subscribeServerReachabilityState } = await import('./serverReachabilitySupervisorPool');
+        let latestPhase: string | null = null;
+        const unsubscribe = subscribeServerReachabilityState(target.serverUrl, (state) => {
+            latestPhase = state.phase;
+        });
+        try {
+            expect(latestPhase).toBe('online');
+            await expect(runtimeFetchWithServerReachability({
+                ...target,
+                url: `${target.serverUrl}/v1/sessions`,
+                networkMode,
+                signal: signalOwner === 'caller' ? controller.signal : undefined,
+                init: { method: 'GET', signal: signalOwner === 'request' ? controller.signal : undefined },
+            })).rejects.toBe(cancellation);
+            expect(latestPhase).toBe('online');
+        } finally {
+            unsubscribe();
+        }
     });
 
     it('marks the server auth_failed when an authenticated main request returns 401', async () => {

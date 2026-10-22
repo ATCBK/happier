@@ -3826,6 +3826,7 @@ export const ru: TranslationStructure = {
   },
 
     notifications: {
+        permissionActionNeedsReview: "Не удалось подтвердить ответ на запрос разрешения из уведомления. Откройте сессию и проверьте текущий запрос, прежде чем отвечать снова.",
       actions: {
         allow: 'Разрешить',
         deny: 'Отклонить',
