@@ -263,7 +263,7 @@ describe('Codex external transcript cursor generations', () => {
     }))).toBeNull();
   });
 
-  it('reports an unavailable source when neither rollout streams nor app-server metadata exist', async () => {
+  it('rejects missing history when no native execution boundary is available', async () => {
     const fixture = await createFixture();
     try {
       await expect(readAfterCodexExternalSessionTranscript({
@@ -271,19 +271,13 @@ describe('Codex external transcript cursor generations', () => {
         cursor: 'tail',
         maxBytes: 64 * 1024,
         maxItems: 20,
-      })).resolves.toEqual({
-        items: [],
-        nextCursor: null,
-        tailCursor: null,
-        truncated: false,
-        readAfterOutcome: 'source_unavailable',
-      });
+      })).rejects.toThrow('Codex native history is unavailable');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
   });
 
-  it('reports an unavailable source when a released app-server cursor loses its metadata', async () => {
+  it('rejects a released preview cursor when complete native history is unavailable', async () => {
     const fixture = await createFixture();
     try {
       await expect(readAfterCodexExternalSessionTranscript({
@@ -291,13 +285,7 @@ describe('Codex external transcript cursor generations', () => {
         cursor: 'eyJ2IjoyLCJraW5kIjoiY29kZXhGb3J3YXJkQXBwU2VydmVyIiwidXBkYXRlZEF0TXMiOjE3MzYwMDAxMDAwMDAsInByZXZpZXdUZXh0IjoiUmVsZWFzZWQgcHJldmlldyJ9',
         maxBytes: 64 * 1024,
         maxItems: 20,
-      })).resolves.toEqual({
-        items: [],
-        nextCursor: null,
-        tailCursor: null,
-        truncated: false,
-        readAfterOutcome: 'source_unavailable',
-      });
+      })).rejects.toThrow('Codex native history is unavailable');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

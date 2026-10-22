@@ -4,7 +4,7 @@ import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk
 import { createExternalSessionUnsupportedTranscriptItem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import type { CodexRolloutAction } from './actions.js';
-import { projectCodexRolloutActions } from './messages.js';
+import { projectCodexRolloutActions, type CodexProjectedRolloutEvent } from './messages.js';
 
 type CodexRolloutExternalMessageCandidate = Pick<
   AgentExternalSessionTranscriptItem,
@@ -72,11 +72,20 @@ export function mapCodexRolloutLineToExternalMessages(params: Readonly<{
     { sidechainId: params.sidechainId ?? null },
   );
 
+  return mapCodexProjectedEventsToExternalMessages({ projected, createdAtMs,
+    idForIndex: index => stableOffsetId(`codex:${params.fileRelPath}`, params.lineStartOffsetBytes, index) });
+}
+
+export function mapCodexProjectedEventsToExternalMessages(params: Readonly<{
+  projected: readonly CodexProjectedRolloutEvent[];
+  createdAtMs: number;
+  idForIndex: (index: number) => string;
+}>): CodexRolloutExternalMessageCandidate[] {
+  const { projected, createdAtMs } = params;
   const out: CodexRolloutExternalMessageCandidate[] = [];
   for (let i = 0; i < projected.length; i++) {
     const action = projected[i]!;
-    const idPrefix = `codex:${params.fileRelPath}`;
-    const stableId = stableOffsetId(idPrefix, params.lineStartOffsetBytes, i);
+    const stableId = params.idForIndex(i);
 
     if (action.type === 'user-text') {
       if (shouldFilterHarnessBlob(action.text)) continue;

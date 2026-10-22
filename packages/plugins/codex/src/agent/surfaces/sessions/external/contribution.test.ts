@@ -4,7 +4,7 @@ import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symli
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 
 import type {
   ExecService,
@@ -22,6 +22,15 @@ import { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema
 import { parseCodexContentSearchProgress } from './transcriptSource.js';
 import { decodeCodexExternalSessionIndexCursor } from './candidates.js';
 import { parseCodexRolloutPreparationState } from '../../../rollout/discovery/preparation.js';
+
+// Native startup locks are per OS user; keep fixture processes separate from live Agents.
+const startupHome = vi.hoisted(() => ({ path: '' }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: () => ({ ...actual.userInfo(), homedir: startupHome.path || actual.userInfo().homedir }) };
+});
+beforeAll(async () => { startupHome.path = await mkdtemp(join(tmpdir(), 'codex-history-startup-test-')); });
+afterAll(async () => { await rm(startupHome.path, { recursive: true, force: true }); });
 
 const contentReadClock = vi.hoisted(() => ({ advance: null as (() => void) | null,
   onDirectoryRead: null as (() => void) | null,
@@ -86,11 +95,25 @@ function createThreadListingExec(
     updatedAt: 1_768_000_100,
     cwd: '/repo/native',
   }],
+  nativeHistory?: { items: Record<string, unknown>[]; onLaunch?: (spec: unknown) => void },
 ): ExecService {
   const never = new Promise<PluginProcessResult>(() => undefined);
   const client: PluginJsonRpcClient = {
-    async request(method) {
+    async request(method, value) {
       requests.push(method);
+      if (method === 'thread/items/list' && nativeHistory) {
+        const args = value as { sortDirection: string; limit: number; cursor?: string };
+        const anchor = args.cursor ? JSON.parse(args.cursor) as { index: number; inclusive: boolean } : null;
+        const desc = args.sortDirection === 'desc';
+        const all = nativeHistory.items.map((entry, index) => ({ entry, index })).filter(({ index }) => !anchor || (desc
+          ? (anchor.inclusive ? index <= anchor.index : index < anchor.index)
+          : (anchor.inclusive ? index >= anchor.index : index > anchor.index)));
+        if (desc) all.reverse();
+        const page = all.slice(0, args.limit);
+        return { data: page.map(row => row.entry), nextCursor: all.length > page.length
+          ? JSON.stringify({ index: page.at(-1)!.index, inclusive: false }) : null,
+          backwardsCursor: page.length ? JSON.stringify({ index: page[0]!.index, inclusive: true }) : null };
+      }
       if (method === 'thread/list') {
         return { data: threads };
       }
@@ -131,7 +154,7 @@ function createThreadListingExec(
       throw new Error('The native app-server path must use exec.clients.spawn');
     }),
     clients: {
-      spawn: async () => handle,
+      spawn: async (spec: unknown) => { nativeHistory?.onLaunch?.(spec); return handle; },
     },
   } as unknown as ExecService;
 }
@@ -154,6 +177,140 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+  it('pages complete native history through the existing plugin execution boundary and follows appends', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-history-plugin-'));
+    try {
+      const entry = (index: number) => ({ turnId: `turn-${index}`, startedAtMs: index * 1000, completedAtMs: index * 1000 + 1,
+        item: { id: `item-${index}`, type: index % 2 ? 'userMessage' : 'agentMessage',
+          ...(index % 2 ? { content: [{ type: 'text', text: `message-${index}` }] } : { text: `message-${index}` }) } });
+      const history = { items: [1, 2, 3, 4].map(entry) };
+      const methods: string[] = [];
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const request = { ...invocation({ exec: createThreadListingExec(methods, [], history) }),
+        source: { kind: 'codexHome', home: 'user' }, remoteSessionId: 'native-thread', direction: 'older' as const, maxItems: 2 };
+      const items: unknown[] = [];
+      let cursor: string | undefined;
+      let tail: string | null = null;
+      do {
+        const page = await contribution.pageTranscript({ ...request, cursor });
+        expect(page.ok, JSON.stringify(page)).toBe(true);
+        if (!page.ok) throw new Error(page.message);
+        items.unshift(...page.value.items);
+        tail ??= page.value.tailCursor;
+        cursor = page.value.nextCursor ?? undefined;
+      } while (cursor);
+      expect(items).toHaveLength(4);
+      expect(JSON.stringify(items)).toContain('message-1');
+      expect(methods).toContain('thread/items/list');
+      expect(methods.some(method => ['thread/resume', 'turn/start', 'thread/unarchive'].includes(method))).toBe(false);
+      history.items.push(entry(5));
+      const appended = await contribution.readAfterTranscript({ ...request, cursor: tail! });
+      expect(appended.ok, JSON.stringify(appended)).toBe(true);
+      if (!appended.ok) throw new Error(appended.message);
+      expect(appended.value).toMatchObject({ outcome: 'advanced', items: [expect.objectContaining({ raw: { role: 'user', content: { type: 'text', text: 'message-5' } } })] });
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('preserves partial native command rows and empty native follow continuations', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-partial-plugin-'));
+    try {
+      const entry = (id: string, item: Record<string, unknown>) => ({ turnId: 'turn', item: { id, ...item }, startedAtMs: 1, completedAtMs: 2 });
+      const history = { items: [entry('command', { type: 'commandExecution', command: 'pwd', aggregatedOutput: '/repo\n', exitCode: 0 })] };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const request = { ...invocation({ exec: createThreadListingExec([], [], history) }),
+        source: { kind: 'codexHome', home: 'user' }, remoteSessionId: 'native-thread', direction: 'older' as const, maxItems: 1 };
+      const latest = await contribution.pageTranscript(request);
+      expect(latest.ok, JSON.stringify(latest)).toBe(true);
+      if (!latest.ok) throw new Error(latest.message);
+      const older = await contribution.pageTranscript({ ...request, cursor: latest.value.nextCursor! });
+      expect(older.ok, JSON.stringify(older)).toBe(true);
+      if (!older.ok) throw new Error(older.message);
+      expect(JSON.stringify(latest.value.items)).toContain('"stdout":"/repo\\n"');
+      expect(JSON.stringify(older.value.items)).toContain('"cmd":"pwd"');
+      expect(latest.value.items[0]!.id).not.toBe(older.value.items[0]!.id);
+      history.items.push(entry('reasoning', { type: 'reasoning', summary: [] }), entry('reply', { type: 'agentMessage', text: 'after-empty-page' }));
+      let cursor = latest.value.tailCursor!;
+      let found = false;
+      for (;;) {
+        const page = await contribution.readAfterTranscript({ ...request, cursor });
+        expect(page.ok, JSON.stringify(page)).toBe(true);
+        if (!page.ok || page.value.outcome !== 'advanced') throw new Error(JSON.stringify(page));
+        found ||= JSON.stringify(page.value.items).includes('after-empty-page');
+        cursor = page.value.nextCursor;
+        if (!page.value.hasMore) break;
+      }
+      expect(found).toBe(true);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('keeps connected-account native history out of the ambient user SQLite home', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-connected-plugin-'));
+    try {
+      const launches: unknown[] = [];
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: '/user/home', CODEX_SQLITE_HOME: '/user/sqlite' } });
+      const page = await contribution.pageTranscript({ ...invocation({ exec: createThreadListingExec([], [], {
+        items: [], onLaunch: spec => {
+          const env = (spec as { launch: { env: Record<string, string | undefined> } }).launch.env;
+          launches.push({ CODEX_HOME: env.CODEX_HOME, CODEX_SQLITE_HOME: env.CODEX_SQLITE_HOME });
+        },
+      }) }), source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex',
+        connectedServiceProfileId: 'profile', homePath: home }, remoteSessionId: 'native-thread', direction: 'older', maxItems: 2 });
+      expect(page.ok, JSON.stringify(page)).toBe(true);
+      expect(launches).toEqual([{ CODEX_HOME: home, CODEX_SQLITE_HOME: home }]);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('rejects mixed native media instead of reporting its text as complete history', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-media-plugin-'));
+    try {
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const page = await contribution.pageTranscript({ ...invocation({ exec: createThreadListingExec([], [], { items: [{
+        turnId: 'turn', startedAtMs: 1, completedAtMs: 2, item: { id: 'mixed', type: 'userMessage',
+          content: [{ type: 'text', text: 'question with image' }, { type: 'image', url: 'https://example.invalid/image.png' }] },
+      }] }) }), source: { kind: 'codexHome', home: 'user' }, remoteSessionId: 'native-thread', direction: 'older', maxItems: 2 });
+      expect(page.ok).toBe(false);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('reads native history when a later root-family segment changes to paginated storage', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-segments-plugin-'));
+    try {
+      const remoteSessionId = 'aaaaaaaa-1111-4111-8111-111111111111';
+      const day = join(home, 'sessions');
+      await mkdir(day);
+      await writeFile(join(day, `rollout-2026-10-20T10-00-00-${remoteSessionId}.jsonl`),
+        jsonl({ type: 'session_meta', payload: { id: remoteSessionId, source: 'cli' } })
+        + jsonl({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'local-only' }] } }));
+      await writeFile(join(day, `rollout-2026-10-20T11-00-00-${remoteSessionId}_cccccccc-3333-4333-8333-333333333333.jsonl`),
+        jsonl({ type: 'session_meta', payload: { id: remoteSessionId, source: 'cli', history_mode: 'paginated',
+          history_base: { thread_id: 'ancestor', end_byte_offset: 100, end_ordinal_exclusive: 2 } } }));
+      const methods: string[] = [];
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const history = { items: [{
+        turnId: 'turn', startedAtMs: 1, completedAtMs: 2, item: { id: 'reply', type: 'agentMessage', text: 'inherited-native-history' },
+      }] };
+      const request = { ...invocation({ exec: createThreadListingExec(methods, [], history) }),
+        source: { kind: 'codexHome', home: 'user' }, remoteSessionId, direction: 'older' as const, maxItems: 2 };
+      const page = await contribution.pageTranscript(request);
+      expect(page.ok, JSON.stringify(page)).toBe(true);
+      expect(JSON.stringify(page)).toContain('inherited-native-history');
+      expect(JSON.stringify(page)).not.toContain('local-only');
+      expect(methods).toContain('thread/items/list');
+      history.items = [];
+      expect((await contribution.pageTranscript(request)).ok).toBe(false);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('does not report absent native transcript storage as complete empty history', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-history-unavailable-'));
+    try {
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const result = await contribution.pageTranscript({ ...invocation(), source: { kind: 'codexHome', home: 'user' },
+        remoteSessionId: 'native-thread', direction: 'older', maxItems: 2 });
+      expect(result.ok).toBe(false);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
   it('pages a large rollout within the complete result byte boundary without losing valid messages', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-codex-byte-pages-'));
     try {
@@ -644,7 +801,7 @@ describe('Codex public Agent External Sessions contribution', () => {
       'eyJ2IjoyLCJraW5kIjoiY29kZXhGb3J3YXJkQXBwU2VydmVyIiwidXBkYXRlZEF0TXMiOjE3MzYwMDAxMDAwMDAsInByZXZpZXdUZXh0IjoiUmVsZWFzZWQgcHJldmlldyJ9',
       'a disappeared released app-server source',
     ],
-  ])('forwards source_unavailable for %s (%s)', async (cursor) => {
+  ])('reports read_failed when native history cannot be read for %s (%s)', async (cursor) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-public-unavailable-'));
     try {
       const codexHome = join(root, 'codex-home');
@@ -661,7 +818,7 @@ describe('Codex public Agent External Sessions contribution', () => {
         ...invocation(),
       })).resolves.toEqual({
         ok: true,
-        value: { outcome: 'source_unavailable' },
+        value: { outcome: 'read_failed' },
       });
     } finally {
       await rm(root, { recursive: true, force: true });

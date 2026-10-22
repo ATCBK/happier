@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { projectCodexAppServerToolEventsFromNotification } from './toolEvents.js';
 
 describe('projectCodexAppServerToolEventsFromNotification', () => {
+  it('preserves native aggregated command output as stdout without treating it as input', () => {
+    const events = projectCodexAppServerToolEventsFromNotification({ method: 'item/completed', notificationParams: {
+      item: { id: 'native-command', type: 'commandExecution', command: 'pwd', aggregatedOutput: '/repo\n', exitCode: 0 },
+    } });
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'tool-call', input: { cmd: 'pwd' } }),
+      expect.objectContaining({ type: 'tool-result', output: expect.objectContaining({ stdout: '/repo\n', exitCode: 0 }) }),
+    ]);
+  });
+
   it('preserves native code-mode input without relabeling an app-server call as terminal control', () => {
     const input = 'const r = await tools.exec_command({cmd:"pwd"}); text(r);';
     expect(projectCodexAppServerToolEventsFromNotification({ method: 'rawResponseItem/completed', notificationParams: {

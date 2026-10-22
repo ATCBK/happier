@@ -99,7 +99,8 @@ function readCommandExecutionToolCall(item: Readonly<Record<string, unknown>>): 
 function readCommandExecutionToolResult(item: Readonly<Record<string, unknown>>): CodexAppServerProjectedToolEvent | null {
   const callId = readFirstString(item, ['callId', 'call_id', 'id', 'itemId', 'item_id']);
   if (!callId) return null;
-  const output = item.output ?? item.result ?? item;
+  const output = item.output ?? item.result ?? (typeof item.aggregatedOutput === 'string'
+    ? { ...item, stdout: item.aggregatedOutput } : item);
   const outputRecord = asRecord(output);
   const isError = typeof outputRecord?.exitCode === 'number'
     ? outputRecord.exitCode !== 0
@@ -172,6 +173,9 @@ const TOOL_INPUT_OMITTED_KEYS = new Set([
   'item_type',
   'stderr',
   'stdout',
+  'aggregatedOutput',
+  'aggregated_output',
+  'durationMs',
   'exitCode',
   'exit_code',
   'status',

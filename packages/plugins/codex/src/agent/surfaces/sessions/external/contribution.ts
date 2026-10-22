@@ -178,7 +178,7 @@ function mapReadAfterPage(
   // remains the only gap/replacement voice; truncation alone never retroactively
   // invalidates the cursor the source just built.
   if (mapped.value.items.length === 0) {
-    if (!page.diagnostics?.length || !mapped.value.nextCursor) {
+    if ((!page.diagnostics?.length && !page.hasMore) || !mapped.value.nextCursor) {
       return ok({ outcome: 'already_current' });
     }
     return ok({
@@ -186,8 +186,8 @@ function mapReadAfterPage(
       items: [],
       nextCursor: mapped.value.nextCursor,
       boundary: mapped.value.nextCursor,
-      hasMore: false,
-      diagnostics: page.diagnostics,
+      hasMore: page.hasMore === true,
+      ...(page.diagnostics?.length ? { diagnostics: page.diagnostics } : {}),
     });
   }
   if (!mapped.value.nextCursor) return ok({ outcome: 'read_failed' });
@@ -436,6 +436,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => pageCodexExternalSessionTranscript({
           observation: request.observation,
+          exec: request.exec,
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,
@@ -469,6 +470,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => readAfterCodexExternalSessionTranscript({
           observation: request.observation,
+          exec: request.exec,
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,

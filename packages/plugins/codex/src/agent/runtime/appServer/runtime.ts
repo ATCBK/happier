@@ -135,6 +135,8 @@ import {
   readNormalizedProviderEventItemType,
   readProviderEventItemId,
   readProviderEventItemRecord,
+  readProviderEventText,
+  readProviderUserMessageText,
   readCodexTerminalOutcome,
   readModelId,
   readProviderEventTurnId,
@@ -458,11 +460,6 @@ function readStringRecord(value: unknown): Readonly<Record<string, string>> {
     if (typeof child === 'string') output[key] = child;
   }
   return output;
-}
-
-function readNonEmptyStringValue(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  return value.trim().length > 0 ? value : null;
 }
 
 function readHappierTitleToolTitle(input: unknown): string | null {
@@ -1575,31 +1572,6 @@ export function createCodexAppServerRuntime(
     return !agentTurnId || !activeTurn.agentTurnId || agentTurnId === activeTurn.agentTurnId;
   };
 
-  const readProviderEventText = (notificationParams: unknown, keys: readonly string[]): string | null => {
-    const readText = (value: unknown): string | null => typeof value === 'string' ? value : null;
-    const record = readRecord(notificationParams);
-    const item = readProviderEventItemRecord(notificationParams);
-    const sources = item === record ? [record] : [record, item];
-    for (const source of sources) {
-      if (!source) continue;
-      for (const key of keys) {
-        const text = readText(source[key]);
-        if (text !== null) return text;
-      }
-    }
-    const content = item?.content ?? record?.content;
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const part of content) {
-      const partRecord = readRecord(part);
-      const text = readText(partRecord?.text)
-        ?? readText(partRecord?.output_text)
-        ?? readText(partRecord?.outputText);
-      if (text !== null) parts.push(text);
-    }
-    return parts.length > 0 ? parts.join('') : null;
-  };
-
   const readProviderEventItemRole = (notificationParams: unknown): string | null => {
     const item = readProviderEventItemRecord(notificationParams);
     const role = trimStringValue(item?.role);
@@ -1610,21 +1582,6 @@ export function createCodexAppServerRuntime(
     if (readNormalizedProviderEventItemType(notificationParams) !== 'usermessage') return null;
     const item = readProviderEventItemRecord(notificationParams);
     return trimStringValue(item?.clientId) ?? trimStringValue(item?.client_id);
-  };
-
-  const readProviderUserMessageText = (notificationParams: unknown): string | null => {
-    const item = readProviderEventItemRecord(notificationParams);
-    if (!Array.isArray(item?.content)) {
-      return readProviderEventText(notificationParams, ['text', 'message']);
-    }
-    const parts = item.content.flatMap((part): string[] => {
-      const record = readRecord(part);
-      const text = readNonEmptyStringValue(record?.text)
-        ?? readNonEmptyStringValue(record?.output_text)
-        ?? readNonEmptyStringValue(record?.outputText);
-      return text === null ? [] : [text];
-    });
-    return parts.length > 0 ? parts.join('\n') : null;
   };
 
   const markCorrelatedProviderUserMessageAccepted = (notificationParams: unknown): void => {

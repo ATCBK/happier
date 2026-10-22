@@ -195,3 +195,47 @@ export function buildThreadConfigOverrideParams(
     },
   };
 }
+
+export function readProviderEventText(notificationParams: unknown, keys: readonly string[]): string | null {
+  const readText = (value: unknown): string | null => typeof value === 'string' ? value : null;
+  const record = readRecord(notificationParams);
+  const item = readProviderEventItemRecord(notificationParams);
+  const sources = item === record ? [record] : [record, item];
+  for (const source of sources) {
+    if (!source) continue;
+    for (const key of keys) {
+      const text = readText(source[key]);
+      if (text !== null) return text;
+    }
+  }
+  const content = item?.content ?? record?.content;
+  if (!Array.isArray(content)) return null;
+  const parts: string[] = [];
+  for (const part of content) {
+    const partRecord = readRecord(part);
+    const text = readText(partRecord?.text)
+      ?? readText(partRecord?.output_text)
+      ?? readText(partRecord?.outputText);
+    if (text !== null) parts.push(text);
+  }
+  return parts.length > 0 ? parts.join('') : null;
+}
+
+function readNonEmptyStringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+export function readProviderUserMessageText(notificationParams: unknown): string | null {
+  const item = readProviderEventItemRecord(notificationParams);
+  if (!Array.isArray(item?.content)) {
+    return readProviderEventText(notificationParams, ['text', 'message']);
+  }
+  const parts = item.content.flatMap((part): string[] => {
+    const record = readRecord(part);
+    const text = readNonEmptyStringValue(record?.text)
+      ?? readNonEmptyStringValue(record?.output_text)
+      ?? readNonEmptyStringValue(record?.outputText);
+    return text === null ? [] : [text];
+  });
+  return parts.length > 0 ? parts.join('\n') : null;
+}

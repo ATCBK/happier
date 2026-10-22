@@ -1,18 +1,5 @@
-import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk/sessions/external';
 import { z } from 'zod/mini';
 
-import type { CodexExternalSessionCandidate } from './models.js';
-
-export type CodexExternalSessionAppServerMetadata = Readonly<{
-  updatedAtMs: number;
-  previewText: string | null;
-  workingDirectory: string | null;
-}>;
-
-function normalizeNonEmptyString(value: unknown): string | null {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed || null;
-}
 
 type CodexAppServerForwardCursorV2 = Readonly<{
   v: 2;
@@ -178,50 +165,4 @@ export function decodeCodexExternalForwardCursor(raw: string): CodexExternalForw
   } catch {
     return null;
   }
-}
-
-export function mapCodexExternalSessionAppServerPreviewToMessage(params: Readonly<{
-  remoteSessionId: string;
-  metadata: CodexExternalSessionAppServerMetadata;
-}>): AgentExternalSessionTranscriptItem | null {
-  const previewText = typeof params.metadata.previewText === 'string' ? params.metadata.previewText.trim() : '';
-  if (!previewText) return null;
-  const stableId = `codex:app-server:${params.remoteSessionId}:${params.metadata.updatedAtMs}`;
-  return {
-    id: stableId,
-    localId: stableId,
-    createdAtMs: params.metadata.updatedAtMs,
-    raw: {
-      role: 'agent',
-      content: {
-        type: 'codex',
-        data: {
-          type: 'message',
-          message: previewText,
-        },
-      },
-    },
-  };
-}
-
-export function mapCodexExternalSessionAppServerCandidateToMetadata(params: Readonly<{
-  candidate: CodexExternalSessionCandidate | null;
-}>): CodexExternalSessionAppServerMetadata | null {
-  const candidate = params.candidate;
-  if (!candidate) return null;
-
-  const updatedAtMs = Number.isFinite(candidate.updatedAtMs)
-    ? Math.trunc(candidate.updatedAtMs)
-    : NaN;
-  if (!Number.isFinite(updatedAtMs) || updatedAtMs < 0) return null;
-
-  const details = candidate.details && typeof candidate.details === 'object' && !Array.isArray(candidate.details)
-    ? candidate.details as Record<string, unknown>
-    : null;
-
-  return {
-    updatedAtMs,
-    previewText: normalizeNonEmptyString(candidate.title),
-    workingDirectory: normalizeNonEmptyString(details?.cwd),
-  };
 }

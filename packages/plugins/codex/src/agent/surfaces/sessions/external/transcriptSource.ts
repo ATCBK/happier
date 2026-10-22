@@ -1,3 +1,8 @@
+import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
+import { createCodexNativeAppServerClient } from '../../../runtime/appServer/client.js';
+import { resolveCodexRuntimeHomeEnvironment } from '../../../auth/services/state/sharing/files.js';
+import { readCodexSessionMetaFromRollout } from '../../../rollout/discovery/indexData.js';
+import { decodeCodexNativeTranscriptCursor, pageCodexNativeTranscript } from './nativeTranscript.js';
 import { createHash } from 'node:crypto';
 import { open, stat, type FileHandle } from 'node:fs/promises';
 import { z } from 'zod/mini';
@@ -27,15 +32,12 @@ import { homeEntries as resolveHomeEntries } from '../../../rollout/discovery/ho
 import {
   decodeCodexExternalForwardCursor,
   encodeCodexExternalForwardCursor,
-  mapCodexExternalSessionAppServerCandidateToMetadata,
-  mapCodexExternalSessionAppServerPreviewToMessage,
   CodexTranscriptRowLocationSchema,
   CodexTranscriptSemanticLocationsSchema,
   type CodexTranscriptSemanticCursor,
   type CodexTranscriptSemanticLocations,
-  type CodexExternalSessionAppServerMetadata,
 } from './transcript.js';
-import { listCodexSessionCandidates, CodexExternalSessionCandidateSourceChangedError } from './candidateSource.js';
+import { CodexExternalSessionCandidateSourceChangedError } from './candidateSource.js';
 import type {
   CodexExternalSessionSource,
   CodexExternalSessionTranscriptSourcePage,
@@ -1153,38 +1155,6 @@ export async function resolveCodexExternalTranscriptFiles(params: Readonly<{
   return new Map([...homes].map(([remoteSessionId, home]) => [remoteSessionId, home.files]));
 }
 
-async function resolveCodexExternalSessionAppServerMetadata(params: Readonly<{
-  source: CodexExternalSessionSource;
-  activeServerDir?: string;
-  remoteSessionId: string;
-  env: NodeJS.ProcessEnv;
-  exec: ExecService;
-}> & CodexExternalSessionInvocationBounds): Promise<CodexExternalSessionAppServerMetadata | null> {
-  const page = await listCodexSessionCandidates({
-    source: params.source,
-    activeServerDir: params.activeServerDir,
-    env: params.env,
-    exec: params.exec,
-    searchTerm: params.remoteSessionId,
-    searchMode: 'full',
-    limit: 50,
-    signal: params.signal,
-    deadlineAtMs: params.deadlineAtMs,
-    onProgress: params.onProgress,
-    preparation: params.preparation,
-  });
-  throwIfCodexExternalSessionInvocationStopped(params);
-  let best: CodexExternalSessionAppServerMetadata | null = null;
-  for (const candidate of page.candidates) {
-    throwIfCodexExternalSessionInvocationStopped(params);
-    if (candidate.remoteSessionId !== params.remoteSessionId) continue;
-    const metadata = mapCodexExternalSessionAppServerCandidateToMetadata({ candidate });
-    if (!metadata) continue;
-    if (!best || metadata.updatedAtMs > best.updatedAtMs) best = metadata;
-  }
-  return best;
-}
-
 async function resolveTranscriptStreams(params: Readonly<{
   source: CodexExternalSessionSource;
   activeServerDir?: string;
@@ -1220,6 +1190,58 @@ async function resolveTranscriptStreams(params: Readonly<{
   };
 }
 
+async function readCodexNativeTranscriptIfNeeded(
+  params: Parameters<typeof pageCodexExternalSessionTranscript>[0],
+  selection: Awaited<ReturnType<typeof resolveTranscriptStreams>>,
+  follow: boolean,
+): Promise<CodexExternalSessionTranscriptSourcePage | null> {
+  const nativeCursor = decodeCodexNativeTranscriptCursor(params.cursor);
+  const metadata = await Promise.all(selection.streams
+    .map(stream => readCodexSessionMetaFromRollout(stream.filePath, params)));
+  const hasPaginatedRollout = metadata.some(value => value?.history_mode === 'paginated');
+  if (!nativeCursor && selection.streams.length && !hasPaginatedRollout) return null;
+  const releasedForward = params.cursor ? decodeCodexExternalForwardCursor(params.cursor) : null;
+  if (!nativeCursor && params.cursor && params.cursor !== 'tail'
+    && (!follow || releasedForward?.kind === 'codexForwardStreamVector')) {
+    return { items: [], nextCursor: null, tailCursor: null, truncated: true,
+      ...(follow ? { readAfterOutcome: 'source_replaced' as const } : { hasMore: false }) };
+  }
+  const homes = await resolveHomeEntries(params);
+  const selected = nativeCursor ? homes.filter(home => home.codexHome === nativeCursor.home)
+    : selection.bestHome ? homes.filter(home => home.codexHome === selection.bestHome!.codexHome) : homes;
+  if (!params.exec || !selected.length) throw new Error('Codex native history is unavailable');
+  let failure: unknown = new Error('Codex native history is unavailable');
+  for (const home of selected) {
+    let client: Awaited<ReturnType<typeof createCodexNativeAppServerClient>> | undefined;
+    try {
+      throwIfCodexExternalSessionInvocationStopped(params);
+      const requestOptions = () => ({ signal: params.signal,
+        ...(params.deadlineAtMs === undefined ? {} : { timeoutMs: Math.max(1, params.deadlineAtMs - Date.now()) }) });
+      // Connected-account custody admits this home, never the ambient user's SQL store.
+      // The current state-sharing declaration shares rollout entries, not SQLite state.
+      const env = { ...process.env, ...params.env,
+        ...(home.source.home === 'connectedService' ? { CODEX_SQLITE_HOME: undefined } : {}) };
+      const processEnv = { ...env, ...resolveCodexRuntimeHomeEnvironment({ env, codexHome: home.codexHome,
+        cwd: process.cwd(), expandHomePath: value => expandHomePath(value, resolveHomeDirFromEnvironment(env)) }) };
+      client = await createCodexNativeAppServerClient({ exec: params.exec, processEnv, signal: params.signal,
+        initializeRequestOptions: requestOptions() });
+      const activeClient = client;
+      const page = await pageCodexNativeTranscript({ ...params, hasPaginatedRollout, home: home.codexHome,
+        client: { request: (method, value) => {
+          throwIfCodexExternalSessionInvocationStopped(params);
+          return activeClient.request(method, value, requestOptions());
+        } }, cursor: nativeCursor ? params.cursor : undefined,
+        direction: follow ? 'newer' : params.direction, tailOnly: follow && !nativeCursor });
+      throwIfCodexExternalSessionInvocationStopped(params);
+      if (params.cursor && params.cursor !== 'tail' && !nativeCursor) return { ...page, items: [], truncated: true,
+        ...(follow ? { readAfterOutcome: 'gap_or_cursor_expired' as const } : {}) };
+      return page;
+    } catch (error) { failure = error; }
+    finally { await client?.dispose(); }
+  }
+  throw failure;
+}
+
 export async function pageCodexExternalSessionTranscript(params: Readonly<{
   source: CodexExternalSessionSource;
   activeServerDir?: string;
@@ -1233,46 +1255,14 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
 }> & CodexExternalSessionInvocationBounds): Promise<CodexExternalSessionTranscriptSourcePage> {
   throwIfCodexExternalSessionInvocationStopped(params);
   const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(params);
-  const { streams, resourceIdentity } = await resolveTranscriptStreams(params);
+  const selection = await resolveTranscriptStreams(params);
+  const nativePage = await readCodexNativeTranscriptIfNeeded({ ...params, direction: 'older' }, selection, false);
+  if (nativePage) return nativePage;
+  const { streams, resourceIdentity } = selection;
   throwIfCodexExternalSessionInvocationStopped(params);
   const tailCursor = resourceIdentity
     ? await buildTailCursorFromStreams(streams, resourceIdentity, params)
     : null;
-  if (streams.length === 0) {
-    if (params.cursor) {
-      return {
-        items: [],
-        nextCursor: null,
-        tailCursor: null,
-        hasMore: false,
-        truncated: true,
-      };
-    }
-    const appServerMetadata = params.exec
-      ? await resolveCodexExternalSessionAppServerMetadata({ ...params, exec: params.exec })
-      : null;
-    const previewItem = appServerMetadata
-      ? mapCodexExternalSessionAppServerPreviewToMessage({
-        remoteSessionId: params.remoteSessionId,
-        metadata: appServerMetadata,
-      })
-      : null;
-    return {
-      items: previewItem ? [previewItem] : [],
-      nextCursor: null,
-      tailCursor: appServerMetadata
-        ? encodeCodexExternalForwardCursor({
-          v: 2,
-          kind: 'codexForwardAppServer',
-          updatedAtMs: appServerMetadata.updatedAtMs,
-          previewText: appServerMetadata.previewText,
-        })
-        : null,
-      hasMore: false,
-      truncated: false,
-    };
-  }
-
   if (params.direction !== 'older') {
     return { items: [], nextCursor: null, tailCursor, hasMore: false, truncated: false };
   }
@@ -1451,82 +1441,14 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
 }> & CodexExternalSessionInvocationBounds): Promise<CodexExternalSessionTranscriptSourcePage> {
   throwIfCodexExternalSessionInvocationStopped(params);
   const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(params);
-  const { streams, resourceIdentity } = await resolveTranscriptStreams(params);
+  const selection = await resolveTranscriptStreams(params);
+  const nativePage = await readCodexNativeTranscriptIfNeeded({ ...params, direction: 'older' }, selection, true);
+  if (nativePage) return nativePage;
+  const { streams, resourceIdentity } = selection;
   throwIfCodexExternalSessionInvocationStopped(params);
   const tailCursor = resourceIdentity
     ? await buildTailCursorFromStreams(streams, resourceIdentity, params)
     : null;
-  if (streams.length === 0) {
-    const appServerMetadata = params.exec
-      ? await resolveCodexExternalSessionAppServerMetadata({ ...params, exec: params.exec })
-      : null;
-    if (params.cursor === 'tail') {
-      if (!appServerMetadata) {
-        return {
-          items: [],
-          nextCursor: null,
-          tailCursor: null,
-          truncated: false,
-          readAfterOutcome: 'source_unavailable',
-        };
-      }
-      return {
-        items: [],
-        nextCursor: encodeCodexExternalForwardCursor({
-          v: 2,
-          kind: 'codexForwardAppServer',
-          updatedAtMs: appServerMetadata.updatedAtMs,
-          previewText: appServerMetadata.previewText,
-        }),
-        tailCursor: null,
-        truncated: false,
-        readAfterOutcome: 'already_current',
-      };
-    }
-    const releasedCursor = decodeCodexExternalForwardCursor(params.cursor);
-    if (releasedCursor?.kind === 'codexForwardAppServer') {
-      if (!appServerMetadata) {
-        return {
-          items: [],
-          nextCursor: null,
-          tailCursor: null,
-          truncated: false,
-          readAfterOutcome: 'source_unavailable',
-        };
-      }
-      const changed = appServerMetadata.updatedAtMs !== releasedCursor.updatedAtMs
-        || appServerMetadata.previewText !== releasedCursor.previewText;
-      const previewItem = changed
-        ? mapCodexExternalSessionAppServerPreviewToMessage({
-          remoteSessionId: params.remoteSessionId,
-          metadata: appServerMetadata,
-        })
-        : null;
-      const nextCursor = encodeCodexExternalForwardCursor({
-        v: 2,
-        kind: 'codexForwardAppServer',
-        updatedAtMs: appServerMetadata.updatedAtMs,
-        previewText: appServerMetadata.previewText,
-      });
-      return {
-        items: previewItem ? [previewItem] : [],
-        nextCursor,
-        tailCursor: null,
-        truncated: false,
-        ...(previewItem ? {} : { readAfterOutcome: 'already_current' }),
-      };
-    }
-    return {
-      items: [],
-      nextCursor: null,
-      tailCursor: null,
-      truncated: true,
-      readAfterOutcome:
-        releasedCursor?.kind === 'codexForwardStreamVector'
-          ? 'source_replaced'
-          : 'gap_or_cursor_expired',
-    };
-  }
   if (params.cursor === 'tail') {
     return {
       items: [],
