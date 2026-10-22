@@ -5,7 +5,7 @@ import * as fsPromises from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { DaemonLspQueryResponseSchema, DaemonLspSyncResponseSchema, DaemonLspWatchResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
+import { DaemonLspQueryRequestSchema, DaemonLspQueryResponseSchema, DaemonLspSyncResponseSchema, DaemonLspWatchResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
 import { MachineResourcesPolicyGetResultV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import type { MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
@@ -25,6 +25,7 @@ import { buildWorkspaceFileRestoreOperation } from '@happier-dev/protocol/machin
 import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
 import type { ResolvedLanguageServerContribution } from '@/plugins/projection/registry/types';
 import { readLspObject } from './languageServerResults';
+import { createCodeIntelligenceController } from '../../../ui/sources/sync/domains/workspaces/languageIntelligence/createCodeIntelligenceController';
 // Filesystem scheduling is the external boundary in the acquire/close regressions.
 vi.mock('node:fs/promises', async () => {
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -68,6 +69,93 @@ async function fixture(rootPath: string, count = 1, behavior: Record<string, unk
     return { host, open, query, call, executor, protocolHandles, setDefinitionCount: (definitionCount: number) => { registry = registryFor(definitionCount); }, messages: async () => String(await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>) };
 }
 describe('language intelligence composed host', () => {
+    it.each([false, true])('reacquires a lost daemon document and diagnostic revision after reconnect (offline edit=%s)', async offlineEdit => {
+        await withTempDir('happier-lsp-reconnect-', async rootPath => {
+            let text = 'broken';
+            let unsaved = false;
+            await writeFile(join(rootPath, 'a.ts'), text);
+            let active = await fixture(rootPath);
+            const hosts = [active.host];
+            let online = true;
+            let transport = new AbortController();
+            let holdOldHover = false;
+            let releaseOldHover: (() => void) | undefined;
+            let oldHover: Promise<void> | undefined;
+            let markOldResponse!: () => void;
+            const oldResponseReady = new Promise<void>(resolve => { markOldResponse = resolve; });
+            // Only the Machine transport disappears/reconnects. Both daemon
+            // instances use real registration, lifecycle, codec and native children.
+            const call = async (method: string, request: unknown, signal?: AbortSignal) => {
+                if (!online) throw new Error('Machine disconnected');
+                const target = active;
+                const response = await target.call(method, request, signal ? AbortSignal.any([signal, transport.signal]) : transport.signal);
+                if (!online || target !== active) throw new Error('Machine disconnected');
+                // A valid packet can already be buffered when cancellation or
+                // reconnect overtakes its delivery. Keep that late packet real.
+                if (holdOldHover && method === RPC_METHODS.DAEMON_LSP_QUERY && DaemonLspQueryRequestSchema.parse(request).kind === 'hover') {
+                    holdOldHover = false;
+                    await new Promise<void>(resolve => { releaseOldHover = resolve; markOldResponse(); });
+                }
+                return response;
+            };
+            const controller = createCodeIntelligenceController({
+                scope: { serverId: 'home', machineId: 'machine', rootPath }, path: 'a.ts', languageId: 'typescript',
+                accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true,
+                    onRetire: () => ({ dispose() {} }) },
+                getText: () => text, getUnsaved: () => unsaved,
+                query: async () => { throw new Error('A capable server must not use name-search fallback'); }, openLocation() {},
+                languageServer: {
+                    sync: async (request, signal) => DaemonLspSyncResponseSchema.parse(await call(RPC_METHODS.DAEMON_LSP_SYNC, request, signal)),
+                    query: async (request, signal) => DaemonLspQueryResponseSchema.parse(await call(RPC_METHODS.DAEMON_LSP_QUERY, request, signal)),
+                    watch: async (request, signal) => DaemonLspWatchResponseSchema.parse(await call(RPC_METHODS.DAEMON_LSP_WATCH, request, signal)),
+                    restart: async () => { throw new Error('Recovery must not require a language-service restart'); },
+                },
+            });
+            try {
+                for (let index = 0; index < 8; index++) await controller.checkProblems();
+                await vi.waitFor(() => expect(controller.getSnapshot().diagnostics).toMatchObject({ state: 'ready', count: 1, items: [{ message: text }] }));
+                const oldRevision = controller.getDiagnosticsProjection().revision;
+                const oldPids = active.protocolHandles.map(handle => readSupervisedPluginProcessIdForHost(handle.process)).filter((pid): pid is number => typeof pid === 'number');
+                expect(oldPids).toHaveLength(1);
+                holdOldHover = true;
+                oldHover = controller.hover({ line: 0, character: 2 });
+                await oldResponseReady;
+                online = false;
+                transport.abort();
+                await active.host.dispose();
+                await vi.waitFor(async () => expect(await Promise.all(oldPids.map(isPidAlive))).toEqual([false]));
+                await controller.checkProblems();
+                expect(controller.getSnapshot()).toMatchObject({ status: 'unavailable', reason: 'transport_failed' });
+                if (offlineEdit) { text = 'brokenOfflineDraft'; unsaved = true; }
+
+                active = await fixture(rootPath);
+                hosts.push(active.host);
+                transport = new AbortController();
+                online = true;
+                await controller.checkProblems();
+                expect(controller.getSnapshot()).toMatchObject({ status: 'ready', result: { status: 'ok', kind: 'diagnostics', diagnostics: [{ message: text }] } });
+                releaseOldHover?.();
+                await oldHover;
+                expect(controller.getSnapshot()).toMatchObject({ status: 'ready', result: { kind: 'diagnostics', diagnostics: [{ message: text }] } });
+                await vi.waitFor(() => expect(controller.getSnapshot().diagnostics).toMatchObject({ state: 'ready', count: 1, items: [{ message: text }] }));
+                expect(controller.getDiagnosticsProjection().revision).toBeLessThan(oldRevision);
+                await controller.hover({ line: 0, character: 2 });
+                expect(controller.getSnapshot()).toMatchObject({ status: 'ready', result: { kind: 'hover', sections: [{ markdown: text }] } });
+                await controller.checkProblems();
+                expect((await active.messages()).filter(message => message.method === 'textDocument/didOpen')).toHaveLength(1);
+                const pids = active.protocolHandles.map(handle => readSupervisedPluginProcessIdForHost(handle.process)).filter((pid): pid is number => typeof pid === 'number');
+                expect(pids).toHaveLength(1);
+                controller.dispose();
+                await vi.waitFor(async () => expect(await Promise.all(pids.map(isPidAlive))).toEqual([false]));
+                expect(active.host.readProcessRoots()).toEqual([]);
+            } finally {
+                releaseOldHover?.();
+                await oldHover;
+                controller.dispose();
+                await Promise.all(hosts.map(host => host.dispose()));
+            }
+        });
+    });
     it.skipIf(process.env.HAPPIER_NATIVE_LSP_SMOKE !== '1')('runs native TypeScript 7.0.2 semantic rename, importer move, quick fix and guarded Undo', async () => {
         expect(JSON.parse(await readFile(resolve('../../node_modules/@typescript/typescript-linux-x64/package.json'), 'utf8'))).toMatchObject({ version: '7.0.2' });
         await withTempDir('happier-native-lsp-semantic-', async rootPath => {

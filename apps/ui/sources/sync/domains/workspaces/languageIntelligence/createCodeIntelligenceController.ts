@@ -124,17 +124,19 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             diagnostics = { ...diagnostics, entries: Object.fromEntries(Object.entries(diagnostics.entries).filter(([path]) => path !== input.path)) };
             publish({ ...snapshot, diagnostics: selectCodeDiagnostics(diagnostics) });
         },
-        onSync: response => {
+        onSync: (response, previousGeneration) => {
             documentServerIds = new Set(response.servers.map(server => server.serverId));
             // A startup watch can precede the first known document version.
             // Revalidate its retained root diagnostics as soon as sync supplies it.
             if (diagnostics.revision >= 0) {
+                const revision = previousGeneration !== null && previousGeneration !== response.generation
+                    ? EMPTY_CODE_DIAGNOSTICS.revision : diagnostics.revision;
                 // A file sync names only its selected servers, not every server
                 // in the root. Revalidate this file without retiring other files.
                 const otherFiles = Object.fromEntries(Object.entries(diagnostics.entries).filter(([path]) => path !== input.path));
-                const currentFile = mergeCodeDiagnostics({ revision: diagnostics.revision,
+                const currentFile = mergeCodeDiagnostics({ revision,
                     entries: { [input.path]: diagnostics.entries[input.path] ?? {} } }, {
-                    status: 'ok', revision: diagnostics.revision, servers: response.servers, diagnostics: {},
+                    status: 'ok', revision, servers: response.servers, diagnostics: {},
                 }, diagnosticsFence(response.servers));
                 diagnostics = { ...currentFile, entries: { ...otherFiles, ...currentFile.entries } };
             }

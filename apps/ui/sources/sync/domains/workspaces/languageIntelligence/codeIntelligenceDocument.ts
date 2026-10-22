@@ -19,7 +19,7 @@ type WatchOk = Extract<LanguageIntelligenceWatchResult, { status: 'ok' }>;
 export function createCodeIntelligenceDocument(input: Readonly<{
     rootPath: string; path: string; languageId: string; port: CodeIntelligenceServerPort;
     getText(): string; getUnsaved(): boolean; isCurrent(): boolean;
-    onSync(value: SyncOk): void; onWatch(value: WatchOk): void; onUnavailable(reason: string): void;
+    onSync(value: SyncOk, previousGeneration: string | null): void; onWatch(value: WatchOk): void; onUnavailable(reason: string): void;
     onSynchronize?(): void;
 }>) {
     let activated = false;
@@ -50,12 +50,16 @@ export function createCodeIntelligenceDocument(input: Readonly<{
     function accept(result: LanguageIntelligenceSyncResult, text: string, unsaved: boolean, version: number): void {
         lastResult = result;
         if (result.status !== 'ok') return;
+        const previousGeneration = acknowledged?.generation ?? null;
         acknowledged = { text, unsaved, version: result.version ?? version, generation: result.generation };
         // Sync names this document's servers; only the root watch can retire
         // other server identities from the existing root delivery fence.
         servers = [...servers.filter(previous => !result.servers.some(next => next.serverId === previous.serverId)), ...result.servers];
         needsSnapshot = false;
-        if (current()) input.onSync(result);
+        // Watch revisions belong to the acknowledged daemon root, not the
+        // mounted controller. A replacement root starts its own revision stream.
+        if (previousGeneration !== null && previousGeneration !== result.generation) activeWatch?.abort();
+        if (current()) input.onSync(result, previousGeneration);
         void watch();
     }
     async function watch(): Promise<void> {
@@ -94,6 +98,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
             cancellation.dispose();
             if (activeWatch === controller) activeWatch = null;
             watching = false;
+            if (current() && acknowledged && controller.signal.aborted && !watchAbort.signal.aborted) void watch();
         }
     }
     function synchronize(activate = false): Promise<LanguageIntelligenceSyncResult | null> {
@@ -146,9 +151,17 @@ export function createCodeIntelligenceDocument(input: Readonly<{
         });
     }
     async function snapshot(version: number, text: string, unsaved: boolean): Promise<LanguageIntelligenceSyncResult> {
-        const result = await input.port.sync({ rootPath: input.rootPath, op: {
+        if (!current()) return { status: 'unavailable', reason: 'session_unavailable' };
+        let result = await input.port.sync({ rootPath: input.rootPath, op: {
             op: 'snapshot', path: input.path, languageId: input.languageId, version, text, unsaved,
-        } });
+        } }, watchAbort.signal);
+        // A new daemon has no document lease to snapshot. Only this typed
+        // missing-holder response authorizes reacquiring our normal open.
+        if (result.status === 'error' && result.errorCode === 'document_out_of_sync' && current()) {
+            result = await input.port.sync({ rootPath: input.rootPath, op: {
+                op: 'open', path: input.path, languageId: input.languageId, version, text, unsaved,
+            } }, watchAbort.signal);
+        }
         accept(result, text, unsaved, version);
         return result;
     }
@@ -171,8 +184,10 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                 const issuedServers = servers;
                 const result = await input.port.query(request, signal);
                 if (!current() || signal.aborted) return null;
-                if (sessionMoved(issuedServers)) return { status: 'error', errorCode: 'stale_query' };
-                if (result.status === 'error' && result.errorCode === 'document_out_of_sync') {
+                const resynchronize = result.status === 'error' && (result.errorCode === 'document_out_of_sync' || result.errorCode === 'stale_query');
+                if (acknowledged !== held || held.text !== input.getText() || held.unsaved !== input.getUnsaved()
+                    || sessionMoved(issuedServers) && !resynchronize) return { status: 'error', errorCode: 'stale_query' };
+                if (resynchronize) {
                     const restored = await enqueue(() => snapshot((acknowledged?.version ?? 0) + 1, input.getText(), input.getUnsaved()));
                     if (!current() || signal.aborted) return null;
                     if (restored.status !== 'ok') return restored;
