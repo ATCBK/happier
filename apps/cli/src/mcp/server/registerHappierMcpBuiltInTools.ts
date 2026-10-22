@@ -170,7 +170,7 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
     const parser = schema instanceof z.core.$ZodType
         ? schema
         : createPluginJsonSchemaZodObjectAdapter(schema);
-    const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(parser, { target: 'draft-7' }));
+    const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(parser, { target: 'draft-7', reused: 'ref' }));
     const adapter = z.looseObject({});
     adapter._zod.processJSONSchema = (_ctx, json) => { Object.assign(json, jsonSchema); json.type = 'object'; };
     return adapter;

@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { z } from 'zod/mini';
 
 import { resolveSessionNativeToolDescriptors } from './resolveSessionNativeToolBridge';
+import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
+import { projectSessionBoundActionToolInputSchema } from './actionToolContext';
 
 const originalActionsSettingsEnv = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
 
@@ -16,6 +20,26 @@ afterEach(() => {
 });
 
 describe('resolveSessionNativeToolDescriptors', () => {
+  it('reuses repeated Board input definitions in the native Agent descriptor', () => {
+    const spec = getActionSpec('session.board.item.upsert');
+    const example = spec.examples?.mcp?.argsExample;
+    if (!example) throw new Error('Expected the canonical Board authoring example');
+    const input: unknown = JSON.parse(example);
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    const tool = resolveSessionNativeToolDescriptors({ accountSettings: {}, sessionId: 'session-1',
+      memoryRecallGuidanceEnabled: false, isServerFeatureEnabled: () => true,
+    }).find(candidate => candidate.name === 'session_board_item_upsert');
+    if (!tool?.inputSchema || typeof tool.inputSchema !== 'object') throw new Error('Expected the native Board tool');
+    const validate = new Ajv2020({ strict: false }).compile(tool.inputSchema);
+    expect(validate(input)).toBe(true);
+    expect(validate({ itemId: 'incomplete' })).toBe(false);
+    const parser = projectSessionBoundActionToolInputSchema({ actionId: spec.id, inputSchema: spec.inputSchema,
+      context: { defaultSessionId: 'session-1' } });
+    if (!(parser instanceof z.core.$ZodType)) throw new Error('Expected the canonical Zod input producer');
+    const inline = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(parser, { reused: 'inline' }));
+    expect(JSON.stringify(tool.inputSchema).length).toBeLessThan(JSON.stringify(inline).length);
+  });
+
   it('advertises only provider-compatible object roots through the real native tool catalog', () => {
     const tools = resolveSessionNativeToolDescriptors({
       accountSettings: {}, sessionId: 'session-1', sessionMachineId: 'machine-1',

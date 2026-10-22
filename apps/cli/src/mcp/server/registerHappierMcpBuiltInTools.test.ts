@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema, ComputerCaptureResponseV1Schema } from '@happier-dev/protocol';
 import { z } from 'zod/mini';
+import Ajv from 'ajv';
 import * as mini from 'zod/mini';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -9,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { configuration } from '@/configuration';
 
 import { prepareHappierMcpToolInventory, registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
-import { ActionJsonSchemaProjectionError } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { createHappierToolInventory } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { projectExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalog';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
@@ -22,8 +23,47 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { projectMcpToolInputJsonSchema } from './projectMcpToolInputJsonSchema';
 
 describe('registerHappierMcpBuiltInTools', () => {
+  it('shares repeated native tool input schemas through MCP discovery without losing their contracts', async () => {
+    const spec = getActionSpec('session.board.item.upsert');
+    const example = spec.examples?.mcp?.argsExample;
+    if (!example) throw new Error('Expected the canonical Board authoring example');
+    const input: unknown = JSON.parse(example);
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    const inventory = prepareHappierMcpToolInventory({ sessionId: '', inventory: {
+      tools: [{ name: 'session_board_item_upsert', title: spec.title, description: spec.description ?? spec.title,
+        actionId: spec.id, inputSchema: spec.inputSchema }],
+      actionToolNameToId: new Map([['session_board_item_upsert', spec.id]]),
+    } });
+    const server = new McpServer({ name: 'native-schema-test', version: '1.0.0' });
+    const bridge = createActionToolExecutorBridge({ surface: 'agent',
+      executor: createActionExecutor(createUnavailableActionTransportDeps()) });
+    registerHappierMcpBuiltInTools(server, { sessionId: '', surface: 'agent', toolInventory: inventory,
+      deps: { ...bridge, changeTitle: async () => ({ success: true }),
+        resolveActionOptions: args => bridge.resolveActionOptions(args, '') } });
+    const client = new Client({ name: 'native-schema-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const advertised = (await client.listTools()).tools[0]!;
+      const compiler = new Ajv({ strict: false, validateFormats: false });
+      const validate = compiler.compile(advertised.inputSchema);
+      expect(validate(input)).toBe(true);
+      expect(validate({ itemId: 'incomplete' })).toBe(false);
+      // Mis-binding the schema producer cannot certify the Board invocation.
+      expect(compiler.compile(zodSchemaToJsonSchemaObject(getActionSpec('workflow.run.get').inputSchema,
+        { target: 'draft-7' }))(input)).toBe(false);
+      const inline = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema,
+        { target: 'draft-7', reused: 'inline' }));
+      expect(JSON.stringify(advertised.inputSchema).length).toBeLessThan(JSON.stringify(inline).length);
+      // Discovery must carry the definitions consumed by its advertised references.
+      expect(() => new Ajv({ strict: false, validateFormats: false }).compile({ ...advertised.inputSchema, definitions: {} })).toThrow();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('contains malformed structured output at the MCP boundary and keeps healthy calls available', async () => {
     const tool = { name: 'change_title', title: 'Change title', description: 'Change title',
       inputSchema: z.strictObject({ title: z.string() }), outputSchema: z.strictObject({ success: z.boolean() }) };
@@ -210,7 +250,8 @@ describe('registerHappierMcpBuiltInTools', () => {
   it('registers only MCP-presentable schemas for the real Action and plugin tool inventories', async () => {
     const pluginId = 'acme.mcp-inventory';
     const inputSchema = {
-      type: 'object', properties: { label: { type: 'string', minLength: 1 } },
+      type: 'object', properties: { label: { $ref: '#/definitions/label' } },
+      definitions: { label: { type: 'string', minLength: 1 } },
       required: ['label'], additionalProperties: false,
     };
     // The plugin is physically installed and admitted by the canonical fixture;
@@ -275,6 +316,13 @@ describe('registerHappierMcpBuiltInTools', () => {
           : [];
       });
       expect(incompatibleInputs).toEqual([]);
+      const plugin = registrations.find(registration => registration.name === 'qa_inventory_read');
+      if (!plugin?.meta.inputSchema) throw new Error('Expected the admitted external tool');
+      const advertisedPluginSchema = zodSchemaToJsonSchemaObject(plugin.meta.inputSchema, { target: 'draft-7' });
+      const validatePlugin = compilePluginJsonSchema(advertisedPluginSchema);
+      expect(validatePlugin({ label: 'kept' })).toBe(true);
+      expect(validatePlugin({ label: '' })).toBe(false);
+      expect(() => compilePluginJsonSchema({ ...advertisedPluginSchema, definitions: {} })).toThrow();
       for (const registration of registrations) {
         expect(() => registration.meta.inputSchema
           ? z.toJSONSchema(registration.meta.inputSchema, { target: 'draft-7', io: 'input' })

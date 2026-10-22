@@ -14,7 +14,7 @@ import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJ
 
 function projectJsonSchema(schema: unknown) {
   const jsonSchema = schema instanceof z.core.$ZodType
-    ? zodSchemaToJsonSchemaObject(schema)
+    ? zodSchemaToJsonSchemaObject(schema, { reused: 'ref' })
     : schema;
   const objectSchema = jsonSchema && typeof jsonSchema === 'object' && !Array.isArray(jsonSchema)
     ? projectMcpToolInputJsonSchema(jsonSchema as Readonly<Record<string, unknown>>)
