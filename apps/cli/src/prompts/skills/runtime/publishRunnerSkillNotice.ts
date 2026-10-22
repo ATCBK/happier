@@ -45,9 +45,11 @@ async function commitSkillNotice(
 ): Promise<void> {
   const notice = SessionCapabilityNoticeV1Schema.parse(input);
   try {
+    // This optional warning has no delivery-dependent caller. Keep durable
+    // admission here; the existing stable-identity journal owns Home delivery.
     await session.enqueueSessionEventCommitted({ type: 'message',
       message: notice.items.map(item => `${item.name} couldn't load · ${item.detail ?? item.code}`).join('\n'),
-      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice });
+      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice }, undefined, { awaitDelivery: false });
   } catch {
     logger.warn('[skills] Session capability notice could not be committed');
   }

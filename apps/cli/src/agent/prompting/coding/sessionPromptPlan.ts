@@ -224,10 +224,11 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [
         { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
       ] });
+      // Optional context preparation needs durable notice admission, not its Home ACK.
       await params.session.enqueueSessionEventCommitted({ type: 'message',
         message: 'Prompt library unavailable. Continuing without optional prompts.',
         [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
-      }).catch(() => logger.warn('[prompts] Session capability notice could not be committed'));
+      }, undefined, { awaitDelivery: false }).catch(() => logger.warn('[prompts] Session capability notice could not be committed'));
       signal.throwIfAborted();
       assertCurrentAccount();
       if (operationContext && !await operationContext.isCurrent()) {
