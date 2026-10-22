@@ -97,5 +97,8 @@ export async function readSessionCreationApiTokenIdInTx(
         ? !await isCurrentDiscussionModelBirthInTx(tx, accountId, authorization) : binding.actionId !== 'session.spawn_new')) {
         throw new ApiTokenOperationError("invalid_token");
     }
-    return 'credentialId' in principal ? principal.credentialId : null;
+    // This attribution proves that a newly created Session belongs to the
+    // spawn-only child that may request a Session-scoped child credential.
+    // Root PATs are revocation authorities, not creation-attribution subjects.
+    return 'credentialId' in principal && principal.parentTokenId !== null ? principal.credentialId : null;
 }

@@ -244,6 +244,12 @@ describe("authRoutes (API-token management) (integration)", () => {
                 actionId: 'session.spawn_new', requestId: randomUUID(), requestEnvelopeDigest: 'a'.repeat(43),
                 target: { kind: 'machine', machineId },
             });
+            const rootAuthorization = await auth.mintExternalActionExecutionAuthorization({
+                serverIdentityId: await getOrCreateServerIdentityId(), accountId: account.id, principalId: account.id,
+                credentialId: root.tokenId, grant: API_TOKEN_FULL_GRANT_V1, machineId,
+                actionId: 'session.spawn_new', requestId: randomUUID(), requestEnvelopeDigest: 'b'.repeat(43),
+                target: { kind: 'machine', machineId },
+            });
             const create = (tag: string, proof?: string, credential = signed) => app.inject({ method: 'POST', url: '/v1/sessions',
                 headers: { ...bearer(credential), 'x-happier-account-stored-content-protocol': '2',
                     ...(proof ? { 'x-happier-session-creation-authorization': proof } : {}) },
@@ -260,6 +266,12 @@ describe("authRoutes (API-token management) (integration)", () => {
             expect((await create(ordinaryTag)).statusCode).toBe(200);
             const ordinary = await db.session.findUniqueOrThrow({ where: { accountId_tag: { accountId: account.id, tag: ordinaryTag } } });
             expect(ordinary.createdByApiTokenId).toBeNull();
+            const rootCreatedTag = randomUUID();
+            expect((await create(rootCreatedTag, rootAuthorization.token)).statusCode).toBe(200);
+            const rootCreated = await db.session.findUniqueOrThrow({ where: { accountId_tag: {
+                accountId: account.id, tag: rootCreatedTag,
+            } } });
+            expect(rootCreated.createdByApiTokenId).toBeNull();
             const otherSigned = await auth.createToken(other.id, undefined, { kind: 'account', authority: 'present_user' });
             expect((await create(randomUUID(), authorization.token, otherSigned)).statusCode).toBe(401);
             const explicitGrant = { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['session.message.send'] },
@@ -269,7 +281,13 @@ describe("authRoutes (API-token management) (integration)", () => {
                 { requireCreatedByChildTokenId: childId })).statusCode).toBe(400);
             const sibling = await mintChild();
             expect((await mintChild(explicitGrant, { requireCreatedByChildTokenId: sibling.json().apiToken.tokenId })).statusCode).toBe(400);
-            await auth.revokeApiToken({ accountId: account.id, tokenId: root.tokenId });
+            const revoked = await app.inject({ method: 'POST', url: ACCOUNT_API_TOKENS_REVOKE_HTTP_PATH_V1,
+                headers: bearer(signed), payload: { tokenId: root.tokenId } });
+            expect(revoked.statusCode, revoked.body).toBe(200);
+            expect(revoked.json()).toEqual({ revoked: true });
+            expect((await db.session.findUniqueOrThrow({ where: { id: rootCreated.id } })).createdByApiTokenId).toBeNull();
+            expect((await auth.verifyPat(root.token)).ok).toBe(false);
+            expect((await auth.verifyPat(child.json().token)).ok).toBe(false);
             expect((await create(randomUUID(), authorization.token)).statusCode).toBe(401);
         } finally { await app.close(); }
     });
