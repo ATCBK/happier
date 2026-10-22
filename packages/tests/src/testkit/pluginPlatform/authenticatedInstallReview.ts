@@ -1,21 +1,7 @@
+import { execFile } from 'node:child_process';
 
-import {
-  decideMachinePluginInstallReviewAsPresentUser,
-} from '../../../../../apps/ui/sources/sync/ops/machinePluginInstallPresentUserDecision.mjs';
-import {
-  HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
-} from '@happier-dev/protocol/marketplace/internal';
-import { readCliAccessKey, type CliAccessKey } from '../cliAccessKey';
-import { type MemoryRpcSchema } from '../memoryRpc';
-import {
-  createUserScopedSocketCollector,
-  type SocketCollector,
-  type SocketConnectivityState,
-  type SocketConnectivityTransition,
-} from '../socketClient';
-import { createDataKeyRpcClient, createLegacyRpcClient, unwrapDataKeyRpcResult } from '../syntheticAgent/rpcClient';
+import { ensureCliDistBuilt } from '../process/cliDist';
 import { waitFor } from '../timing';
-import { waitForDaemonMachineIdFromCliSettings } from '../uiE2e/daemonMachineId';
 export {
   readPluginInstallReviewRequiredEnvelope,
   type PluginInstallationReviewFacts,
@@ -31,40 +17,11 @@ export type PluginInstallDecisionOutcome = Readonly<{
   message?: string;
 }>;
 
-const PluginInstallDecisionOutcomeSchema: MemoryRpcSchema<PluginInstallDecisionOutcome> = {
-  safeParse(value: unknown) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return { success: false };
-    const kind = (value as Readonly<Record<string, unknown>>).kind;
-    if (![
-      'committed',
-      'failed',
-      'conflict',
-      'expired',
-      'cancelled',
-      'unavailable',
-      'outcomeUnknown',
-      'busy',
-    ].includes(String(kind))) {
-      return { success: false };
-    }
-    return { success: true, data: value as PluginInstallDecisionOutcome };
-  },
-};
-
-type ReviewSocket =
-  & Pick<SocketCollector, 'connect' | 'close' | 'isConnected' | 'emitWithAck' | 'emit'>
-  & Partial<Pick<SocketCollector, 'getConnectivityState'>>;
-
 export type AuthenticatedPluginInstallReviewTimeoutDiagnostic = Readonly<{
   pendingChangeId: string;
-  machineId: string;
-  rpcStartedAtMs: number;
-  rpcTimedOutAtMs: number;
-  connectedBefore: boolean;
-  connectedAfter: boolean;
-  transitionCountDuringRpc: number;
-  omittedTransitionCountDuringRpc: number;
-  transitionsDuringRpc: readonly SocketConnectivityTransition[];
+  decidedAtMs: number;
+  timedOutAtMs: number;
+  lastStatusKind: string | null;
 }>;
 
 export class AuthenticatedPluginInstallReviewTimeoutError extends Error {
@@ -82,319 +39,156 @@ export class AuthenticatedPluginInstallReviewTimeoutError extends Error {
   }
 }
 
-type PrivateRpcTransportResult =
-  | Readonly<{ ok: true; result: unknown | null }>
-  | Readonly<{ ok: false; error?: string; errorCode?: string }>;
+type CliRunResult = Readonly<{ code: number | null; stdout: string }>;
 
 type AuthenticatedInstallReviewDeps = Readonly<{
-  readAccessKey: typeof readCliAccessKey;
-  readMachineId: typeof waitForDaemonMachineIdFromCliSettings;
-  createUserSocket: (baseUrl: string, token: string) => ReviewSocket;
-  waitForConnected: (socket: ReviewSocket) => Promise<void>;
-  probeLegacy: (params: Readonly<{
-    socket: ReviewSocket;
-    machineId: string;
-    method: string;
-    payload: unknown;
-    secret: Uint8Array;
-    timeoutMs: number;
-  }>) => Promise<PrivateRpcTransportResult>;
-  probeDataKey: (params: Readonly<{
-    socket: ReviewSocket;
-    machineId: string;
-    method: string;
-    payload: unknown;
-    machineKey: Uint8Array;
-    timeoutMs: number;
-  }>) => Promise<PrivateRpcTransportResult>;
-  callLegacy: (params: Readonly<{
-    socket: ReviewSocket;
-    machineId: string;
-    method: string;
-    payload: unknown;
-    secret: Uint8Array;
-    timeoutMs: number;
-  }>) => Promise<PluginInstallDecisionOutcome>;
-  callDataKey: (params: Readonly<{
-    socket: ReviewSocket;
-    machineId: string;
-    method: string;
-    payload: unknown;
-    machineKey: Uint8Array;
-    timeoutMs: number;
-  }>) => Promise<PluginInstallDecisionOutcome>;
+  runCli: (params: Readonly<{
+    cliEntrypoint: string;
+    args: readonly string[];
+    env: NodeJS.ProcessEnv;
+  }>) => Promise<CliRunResult>;
+  resolveCliEntrypoint: (cliHomeDir: string) => Promise<string>;
   nowMs: () => number;
-  readinessTimeoutMs: number;
-  decisionTimeoutMs: number;
+  settleTimeoutMs: number;
 }>;
 
-const AUTHENTICATED_INSTALL_DECISION_TIMEOUT_MS = 5 * 60_000;
-
-async function callLegacyPrivateRpcOnce(params: Readonly<{
-  socket: ReviewSocket;
-  machineId: string;
-  method: string;
-  payload: unknown;
-  secret: Uint8Array;
-  timeoutMs: number;
-}>): Promise<PrivateRpcTransportResult> {
-  return createLegacyRpcClient(params.socket, params.secret).call(
-    `${params.machineId}:${params.method}`,
-    params.payload,
-    params.timeoutMs,
-  );
-}
-
-function isExactInvalidRequestProbeResult(
-  result: PrivateRpcTransportResult,
-): boolean {
-  if (result.ok !== true) return false;
-  const value = result.result;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const record = value as Readonly<Record<string, unknown>>;
-  return (
-    Object.keys(record).sort().join(',')
-      === 'error,errorCode,ok'
-    && record.ok === false
-    && record.errorCode === 'invalid_request'
-    && record.error === 'invalid_request'
-  );
-}
-
-// The private decision handler validates its strict schema before calling the
-// daemon decision owner. An empty request therefore proves the exact route is
-// registered while remaining incapable of carrying a decision or actor evidence.
-async function waitForPrivateInstallDecisionRpcReady(params: Readonly<{
-  probe: () => Promise<PrivateRpcTransportResult>;
-  timeoutMs: number;
-}>): Promise<void> {
-  await waitFor(async () => {
-    const result = await params.probe();
-    if (
-      result.ok === false
-      && result.errorCode === 'RPC_METHOD_NOT_AVAILABLE'
-    ) {
-      return false;
-    }
-    if (isExactInvalidRequestProbeResult(result)) return true;
-    if (result.ok === false) {
-      throw new Error(
-        `Authenticated plugin install-review readiness probe failed: ${result.errorCode ?? result.error ?? 'unknown-error'}`,
-      );
-    }
-    throw new Error(
-      'Authenticated plugin install-review readiness probe returned an invalid handler response',
-    );
-  }, {
-    timeoutMs: params.timeoutMs,
-    intervalMs: 50,
-    failFast: true,
-    context: 'authenticated plugin install-review private RPC readiness',
-  });
-}
+const INSTALL_SETTLE_TIMEOUT_MS = 5 * 60_000;
 
 const defaultDeps: AuthenticatedInstallReviewDeps = {
-  readAccessKey: readCliAccessKey,
-  readMachineId: waitForDaemonMachineIdFromCliSettings,
-  createUserSocket: (baseUrl, token) => createUserScopedSocketCollector(baseUrl, token, {
-    captureEvents: false,
-  }),
-  waitForConnected: async (socket) => {
-    socket.connect();
-    await waitFor(() => socket.isConnected(), {
-      timeoutMs: 20_000,
-      context: 'authenticated plugin install-review socket',
-    });
-  },
-  probeLegacy: callLegacyPrivateRpcOnce,
-  probeDataKey: async ({
-    socket,
-    machineId,
-    method,
-    payload,
-    machineKey,
-    timeoutMs,
-  }) => await createDataKeyRpcClient(socket, machineKey).call(
-    `${machineId}:${method}`,
-    payload,
-    timeoutMs,
-  ),
-  callLegacy: async ({ socket, machineId, method, payload, secret, timeoutMs }) => {
-    const raw = await callLegacyPrivateRpcOnce({
-      socket,
-      machineId,
-      method,
-      payload,
-      secret,
-      timeoutMs,
-    });
-    if (raw.ok !== true) {
-      if (raw.error === 'operation has timed out') {
-        throw new Error(raw.error);
-      }
-      throw new Error(
-        `Authenticated plugin install review failed: ${raw.errorCode ?? raw.error ?? 'unknown-error'}`,
-      );
-    }
-    const parsed = PluginInstallDecisionOutcomeSchema.safeParse(raw.result);
-    if (!parsed.success) {
-      throw new Error(
-        'Authenticated plugin install review returned an invalid outcome',
-      );
-    }
-    return parsed.data;
-  },
-  callDataKey: async ({ socket, machineId, method, payload, machineKey, timeoutMs }) => {
-    const raw = unwrapDataKeyRpcResult(
-      await createDataKeyRpcClient(socket, machineKey).call(
-        `${machineId}:${method}`,
-        payload,
-        timeoutMs,
-      ),
-      method,
+  runCli: ({ cliEntrypoint, args, env }) => new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [cliEntrypoint, ...args],
+      { env, maxBuffer: 32 * 1024 * 1024, timeout: 120_000 },
+      (error, stdout) => {
+        const code = error && typeof (error as { code?: unknown }).code === 'number'
+          ? (error as { code: number }).code
+          : error ? null : 0;
+        if (error && !stdout.trim()) reject(error);
+        else resolve({ code, stdout });
+      },
     );
-    const parsed = PluginInstallDecisionOutcomeSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Authenticated plugin install review returned an invalid outcome');
-    return parsed.data;
-  },
+  }),
+  resolveCliEntrypoint: async (cliHomeDir) => await ensureCliDistBuilt(
+    { testDir: cliHomeDir, env: process.env },
+  ),
   nowMs: Date.now,
-  readinessTimeoutMs: 20_000,
-  decisionTimeoutMs: AUTHENTICATED_INSTALL_DECISION_TIMEOUT_MS,
+  settleTimeoutMs: INSTALL_SETTLE_TIMEOUT_MS,
 };
 
-function accessKeyIdentity(accessKey: CliAccessKey): string {
-  return 'secret' in accessKey
-    ? `legacy:${accessKey.token}:${accessKey.secret}`
-    : `dataKey:${accessKey.token}:${accessKey.encryption.publicKey}:${accessKey.encryption.machineKey}`;
+function readJsonEnvelope(stdout: string, context: string): Readonly<Record<string, unknown>> {
+  try {
+    const parsed: unknown = JSON.parse(stdout.trim());
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Readonly<Record<string, unknown>>;
+    }
+  } catch {
+    // fall through to the typed failure below
+  }
+  throw new Error(`Authenticated plugin install review ${context} did not return a JSON envelope`);
 }
 
-function readSocketConnectivityState(socket: ReviewSocket): SocketConnectivityState {
-  return socket.getConnectivityState?.() ?? {
-    connected: socket.isConnected(),
-    totalTransitionCount: 0,
-    transitions: [],
-  };
+function projectTerminalResult(result: unknown): PluginInstallDecisionOutcome {
+  const record = result && typeof result === 'object' && !Array.isArray(result)
+    ? result as Readonly<Record<string, unknown>>
+    : null;
+  const kind = record?.kind;
+  if (
+    kind === 'committed' || kind === 'failed' || kind === 'conflict' || kind === 'expired'
+    || kind === 'cancelled' || kind === 'unavailable' || kind === 'outcomeUnknown' || kind === 'busy'
+  ) {
+    return record as PluginInstallDecisionOutcome;
+  }
+  throw new Error('Authenticated plugin install review returned an invalid terminal outcome');
 }
 
-function isSocketAcknowledgementTimeout(error: unknown): error is Error {
-  return error instanceof Error && error.message === 'operation has timed out';
-}
-
+/**
+ * Decides the daemon-retained install review as the present user through the
+ * canonical `approval.request.decide` Action. The approval Artifact id is the
+ * pending change id, and the install settles in the daemon change service,
+ * which `plugins change status` reads.
+ */
 export async function decideAuthenticatedPluginInstallReview(input: Readonly<{
   cliHomeDir: string;
   serverUrl: string;
   pendingChangeId: string;
-  optionalSelections: readonly Readonly<{ accessId: string; selected: boolean }>[];
+  /** Optional host access is not expressible in an approval decision; only unselected is accepted. */
+  optionalSelections?: readonly Readonly<{ accessId: string; selected: boolean }>[];
   confirmPresentUser: () => Promise<boolean>;
+  cliEntrypoint?: string;
   deps?: Partial<AuthenticatedInstallReviewDeps>;
 }>): Promise<PluginInstallDecisionOutcome> {
   const deps = { ...defaultDeps, ...(input.deps ?? {}) };
-  const [machineId, accessKey] = await Promise.all([
-    deps.readMachineId({ cliHomeDir: input.cliHomeDir }),
-    deps.readAccessKey(input.cliHomeDir),
-  ]);
-  if (!accessKey) {
-    throw new Error('Authenticated CLI credentials were unavailable for plugin install review');
+  if ((input.optionalSelections ?? []).some((selection) => selection.selected)) {
+    throw new Error('Authenticated plugin install review cannot select optional host access through an approval decision');
   }
-  const socket = deps.createUserSocket(input.serverUrl, accessKey.token);
+  const approve = await input.confirmPresentUser();
+  const cliEntrypoint = input.cliEntrypoint ?? await deps.resolveCliEntrypoint(input.cliHomeDir);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HAPPIER_HOME_DIR: input.cliHomeDir,
+    HAPPIER_SERVER_URL: input.serverUrl,
+    HAPPIER_WEBAPP_URL: input.serverUrl,
+  };
+  const decided = await deps.runCli({
+    cliEntrypoint,
+    env,
+    args: [
+      'actions', 'invoke', 'approval.request.decide',
+      '--input-json', JSON.stringify({
+        artifactId: input.pendingChangeId,
+        decision: approve ? 'approve' : 'cancel',
+      }),
+      '--json',
+    ],
+  });
+  const decidedEnvelope = readJsonEnvelope(decided.stdout, 'decision');
+  if (decided.code !== 0 || decidedEnvelope.ok !== true) {
+    const error = decidedEnvelope.error as Readonly<Record<string, unknown>> | undefined;
+    throw new Error(
+      `Authenticated plugin install review failed: ${String(error?.code ?? decidedEnvelope.errorCode ?? 'unknown-error')}`,
+    );
+  }
+  if (!approve) return { kind: 'cancelled' };
+
+  const decidedAtMs = deps.nowMs();
+  let lastStatusKind: string | null = null;
+  let outcome: PluginInstallDecisionOutcome | null = null;
   try {
-    await deps.waitForConnected(socket);
-    await waitForPrivateInstallDecisionRpcReady({
-      timeoutMs: deps.readinessTimeoutMs,
-      probe: async () => {
-        const common = {
-          socket,
-          machineId,
-          method: HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
-          payload: {},
-          timeoutMs: deps.readinessTimeoutMs,
-        };
-        if ('secret' in accessKey) {
-          return await deps.probeLegacy({
-            ...common,
-            secret: Uint8Array.from(
-              Buffer.from(accessKey.secret, 'base64'),
-            ),
-          });
-        }
-        return await deps.probeDataKey({
-          ...common,
-          machineKey: Uint8Array.from(
-            Buffer.from(accessKey.encryption.machineKey, 'base64'),
-          ),
-        });
-      },
+    await waitFor(async () => {
+      const status = await deps.runCli({
+        cliEntrypoint,
+        env,
+        args: ['plugins', 'change', 'status', input.pendingChangeId, '--json'],
+      });
+      const envelope = readJsonEnvelope(status.stdout, 'status');
+      if (envelope.ok !== true) {
+        lastStatusKind = 'daemonUnavailable';
+        return false;
+      }
+      const data = envelope.data as Readonly<Record<string, unknown>> | undefined;
+      lastStatusKind = typeof data?.kind === 'string' ? data.kind : null;
+      if (lastStatusKind === 'terminal') {
+        outcome = projectTerminalResult(data?.result);
+        return true;
+      }
+      if (lastStatusKind === 'expired') {
+        outcome = { kind: 'expired' };
+        return true;
+      }
+      return false;
+    }, {
+      timeoutMs: deps.settleTimeoutMs,
+      intervalMs: 250,
+      context: `plugin install ${input.pendingChangeId} to settle`,
     });
-    return await decideMachinePluginInstallReviewAsPresentUser({
+  } catch (error) {
+    throw new AuthenticatedPluginInstallReviewTimeoutError({
       pendingChangeId: input.pendingChangeId,
-      confirmPresentUser: async () => (
-        await input.confirmPresentUser()
-          ? [...input.optionalSelections]
-          : null
-      ),
-      isAuthorityCurrent: async () => {
-        const [currentMachineId, currentAccessKey] = await Promise.all([
-          deps.readMachineId({ cliHomeDir: input.cliHomeDir }),
-          deps.readAccessKey(input.cliHomeDir),
-        ]);
-        return (
-          currentMachineId === machineId
-          && currentAccessKey !== null
-          && accessKeyIdentity(currentAccessKey) === accessKeyIdentity(accessKey)
-          && socket.isConnected()
-        );
-      },
-      callAuthenticatedPrivateRpc: async (method, payload) => {
-        const before = readSocketConnectivityState(socket);
-        const rpcStartedAtMs = deps.nowMs();
-        try {
-          if ('secret' in accessKey) {
-            return await deps.callLegacy({
-              socket,
-              machineId,
-              method,
-              payload,
-              secret: Uint8Array.from(Buffer.from(accessKey.secret, 'base64')),
-              timeoutMs: deps.decisionTimeoutMs,
-            });
-          }
-          return await deps.callDataKey({
-            socket,
-            machineId,
-            method,
-            payload,
-            machineKey: Uint8Array.from(Buffer.from(accessKey.encryption.machineKey, 'base64')),
-            timeoutMs: deps.decisionTimeoutMs,
-          });
-        } catch (error) {
-          if (!isSocketAcknowledgementTimeout(error)) throw error;
-          const rpcTimedOutAtMs = deps.nowMs();
-          const after = readSocketConnectivityState(socket);
-          const transitionCountDuringRpc = Math.max(
-            0,
-            after.totalTransitionCount - before.totalTransitionCount,
-          );
-          const transitionsDuringRpc = after.transitions.filter(
-            (transition) => transition.sequence > before.totalTransitionCount,
-          );
-          throw new AuthenticatedPluginInstallReviewTimeoutError({
-            pendingChangeId: input.pendingChangeId,
-            machineId,
-            rpcStartedAtMs,
-            rpcTimedOutAtMs,
-            connectedBefore: before.connected,
-            connectedAfter: after.connected,
-            transitionCountDuringRpc,
-            omittedTransitionCountDuringRpc: Math.max(
-              0,
-              transitionCountDuringRpc - transitionsDuringRpc.length,
-            ),
-            transitionsDuringRpc,
-          }, { cause: error });
-        }
-      },
-    });
-  } finally {
-    socket.close();
+      decidedAtMs,
+      timedOutAtMs: deps.nowMs(),
+      lastStatusKind,
+    }, { cause: error });
   }
+  return outcome!;
 }

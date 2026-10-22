@@ -1,43 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { socketRpcCodec } from '@happier-dev/sync-client';
-
 import {
   decideAuthenticatedPluginInstallReview,
   readPluginInstallReviewRequiredEnvelope,
 } from './authenticatedInstallReview';
-import {
-  decryptLegacyBase64,
-  encryptLegacyBase64,
-} from '../messageCrypto';
-import {
-  decryptDataKeyBase64,
-  encryptDataKeyBase64,
-} from '../rpcCrypto';
-
-function boundResponse(mode: 'legacy' | 'dataKey', key: Uint8Array, result: unknown) {
-  const content = { mode: 'e2ee' as const, cipher: {
-    encryptRaw: async (value: unknown) => mode === 'legacy'
-      ? encryptLegacyBase64(value, key) : encryptDataKeyBase64(value, key),
-    decryptRaw: async (value: string) => mode === 'legacy'
-      ? decryptLegacyBase64(value, key) : decryptDataKeyBase64(value, key),
-  } };
-  return async (_event: string, payload: unknown) => {
-    const { method, params } = payload as { method: string; params: unknown };
-    const request = await socketRpcCodec.decodeRequestParams(content, params, method);
-    return { ok: true, result: await socketRpcCodec.encodeResponse(content, result, request.callId) };
-  };
-}
-
-function socket() {
-  return {
-    connect: vi.fn(),
-    close: vi.fn(),
-    isConnected: vi.fn(() => true),
-    emit: vi.fn(),
-    emitWithAck: vi.fn(),
-  };
-}
-
 const completeReview = {
   pluginId: 'acme.plugin',
   displayName: 'Acme Plugin',
@@ -366,470 +331,74 @@ describe('decideAuthenticatedPluginInstallReview', () => {
     });
   });
 
-  it('waits for the exact private legacy handler before confirmation and sends one decision', async () => {
-    const reviewSocket = socket();
-    const legacySecret = Uint8Array.from(Buffer.alloc(32, 1));
-    reviewSocket.emitWithAck
-      .mockResolvedValueOnce({
-        ok: false,
-        errorCode: 'RPC_METHOD_NOT_AVAILABLE',
-      })
-      .mockImplementationOnce(boundResponse('legacy', legacySecret, {
-          ok: false,
-          errorCode: 'invalid_request',
-          error: 'invalid_request',
-        }));
-    const events: string[] = [];
-    const callLegacy = vi.fn(async () => {
-      events.push('send');
-      return { kind: 'committed' as const, pluginId: 'acme.plugin' };
+  it('decides the pending install as the present user through approval.request.decide, then reads the settled change', async () => {
+    const calls: string[][] = [];
+    const runCli = vi.fn(async ({ args }: { args: readonly string[] }) => {
+      calls.push([...args]);
+      if (args[0] === 'actions') {
+        return { code: 0, stdout: JSON.stringify({ ok: true, data: { status: 'approved' } }) };
+      }
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          kind: 'plugins_change_status',
+          data: calls.filter((call) => call[0] === 'plugins').length < 2
+            ? { kind: 'applying', pendingChangeId: 'pending-1' }
+            : { kind: 'terminal', pendingChangeId: 'pending-1', result: { kind: 'committed', pluginId: 'acme.plugin' } },
+        }),
+      };
     });
-    const callDataKey = vi.fn();
+    const outcome = await decideAuthenticatedPluginInstallReview({
+      cliHomeDir: '/tmp/home',
+      serverUrl: 'http://127.0.0.1:1',
+      pendingChangeId: 'pending-1',
+      optionalSelections: [{ accessId: 'optional-secrets', selected: false }],
+      confirmPresentUser: async () => true,
+      cliEntrypoint: '/cli.mjs',
+      deps: { runCli },
+    });
+    expect(outcome).toMatchObject({ kind: 'committed', pluginId: 'acme.plugin' });
+    expect(calls[0]).toEqual(expect.arrayContaining(['approval.request.decide', '--input-json']));
+    expect(JSON.parse(calls[0]![calls[0]!.indexOf('--input-json') + 1]!)).toEqual({
+      artifactId: 'pending-1',
+      decision: 'approve',
+    });
+  });
 
+  it('cancels without polling when the present user declines', async () => {
+    const runCli = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ ok: true }) }));
+    const outcome = await decideAuthenticatedPluginInstallReview({
+      cliHomeDir: '/tmp/home',
+      serverUrl: 'http://127.0.0.1:1',
+      pendingChangeId: 'pending-1',
+      confirmPresentUser: async () => false,
+      cliEntrypoint: '/cli.mjs',
+      deps: { runCli },
+    });
+    expect(outcome).toEqual({ kind: 'cancelled' });
+    expect(runCli).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed on a refused decision and on an unexpressible optional selection', async () => {
     await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
+      cliHomeDir: '/tmp/home',
+      serverUrl: 'http://127.0.0.1:1',
+      pendingChangeId: 'pending-1',
+      confirmPresentUser: async () => true,
+      cliEntrypoint: '/cli.mjs',
+      deps: { runCli: async () => ({ code: 1, stdout: JSON.stringify({ ok: false, error: { code: 'not_found' } }) }) },
+    })).rejects.toThrow('not_found');
+    const runCli = vi.fn();
+    await expect(decideAuthenticatedPluginInstallReview({
+      cliHomeDir: '/tmp/home',
+      serverUrl: 'http://127.0.0.1:1',
       pendingChangeId: 'pending-1',
       optionalSelections: [{ accessId: 'optional-secrets', selected: true }],
-      confirmPresentUser: async () => {
-        events.push('confirm');
-        return true;
-      },
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          secret: Buffer.from(legacySecret).toString('base64'),
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        callLegacy,
-        callDataKey,
-        nowMs: () => 42,
-      },
-    })).resolves.toMatchObject({ kind: 'committed', pluginId: 'acme.plugin' });
-
-    expect(events).toEqual(['confirm', 'send']);
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledTimes(2);
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledWith(
-      'rpc-call',
-      expect.objectContaining({ method: 'machine-1:daemon.plugins.install.review.decide', params: expect.any(String) }),
-      expect.any(Number),
-    );
-    for (const [, payload] of reviewSocket.emitWithAck.mock.calls) {
-      const encryptedProbe = (payload as { params: string }).params;
-      expect(decryptLegacyBase64(encryptedProbe, legacySecret)).toMatchObject({ v: 2, k: 'req', p: {} });
-    }
-    expect(callLegacy).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1',
-      method: 'daemon.plugins.install.review.decide',
-      timeoutMs: 5 * 60_000,
-      payload: expect.objectContaining({
-        pendingChangeId: 'pending-1',
-        decision: 'installAndTrust',
-        optionalSelections: [{ accessId: 'optional-secrets', selected: true }],
-      }),
-    }));
-    expect(callLegacy).toHaveBeenCalledOnce();
-    expect(callDataKey).not.toHaveBeenCalled();
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('uses the authenticated data-key authority after malformed readiness probes with zero decision effect', async () => {
-    const reviewSocket = socket();
-    const machineKey = Uint8Array.from(Buffer.alloc(32, 3));
-    reviewSocket.emitWithAck
-      .mockResolvedValueOnce({
-        ok: false,
-        errorCode: 'RPC_METHOD_NOT_AVAILABLE',
-      })
-      .mockImplementationOnce(boundResponse('dataKey', machineKey, {
-          ok: false,
-          errorCode: 'invalid_request',
-          error: 'invalid_request',
-        }));
-    const callDataKey = vi.fn(async () => ({
-      kind: 'committed' as const,
-      pluginId: 'acme.plugin',
-    }));
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
       confirmPresentUser: async () => true,
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          encryption: {
-            publicKey: Buffer.alloc(32, 2).toString('base64'),
-            machineKey: Buffer.from(machineKey).toString('base64'),
-          },
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        callLegacy: vi.fn(),
-        callDataKey,
-        nowMs: () => 42,
-      },
-    })).resolves.toMatchObject({
-      kind: 'committed',
-      pluginId: 'acme.plugin',
-    });
-
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledTimes(2);
-    for (const [, payload] of reviewSocket.emitWithAck.mock.calls) {
-      const encryptedProbe = (payload as { params: string }).params;
-      expect(decryptDataKeyBase64(encryptedProbe, machineKey)).toMatchObject({ v: 2, k: 'req', p: {} });
-    }
-    expect(callDataKey).toHaveBeenCalledOnce();
-    expect(callDataKey).toHaveBeenCalledWith(expect.objectContaining({
-      timeoutMs: 5 * 60_000,
-      payload: expect.objectContaining({
-        pendingChangeId: 'pending-1',
-        decision: 'installAndTrust',
-      }),
-    }));
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      name: 'non-unavailable outer error',
-      result: {
-        ok: false as const,
-        errorCode: 'SERVER_REQUIRED',
-      },
-      expected: /SERVER_REQUIRED/,
-      readinessTimeoutMs: 20_000,
-    },
-    {
-      name: 'wrong decrypted handler shape',
-      result: {
-        ok: true as const,
-        result: {
-          ok: false,
-          errorCode: 'invalid_request',
-        },
-      },
-      expected: /invalid handler response/,
-      readinessTimeoutMs: 20_000,
-    },
-    {
-      name: 'unavailable timeout',
-      result: {
-        ok: false as const,
-        errorCode: 'RPC_METHOD_NOT_AVAILABLE',
-      },
-      expected: /Timed out waiting/,
-      readinessTimeoutMs: 20,
-    },
-  ])('fails closed on $name before confirmation or a decision effect', async (failureCase) => {
-    const machineKey = Uint8Array.from(Buffer.alloc(32, 3));
-    const reviewSocket = socket();
-    const confirmPresentUser = vi.fn(async () => true);
-    const callDataKey = vi.fn();
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser,
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          encryption: {
-            publicKey: Buffer.alloc(32, 2).toString('base64'),
-            machineKey: Buffer.from(machineKey).toString('base64'),
-          },
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        probeDataKey: vi.fn(async () => failureCase.result),
-        callLegacy: vi.fn(),
-        callDataKey,
-        readinessTimeoutMs: failureCase.readinessTimeoutMs,
-      },
-    })).rejects.toThrow(failureCase.expected);
-
-    expect(confirmPresentUser).not.toHaveBeenCalled();
-    expect(callDataKey).not.toHaveBeenCalled();
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('fails closed when the socket disconnects after readiness and before the decision', async () => {
-    const reviewSocket = socket();
-    const legacySecret = Uint8Array.from(Buffer.alloc(32, 1));
-    reviewSocket.emitWithAck.mockImplementationOnce(boundResponse('legacy', legacySecret, {
-        ok: false,
-        errorCode: 'invalid_request',
-        error: 'invalid_request',
-      }));
-    const callLegacy = vi.fn();
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser: async () => {
-        reviewSocket.isConnected.mockReturnValue(false);
-        return true;
-      },
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          secret: Buffer.from(legacySecret).toString('base64'),
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        callLegacy,
-        callDataKey: vi.fn(),
-      },
-    })).rejects.toThrow(/authority changed/);
-
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledOnce();
-    expect(callLegacy).not.toHaveBeenCalled();
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('does not replay a decision when the exact route disappears after readiness', async () => {
-    const reviewSocket = socket();
-    const legacySecret = Uint8Array.from(Buffer.alloc(32, 1));
-    reviewSocket.emitWithAck
-      .mockImplementationOnce(boundResponse('legacy', legacySecret, {
-          ok: false,
-          errorCode: 'invalid_request',
-          error: 'invalid_request',
-        }))
-      .mockResolvedValueOnce({
-        ok: false,
-        errorCode: 'RPC_METHOD_NOT_AVAILABLE',
-      });
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser: async () => true,
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          secret: Buffer.from(legacySecret).toString('base64'),
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        nowMs: () => 42,
-      },
-    })).rejects.toThrow(/RPC_METHOD_NOT_AVAILABLE/);
-
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledTimes(2);
-    expect(decryptLegacyBase64(reviewSocket.emitWithAck.mock.calls[0]?.[1].params, legacySecret)).toMatchObject({ v: 2, k: 'req', p: {} });
-    expect(decryptLegacyBase64(reviewSocket.emitWithAck.mock.calls[1]?.[1].params, legacySecret)).toMatchObject({
-      v: 2, k: 'req', p: {
-        v: 1,
-        pendingChangeId: 'pending-1',
-        decision: 'installAndTrust',
-        optionalSelections: [],
-      },
-    });
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('reports bounded socket connectivity evidence when the decision acknowledgement times out', async () => {
-    const reviewSocket = socket() as ReturnType<typeof socket> & {
-      getConnectivityState: ReturnType<typeof vi.fn>;
-    };
-    const legacySecret = Uint8Array.from(Buffer.alloc(32, 1));
-    reviewSocket.emitWithAck.mockImplementationOnce(boundResponse('legacy', legacySecret, {
-        ok: false,
-        errorCode: 'invalid_request',
-        error: 'invalid_request',
-      }));
-    reviewSocket.getConnectivityState = vi.fn()
-      .mockReturnValueOnce({
-        connected: true,
-        totalTransitionCount: 1,
-        transitions: [{
-          sequence: 1,
-          kind: 'connect',
-          at: 90,
-        }],
-      })
-      .mockReturnValueOnce({
-        connected: true,
-        totalTransitionCount: 3,
-        transitions: [{
-          sequence: 1,
-          kind: 'connect',
-          at: 90,
-        }, {
-          sequence: 2,
-          kind: 'disconnect',
-          at: 120,
-          reason: 'transport close',
-        }, {
-          sequence: 3,
-          kind: 'connect',
-          at: 140,
-        }],
-      });
-    // The decision payload carries no timestamp, so this clock is read only
-    // for the RPC start/timeout diagnostics below.
-    const nowMs = vi.fn()
-      .mockReturnValueOnce(100)
-      .mockReturnValueOnce(200);
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser: async () => true,
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          secret: Buffer.from(legacySecret).toString('base64'),
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        callLegacy: vi.fn(async () => {
-          throw new Error('operation has timed out');
-        }),
-        callDataKey: vi.fn(),
-        nowMs,
-      },
-    })).rejects.toMatchObject({
-      code: 'authenticated_plugin_install_review_timeout',
-      diagnostic: {
-        pendingChangeId: 'pending-1',
-        machineId: 'machine-1',
-        rpcStartedAtMs: 100,
-        rpcTimedOutAtMs: 200,
-        connectedBefore: true,
-        connectedAfter: true,
-        transitionCountDuringRpc: 2,
-        omittedTransitionCountDuringRpc: 0,
-        transitionsDuringRpc: [{
-          sequence: 2,
-          kind: 'disconnect',
-          at: 120,
-          reason: 'transport close',
-        }, {
-          sequence: 3,
-          kind: 'connect',
-          at: 140,
-        }],
-      },
-    });
-
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('classifies the Socket.IO timeout envelope as an acknowledgement timeout', async () => {
-    const reviewSocket = socket();
-    const legacySecret = Uint8Array.from(Buffer.alloc(32, 1));
-    reviewSocket.emitWithAck
-      .mockImplementationOnce(boundResponse('legacy', legacySecret, {
-          ok: false,
-          errorCode: 'invalid_request',
-          error: 'invalid_request',
-        }))
-      .mockResolvedValueOnce({
-        ok: false,
-        error: 'operation has timed out',
-      });
-    // The decision payload carries no timestamp, so this clock is read only
-    // for the RPC start/timeout diagnostics below.
-    const nowMs = vi.fn()
-      .mockReturnValueOnce(100)
-      .mockReturnValueOnce(200);
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser: async () => true,
-      deps: {
-        readAccessKey: vi.fn(async () => ({
-          token: 'token-1',
-          secret: Buffer.from(legacySecret).toString('base64'),
-        })),
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        nowMs,
-      },
-    })).rejects.toMatchObject({
-      code: 'authenticated_plugin_install_review_timeout',
-      diagnostic: {
-        pendingChangeId: 'pending-1',
-        machineId: 'machine-1',
-        rpcStartedAtMs: 100,
-        rpcTimedOutAtMs: 200,
-        connectedBefore: true,
-        connectedAfter: true,
-        transitionCountDuringRpc: 0,
-        omittedTransitionCountDuringRpc: 0,
-        transitionsDuringRpc: [],
-      },
-    });
-
-    expect(reviewSocket.emitWithAck).toHaveBeenCalledTimes(2);
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
-  });
-
-  it('fails closed before data-key RPC when the authenticated authority changes', async () => {
-    const reviewSocket = socket();
-    const machineKey = Uint8Array.from(Buffer.alloc(32, 3));
-    reviewSocket.emitWithAck.mockImplementationOnce(boundResponse('dataKey', machineKey, {
-        ok: false,
-        errorCode: 'invalid_request',
-        error: 'invalid_request',
-      }));
-    const callDataKey = vi.fn();
-    const readAccessKey = vi.fn()
-      .mockResolvedValueOnce({
-        token: 'token-1',
-        encryption: {
-          publicKey: Buffer.alloc(32, 2).toString('base64'),
-          machineKey: Buffer.from(machineKey).toString('base64'),
-        },
-      })
-      .mockResolvedValueOnce({
-        token: 'token-2',
-        encryption: {
-          publicKey: Buffer.alloc(32, 2).toString('base64'),
-          machineKey: Buffer.from(machineKey).toString('base64'),
-        },
-      });
-
-    await expect(decideAuthenticatedPluginInstallReview({
-      cliHomeDir: '/candidate/home',
-      serverUrl: 'http://127.0.0.1:3000',
-      pendingChangeId: 'pending-1',
-      optionalSelections: [],
-      confirmPresentUser: async () => true,
-      deps: {
-        readAccessKey,
-        readMachineId: vi.fn(async () => 'machine-1'),
-        createUserSocket: vi.fn(() => reviewSocket),
-        waitForConnected: vi.fn(async () => undefined),
-        callLegacy: vi.fn(),
-        callDataKey,
-      },
-    })).rejects.toThrow(/authority changed/);
-
-    expect(callDataKey).not.toHaveBeenCalled();
-    expect(reviewSocket.close).toHaveBeenCalledOnce();
+      cliEntrypoint: '/cli.mjs',
+      deps: { runCli },
+    })).rejects.toThrow('optional host access');
+    expect(runCli).not.toHaveBeenCalled();
   });
 });
