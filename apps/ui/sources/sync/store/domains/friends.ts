@@ -1,6 +1,17 @@
 import type { RelationshipUpdatedEvent, UserProfile } from '../../domains/social/friendTypes';
 import type { StoreGet, StoreSet } from './_shared';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { areAccountSettingsJsonValuesEqual } from '../../domains/settings/accountSettingsStructuralEquality';
+
+function reconcileUserProfile(previous: UserProfile | null | undefined, next: UserProfile | null): UserProfile | null {
+  if (areAccountSettingsJsonValuesEqual(previous, next)) return previous ?? null;
+  if (!previous || !next) return next;
+  return {
+    ...next,
+    avatar: areAccountSettingsJsonValuesEqual(previous.avatar, next.avatar) ? previous.avatar : next.avatar,
+    badges: areAccountSettingsJsonValuesEqual(previous.badges, next.badges) ? previous.badges : next.badges,
+  };
+}
 
 export type FriendsDomain = {
   friends: Record<string, UserProfile>;
@@ -24,10 +35,15 @@ export function createFriendsDomain<
     friendsLoaded: false,
     applyFriends: (friends) =>
       set((state) => {
-        const mergedFriends = { ...state.friends };
+        let mergedFriends = state.friends;
         friends.forEach((friend) => {
-          mergedFriends[friend.id] = friend;
+          const previous = mergedFriends[friend.id];
+          const next = reconcileUserProfile(previous, friend);
+          if (previous === next) return;
+          if (mergedFriends === state.friends) mergedFriends = { ...state.friends };
+          mergedFriends[friend.id] = next!;
         });
+        if (mergedFriends === state.friends && state.friendsLoaded) return state;
         return {
           ...state,
           friends: mergedFriends,
@@ -40,23 +56,23 @@ export function createFriendsDomain<
         const currentUserId = state.profile.id;
 
         // Update friends cache
-        const updatedFriends = { ...state.friends };
-
         // Determine which user profile to update based on perspective
         const otherUserId = fromUserId === currentUserId ? toUserId : fromUserId;
         const otherUser = fromUserId === currentUserId ? toUser : fromUser;
 
         if (action === 'deleted' || status === 'none') {
+          if (!Object.prototype.hasOwnProperty.call(state.friends, otherUserId)) return state;
           // Remove from friends if deleted or status is none
+          const updatedFriends = { ...state.friends };
           delete updatedFriends[otherUserId];
-        } else if (otherUser) {
-          // Update or add the user profile with current status
-          updatedFriends[otherUserId] = otherUser;
+          return { ...state, friends: updatedFriends };
         }
-
+        if (!otherUser) return state;
+        const next = reconcileUserProfile(state.friends[otherUserId], otherUser);
+        if (next === state.friends[otherUserId]) return state;
         return {
           ...state,
-          friends: updatedFriends,
+          friends: { ...state.friends, [otherUserId]: next! },
         };
       }),
     getFriend: (userId) => get().friends[userId],
@@ -65,10 +81,16 @@ export function createFriendsDomain<
       return Object.values(friends).filter((friend) => friend.status === 'friend');
     },
     applyUsers: (users) =>
-      set((state) => ({
-        ...state,
-        users: { ...state.users, ...users },
-      })),
+      set((state) => {
+        let mergedUsers = state.users;
+        for (const [id, user] of Object.entries(users)) {
+          const next = reconcileUserProfile(mergedUsers[id], user);
+          if (mergedUsers[id] === next) continue;
+          if (mergedUsers === state.users) mergedUsers = { ...state.users };
+          mergedUsers[id] = next;
+        }
+        return mergedUsers === state.users ? state : { ...state, users: mergedUsers };
+      }),
     getUser: (userId) => get().users[userId], // Returns UserProfile | null | undefined
     assumeUsers: async (userIds) => {
       return getSyncSingleton().assumeUsers(userIds);

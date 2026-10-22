@@ -70,6 +70,32 @@ function summary(input: Readonly<{
 }
 
 describe('workflow run body store', () => {
+    it('retains unrelated window and invocation maps when removing an exact-only Run', () => {
+        const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
+        store.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary({ id: 'exact-only' }))], null);
+        const before = store.getState();
+        store.getState().removeWorkflowRun('exact-only', null);
+        expect(store.getState().workflowRunListWindows).toBe(before.workflowRunListWindows);
+        expect(store.getState().workflowRunInvocationsByRunId).toBe(before.workflowRunInvocationsByRunId);
+        expect(store.getState().workflowRunsById).not.toBe(before.workflowRunsById);
+    });
+    it('keeps equal pages quiet and shares membership through a fresh successful read boundary', () => {
+        const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
+        const runs = [summary({ id: 'quiet-run' })];
+        store.getState().applyWorkflowRunListPage({ windowId: 'all', runs, mode: 'replace', nextCursor: null, lastSuccessfulReadAt: 10 });
+        const before = store.getState();
+        let notifications = 0;
+        const unsubscribe = store.subscribe(() => notifications++);
+        store.getState().applyWorkflowRunListPage({ windowId: 'all', runs: structuredClone(runs), mode: 'replace', nextCursor: null, lastSuccessfulReadAt: 10 });
+        expect(store.getState()).toBe(before);
+        expect(notifications).toBe(0);
+        store.getState().applyWorkflowRunListPage({ windowId: 'all', runs: structuredClone(runs), mode: 'replace', nextCursor: null, lastSuccessfulReadAt: 11 });
+        expect(store.getState().workflowRunListWindows.all?.lastSuccessfulReadAt).toBe(11);
+        expect(store.getState().workflowRunListWindows.all?.runIds).toBe(before.workflowRunListWindows.all?.runIds);
+        expect(store.getState().workflowRunListWindows.all?.frontier).toBe(before.workflowRunListWindows.all?.frontier);
+        expect(notifications).toBe(1);
+        unsubscribe();
+    });
     it('does not promote an older title after a newer full read becomes unavailable', () => {
         const metadata = { kind: 'unavailable' as const, reason: 'run_access_denied' as const };
         const harness = createHarness();

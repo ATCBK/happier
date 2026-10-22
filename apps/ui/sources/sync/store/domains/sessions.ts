@@ -80,7 +80,6 @@ import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from 
 import { isSessionAccessRecipient } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
 import { areServerAccountScopesEqual, createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     mutateSessionModelModeField,
@@ -88,7 +87,7 @@ import {
 } from '@/sync/state/mutators';
 
 import type { StoreGet, StoreSet } from './_shared';
-import { areSessionValuesDeepEqual, areStoredSessionsEqual } from './areStoredSessionsEqual';
+import { areSessionValuesDeepEqual, areStoredSessionsEqual, reuseEqualSessionObjectFields } from './areStoredSessionsEqual';
 import { applyAgentStateUpdateToSessionMessages } from './messages';
 import type { SessionMessages } from './messages';
 import {
@@ -1037,14 +1036,34 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     };
                 }
 
+                const nextLastViewed = areSessionValuesDeepEqual(state.sessionLastViewed, sessionLastViewed)
+                    ? state.sessionLastViewed : { ...sessionLastViewed };
+                const nextSessionReviews = areSessionValuesDeepEqual(state.reviewCommentsDraftsBySessionId, reviewCommentsDraftsBySessionId)
+                    ? state.reviewCommentsDraftsBySessionId
+                    : reuseEqualSessionObjectFields(state.reviewCommentsDraftsBySessionId, reviewCommentsDraftsBySessionId);
+                const nextWorkspaceReviews = areSessionValuesDeepEqual(state.reviewCommentsDraftsByWorkspaceCacheKey, reviewCommentsDraftsByWorkspaceCacheKey)
+                    ? state.reviewCommentsDraftsByWorkspaceCacheKey
+                    : reuseEqualSessionObjectFields(state.reviewCommentsDraftsByWorkspaceCacheKey, reviewCommentsDraftsByWorkspaceCacheKey);
+                const nextActionDrafts = areSessionValuesDeepEqual(state.sessionActionDraftsByAddressKey, sessionActionDraftsByAddressKey)
+                    ? state.sessionActionDraftsByAddressKey
+                    : reuseEqualSessionObjectFields(state.sessionActionDraftsByAddressKey, sessionActionDraftsByAddressKey);
+                const nextScope = areServerAccountScopesEqual(state.sessionLocalStateScope, scope)
+                    ? state.sessionLocalStateScope : scope;
+                if (nextSessions === state.sessions
+                    && nextLastViewed === state.sessionLastViewed
+                    && nextSessionReviews === state.reviewCommentsDraftsBySessionId
+                    && nextWorkspaceReviews === state.reviewCommentsDraftsByWorkspaceCacheKey
+                    && nextActionDrafts === state.sessionActionDraftsByAddressKey
+                    && nextScope === state.sessionLocalStateScope) return state;
+
                 return {
                     ...state,
                     sessions: nextSessions,
-                    sessionLastViewed: { ...sessionLastViewed },
-                    reviewCommentsDraftsBySessionId: { ...reviewCommentsDraftsBySessionId },
-                    reviewCommentsDraftsByWorkspaceCacheKey: { ...reviewCommentsDraftsByWorkspaceCacheKey },
-                    sessionActionDraftsByAddressKey: { ...sessionActionDraftsByAddressKey },
-                    sessionLocalStateScope: scope,
+                    sessionLastViewed: nextLastViewed,
+                    reviewCommentsDraftsBySessionId: nextSessionReviews,
+                    reviewCommentsDraftsByWorkspaceCacheKey: nextWorkspaceReviews,
+                    sessionActionDraftsByAddressKey: nextActionDrafts,
+                    sessionLocalStateScope: nextScope,
                 };
             });
         },
@@ -1059,13 +1078,25 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             reviewCommentsDraftsBySessionId = {};
             reviewCommentsDraftsByWorkspaceCacheKey = {};
             sessionActionDraftsByAddressKey = {};
-            set({
-                sessionLastViewed: {},
-                reviewCommentsDraftsBySessionId: {},
-                reviewCommentsDraftsByWorkspaceCacheKey: {},
-                sessionActionDraftsByAddressKey: {},
-                sessionLocalStateScope: null,
-            } as Partial<S> as S);
+            set((state) => {
+                const lastViewed = Object.keys(state.sessionLastViewed).length === 0 ? state.sessionLastViewed : {};
+                const sessionReviews = Object.keys(state.reviewCommentsDraftsBySessionId).length === 0 ? state.reviewCommentsDraftsBySessionId : {};
+                const workspaceReviews = Object.keys(state.reviewCommentsDraftsByWorkspaceCacheKey).length === 0 ? state.reviewCommentsDraftsByWorkspaceCacheKey : {};
+                const actionDrafts = Object.keys(state.sessionActionDraftsByAddressKey).length === 0 ? state.sessionActionDraftsByAddressKey : {};
+                if (state.sessionLocalStateScope === null
+                    && lastViewed === state.sessionLastViewed
+                    && sessionReviews === state.reviewCommentsDraftsBySessionId
+                    && workspaceReviews === state.reviewCommentsDraftsByWorkspaceCacheKey
+                    && actionDrafts === state.sessionActionDraftsByAddressKey) return state;
+                return {
+                    ...state,
+                    sessionLastViewed: lastViewed,
+                    reviewCommentsDraftsBySessionId: sessionReviews,
+                    reviewCommentsDraftsByWorkspaceCacheKey: workspaceReviews,
+                    sessionActionDraftsByAddressKey: actionDrafts,
+                    sessionLocalStateScope: null,
+                };
+            });
         },
         getActiveSessions: () => {
             const state = get();
@@ -1363,7 +1394,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 };
                 const mergedSession = areStoredSessionsEqual(previousSession, nextSession)
                     ? previousSession
-                    : nextSession;
+                    : reuseEqualSessionObjectFields(previousSession, nextSession);
                 if (mergedSession !== previousSession) {
                     changedSessionCount += 1;
                     if (mergedSessions === state.sessions) {
@@ -1834,10 +1865,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             for (const incoming of sessions) {
                 const previous = previousRows[incoming.id];
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
-                const next = preserveSessionListRenderableTransientState(previous, withStaleFields);
+                let next = preserveSessionListRenderableTransientState(previous, withStaleFields);
                 if (didPreserveRenderableMetadata(previous, incoming, next)) staleMetadataPreservedCount += 1;
                 if (didPreserveRenderablePendingFlags(previous, incoming, next)) stalePendingFlagsPreservedCount += 1;
                 if (previous && areSessionListRenderablesEqual(previous, next)) continue;
+                next = reuseEqualSessionObjectFields(previous, next);
                 if (nextRows === previousRows) nextRows = { ...previousRows };
                 nextRows[incoming.id] = next;
                 changedSessionIds.push(incoming.id);
@@ -2086,7 +2118,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     missingCount += 1;
                     continue;
                 }
-                const next = applySessionListRenderablePatch(
+                let next = applySessionListRenderablePatch(
                     previous,
                     patch as SessionListRenderablePatchFields,
                 );
@@ -2094,6 +2126,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     noopPatchCount += 1;
                     continue;
                 }
+                next = reuseEqualSessionObjectFields(previous, next);
                 changedCount += 1;
                 changedSessionIds.push(sessionId);
                 const didArchivalStateChange = (previous.archivedAt ?? null) !== (next.archivedAt ?? null);
@@ -2260,7 +2293,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     continue;
                 }
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
-                nextRows[sessionId] = preserveSessionListRenderableTransientState(previous, withStaleFields);
+                const next = preserveSessionListRenderableTransientState(previous, withStaleFields);
+                nextRows[sessionId] = previous && areSessionListRenderablesEqual(previous, next)
+                    ? previous
+                    : reuseEqualSessionObjectFields(previous, next);
             }
             const incomingMembership = sessions.map((session) => session.id);
             const incomingMembershipSet = new Set(incomingMembership);
@@ -2335,7 +2371,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             for (const incoming of sessions) {
                 const previous = previousRows[incoming.id];
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
-                nextRows[incoming.id] = preserveSessionListRenderableTransientState(previous, withStaleFields);
+                const next = preserveSessionListRenderableTransientState(previous, withStaleFields);
+                nextRows[incoming.id] = previous && areSessionListRenderablesEqual(previous, next)
+                    ? previous
+                    : reuseEqualSessionObjectFields(previous, next);
             }
             const previousMembership = previousMembershipKey ? state.ordinarySessionListMembershipByServerId[previousMembershipKey] ?? [] : [];
             const previousMembershipSet = new Set(previousMembership);
@@ -2424,13 +2463,16 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             }
             return next ? { ...state, sessionListQueryMembershipByKey: next } : state;
         }),
-        applyReady: () => set((state) => ({
+        applyReady: () => set((state) => state.isDataReady ? state : ({
             ...state,
             isDataReady: true
         })),
         applyScmStatus: (sessionId: string, status: ScmStatus | null) => set((state) => {
             // Update project git status as well
-            projectManager.updateSessionProjectScmStatus(sessionId, status);
+            const projectChanged = projectManager.updateSessionProjectScmStatus(sessionId, status);
+            if (areSessionValuesDeepEqual(state.sessionScmStatus[sessionId], status)) {
+                return projectChanged ? { ...state } : state;
+            }
 
             return {
                 ...state,
@@ -2442,8 +2484,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         }),
         upsertSessionReviewCommentDraft: (sessionId: string, draft: ReviewCommentDraft) => set((state) => {
             const existing = state.reviewCommentsDraftsBySessionId[sessionId] ?? [];
-            const next = existing.some((d) => d.id === draft.id)
-                ? existing.map((d) => (d.id === draft.id ? draft : d))
+            const previous = existing.find((d) => d.id === draft.id);
+            if (previous && areSessionValuesDeepEqual(previous, draft)) return state;
+            const nextDraft = reuseEqualSessionObjectFields(previous, draft);
+            const next = previous
+                ? existing.map((d) => (d.id === draft.id ? nextDraft : d))
                 : [...existing, draft];
 
             const merged = { ...state.reviewCommentsDraftsBySessionId, [sessionId]: next };
@@ -2453,9 +2498,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         }),
         setSessionReviewCommentDraftIncluded: (sessionId: string, commentId: string, included: boolean) => set((state) => {
             const existing = state.reviewCommentsDraftsBySessionId[sessionId] ?? [];
-            if (existing.length === 0) return state;
+            if (!existing.some((draft) => draft.id === commentId && (draft.includeInPrompt !== false) !== included)) return state;
             const next = existing.map((draft) => (
-                draft.id === commentId ? { ...draft, includeInPrompt: included } : draft
+                draft.id === commentId && (draft.includeInPrompt !== false) !== included
+                    ? { ...draft, includeInPrompt: included } : draft
             ));
             const merged = { ...state.reviewCommentsDraftsBySessionId, [sessionId]: next };
             reviewCommentsDraftsBySessionId = merged;
@@ -2486,8 +2532,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const key = String(workspaceCacheKey ?? '').trim();
             if (!key) return state;
             const existing = state.reviewCommentsDraftsByWorkspaceCacheKey[key] ?? [];
-            const next = existing.some((d) => d.id === draft.id)
-                ? existing.map((d) => (d.id === draft.id ? draft : d))
+            const previous = existing.find((d) => d.id === draft.id);
+            if (previous && areSessionValuesDeepEqual(previous, draft)) return state;
+            const nextDraft = reuseEqualSessionObjectFields(previous, draft);
+            const next = previous
+                ? existing.map((d) => (d.id === draft.id ? nextDraft : d))
                 : [...existing, draft];
             const merged = { ...state.reviewCommentsDraftsByWorkspaceCacheKey, [key]: next };
             reviewCommentsDraftsByWorkspaceCacheKey = merged;
@@ -2498,9 +2547,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const key = String(workspaceCacheKey ?? '').trim();
             if (!key) return state;
             const existing = state.reviewCommentsDraftsByWorkspaceCacheKey[key] ?? [];
-            if (existing.length === 0) return state;
+            if (!existing.some((draft) => draft.id === commentId && (draft.includeInPrompt !== false) !== included)) return state;
             const next = existing.map((draft) => (
-                draft.id === commentId ? { ...draft, includeInPrompt: included } : draft
+                draft.id === commentId && (draft.includeInPrompt !== false) !== included
+                    ? { ...draft, includeInPrompt: included } : draft
             ));
             const merged = { ...state.reviewCommentsDraftsByWorkspaceCacheKey, [key]: next };
             reviewCommentsDraftsByWorkspaceCacheKey = merged;
@@ -2573,8 +2623,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 const prev = existing[idx]!;
                 const updated: SessionActionDraft = {
                     ...prev,
-                    input: { ...(prev.input ?? {}), ...(patch ?? {}) },
+                    input: reuseEqualSessionObjectFields(prev.input, { ...(prev.input ?? {}), ...(patch ?? {}) }),
                 };
+                if (inMemory?.length && areSessionValuesDeepEqual(prev, updated)) return state;
                 const next = [...existing.slice(0, idx), updated, ...existing.slice(idx + 1)];
                 const merged = { ...state.sessionActionDraftsByAddressKey, [addressKey]: next };
                 sessionActionDraftsByAddressKey = merged;
@@ -2597,6 +2648,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     status,
                     ...(typeof error !== 'undefined' ? { error: error ?? null } : {}),
                 };
+                if (inMemory?.length && areSessionValuesDeepEqual(prev, updated)) return state;
                 const next = [...existing.slice(0, idx), updated, ...existing.slice(idx + 1)];
                 const merged = { ...state.sessionActionDraftsByAddressKey, [addressKey]: next };
                 sessionActionDraftsByAddressKey = merged;
@@ -2903,9 +2955,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().updateWorkspaceScmStatus(scope, status) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.updateSessionProjectScmStatus(sessionId, status);
-            // Trigger a state update to notify hooks
-            set((state) => ({ ...state }));
+            if (projectManager.updateSessionProjectScmStatus(sessionId, status)) {
+                set((state) => ({ ...state }));
+            }
         },
         getProjectScmSnapshot: (projectId: string) => projectManager.getProjectScmSnapshot(projectId),
         getProjectScmSnapshotError: (projectId: string) => projectManager.getProjectScmSnapshotError(projectId),
@@ -2931,13 +2983,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().updateWorkspaceScmSnapshot(scope, snapshot) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            const previous = projectManager.getSessionProjectScmSnapshot(sessionId);
-            if (areScmWorkingSnapshotsEquivalentIgnoringFetchedAt(previous, snapshot)) {
-                return;
+            if (projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot)) {
+                set((state) => ({ ...state }));
             }
-            projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot);
-            // Trigger a state update to notify hooks
-            set((state) => ({ ...state }));
         },
         updateSessionProjectScmSnapshotError: (
             sessionId: string,
@@ -2949,8 +2997,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().updateWorkspaceScmSnapshotError(scope, error) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.updateSessionProjectScmSnapshotError(sessionId, error);
-            set((state) => ({ ...state }));
+            if (projectManager.updateSessionProjectScmSnapshotError(sessionId, error)) {
+                set((state) => ({ ...state }));
+            }
         },
         publishSessionProjectScmSnapshots: (publishes) => {
             // A project SCM refresh publishes to every session sharing the repo. Doing that
@@ -2960,44 +3009,41 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             // happen here first, then a single notification covers the whole batch.
             if (publishes.length === 0) return;
             const statusUpdates: Record<string, ScmStatus | null> = {};
+            let projectChanged = false;
             for (const { sessionId, serverId, snapshot, status } of publishes) {
                 if (serverId != null) {
                     const scope = resolveWorkspaceTargetForSessionFromState(get(), { sessionId, serverId });
                     if (!scope) continue;
-                    const previousSnapshot = projectManager.getWorkspaceScmSnapshot(scope);
-                    if (!areScmWorkingSnapshotsEquivalentIgnoringFetchedAt(previousSnapshot, snapshot)) {
-                        projectManager.updateWorkspaceScmSnapshot(scope, snapshot);
-                    }
-                    projectManager.updateWorkspaceScmSnapshotError(scope, null);
-                    projectManager.updateWorkspaceScmStatus(scope, status);
+                    projectChanged = projectManager.updateWorkspaceScmSnapshot(scope, snapshot) || projectChanged;
+                    projectChanged = projectManager.updateWorkspaceScmSnapshotError(scope, null) || projectChanged;
+                    projectChanged = projectManager.updateWorkspaceScmStatus(scope, status) || projectChanged;
                     const activePaths = new Set(snapshot.entries.map((entry) => entry.path));
-                    projectManager.pruneWorkspaceScmTouchedPaths(scope, activePaths);
-                    projectManager.pruneWorkspaceScmCommitSelectionPaths(scope, activePaths);
-                    projectManager.pruneWorkspaceScmCommitSelectionPatches(scope, activePaths);
+                    projectChanged = projectManager.pruneWorkspaceScmTouchedPaths(scope, activePaths) || projectChanged;
+                    projectChanged = projectManager.pruneWorkspaceScmCommitSelectionPaths(scope, activePaths) || projectChanged;
+                    projectChanged = projectManager.pruneWorkspaceScmCommitSelectionPatches(scope, activePaths) || projectChanged;
                     continue;
                 }
                 ensureProjectManagerSession(sessionId);
-                const previousSnapshot = projectManager.getSessionProjectScmSnapshot(sessionId);
-                if (!areScmWorkingSnapshotsEquivalentIgnoringFetchedAt(previousSnapshot, snapshot)) {
-                    projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot);
-                }
-                if (projectManager.getSessionProjectScmSnapshotError(sessionId)) {
-                    projectManager.updateSessionProjectScmSnapshotError(sessionId, null);
-                }
-                projectManager.updateSessionProjectScmStatus(sessionId, status);
+                projectChanged = projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot) || projectChanged;
+                projectChanged = projectManager.updateSessionProjectScmSnapshotError(sessionId, null) || projectChanged;
+                projectChanged = projectManager.updateSessionProjectScmStatus(sessionId, status) || projectChanged;
                 const activePaths = new Set(snapshot.entries.map((entry) => entry.path));
-                projectManager.pruneWorkspaceScmTouchedPathsForSession(sessionId, activePaths);
-                projectManager.pruneSessionProjectScmCommitSelectionPaths(sessionId, activePaths);
-                projectManager.pruneSessionProjectScmCommitSelectionPatches(sessionId, activePaths);
+                projectChanged = projectManager.pruneWorkspaceScmTouchedPathsForSession(sessionId, activePaths) || projectChanged;
+                projectChanged = projectManager.pruneSessionProjectScmCommitSelectionPaths(sessionId, activePaths) || projectChanged;
+                projectChanged = projectManager.pruneSessionProjectScmCommitSelectionPatches(sessionId, activePaths) || projectChanged;
                 statusUpdates[sessionId] = status;
             }
-            set((state) => ({
-                ...state,
-                sessionScmStatus: {
-                    ...state.sessionScmStatus,
-                    ...statusUpdates,
-                },
-            }));
+            set((state) => {
+                let nextStatus = state.sessionScmStatus;
+                for (const [sessionId, status] of Object.entries(statusUpdates)) {
+                    if (areSessionValuesDeepEqual(nextStatus[sessionId], status)) continue;
+                    if (nextStatus === state.sessionScmStatus) nextStatus = { ...state.sessionScmStatus };
+                    nextStatus[sessionId] = status;
+                }
+                return projectChanged || nextStatus !== state.sessionScmStatus
+                    ? { ...state, sessionScmStatus: nextStatus }
+                    : state;
+            });
         },
         getWorkspaceScmTouchedPathsForSession: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3013,8 +3059,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().markWorkspaceScmTouchedPaths(scope, paths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.markWorkspaceScmTouchedPathsForSession(sessionId, paths);
-            set((state) => ({ ...state }));
+            if (projectManager.markWorkspaceScmTouchedPathsForSession(sessionId, paths)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneWorkspaceScmTouchedPathsForSession: (sessionId: string, activePaths: Set<string>, serverId?: string | null) => {
             if (serverId != null) {
@@ -3022,8 +3069,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().pruneWorkspaceScmTouchedPaths(scope, activePaths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.pruneWorkspaceScmTouchedPathsForSession(sessionId, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneWorkspaceScmTouchedPathsForSession(sessionId, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getSessionProjectScmCommitSelectionPaths: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3039,8 +3087,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().markWorkspaceScmCommitSelectionPaths(scope, paths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.markSessionProjectScmCommitSelectionPaths(sessionId, paths);
-            set((state) => ({ ...state }));
+            if (projectManager.markSessionProjectScmCommitSelectionPaths(sessionId, paths)) {
+                set((state) => ({ ...state }));
+            }
         },
         unmarkSessionProjectScmCommitSelectionPaths: (sessionId: string, paths: string[], serverId?: string | null) => {
             if (serverId != null) {
@@ -3048,8 +3097,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().unmarkWorkspaceScmCommitSelectionPaths(scope, paths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.unmarkSessionProjectScmCommitSelectionPaths(sessionId, paths);
-            set((state) => ({ ...state }));
+            if (projectManager.unmarkSessionProjectScmCommitSelectionPaths(sessionId, paths)) {
+                set((state) => ({ ...state }));
+            }
         },
         clearSessionProjectScmCommitSelectionPaths: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3057,8 +3107,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().clearWorkspaceScmCommitSelectionPaths(scope) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.clearSessionProjectScmCommitSelectionPaths(sessionId);
-            set((state) => ({ ...state }));
+            if (projectManager.clearSessionProjectScmCommitSelectionPaths(sessionId)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneSessionProjectScmCommitSelectionPaths: (sessionId: string, activePaths: Set<string>, serverId?: string | null) => {
             if (serverId != null) {
@@ -3066,8 +3117,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().pruneWorkspaceScmCommitSelectionPaths(scope, activePaths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.pruneSessionProjectScmCommitSelectionPaths(sessionId, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneSessionProjectScmCommitSelectionPaths(sessionId, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getSessionProjectScmCommitSelectionPatches: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3083,8 +3135,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().upsertWorkspaceScmCommitSelectionPatch(scope, patchSelection) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.upsertSessionProjectScmCommitSelectionPatch(sessionId, patchSelection);
-            set((state) => ({ ...state }));
+            if (projectManager.upsertSessionProjectScmCommitSelectionPatch(sessionId, patchSelection)) {
+                set((state) => ({ ...state }));
+            }
         },
         removeSessionProjectScmCommitSelectionPatch: (sessionId: string, path: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3092,8 +3145,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().removeWorkspaceScmCommitSelectionPatch(scope, path) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.removeSessionProjectScmCommitSelectionPatch(sessionId, path);
-            set((state) => ({ ...state }));
+            if (projectManager.removeSessionProjectScmCommitSelectionPatch(sessionId, path)) {
+                set((state) => ({ ...state }));
+            }
         },
         clearSessionProjectScmCommitSelectionPatches: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3101,8 +3155,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().clearWorkspaceScmCommitSelectionPatches(scope) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.clearSessionProjectScmCommitSelectionPatches(sessionId);
-            set((state) => ({ ...state }));
+            if (projectManager.clearSessionProjectScmCommitSelectionPatches(sessionId)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneSessionProjectScmCommitSelectionPatches: (sessionId: string, activePaths: Set<string>, serverId?: string | null) => {
             if (serverId != null) {
@@ -3110,8 +3165,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 return scope ? get().pruneWorkspaceScmCommitSelectionPatches(scope, activePaths) : undefined;
             }
             ensureProjectManagerSession(sessionId);
-            projectManager.pruneSessionProjectScmCommitSelectionPatches(sessionId, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneSessionProjectScmCommitSelectionPatches(sessionId, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getSessionProjectScmOperationLog: (sessionId: string, serverId?: string | null) => {
             if (serverId != null) {
@@ -3153,7 +3209,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             }
             ensureProjectManagerSession(sessionId);
             const result = projectManager.beginSessionProjectScmOperation(sessionId, operation);
-            if (result.started || result.reason === 'operation_in_flight') {
+            if (result.started) {
                 set((state) => ({ ...state }));
             }
             return result;
@@ -3182,65 +3238,74 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         },
         getWorkspaceScmStatus: (scope) => projectManager.getWorkspaceScmStatus(scope),
         updateWorkspaceScmStatus: (scope, status) => {
-            projectManager.updateWorkspaceScmStatus(scope, status);
-            set((state) => ({ ...state }));
+            if (projectManager.updateWorkspaceScmStatus(scope, status)) {
+                set((state) => ({ ...state }));
+            }
         },
         getWorkspaceScmSnapshot: (scope) => projectManager.getWorkspaceScmSnapshot(scope),
         getWorkspaceScmSnapshotError: (scope) => projectManager.getWorkspaceScmSnapshotError(scope),
         updateWorkspaceScmSnapshot: (scope, snapshot) => {
-            const previous = projectManager.getWorkspaceScmSnapshot(scope);
-            if (areScmWorkingSnapshotsEquivalentIgnoringFetchedAt(previous, snapshot)) {
-                return;
+            if (projectManager.updateWorkspaceScmSnapshot(scope, snapshot)) {
+                set((state) => ({ ...state }));
             }
-            projectManager.updateWorkspaceScmSnapshot(scope, snapshot);
-            set((state) => ({ ...state }));
         },
         updateWorkspaceScmSnapshotError: (scope, error) => {
-            projectManager.updateWorkspaceScmSnapshotError(scope, error);
-            set((state) => ({ ...state }));
+            if (projectManager.updateWorkspaceScmSnapshotError(scope, error)) {
+                set((state) => ({ ...state }));
+            }
         },
         getWorkspaceScmTouchedPaths: (scope) => projectManager.getWorkspaceScmTouchedPaths(scope),
         markWorkspaceScmTouchedPaths: (scope, paths, touchedAt) => {
-            projectManager.markWorkspaceScmTouchedPaths(scope, paths, touchedAt);
-            set((state) => ({ ...state }));
+            if (projectManager.markWorkspaceScmTouchedPaths(scope, paths, touchedAt)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneWorkspaceScmTouchedPaths: (scope, activePaths) => {
-            projectManager.pruneWorkspaceScmTouchedPaths(scope, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneWorkspaceScmTouchedPaths(scope, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getWorkspaceScmCommitSelectionPaths: (scope) => projectManager.getWorkspaceScmCommitSelectionPaths(scope),
         markWorkspaceScmCommitSelectionPaths: (scope, paths, selectedAt) => {
-            projectManager.markWorkspaceScmCommitSelectionPaths(scope, paths, selectedAt);
-            set((state) => ({ ...state }));
+            if (projectManager.markWorkspaceScmCommitSelectionPaths(scope, paths, selectedAt)) {
+                set((state) => ({ ...state }));
+            }
         },
         unmarkWorkspaceScmCommitSelectionPaths: (scope, paths) => {
-            projectManager.unmarkWorkspaceScmCommitSelectionPaths(scope, paths);
-            set((state) => ({ ...state }));
+            if (projectManager.unmarkWorkspaceScmCommitSelectionPaths(scope, paths)) {
+                set((state) => ({ ...state }));
+            }
         },
         clearWorkspaceScmCommitSelectionPaths: (scope) => {
-            projectManager.clearWorkspaceScmCommitSelectionPaths(scope);
-            set((state) => ({ ...state }));
+            if (projectManager.clearWorkspaceScmCommitSelectionPaths(scope)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneWorkspaceScmCommitSelectionPaths: (scope, activePaths) => {
-            projectManager.pruneWorkspaceScmCommitSelectionPaths(scope, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneWorkspaceScmCommitSelectionPaths(scope, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getWorkspaceScmCommitSelectionPatches: (scope) => projectManager.getWorkspaceScmCommitSelectionPatches(scope),
         upsertWorkspaceScmCommitSelectionPatch: (scope, patchSelection, selectedAt) => {
-            projectManager.upsertWorkspaceScmCommitSelectionPatch(scope, patchSelection, selectedAt);
-            set((state) => ({ ...state }));
+            if (projectManager.upsertWorkspaceScmCommitSelectionPatch(scope, patchSelection, selectedAt)) {
+                set((state) => ({ ...state }));
+            }
         },
         removeWorkspaceScmCommitSelectionPatch: (scope, path) => {
-            projectManager.removeWorkspaceScmCommitSelectionPatch(scope, path);
-            set((state) => ({ ...state }));
+            if (projectManager.removeWorkspaceScmCommitSelectionPatch(scope, path)) {
+                set((state) => ({ ...state }));
+            }
         },
         clearWorkspaceScmCommitSelectionPatches: (scope) => {
-            projectManager.clearWorkspaceScmCommitSelectionPatches(scope);
-            set((state) => ({ ...state }));
+            if (projectManager.clearWorkspaceScmCommitSelectionPatches(scope)) {
+                set((state) => ({ ...state }));
+            }
         },
         pruneWorkspaceScmCommitSelectionPatches: (scope, activePaths) => {
-            projectManager.pruneWorkspaceScmCommitSelectionPatches(scope, activePaths);
-            set((state) => ({ ...state }));
+            if (projectManager.pruneWorkspaceScmCommitSelectionPatches(scope, activePaths)) {
+                set((state) => ({ ...state }));
+            }
         },
         getWorkspaceScmOperationLog: (scope) => projectManager.getWorkspaceScmOperationLog(scope),
         appendWorkspaceScmOperation: (scope, entry) => {
@@ -3250,7 +3315,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         getWorkspaceScmInFlightOperation: (scope) => projectManager.getWorkspaceScmInFlightOperation(scope),
         beginWorkspaceScmOperation: (scope, operation) => {
             const result = projectManager.beginWorkspaceScmOperation(scope, operation);
-            if (result.started || result.reason === 'operation_in_flight') {
+            if (result.started) {
                 set((state) => ({ ...state }));
             }
             return result;

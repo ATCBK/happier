@@ -49,6 +49,31 @@ afterEach(() => {
 });
 
 describe('messages domain: ordering', () => {
+    it('does not republish an already reset transcript but still clears new coverage and messages', () => {
+        const { get, domain } = createHarness({});
+        domain.applyMessagesLoaded('s1');
+        domain.resetSessionMessages('s1');
+        const reset = get();
+        const notify = vi.fn();
+        const unsubscribe = storage.subscribe(notify);
+        try {
+            domain.resetSessionMessages('s1');
+            expect(get()).toBe(reset);
+            expect(notify).not.toHaveBeenCalled();
+            domain.markSessionMessagesHistoryStartLoaded('s1');
+            domain.resetSessionMessages('s1');
+            expect(get().sessionMessagesHistoryStartLoaded.s1).toBeUndefined();
+            expect(notify).toHaveBeenCalledTimes(2);
+            domain.applyMessages('s1', [{ id: 'pub-message', localId: null, seq: 1,
+                createdAt: 1_000, isSidechain: false, role: 'user',
+                content: { type: 'text', text: 'new content after reset' } }]);
+            expect(get().sessionMessages.s1.messageIdsOldestFirst).toHaveLength(1);
+            domain.resetSessionMessages('s1');
+            expect(get().sessionMessages.s1.messageIdsOldestFirst).toHaveLength(0);
+            expect(get().sessionMessages.s1.isLoaded).toBe(false);
+        } finally { unsubscribe(); }
+    });
+
     it('projects deferred completed questions when paging reaches the beginning, even with no final rows', () => {
         const session = createSessionFixture({
             id: 's1', agentStateVersion: 1,

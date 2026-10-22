@@ -1095,29 +1095,23 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
             if (!existingSession) {
                 return _coverage ? { ...state, sessionMessagesHistoryStartLoaded: remainingHistoryStartLoaded } : state;
             }
-
-            const messagesById: Record<string, Message> = {};
+            // Every reducer mutation advances reducerVersion. A pristine,
+            // unloaded entry with no coverage already represents this reset.
+            if (!_coverage && existingSession.isLoaded === false
+                && existingSession.reducerVersion === 0 && existingSession.messagesVersion === 0
+                && existingSession.subagentSourceVersion === 0
+                && existingSession.lastAppliedAgentStateVersion === null
+                && existingSession.messageIdsOldestFirst.length === 0
+                && Object.keys(existingSession.messagesById).length === 0
+                && existingSession.latestThinkingMessageId === null
+                && existingSession.latestThinkingMessageActivityAtMs === null
+                && existingSession.latestReadyEventSeq === null && existingSession.latestReadyEventAt === null) return state;
             return {
                 ...state,
                 sessionMessagesHistoryStartLoaded: remainingHistoryStartLoaded,
                 sessionMessages: {
                     ...state.sessionMessages,
-                    [sessionId]: {
-                        messageIdsOldestFirst: [],
-                        messagesById,
-                        messageRevisionsById: {},
-                        messagesMap: messagesById,
-                        reducerState: createReducer(),
-                        reducerVersion: 0,
-                        latestThinkingMessageId: null,
-                        latestThinkingMessageActivityAtMs: null,
-                        latestReadyEventSeq: null,
-                        latestReadyEventAt: null,
-                        messagesVersion: 0,
-                        subagentSourceVersion: 0,
-                        lastAppliedAgentStateVersion: null,
-                        isLoaded: false,
-                    } satisfies SessionMessages,
+                    [sessionId]: createEmptySessionMessages(),
                 },
             };
         }),

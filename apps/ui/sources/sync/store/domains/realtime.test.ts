@@ -4,6 +4,33 @@ import { createStore } from 'zustand/vanilla';
 import { createRealtimeDomain, type EndpointConnectivitySnapshot, type RealtimeDomain } from './realtime';
 
 describe('realtime sync-error publication', () => {
+    it('keeps equal status/error snapshots quiet and publishes real time boundaries', () => {
+        const store = createStore<RealtimeDomain>()((set) => createRealtimeDomain({ set }));
+        const failure = { message: 'Unavailable', retryable: true, kind: 'network' as const, at: 1 };
+        store.getState().setSyncError(failure);
+        store.getState().applyNativeUpdateStatus({ available: true, updateUrl: '/update' });
+        store.getState().setAccountSettingsSyncStatus({ state: 'synced', lastSyncedAt: 10 });
+        store.getState().setLastSyncAt(10);
+        const before = store.getState();
+        const notify = vi.fn();
+        const unsubscribe = store.subscribe(notify);
+        store.getState().setSyncError({ ...failure });
+        store.getState().applyNativeUpdateStatus({ available: true, updateUrl: '/update' });
+        store.getState().setAccountSettingsSyncStatus({ state: 'synced', lastSyncedAt: 10 });
+        store.getState().setLastSyncAt(10);
+        store.getState().setSocketError(null);
+        expect(store.getState()).toBe(before);
+        expect(notify).not.toHaveBeenCalled();
+        store.getState().setSyncError({ ...failure, at: 2 });
+        store.getState().setAccountSettingsSyncStatus({ state: 'synced', lastSyncedAt: 11 });
+        store.getState().setLastSyncAt(11);
+        expect(notify).toHaveBeenCalledTimes(3);
+        store.getState().resetAccountSettingsSyncStatus();
+        const idle = store.getState();
+        store.getState().resetAccountSettingsSyncStatus();
+        expect(store.getState()).toBe(idle);
+        unsubscribe();
+    });
     it('publishes connection transitions, preserving timestamps and suppressing identical status snapshots', () => {
         vi.spyOn(Date, 'now').mockReturnValue(100);
         const store = createStore<RealtimeDomain>()((set) => createRealtimeDomain({ set }));

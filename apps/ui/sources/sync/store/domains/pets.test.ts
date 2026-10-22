@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStore } from 'zustand/vanilla';
 import type { LocalPetSourceMetadata } from "@/sync/domains/pets/localPetSourceTypes";
 import type { StoreGet, StoreSet } from "./_shared";
 
@@ -27,6 +28,36 @@ vi.mock("react-native-mmkv", () => {
 });
 
 describe("createPetsDomain", () => {
+    afterEach(() => vi.restoreAllMocks());
+    it('retains equal rows and skips notifications and persistence on unchanged input', async () => {
+        const { createPetsDomain } = await import('./pets');
+        const store = createStore<ReturnType<typeof createPetsDomain>>()((set, get) => createPetsDomain({ set, get }));
+        const first = metadata('pet-1');
+        store.getState().applyAccountPets([first, metadata('pet-2')]);
+        store.getState().upsertLocalPetSources([localMetadata('local-1')]);
+        const before = store.getState();
+        const notify = vi.fn();
+        const persistSet = vi.spyOn(persistedStore, 'set');
+        const persistDelete = vi.spyOn(persistedStore, 'delete');
+        const unsubscribe = store.subscribe(notify);
+        store.getState().applyAccountPets([structuredClone(first), metadata('pet-2')]);
+        store.getState().upsertAccountPet(structuredClone(first));
+        store.getState().removeAccountPet('absent');
+        store.getState().upsertLocalPetSources([localMetadata('local-1')]);
+        store.getState().upsertLocalPetSources([]);
+        store.getState().removeLocalPetSource('absent');
+        expect(store.getState()).toBe(before);
+        expect(notify).not.toHaveBeenCalled();
+        expect(persistSet).not.toHaveBeenCalled();
+        expect(persistDelete).not.toHaveBeenCalled();
+        store.getState().applyAccountPets([structuredClone(first), { ...metadata('pet-2'), updatedAt: 3 }]);
+        expect(store.getState().accountPetsById['pet-1']).toBe(before.accountPetsById['pet-1']);
+        expect(store.getState().accountPetsById['pet-2']?.updatedAt).toBe(3);
+        expect(notify).toHaveBeenCalledTimes(1);
+        unsubscribe();
+        persistSet.mockRestore();
+        persistDelete.mockRestore();
+    });
     beforeEach(() => {
         persistedStore.clear();
     });

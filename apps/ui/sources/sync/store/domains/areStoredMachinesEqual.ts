@@ -67,8 +67,6 @@ export function areMachineLaunchInputsEqual(previous: Machine, next: Machine): b
     const nowMs = Date.now();
     return areStoredMachineValuesEqual(previous, next, false, false)
         && isMachineOnline(previous, nowMs) === isMachineOnline(next, nowMs)
-        && previous.isShared === next.isShared
-        && previous.installationPublicKey === next.installationPublicKey
         && hasCurrentMachineContent(previous) === hasCurrentMachineContent(next);
 }
 
@@ -114,6 +112,8 @@ function areStoredMachineValuesEqual(
         && (previous.replacementSource ?? null) === (next.replacementSource ?? null)
         && (previous.replacementActorUserId ?? null) === (next.replacementActorUserId ?? null)
         && (previous.installationId ?? null) === (next.installationId ?? null)
+        && (previous.installationPublicKey ?? null) === (next.installationPublicKey ?? null)
+        && previous.isShared === next.isShared
         && (previous.contentPublicKeyFingerprint ?? null) === (next.contentPublicKeyFingerprint ?? null)
         && (previous.operationProtocolCapabilitiesRevision ?? null) === (next.operationProtocolCapabilitiesRevision ?? null)
         && areSessionValuesDeepEqual(previous.operationProtocolCapabilities ?? null, next.operationProtocolCapabilities ?? null)

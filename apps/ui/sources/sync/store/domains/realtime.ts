@@ -1,4 +1,5 @@
 import type { StoreSet } from './_shared';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
   createAccountSettingsIdleStatus,
   type AccountSettingsSyncStatus,
@@ -72,7 +73,7 @@ export function createRealtimeDomain<S extends RealtimeDomain>({
   set: StoreSet<S>;
 }): RealtimeDomain {
   const setSyncError = (error: SyncError) => set((state) =>
-    state.syncError === error ? state : { ...state, syncError: error });
+    sameStrictJsonValue(state.syncError, error) ? state : { ...state, syncError: error });
   const setEndpointConnectivity = (snapshot: EndpointConnectivitySnapshot) => set((state) => {
     if (state.endpointStatus === snapshot.status
       && state.endpointReason === snapshot.reason
@@ -109,7 +110,7 @@ export function createRealtimeDomain<S extends RealtimeDomain>({
     endpointLastErrorMessage: null,
     nativeUpdateStatus: null,
     applyNativeUpdateStatus: (status) =>
-      set((state) => ({
+      set((state) => sameStrictJsonValue(state.nativeUpdateStatus, status) ? state : ({
         ...state,
         nativeUpdateStatus: status,
       })),
@@ -137,6 +138,7 @@ export function createRealtimeDomain<S extends RealtimeDomain>({
     setSocketError: (message) =>
       set((state) => {
         if (!message) {
+          if (state.socketLastError === null && state.socketLastErrorAt === null) return state;
           return {
             ...state,
             socketLastError: null,
@@ -151,9 +153,12 @@ export function createRealtimeDomain<S extends RealtimeDomain>({
       }),
     setSyncError,
     clearSyncError: () => setSyncError(null),
-    setAccountSettingsSyncStatus: (status) => set((state) => ({ ...state, accountSettingsSyncStatus: status })),
-    resetAccountSettingsSyncStatus: () => set((state) => ({ ...state, accountSettingsSyncStatus: createAccountSettingsIdleStatus() })),
-    setLastSyncAt: (ts) => set((state) => ({ ...state, lastSyncAt: ts })),
+    setAccountSettingsSyncStatus: (status) => set((state) => sameStrictJsonValue(state.accountSettingsSyncStatus, status)
+      ? state : { ...state, accountSettingsSyncStatus: status }),
+    resetAccountSettingsSyncStatus: () => set((state) => state.accountSettingsSyncStatus.state === 'idle'
+      && state.accountSettingsSyncStatus.lastSyncedAt === null ? state
+      : { ...state, accountSettingsSyncStatus: createAccountSettingsIdleStatus() }),
+    setLastSyncAt: (ts) => set((state) => state.lastSyncAt === ts ? state : { ...state, lastSyncAt: ts }),
     setEndpointConnectivity,
     resetEndpointConnectivity: () => setEndpointConnectivity({
       status: 'idle', reason: null, attempt: 0, nextRetryAt: null,

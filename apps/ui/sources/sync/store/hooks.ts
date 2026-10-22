@@ -3744,8 +3744,10 @@ export function useIsSessionDraftsReady(): boolean {
   return getStorage()((state) => state.isSessionDraftsReady);
 }
 
-export function useProfile() {
-  return getStorage()(useShallow((state) => state.profile));
+export function useProfile<T>(select: (profile: StorageState['profile']) => T): T;
+export function useProfile(): StorageState['profile'];
+export function useProfile(select?: (profile: StorageState['profile']) => unknown) {
+  return getStorage()(useShallow((state) => select ? select(state.profile) : state.profile));
 }
 
 /** Explicit Home readers follow the applied runtime; unscoped Settings retain their Profile scope. */

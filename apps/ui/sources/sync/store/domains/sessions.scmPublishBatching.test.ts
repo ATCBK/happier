@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 const mmkvStore = vi.hoisted(() => new Map<string, string>());
 vi.mock('react-native-mmkv', () => {
@@ -21,35 +22,21 @@ vi.mock('react-native-mmkv', () => {
 
 import { createSessionsDomain } from './sessions';
 import { projectManager } from '../../runtime/orchestration/projectManager';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { StorageState } from '@/sync/store/types';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 function createHarness() {
-  let state: any = {
-    sessions: {},
-    concurrentSessionListCacheByServerId: {},
-    sessionScmStatus: {},
-    sessionLastViewed: {},
-    sessionRepositoryTreeExpandedPathsBySessionId: {},
-    reviewCommentsDraftsBySessionId: {},
-    sessionActionDraftsByAddressKey: {},
-    isDataReady: false,
-    machines: { m1: { id: 'm1', metadata: { homeDir: '/home/u' } } },
-    machineDisplayById: {},
-    sessionMessages: {},
-    settings: {},
-  };
+  const store = createStore<StorageState>()((set, get) => ({
+    ...storage.getInitialState(),
+    ...createSessionsDomain<StorageState>({ set, get }),
+    machines: { m1: createMachineFixture({ id: 'm1', metadata: { ...createMachineFixture().metadata!, homeDir: '/home/u' } }) },
+    machineDisplayById: {}, sessionMessages: {}, sessionMessagesHistoryStartLoaded: {},
+  }));
   let setCount = 0;
-
-  const get = () => state;
-  const set = (updater: any) => {
-    setCount += 1;
-    const next = typeof updater === 'function' ? updater(state) : updater;
-    state = { ...state, ...next };
-  };
-
-  const domain = createSessionsDomain({ get, set } as any);
-  set(domain as any);
-  setCount = 0;
-  return { get, domain, getSetCount: () => setCount };
+  store.subscribe(() => { setCount += 1; });
+  return { get: store.getState, domain: store.getState(), getSetCount: () => setCount };
 }
 
 function makeSession(id: string) {
@@ -143,6 +130,32 @@ function makeStatus(lastUpdatedAt: number) {
 describe('sessions domain: batched project SCM snapshot publish', () => {
   beforeEach(() => {
     projectManager.clear();
+  });
+
+  it('keeps an empty snapshot clear a no-op without creating a project', () => {
+    const { domain, get, getSetCount } = createHarness();
+    const previous = get();
+    const notifications = getSetCount();
+    domain.updateWorkspaceScmSnapshot({ serverId: 'pub-empty', machineId: 'm1', rootPath: '/empty' }, null);
+    expect(get()).toBe(previous);
+    expect(getSetCount()).toBe(notifications);
+    expect(projectManager.getProjects()).toEqual([]);
+  });
+
+  it.each([false, true])('suppresses an equal SCM batch in the real store (exact Home: %s), while retaining real changes', (exactHome) => {
+    const { get, domain, getSetCount } = createHarness();
+    const serverId = getActiveServerSnapshot().serverId;
+    domain.applySessions([{ ...makeSession('s1'), serverId }]);
+    const first = { sessionId: 's1', snapshot: makeSnapshot(100), status: makeStatus(100) };
+    const publish = exactHome ? { ...first, serverId } : first;
+    domain.publishSessionProjectScmSnapshots([publish]);
+    const settled = get();
+    const notifications = getSetCount();
+    domain.publishSessionProjectScmSnapshots([structuredClone(publish)]);
+    expect(get()).toBe(settled);
+    expect(getSetCount()).toBe(notifications);
+    domain.publishSessionProjectScmSnapshots([{ ...publish, status: makeStatus(200) }]);
+    expect(getSetCount()).toBe(notifications + 1);
   });
 
   it('isolates duplicate Session SCM snapshots, selections and operation locks by Home', () => {

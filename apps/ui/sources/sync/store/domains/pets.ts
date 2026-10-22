@@ -7,6 +7,7 @@ import {
 } from "@/sync/domains/state/localPetSourcePersistence";
 
 import type { StoreGet, StoreSet } from "./_shared";
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type PetsDomain = {
     accountPetsById: Record<string, AccountPetMetadata>;
@@ -30,12 +31,15 @@ export function createPetsDomain<S extends PetsDomain>({
         accountPetsById: {},
         localPetSourcesBySourceKey,
         applyAccountPets: (pets) =>
-            set((state) => ({
-                ...state,
-                accountPetsById: normalizeAccountPetsById(pets),
-            })),
+            set((state) => {
+                const incoming = normalizeAccountPetsById(pets);
+                if (sameStrictJsonValue(state.accountPetsById, incoming)) return state;
+                const accountPetsById = Object.fromEntries(Object.entries(incoming).map(([id, pet]) => [id,
+                    sameStrictJsonValue(state.accountPetsById[id], pet) ? state.accountPetsById[id]! : pet]));
+                return { ...state, accountPetsById };
+            }),
         upsertAccountPet: (pet) =>
-            set((state) => ({
+            set((state) => sameStrictJsonValue(state.accountPetsById[pet.accountPetId], pet) ? state : ({
                 ...state,
                 accountPetsById: {
                     ...state.accountPetsById,
@@ -44,6 +48,7 @@ export function createPetsDomain<S extends PetsDomain>({
             })),
         removeAccountPet: (petId) =>
             set((state) => {
+                if (!Object.prototype.hasOwnProperty.call(state.accountPetsById, petId)) return state;
                 const next = { ...state.accountPetsById };
                 delete next[petId];
                 return {
@@ -53,10 +58,13 @@ export function createPetsDomain<S extends PetsDomain>({
             }),
         upsertLocalPetSources: (sources) =>
             set((state) => {
-                const next = { ...state.localPetSourcesBySourceKey };
+                let next: Record<string, LocalPetSourceMetadata> | null = null;
                 for (const source of sources) {
+                    if (sameStrictJsonValue((next ?? state.localPetSourcesBySourceKey)[source.sourceKey], source)) continue;
+                    next ??= { ...state.localPetSourcesBySourceKey };
                     next[source.sourceKey] = source;
                 }
+                if (next === null) return state;
                 saveLocalPetSourcesBySourceKey(next);
                 return {
                     ...state,
@@ -65,6 +73,7 @@ export function createPetsDomain<S extends PetsDomain>({
             }),
         removeLocalPetSource: (sourceKey) =>
             set((state) => {
+                if (!Object.prototype.hasOwnProperty.call(state.localPetSourcesBySourceKey, sourceKey)) return state;
                 const next = { ...state.localPetSourcesBySourceKey };
                 delete next[sourceKey];
                 saveLocalPetSourcesBySourceKey(next);

@@ -29,6 +29,20 @@ export function areSessionValuesDeepEqual(previous: unknown, next: unknown): boo
     return areSessionValueEqual(previous, next);
 }
 
+/** Reuse unchanged nested values when a Session or row has another real change. */
+export function reuseEqualSessionObjectFields<T extends object>(previous: T | undefined, next: T): T {
+    if (!previous) return next;
+    let shared = next;
+    for (const key of Object.keys(next) as Array<keyof T>) {
+        const value = next[key];
+        if (value === null || typeof value !== 'object' || value === previous[key]) continue;
+        if (!areSessionValueEqual(previous[key], value)) continue;
+        if (shared === next) shared = { ...next };
+        shared[key] = previous[key];
+    }
+    return shared;
+}
+
 function areSessionValueEqual(previous: unknown, next: unknown): boolean {
     if (previous === next) return true;
     if (previous == null || next == null) return previous === next;
@@ -44,6 +58,10 @@ function areSessionValueEqual(previous: unknown, next: unknown): boolean {
 
     if (typeof previous === 'object' || typeof next === 'object') {
         if (typeof previous !== 'object' || typeof next !== 'object') return false;
+        const previousPrototype = Object.getPrototypeOf(previous);
+        const nextPrototype = Object.getPrototypeOf(next);
+        if ((previousPrototype !== Object.prototype && previousPrototype !== null)
+            || (nextPrototype !== Object.prototype && nextPrototype !== null)) return false;
         return arePlainObjectValuesEqual(
             previous as Record<string, unknown>,
             next as Record<string, unknown>,

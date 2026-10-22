@@ -9,7 +9,7 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
-import { createMachinesDomain, type MachinesDomain } from './machines';
+import { createMachinesDomain, subscribeMachineUpdates, type MachinesDomain } from './machines';
 
 type TestState = MachinesDomain & Pick<StorageState,
     'sessions' | 'sessionListRowsByServerId' | 'ordinarySessionListMembershipByServerId'
@@ -38,6 +38,42 @@ function machine(id: string, overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('machine inventory reference stability through the real store', () => {
+    it('retains unchanged Machine slices when daemon resources change and publishes installation changes', () => {
+        const store = createTestStore();
+        const options = { sourceServerId: getActiveServerSnapshot().serverId };
+        const one = machine('one', { installationPublicKey: 'first', daemonStateVersion: 1,
+            daemonState: { resources: { activeSessions: 1 } }, availability: { kind: 'available' } });
+        store.getState().applyMachines([one], true, options);
+        const before = store.getState().machines.one;
+        store.getState().applyMachines([{ ...structuredClone(one), daemonStateVersion: 2,
+            daemonState: { resources: { activeSessions: 2 } } }], false, options);
+        const updated = store.getState().machines.one;
+        expect(updated).not.toBe(before);
+        expect(updated.metadata).toBe(before.metadata);
+        expect(updated.availability).toBe(before.availability);
+        store.getState().applyMachines([{ ...updated, installationPublicKey: 'replacement', isShared: true }], false, options);
+        expect(store.getState().machines.one.installationPublicKey).toBe('replacement');
+        expect(store.getState().machines.one.isShared).toBe(true);
+    });
+
+    it('notifies receipt readers only for changed Machine observations, including heartbeats', () => {
+        const store = createTestStore();
+        const options = { sourceServerId: getActiveServerSnapshot().serverId };
+        const one = machine('one'), two = machine('two');
+        store.getState().applyMachines([one, two], true, options);
+        const notify = vi.fn();
+        const unsubscribe = subscribeMachineUpdates(notify);
+        try {
+            store.getState().applyMachines(structuredClone([one, two]), true, options);
+            expect(notify).not.toHaveBeenCalled();
+            store.getState().applyMachines([structuredClone(one), machine('two', { activeAt: 2, updatedAt: 2 })], false, options);
+            expect(notify).toHaveBeenCalledExactlyOnceWith(options.sourceServerId, ['two']);
+            store.getState().applyMachines([structuredClone(one)], true, options);
+            expect(notify).toHaveBeenLastCalledWith(options.sourceServerId, ['two']);
+            expect(notify).toHaveBeenCalledTimes(2);
+        } finally { unsubscribe(); }
+    });
+
     it('does not rerender project-grouped lists for unrelated machine metadata but does publish a rename', async () => {
         const store = createTestStore();
         const serverId = getActiveServerSnapshot().serverId;

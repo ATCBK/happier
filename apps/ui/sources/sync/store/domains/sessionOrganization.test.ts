@@ -34,6 +34,43 @@ function emptySnapshot(input: Partial<SessionOrganizationSnapshot> = {}): Sessio
 }
 
 describe('createSessionOrganizationDomain', () => {
+    it('keeps repeated clear and legacy assignment writes quiet', () => {
+        const harness = createHarness();
+        const initial = harness.get();
+        let notifications = 0;
+        const unsubscribe = harness.subscribe(() => notifications++);
+        harness.get().clearSessionOrganizationForServer('missing');
+        expect(harness.get()).toBe(initial);
+        harness.get().setSessionFolderAssignmentOptimistic('srv-a', 's1', 'folder');
+        const before = harness.get();
+        harness.get().setSessionFolderAssignmentOptimistic('srv-a', 's1', 'folder');
+        harness.get().rollbackSessionFolderAssignment('srv-a', 's1', 'folder');
+        expect(harness.get()).toBe(before);
+        expect(notifications).toBe(1);
+        unsubscribe();
+    });
+    it('reuses deep-equal display and assignment rows across echoes and sibling changes', () => {
+        const harness = createHarness();
+        const snapshot = emptySnapshot({
+            tagAssignments: [{ sessionId: 's1', tagIds: ['tag'] }],
+            tags: [{ tagId: 'tag', tagKey: 'tag', sortKey: null, archivedAt: null,
+                display: { t: 'plain', v: { name: 'Important' } }, createdAt: 1, updatedAt: 1 }],
+        });
+        harness.get().applySessionOrganizationSnapshot('srv-a', snapshot);
+        const before = harness.get();
+        let notifications = 0;
+        const unsubscribe = harness.subscribe(() => notifications++);
+        harness.get().applySessionOrganizationSnapshot('srv-a', structuredClone(snapshot));
+        expect(harness.get()).toBe(before);
+        expect(notifications).toBe(0);
+        harness.get().applySessionOrganizationSnapshot('srv-a', { ...structuredClone(snapshot), version: 2,
+            tagAssignments: [...snapshot.tagAssignments, { sessionId: 's2', tagIds: [] }] });
+        const key = buildSessionOrganizationSessionKey('srv-a', 's1');
+        expect(harness.get().sessionOrganizationTagAssignmentsBySessionKey[key]).toBe(before.sessionOrganizationTagAssignmentsBySessionKey[key]);
+        expect(harness.get().sessionOrganizationTagsByTagKey).toBe(before.sessionOrganizationTagsByTagKey);
+        expect(notifications).toBe(1);
+        unsubscribe();
+    });
     it('rebases a pending replacement on the confirmed reminder clear before rollback', () => {
         const harness = createHarness();
         harness.get().applySessionOrganizationSnapshot('srv-a', emptySnapshot({

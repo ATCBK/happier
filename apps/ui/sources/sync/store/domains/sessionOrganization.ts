@@ -25,6 +25,7 @@ import type {
 } from '@/sync/domains/session/organization';
 
 import type { StoreGet, StoreSet } from './_shared';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type SessionFolderAssignment = Readonly<{
     sessionId: string;
@@ -177,18 +178,9 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
     return Object.prototype.hasOwnProperty.call(record, key);
 }
 
-function shallowEqualValue(a: unknown, b: unknown): boolean {
-    if (a === b) return true;
-    if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
-    const aEntries = Object.entries(a);
-    const bRecord = b as Record<string, unknown>;
-    if (aEntries.length !== Object.keys(bRecord).length) return false;
-    return aEntries.every(([key, value]) => bRecord[key] === value);
-}
-
 function entriesEqual<T>(a: readonly T[] | undefined, b: readonly T[]): boolean {
     if (!a || a.length !== b.length) return false;
-    return a.every((entry, index) => shallowEqualValue(entry, b[index]));
+    return a.every((entry, index) => sameStrictJsonValue(entry, b[index]));
 }
 
 function replaceServerRecord<T>(
@@ -203,11 +195,12 @@ function replaceServerRecord<T>(
         }
     }
     for (const [id, value] of entries) {
-        next[buildSessionOrganizationServerKey(serverId, id)] = value;
+        const key = buildSessionOrganizationServerKey(serverId, id);
+        next[key] = sameStrictJsonValue(current[key], value) ? current[key]! : value;
     }
     if (Object.keys(next).length !== Object.keys(current).length) return next;
     for (const [key, value] of Object.entries(next)) {
-        if (!shallowEqualValue(current[key], value)) return next;
+        if (current[key] !== value) return next;
     }
     return current;
 }
@@ -222,10 +215,13 @@ function replaceEntityRecord<T>(
     for (const [key, value] of Object.entries(current)) {
         if (key !== buildSessionOrganizationServerKey(serverId, readId(value))) next[key] = value;
     }
-    for (const [id, value] of entries) next[buildSessionOrganizationServerKey(serverId, id)] = value;
+    for (const [id, value] of entries) {
+        const key = buildSessionOrganizationServerKey(serverId, id);
+        next[key] = sameStrictJsonValue(current[key], value) ? current[key]! : value;
+    }
     if (Object.keys(next).length !== Object.keys(current).length) return next;
     for (const [key, value] of Object.entries(next)) {
-        if (!shallowEqualValue(current[key], value)) return next;
+        if (current[key] !== value) return next;
     }
     return current;
 }
@@ -243,11 +239,12 @@ function replaceSessionRecord<T>(
         }
     }
     for (const [sessionId, value] of entries) {
-        next[buildSessionOrganizationSessionKey(serverId, sessionId)] = value;
+        const key = buildSessionOrganizationSessionKey(serverId, sessionId);
+        next[key] = sameStrictJsonValue(current[key], value) ? current[key]! : value;
     }
     if (Object.keys(next).length !== Object.keys(current).length) return next;
     for (const [key, value] of Object.entries(next)) {
-        if (!shallowEqualValue(current[key], value)) return next;
+        if (current[key] !== value) return next;
     }
     return current;
 }
@@ -278,12 +275,13 @@ function replaceRequestedServerRecord<T>(
     }
     for (const [id, value] of entries) {
         if (!requestedIdsSet.has(String(id ?? '').trim())) continue;
-        next[buildSessionOrganizationServerKey(serverId, id)] = value;
+        const key = buildSessionOrganizationServerKey(serverId, id);
+        next[key] = sameStrictJsonValue(current[key], value) ? current[key]! : value;
     }
 
     if (Object.keys(next).length !== Object.keys(current).length) return next;
     for (const [key, value] of Object.entries(next)) {
-        if (!shallowEqualValue(current[key], value)) return next;
+        if (current[key] !== value) return next;
     }
     return current;
 }
@@ -294,7 +292,7 @@ function mergeRecordEntries<T>(
 ): Record<string, T> {
     let next: Record<string, T> | null = null;
     for (const [key, value] of entries) {
-        if (shallowEqualValue(current[key], value)) continue;
+        if (sameStrictJsonValue(current[key], value)) continue;
         next ??= { ...current };
         next[key] = value;
     }
@@ -365,7 +363,7 @@ function setRecordValue<T>(current: Record<string, T>, key: string, value: T | u
         delete next[key];
         return next;
     }
-    if (shallowEqualValue(current[key], value)) return current;
+    if (sameStrictJsonValue(current[key], value)) return current;
     return { ...current, [key]: value };
 }
 
@@ -496,7 +494,7 @@ function replaceOrderEntries(
         }
     }
     for (const [key, value] of grouped.entries()) {
-        next[key] = value;
+        next[key] = entriesEqual(current[key], value) ? current[key]! : value;
     }
     if (Object.keys(next).length !== Object.keys(current).length) return next;
     for (const [key, value] of Object.entries(next)) {
@@ -555,7 +553,7 @@ function applyRecordDelta<T>(
     for (const key of keys) {
         const hasAfter = hasOwn(after as Record<string, unknown>, key);
         const afterValue = after[key];
-        if (hasAfter && shallowEqualValue(before[key], afterValue)) continue;
+        if (hasAfter && sameStrictJsonValue(before[key], afterValue)) continue;
         next = setRecordValue(next, key, hasAfter ? afterValue : undefined);
     }
     return next;
@@ -577,9 +575,9 @@ function undoRecordDelta<T>(
     for (const key of keys) {
         const hasAfter = hasOwn(after as Record<string, unknown>, key);
         const ownedValue = hasAfter ? after[key] : undefined;
-        if (!shallowEqualValue(next[key], ownedValue)) continue;
+        if (!sameStrictJsonValue(next[key], ownedValue)) continue;
         const hasBefore = hasOwn(before as Record<string, unknown>, key);
-        if (hasBefore && shallowEqualValue(before[key], ownedValue)) continue;
+        if (hasBefore && sameStrictJsonValue(before[key], ownedValue)) continue;
         next = setRecordValue(next, key, hasBefore ? before[key] : undefined);
     }
     return next;
@@ -786,15 +784,21 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     uiSnapshot.orderEntries,
                     options,
                 );
+                const schemaVersions = setRecordValue(state.sessionOrganizationSchemaVersionByServerId, serverId, uiSnapshot.schemaVersion);
+                const snapshotVersions = setRecordValue(state.sessionOrganizationSnapshotVersionByServerId, serverId, uiSnapshot.version);
+                if (schemaVersions === state.sessionOrganizationSchemaVersionByServerId
+                    && snapshotVersions === state.sessionOrganizationSnapshotVersionByServerId
+                    && pins === state.sessionOrganizationPinsBySessionKey
+                    && attentionStandings === state.sessionOrganizationAttentionStandingsBySessionKey
+                    && folders === state.sessionOrganizationFoldersByFolderKey
+                    && folderAssignments === state.sessionOrganizationFolderAssignmentsBySessionKey
+                    && tags === state.sessionOrganizationTagsByTagKey
+                    && tagAssignments === state.sessionOrganizationTagAssignmentsBySessionKey
+                    && labels === state.sessionOrganizationLabelsByLabelKey
+                    && orderEntries === state.sessionOrganizationOrderEntriesByScopeKey) return state;
                 return {
-                    sessionOrganizationSchemaVersionByServerId: {
-                        ...state.sessionOrganizationSchemaVersionByServerId,
-                        [serverId]: uiSnapshot.schemaVersion,
-                    },
-                    sessionOrganizationSnapshotVersionByServerId: {
-                        ...state.sessionOrganizationSnapshotVersionByServerId,
-                        [serverId]: uiSnapshot.version,
-                    },
+                    sessionOrganizationSchemaVersionByServerId: schemaVersions,
+                    sessionOrganizationSnapshotVersionByServerId: snapshotVersions,
                     sessionOrganizationPinsBySessionKey: pins,
                     sessionOrganizationAttentionStandingsBySessionKey: attentionStandings,
                     sessionOrganizationFoldersByFolderKey: folders,
@@ -1076,11 +1080,11 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     if (readOptimisticRecordSequence(later) <= readOptimisticRecordSequence(record)) continue;
                     const before = later.before[map];
                     const after = later.after[map];
-                    if (!before || !shallowEqualValue(before[key], record.after[map]?.[key])) continue;
+                    if (!before || !sameStrictJsonValue(before[key], record.after[map]?.[key])) continue;
                     nextRecords[id] = {
                         ...later,
                         before: { ...later.before, [map]: setRecordValue<unknown>(before, key, value ?? undefined) },
-                        after: after && shallowEqualValue(after[key], before[key])
+                        after: after && sameStrictJsonValue(after[key], before[key])
                             ? { ...later.after, [map]: setRecordValue<unknown>(after, key, value ?? undefined) }
                             : later.after,
                     };
@@ -1090,7 +1094,7 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                 // mutation or an authoritative snapshot that already replaced it is never
                 // overwritten by an older response, whatever order the responses settle in.
                 const optimistic = record?.after[map];
-                const stillCurrent = optimistic !== undefined && shallowEqualValue(state[map][key], optimistic[key]);
+                const stillCurrent = optimistic !== undefined && sameStrictJsonValue(state[map][key], optimistic[key]);
                 if (!stillCurrent) return { sessionOrganizationOptimisticRecords: nextRecords } as Partial<S>;
                 return {
                     sessionOrganizationOptimisticRecords: nextRecords,
@@ -1107,13 +1111,9 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     serverId,
                     (assignment) => assignment.sessionId,
                 );
-                return {
-                    sessionOrganizationSnapshotVersionByServerId: Object.fromEntries(
-                        Object.entries(state.sessionOrganizationSnapshotVersionByServerId).filter(([key]) => key !== serverId),
-                    ),
-                    sessionOrganizationSchemaVersionByServerId: Object.fromEntries(
-                        Object.entries(state.sessionOrganizationSchemaVersionByServerId).filter(([key]) => key !== serverId),
-                    ),
+                const update = {
+                    sessionOrganizationSnapshotVersionByServerId: removeRecordKeys(state.sessionOrganizationSnapshotVersionByServerId, [serverId]),
+                    sessionOrganizationSchemaVersionByServerId: removeRecordKeys(state.sessionOrganizationSchemaVersionByServerId, [serverId]),
                     sessionOrganizationPinsBySessionKey: removeSessionRecordEntries(
                         state.sessionOrganizationPinsBySessionKey,
                         serverId,
@@ -1142,13 +1142,11 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     ),
                     sessionOrganizationOrderEntriesByScopeKey: removeServerRecordEntries(state.sessionOrganizationOrderEntriesByScopeKey, serverId),
                     sessionOrganizationLabelsByLabelKey: removeServerRecordEntries(state.sessionOrganizationLabelsByLabelKey, serverId),
-                    sessionOrganizationLoadingByServerId: Object.fromEntries(
-                        Object.entries(state.sessionOrganizationLoadingByServerId).filter(([key]) => key !== serverId),
-                    ),
-                    sessionOrganizationErrorByServerId: Object.fromEntries(
-                        Object.entries(state.sessionOrganizationErrorByServerId).filter(([key]) => key !== serverId),
-                    ),
-                } as Partial<S>;
+                    sessionOrganizationLoadingByServerId: removeRecordKeys(state.sessionOrganizationLoadingByServerId, [serverId]),
+                    sessionOrganizationErrorByServerId: removeRecordKeys(state.sessionOrganizationErrorByServerId, [serverId]),
+                };
+                const keys = Object.keys(update) as Array<keyof typeof update>;
+                return keys.every(key => update[key] === state[key]) ? state : update as Partial<S>;
             });
         },
         applySessionFolderAssignments: applyFolderAssignments,
@@ -1164,6 +1162,7 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     key,
                     { sessionId, folderId },
                 );
+                if (nextAssignments === state.sessionOrganizationFolderAssignmentsBySessionKey) return state;
                 return {
                     sessionOrganizationFolderAssignmentsBySessionKey: nextAssignments,
                 } as Partial<S>;
@@ -1178,6 +1177,7 @@ export function createSessionOrganizationDomain<S extends SessionOrganizationDom
                     key,
                     { sessionId, folderId: previousFolderId },
                 );
+                if (nextAssignments === state.sessionOrganizationFolderAssignmentsBySessionKey) return state;
                 return {
                     sessionOrganizationFolderAssignmentsBySessionKey: nextAssignments,
                 } as Partial<S>;

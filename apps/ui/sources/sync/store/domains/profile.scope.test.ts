@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -39,16 +40,8 @@ type ScopedProfileDomain = ReturnType<typeof createProfileDomain> & Readonly<{
     clearProfileScope?: () => void;
 }>;
 
-function createTestStore(): { getState: () => ScopedProfileDomain } {
-    let state = {} as ScopedProfileDomain;
-    const set = (updater: ((state: ScopedProfileDomain) => Partial<ScopedProfileDomain> | ScopedProfileDomain) | Partial<ScopedProfileDomain>) => {
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
-    const get = () => state;
-    const domain = createProfileDomain<ScopedProfileDomain>({ set, get });
-    state = { ...state, ...(domain as ScopedProfileDomain) };
-    return { getState: () => state };
+function createTestStore() {
+    return createStore<ScopedProfileDomain>((set, get) => createProfileDomain<ScopedProfileDomain>({ set, get }));
 }
 
 function requireScopedMethods(state: ScopedProfileDomain): asserts state is ScopedProfileDomain & Required<Pick<
@@ -66,6 +59,50 @@ describe('createProfileDomain scoped profiles', () => {
 
     beforeEach(() => {
         clearPersistence();
+    });
+
+    it('suppresses equal profile echoes and keeps unchanged fields on a real update', () => {
+        const api = createTestStore();
+        const profile = { ...structuredClone(profileDefaults), id: 'account-a', name: 'Account A' };
+        api.getState().applyProfile(profile);
+        const previous = api.getState();
+        const notified = vi.fn();
+        api.subscribe(notified);
+
+        api.getState().applyProfile(structuredClone(profile));
+        expect(api.getState()).toBe(previous);
+        expect(notified).not.toHaveBeenCalled();
+
+        api.getState().applyProfile({ ...structuredClone(profile), timestamp: 1 });
+        expect(api.getState().profile.timestamp).toBe(1);
+        expect(api.getState().profile.connectedAccountsV4).toBe(previous.profile.connectedAccountsV4);
+        expect(api.getState().profile.linkedProviders).toBe(previous.profile.linkedProviders);
+        expect(notified).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppresses repeated activation, scoped echoes and clearing but publishes scope changes', () => {
+        const api = createTestStore();
+        api.getState().activateProfileScope(scopeA);
+        api.getState().applyProfileForScope(scopeA, { ...profileDefaults, id: 'account-a' });
+        const previous = api.getState();
+        const notified = vi.fn();
+        api.subscribe(notified);
+
+        api.getState().applyProfileForScope({ ...scopeA }, structuredClone(previous.profile));
+        api.getState().activateProfileScope({ ...scopeA });
+        expect(api.getState()).toBe(previous);
+        expect(notified).not.toHaveBeenCalled();
+
+        saveAccountProfile(scopeB, structuredClone(previous.profile));
+        api.getState().activateProfileScope(scopeB);
+        expect(api.getState().profileScope).toEqual(scopeB);
+        expect(notified).toHaveBeenCalledTimes(1);
+
+        api.getState().clearProfileScope();
+        const cleared = api.getState();
+        api.getState().clearProfileScope();
+        expect(api.getState()).toBe(cleared);
+        expect(notified).toHaveBeenCalledTimes(2);
     });
 
     it('hydrates the active profile projection from the selected scope', () => {

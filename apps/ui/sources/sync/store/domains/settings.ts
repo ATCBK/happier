@@ -39,6 +39,30 @@ import { normalizeServerSelectionGroupsForSettings } from '@/sync/domains/server
 
 import type { StoreGet, StoreSet } from './_shared';
 
+function reconcilePurchasesReferences(previous: Purchases, next: Purchases): Purchases {
+    if (areAccountSettingsJsonValuesEqual(previous, next)) return previous;
+    return {
+        ...next,
+        activeSubscriptions: areAccountSettingsJsonValuesEqual(previous.activeSubscriptions, next.activeSubscriptions)
+            ? previous.activeSubscriptions : next.activeSubscriptions,
+        entitlements: areAccountSettingsJsonValuesEqual(previous.entitlements, next.entitlements)
+            ? previous.entitlements : next.entitlements,
+    };
+}
+
+function reconcileLocalSettingsReferences(previous: LocalSettings, next: LocalSettings): LocalSettings {
+    const reconciled = { ...next };
+    const previousRecord = previous as Record<string, unknown>;
+    const reconciledRecord = reconciled as Record<string, unknown>;
+    for (const key of Object.keys(next)) {
+        if (Object.prototype.hasOwnProperty.call(previousRecord, key)
+            && areAccountSettingsJsonValuesEqual(previousRecord[key], reconciledRecord[key])) {
+            reconciledRecord[key] = previousRecord[key];
+        }
+    }
+    return reconciled;
+}
+
 function safeSetPreferredLanguageFromSettings(preferredLanguage: unknown): void {
     try {
         setPreferredLanguageFromSettings(preferredLanguage);
@@ -174,11 +198,16 @@ function buildSettingsProjectionState<S extends SettingsDomain & SettingsDomainD
         ? rebuildSessionListIndexesForSettingsChange(state, nextSettings)
         : (state.sessionListIndexByServerId ?? {});
 
+    const settingsScope = state.settingsScope === nextScope || areAccountSettingsScopesEqual(state.settingsScope, nextScope)
+        ? state.settingsScope : nextScope;
+    if (nextSettings === state.settings && nextVersion === state.settingsVersion && settingsScope === state.settingsScope
+        && nextSessionListIndexByServerId === state.sessionListIndexByServerId) return state;
+
     return {
         ...state,
         settings: nextSettings,
         settingsVersion: nextVersion,
-        settingsScope: nextScope,
+        settingsScope,
         sessionListIndexByServerId: nextSessionListIndexByServerId,
     };
 }
@@ -278,17 +307,17 @@ export function createSettingsDomain<S extends SettingsDomain & SettingsDomainDe
             prepareAccountProfileScopeForActivation(scope, legacyScopes);
             set((state) => {
                 const loaded = loadParsedAccountSettings(scope);
-                return {
-                    ...projectSettings(state, loaded.settings, loaded.version, scope),
-                    purchases: loadAccountPurchases(scope),
-                };
+                const projected = projectSettings(state, loaded.settings, loaded.version, scope);
+                const purchases = reconcilePurchasesReferences(state.purchases, loadAccountPurchases(scope));
+                return purchases === state.purchases ? projected : { ...projected, purchases };
             });
         },
         clearSettingsScope: () =>
-            set((state) => ({
-                ...projectSettings(state, { ...settingsDefaults }, null, null),
-                purchases: { ...purchasesDefaults },
-            })),
+            set((state) => {
+                const projected = projectSettings(state, settingsDefaults, null, null);
+                const purchases = reconcilePurchasesReferences(state.purchases, purchasesDefaults);
+                return purchases === state.purchases ? projected : { ...projected, purchases };
+            }),
         applySettingsForScope: (scope, nextSettings, nextVersion) =>
             set((state) => {
                 if (!shouldAcceptScopedSettings(scope, nextVersion)) {
@@ -303,10 +332,11 @@ export function createSettingsDomain<S extends SettingsDomain & SettingsDomainDe
         applyLocalSettings: (delta, options) =>
             set((state) => {
                 const previousLocalSettings = state.localSettings;
-                const updatedLocalSettings = applyLocalSettings(state.localSettings, delta);
-                if (areAccountSettingsJsonValuesEqual(updatedLocalSettings, previousLocalSettings)) {
+                const incomingLocalSettings = applyLocalSettings(state.localSettings, delta);
+                if (areAccountSettingsJsonValuesEqual(incomingLocalSettings, previousLocalSettings)) {
                     return state;
                 }
+                const updatedLocalSettings = reconcileLocalSettingsReferences(previousLocalSettings, incomingLocalSettings);
                 if (options?.persist !== false) {
                     saveLocalSettings(updatedLocalSettings);
                     emitLocalSettingChangedEvents({
@@ -322,12 +352,13 @@ export function createSettingsDomain<S extends SettingsDomain & SettingsDomainDe
             }),
         applyPurchases: (customerInfo) =>
             set((state) => {
-                const nextPurchases = customerInfoToPurchases(customerInfo);
+                const nextPurchases = reconcilePurchasesReferences(state.purchases, customerInfoToPurchases(customerInfo));
                 if (state.settingsScope) {
                     saveAccountPurchases(state.settingsScope, nextPurchases);
                 } else {
                     savePurchases(nextPurchases);
                 }
+                if (nextPurchases === state.purchases) return state;
                 return {
                     ...state,
                     purchases: nextPurchases,

@@ -68,17 +68,23 @@ export function createAuthoringMemoryDomain<S extends AuthoringMemoryDomain>(dep
             return {
                 ...state,
                 authoringMemory: {
-                    recentMachinePaths: pathsUnchanged ? previous.recentMachinePaths : recentMachinePaths,
+                    recentMachinePaths: pathsUnchanged ? previous.recentMachinePaths : recentMachinePaths.map(path =>
+                        previous.recentMachinePaths.find(known => known.machineId === path.machineId && known.path === path.path) ?? path),
                     lastUsedProfile,
                     workflowProjectTargetsByDefinitionId: reconciledProjects,
-                    lastEngineSelectionsByScopeV1: selectionsUnchanged ? previous.lastEngineSelectionsByScopeV1 : lastEngineSelectionsByScopeV1,
+                    lastEngineSelectionsByScopeV1: selectionsUnchanged ? previous.lastEngineSelectionsByScopeV1
+                        : Object.fromEntries(Object.entries(lastEngineSelectionsByScopeV1).map(([scope, value]) => [scope,
+                            areAccountSettingsJsonValuesEqual(previous.lastEngineSelectionsByScopeV1[scope], value)
+                                ? previous.lastEngineSelectionsByScopeV1[scope]! : value])),
                     currentRememberedEngineSelectionsByScopeV1: areAccountSettingsJsonValuesEqual(previous.currentRememberedEngineSelectionsByScopeV1, currentSelections)
                         ? previous.currentRememberedEngineSelectionsByScopeV1
-                        : currentSelections,
+                        : Object.fromEntries(Object.entries(currentSelections).map(([scope, value]) => [scope,
+                            areAccountSettingsJsonValuesEqual(previous.currentRememberedEngineSelectionsByScopeV1[scope], value)
+                                ? previous.currentRememberedEngineSelectionsByScopeV1[scope]! : value])),
                 },
             };
         }),
-        resetAuthoringMemory: () => deps.set((state) => state.authoringMemory === authoringMemoryDefaults
+        resetAuthoringMemory: () => deps.set((state) => areAccountSettingsJsonValuesEqual(state.authoringMemory, authoringMemoryDefaults)
             ? state : { ...state, authoringMemory: authoringMemoryDefaults }),
     };
 }

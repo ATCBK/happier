@@ -313,6 +313,23 @@ function collectReferencedRunIds(
     return referenced;
 }
 
+/** Retain the unchanged records in an Automation-owned membership or definition map. */
+function reconcileAutomationRecords<T>(previous: Record<string, T>, incoming: Record<string, T>): Record<string, T> {
+    if (previous === incoming) return previous;
+    const entries = Object.entries(incoming);
+    let changed = Object.keys(previous).length !== entries.length;
+    const reconciled: Record<string, T> = {};
+    for (const [id, value] of entries) {
+        if (Object.prototype.hasOwnProperty.call(previous, id) && sameStrictJsonValue(previous[id], value)) {
+            reconciled[id] = previous[id]!;
+        } else {
+            reconciled[id] = value;
+            changed = true;
+        }
+    }
+    return changed ? reconciled : previous;
+}
+
 /**
  * Commit a window change and retire the bodies this domain stopped holding.
  *
@@ -325,23 +342,40 @@ function commitAutomationRunWindows<S extends AutomationsDomain & AutomationRuns
     previous: S,
     next: S,
 ): S {
-    const retainedRunIds = collectReferencedRunIds(
-        next.automationRunIdsByAutomationId,
-        next.automationRunTraversalsByAutomationId,
-    );
-    // History owns its membership, not the lifetime of another visible Run window.
-    for (const window of Object.values(next.workflowRunListWindows)) {
-        for (const runId of window?.runIds ?? []) retainedRunIds.add(runId);
+    const automations = reconcileAutomationRecords(previous.automations, next.automations);
+    const automationRunIdsByAutomationId = reconcileAutomationRecords(previous.automationRunIdsByAutomationId, next.automationRunIdsByAutomationId);
+    const automationRunNextCursorByAutomationId = reconcileAutomationRecords(previous.automationRunNextCursorByAutomationId, next.automationRunNextCursorByAutomationId);
+    const automationRunTraversalsByAutomationId = reconcileAutomationRecords(previous.automationRunTraversalsByAutomationId, next.automationRunTraversalsByAutomationId);
+    const automationDefinitionTraversal = sameStrictJsonValue(previous.automationDefinitionTraversal, next.automationDefinitionTraversal)
+        ? previous.automationDefinitionTraversal : next.automationDefinitionTraversal;
+    let workflowRunsById = next.workflowRunsById;
+    if (automationRunIdsByAutomationId !== previous.automationRunIdsByAutomationId
+        || automationRunTraversalsByAutomationId !== previous.automationRunTraversalsByAutomationId) {
+        const retainedRunIds = collectReferencedRunIds(automationRunIdsByAutomationId, automationRunTraversalsByAutomationId);
+        // History owns its membership, not the lifetime of another visible Run window.
+        for (const window of Object.values(next.workflowRunListWindows)) {
+            for (const runId of window?.runIds ?? []) retainedRunIds.add(runId);
+        }
+        workflowRunsById = releaseWorkflowRunBodies({
+            runsById: workflowRunsById,
+            releasedRunIds: collectReferencedRunIds(
+                previous.automationRunIdsByAutomationId,
+                previous.automationRunTraversalsByAutomationId,
+            ),
+            retainedRunIds,
+        });
     }
-    const workflowRunsById = releaseWorkflowRunBodies({
-        runsById: next.workflowRunsById,
-        releasedRunIds: collectReferencedRunIds(
-            previous.automationRunIdsByAutomationId,
-            previous.automationRunTraversalsByAutomationId,
-        ),
-        retainedRunIds,
-    });
-    return workflowRunsById === next.workflowRunsById ? next : { ...next, workflowRunsById };
+    if (automations === previous.automations && workflowRunsById === previous.workflowRunsById
+        && automationRunIdsByAutomationId === previous.automationRunIdsByAutomationId
+        && automationRunNextCursorByAutomationId === previous.automationRunNextCursorByAutomationId
+        && automationRunTraversalsByAutomationId === previous.automationRunTraversalsByAutomationId
+        && automationDefinitionTraversal === previous.automationDefinitionTraversal
+        && next.automationDefinitionNextCursor === previous.automationDefinitionNextCursor
+        && next.automationDefinitionWindowExtended === previous.automationDefinitionWindowExtended
+        && next.workflowTriggerSetsById === previous.workflowTriggerSetsById
+        && next.workflowTriggerSetIdsByQuery === previous.workflowTriggerSetIdsByQuery) return previous;
+    return { ...next, automations, workflowRunsById, automationRunIdsByAutomationId,
+        automationRunNextCursorByAutomationId, automationRunTraversalsByAutomationId, automationDefinitionTraversal };
 }
 
 /**
@@ -467,13 +501,13 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                     // Keep the last-known-good window while a fresh traversal
                     // is incomplete. Only the full terminal traversal can
                     // authoritatively retire a remotely deleted definition.
-                    return {
+                    return commitAutomationRunWindows(state, {
                         ...state,
                         automations: mergeAutomationDefinitions(state.automations, automations),
                         automationDefinitionNextCursor: nextCursor,
                         automationDefinitionWindowExtended: true,
                         automationDefinitionTraversal: { nextCursor, automations: freshPage },
-                    };
+                    });
                 }
                 const replacement = replaceAutomationDefinitions(state.automations, automations);
                 return commitAutomationRunWindows(state, {
@@ -523,7 +557,7 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                         ),
                     });
                 }
-                return {
+                return commitAutomationRunWindows(state, {
                     ...state,
                     automations: mergeAutomationDefinitions(state.automations, automations),
                     automationDefinitionNextCursor: nextCursor,
@@ -532,12 +566,12 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                         nextCursor,
                         automations: traversedAutomations,
                     },
-                };
+                });
             });
             return accepted;
         },
         upsertAutomation: (automation) =>
-            set((state) => ({
+            set((state) => commitAutomationRunWindows(state, {
                 ...state,
                 automations: {
                     ...state.automations,

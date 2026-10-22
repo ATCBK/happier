@@ -1,164 +1,115 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { useSettingMutable } from '@/sync/domains/state/storage';
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
-import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 
-function observeApplySettings() {
-    return vi.spyOn(getSyncSingleton(), 'applySettings');
-}
-
-import { useApplySettings } from './settingsWriters';
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+// The Sync bridge owns the store graph; Account stores and writers load after it, as in the other composed writer tests.
+await loadSyncSingletonForTests();
+const { storage, useSettingMutable } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { useApplySettings } = await import('./settingsWriters');
+const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const originalState = storage.getState();
+afterEach(() => {
+    standardCleanup();
+    storage.setState(originalState, true);
+});
+
+// Real Home/Account/Settings Action owners; only HTTP and credential storage are synthetic.
+async function createAccount() {
+    return await createSecretSettingsTestHarness({ settings: settingsParse({
+        useProfiles: false,
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+    }) });
+}
+
+async function moveToAnotherAccount(serverId: string) {
+    await act(async () => { storage.setState({ settingsScope: { serverId, accountId: 'another-account' } }); });
+}
+
 describe('useApplySettings Account scope binding', () => {
-    let previousState: ReturnType<typeof storage.getState>;
-    let applySettings: ReturnType<typeof observeApplySettings>;
-    type RuntimeState = {
-        pendingSettings: Partial<Settings>;
-        pendingSettingsFlushTimer: ReturnType<typeof setTimeout> | null;
-        pendingSettingsDirty: boolean;
-    };
-    let runtime: RuntimeState;
-    let previousRuntimeState: RuntimeState;
+    it('writes through the writer for the current Account and refuses it once the rendered Account is retired', async () => {
+        const account = await createAccount();
+        try {
+            const hook = await renderHook(() => useApplySettings());
+            const writerA = hook.getCurrent();
+            await act(async () => { await writerA({ useProfiles: true }); });
+            await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(true));
+            const writes = account.settingsWrites.length;
 
-    beforeEach(async () => {
-        previousState = storage.getState();
-        await loadSyncSingletonForTests();
-        // Observe the real writer; the fake clock holds its external persistence/network flush.
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-        applySettings = observeApplySettings();
-        runtime = getSyncSingleton() as unknown as RuntimeState;
-        previousRuntimeState = {
-            pendingSettings: runtime.pendingSettings,
-            pendingSettingsFlushTimer: runtime.pendingSettingsFlushTimer,
-            pendingSettingsDirty: runtime.pendingSettingsDirty,
-        };
-        runtime.pendingSettings = {};
-        runtime.pendingSettingsFlushTimer = null;
-        runtime.pendingSettingsDirty = false;
-        storage.setState((state) => ({
-            ...state,
-            settingsScope: { serverId: 'server-a', accountId: 'account-a' },
-            settingsVersion: 1,
-        }));
-    });
+            await moveToAnotherAccount(account.scope.serverId);
+            expect(hook.getCurrent()).not.toBe(writerA);
+            await act(async () => { await writerA({ useProfiles: false }); });
 
-    afterEach(() => {
-        standardCleanup();
-        applySettings?.mockRestore();
-        vi.clearAllTimers();
-        if (runtime) Object.assign(runtime, previousRuntimeState);
-        vi.useRealTimers();
-        storage.setState(previousState, true);
-    });
-
-    it('retains the rendered Account scope while a newly rendered writer binds the new scope', async () => {
-        const hook = await renderHook(() => useApplySettings());
-        const writerA = hook.getCurrent();
-
-        await act(async () => {
-            storage.setState((state) => ({
-                ...state,
-                settingsScope: { serverId: 'server-b', accountId: 'account-b' },
-            }));
-        });
-        const writerB = hook.getCurrent();
-
-        await act(async () => {
-            writerA({ sessionListSectionModeV1: 'activity' });
-            writerB({ sessionListSectionModeV1: 'single' });
-        });
-
-        expect(writerB).not.toBe(writerA);
-        expect(applySettings).toHaveBeenNthCalledWith(1, { sessionListSectionModeV1: 'activity' }, {
-            expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' },
-            source: 'ui',
-        });
-        expect(applySettings).toHaveBeenNthCalledWith(2, { sessionListSectionModeV1: 'single' }, {
-            expectedSettingsScope: { serverId: 'server-b', accountId: 'account-b' },
-            source: 'ui',
-        });
+            expect(account.persistedSettings.useProfiles).toBe(true);
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { await account.dispose(); }
     });
 
     it('keeps a retained useSettingMutable setter bound to the Account that rendered it', async () => {
-        const hook = await renderHook(() => useSettingMutable('sessionListSectionModeV1'));
-        const setterA = hook.getCurrent()[1];
+        const account = await createAccount();
+        try {
+            const hook = await renderHook(() => useSettingMutable('useProfiles'));
+            const setterA = hook.getCurrent()[1];
+            await act(async () => { setterA(true); });
+            await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(true));
+            const writes = account.settingsWrites.length;
 
-        await act(async () => {
-            storage.setState((state) => ({
-                ...state,
-                settingsScope: { serverId: 'server-b', accountId: 'account-b' },
-            }));
-        });
-        const setterB = hook.getCurrent()[1];
+            await moveToAnotherAccount(account.scope.serverId);
+            expect(hook.getCurrent()[1]).not.toBe(setterA);
+            await act(async () => { setterA(false); });
 
-        await act(async () => {
-            setterA('single');
-            setterB('activity');
-        });
-
-        expect(setterB).not.toBe(setterA);
-        expect(applySettings).toHaveBeenNthCalledWith(1, { sessionListSectionModeV1: 'single' }, {
-            expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' },
-            source: 'ui',
-        });
-        expect(applySettings).toHaveBeenNthCalledWith(2, { sessionListSectionModeV1: 'activity' }, {
-            expectedSettingsScope: { serverId: 'server-b', accountId: 'account-b' },
-            source: 'ui',
-        });
+            expect(account.persistedSettings.useProfiles).toBe(true);
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { await account.dispose(); }
     });
 
     it('applies a retained setting updater to the current Account value', async () => {
-        storage.setState({ settings: settingsParse({}) });
-        const hook = await renderHook(() => useSettingMutable('connectedServicesProviderStateSharingSettingsV1'));
-        const setter = hook.getCurrent()[1];
-        await act(async () => {
-            storage.getState().applySettingsLocal({
-                connectedServicesProviderStateSharingSettingsV1: {
-                    ...storage.getState().settings.connectedServicesProviderStateSharingSettingsV1,
-                    defaults: { configMode: 'copied', stateMode: 'isolated' },
-                    byAgentId: { claude: { configMode: 'isolated' } },
-                },
-            });
-        });
+        const account = await createAccount();
+        try {
+            const hook = await renderHook(() => useSettingMutable('useProfiles'));
+            const setter = hook.getCurrent()[1];
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings, useProfiles: true })); });
 
-        await act(async () => {
-            setter(current => ({ ...current, defaults: { ...current.defaults, stateMode: 'shared' } }));
-        });
+            await act(async () => { setter(current => !current); });
 
-        expect(applySettings).toHaveBeenCalledWith({
-            connectedServicesProviderStateSharingSettingsV1: expect.objectContaining({
-                defaults: { configMode: 'copied', stateMode: 'shared' },
-                byAgentId: { claude: { configMode: 'isolated' } },
-            }),
-        }, expect.objectContaining({ expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' } }));
+            await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(false));
+        } finally { await account.dispose(); }
     });
 
     it('does not evaluate a retained updater against a different Account', async () => {
-        const hook = await renderHook(() => useSettingMutable('connectedServicesProviderStateSharingSettingsV1'));
-        const setter = hook.getCurrent()[1];
-        await act(async () => {
-            storage.setState({ settingsScope: { serverId: 'server-b', accountId: 'account-b' } });
-        });
-        const update = vi.fn((current: Settings['connectedServicesProviderStateSharingSettingsV1']) => current);
+        const account = await createAccount();
+        try {
+            const hook = await renderHook(() => useSettingMutable('useProfiles'));
+            const setter = hook.getCurrent()[1];
+            const writes = account.settingsWrites.length;
+            await moveToAnotherAccount(account.scope.serverId);
+            const update = vi.fn((current: boolean) => !current);
 
-        setter(update);
+            await act(async () => { setter(update); });
 
-        expect(update).not.toHaveBeenCalled();
-        expect(applySettings).not.toHaveBeenCalled();
+            expect(update).not.toHaveBeenCalled();
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { await account.dispose(); }
     });
 
     it('does not write a setting updater that declines the current value', async () => {
-        const hook = await renderHook(() => useSettingMutable('connectedServicesProviderStateSharingSettingsV1'));
+        const account = await createAccount();
+        try {
+            const hook = await renderHook(() => useSettingMutable('useProfiles'));
+            const writes = account.settingsWrites.length;
 
-        hook.getCurrent()[1](() => null);
+            await act(async () => { hook.getCurrent()[1](() => null); });
 
-        expect(applySettings).not.toHaveBeenCalled();
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { await account.dispose(); }
     });
 });

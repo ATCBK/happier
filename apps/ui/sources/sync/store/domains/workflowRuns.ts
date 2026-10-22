@@ -797,18 +797,21 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
             if (!(key in state.workflowRunsById)) return state;
             const workflowRunsById = { ...state.workflowRunsById };
             delete workflowRunsById[key];
-            const workflowRunListWindows = Object.fromEntries(
-                Object.entries(state.workflowRunListWindows).map(([id, window]) => [
-                    id,
-                    window?.runIds.includes(runId) && (window.scope
-                        ? areServerAccountScopesEqual(scope, window.scope)
-                        : !scope || areServerAccountScopesEqual(scope, getActiveServerAccountScope()))
-                        ? { ...window, runIds: window.runIds.filter((candidate) => candidate !== runId),
-                            ...(window.attentionRunIds ? { attentionRunIds: window.attentionRunIds.filter(candidate => candidate !== runId) } : {}) } : window,
-                ]),
-            ) as WorkflowRunsDomain['workflowRunListWindows'];
-            const workflowRunInvocationsByRunId = { ...state.workflowRunInvocationsByRunId };
-            delete workflowRunInvocationsByRunId[key];
+            let workflowRunListWindows = state.workflowRunListWindows;
+            for (const [id, window] of Object.entries(state.workflowRunListWindows)) {
+                if (!window?.runIds.includes(runId) || !(window.scope
+                    ? areServerAccountScopesEqual(scope, window.scope)
+                    : !scope || areServerAccountScopesEqual(scope, getActiveServerAccountScope()))) continue;
+                if (workflowRunListWindows === state.workflowRunListWindows) workflowRunListWindows = { ...workflowRunListWindows };
+                workflowRunListWindows[id as keyof typeof workflowRunListWindows] = { ...window,
+                    runIds: window.runIds.filter(candidate => candidate !== runId),
+                    ...(window.attentionRunIds ? { attentionRunIds: window.attentionRunIds.filter(candidate => candidate !== runId) } : {}) };
+            }
+            let workflowRunInvocationsByRunId = state.workflowRunInvocationsByRunId;
+            if (key in workflowRunInvocationsByRunId) {
+                workflowRunInvocationsByRunId = { ...workflowRunInvocationsByRunId };
+                delete workflowRunInvocationsByRunId[key];
+            }
             return { ...state, workflowRunsById, workflowRunListWindows, workflowRunInvocationsByRunId };
         }),
         applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, projection, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
@@ -836,10 +839,11 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     : tailAutomation ? { id: tailAutomation.id, createdAt: tailAutomation.createdAt }
                     : tailBody ? workflowRunListFrontier(tailBody) : tailId === previous?.frontier?.id ? previous?.frontier : undefined;
                 const window: WorkflowRunListWindow = { ...membership,
+                    runIds: previous && sameStrictJsonValue(previous.runIds, membership.runIds) ? previous.runIds : membership.runIds,
                     ...(projection === undefined ? {} : { projection }),
-                    ...(frontier === undefined ? {} : { frontier }),
+                    ...(frontier === undefined ? {} : { frontier: previous?.frontier && sameStrictJsonValue(previous.frontier, frontier) ? previous.frontier : frontier }),
                     ...((windowId.startsWith('session:') || windowId.startsWith('discussion:')) && scope ? { scope } : {}),
-                    ...(attentionRunIds === undefined ? {} : { attentionRunIds }),
+                    ...(attentionRunIds === undefined ? {} : { attentionRunIds: previous?.attentionRunIds && sameStrictJsonValue(previous.attentionRunIds, attentionRunIds) ? previous.attentionRunIds : attentionRunIds }),
                     ...(lastSuccessfulReadAt === undefined ? {} : { lastSuccessfulReadAt }),
                 };
                 const unchangedWindow = previous !== undefined && sameStrictJsonValue(previous, window);
@@ -887,7 +891,8 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     invocationIds = pageIds;
                 }
                 const candidateWindow: WorkflowRunInvocationWindow = {
-                    invocationIds, nextCursor: cursor, loaded: true,
+                    invocationIds: sameStrictJsonValue(previousWindow.invocationIds, invocationIds) ? previousWindow.invocationIds : invocationIds,
+                    nextCursor: cursor, loaded: true,
                     parentRevision: Math.max(previousWindow.parentRevision ?? 0, parentRevision),
                 };
                 const nextWindow = sameStrictJsonValue(previousWindow, candidateWindow) ? previousWindow : candidateWindow;

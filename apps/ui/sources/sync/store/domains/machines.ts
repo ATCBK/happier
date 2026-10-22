@@ -27,7 +27,8 @@ import {
     scheduleMachineDisplayWarmCacheSave,
     scheduleMachineListDisplayWarmCacheSave,
 } from '../../domains/state/machineDisplayWarmCacheWriter';
-import { areStoredMachineSemanticsEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
+import { areStoredMachinesEqual, areStoredMachineSemanticsEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
+import { areSessionValuesDeepEqual } from './areStoredSessionsEqual';
 import { applyWorkspaceSyncRuntimeEvent } from '../../domains/sessionHandoff/applyWorkspaceSyncRuntimeEvent';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -156,20 +157,41 @@ function retainMachinePresenceForHeartbeat(
 }
 
 function retainMachineForPresenceOnly(previous: Machine | undefined, next: Machine): Machine {
-    if (!previous || !areStoredMachineSemanticsEqual(previous, next)) return next;
-    previous.updatedAt = next.updatedAt;
-    previous.activeAt = next.activeAt;
-    return previous;
+    if (!previous) return next;
+    if (areStoredMachineSemanticsEqual(previous, next)) {
+        previous.updatedAt = next.updatedAt;
+        previous.activeAt = next.activeAt;
+        return previous;
+    }
+    let retained = next;
+    const retainField = <K extends keyof Machine>(key: K) => {
+        if (previous[key] === next[key] || !areSessionValuesDeepEqual(previous[key], next[key])) return;
+        if (retained === next) retained = { ...next };
+        retained[key] = previous[key];
+    };
+    for (const key of ['metadata', 'daemonState', 'availability', 'access', 'keyBasis', 'operationProtocolCapabilities'] as const) {
+        retainField(key);
+    }
+    return retained;
 }
 
 function retainMachineDisplayForPresenceOnly(
     previous: MachineDisplayRenderable | undefined,
     next: MachineDisplayRenderable,
 ): MachineDisplayRenderable {
-    if (!previous || !areMachineDisplaySemanticsEqual(previous, next)) return next;
-    previous.updatedAt = next.updatedAt;
-    previous.activeAt = next.activeAt;
-    return previous;
+    if (!previous) return next;
+    if (areMachineDisplaySemanticsEqual(previous, next)) {
+        previous.updatedAt = next.updatedAt;
+        previous.activeAt = next.activeAt;
+        return previous;
+    }
+    const retained = {
+        ...next,
+        metadata: areSessionValuesDeepEqual(previous.metadata, next.metadata) ? previous.metadata : next.metadata,
+        ...(next.availability !== undefined ? { availability: areSessionValuesDeepEqual(previous.availability, next.availability) ? previous.availability : next.availability } : {}),
+        ...(next.access !== undefined ? { access: areSessionValuesDeepEqual(previous.access, next.access) ? previous.access : next.access } : {}),
+    };
+    return retained;
 }
 
 function preserveNewestMachinePresence<T extends MachinePresence>(
@@ -256,6 +278,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 if (!scope || !areServerProfileIdentifiersEquivalent(scope.serverId, sourceServerId)
                     || scope.accountId !== sourceAccountId) return;
             }
+            const changedMachineIds = new Set<string>();
             set((state) => {
                 const shouldUpdateActiveProjection = !sourceServerId || areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId);
                 const currentScopedMachines = sourceServerId
@@ -266,6 +289,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 const currentMachineRecords = Array.isArray(currentScopedMachines)
                     ? currentScopedMachines
                     : shouldUpdateActiveProjection ? Object.values(state.machines) : [];
+                const currentMachineById = new Map(currentMachineRecords.map(machine => [machine.id, machine]));
                 const incomingIds = new Set(machines.map((machine) => machine.id));
                 const incomingMachines = replace
                     ? [...machines, ...currentMachineRecords.filter((machine) => (
@@ -274,10 +298,17 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     : machines;
                 const normalizedMachines = incomingMachines.map((machine) => preserveNewestMachinePresence(machine, [
                     Array.isArray(currentScopedMachines)
-                        ? currentScopedMachines.find((current) => current.id === machine.id)
+                        ? currentMachineById.get(machine.id)
                         : null,
                     shouldUpdateActiveProjection ? state.machines[machine.id] : null,
                 ]));
+                for (const machine of normalizedMachines) {
+                    if (!areStoredMachinesEqual(currentMachineById.get(machine.id), machine)) changedMachineIds.add(machine.id);
+                }
+                if (replace) {
+                    const retainedIds = new Set(normalizedMachines.map(machine => machine.id));
+                    for (const id of currentMachineById.keys()) if (!retainedIds.has(id)) changedMachineIds.add(id);
+                }
                 let machinePresenceByServerId = state.machinePresenceByServerId;
                 let machinePresenceById = state.machinePresenceById;
                 if (sourceServerId) {
@@ -322,7 +353,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 const scopedMachinesWithAdvancedDaemonState = normalizedMachines.filter((machine) => (
                     hasMachineDaemonStateAdvanced(
                         Array.isArray(currentScopedMachines)
-                            ? currentScopedMachines.find((current) => current.id === machine.id)
+                            ? currentMachineById.get(machine.id)
                             : undefined,
                         machine,
                     )
@@ -335,7 +366,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         });
                     }
                     const previous = Array.isArray(currentScopedMachines)
-                        ? currentScopedMachines.find((current) => current.id === machine.id)
+                        ? currentMachineById.get(machine.id)
                         : shouldUpdateActiveProjection ? state.machines[machine.id] : undefined;
                     if (sourceServerId && hasMachineContributionRegistryProjectionChanged(previous, machine)) {
                         publishMachineContributionRegistryProjectionInvalidation({
@@ -515,8 +546,8 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                 }
                 return nextState;
             });
-            if (sourceServerId && machineUpdateObservers.size > 0) {
-                const machineIds = machines.map(machine => machine.id);
+            if (sourceServerId && machineUpdateObservers.size > 0 && changedMachineIds.size > 0) {
+                const machineIds = [...changedMachineIds];
                 for (const observer of [...machineUpdateObservers]) observer(sourceServerId, machineIds);
             }
         },

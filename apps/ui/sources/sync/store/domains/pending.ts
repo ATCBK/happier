@@ -5,6 +5,7 @@ import { shouldPreservePendingProjectionAfterCommittedUserLocalId } from '../../
 import { isPendingMessageForRecipient } from '../../domains/pending/pendingMessageRecipient';
 
 import type { StoreGet, StoreSet } from './_shared';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type SessionPending = {
     messages: PendingMessage[];
@@ -168,29 +169,13 @@ function isLocallyOwnedUncommittedOutboundProjection<S extends PendingDomainDepe
     return collectCommittedUserLocalIds(state, sessionId, new Set([localId])).size === 0;
 }
 
-function arePendingValuesEqual(left: unknown, right: unknown): boolean {
-    if (Object.is(left, right)) return true;
-    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
-    if (Array.isArray(left) || Array.isArray(right)) {
-        if (!Array.isArray(left) || !Array.isArray(right)) return false;
-        if (left.length !== right.length) return false;
-        return left.every((value, index) => arePendingValuesEqual(value, right[index]));
-    }
-    const leftRecord = left as Record<string, unknown>;
-    const rightRecord = right as Record<string, unknown>;
-    const leftKeys = Object.keys(leftRecord);
-    const rightKeys = Object.keys(rightRecord);
-    if (leftKeys.length !== rightKeys.length) return false;
-    return leftKeys.every((key) => (
-        Object.prototype.hasOwnProperty.call(rightRecord, key)
-        && arePendingValuesEqual(leftRecord[key], rightRecord[key])
-    ));
-}
-
-function arePendingMessageListsEqual<T>(left: readonly T[], right: readonly T[]): boolean {
-    if (left === right) return true;
-    if (left.length !== right.length) return false;
-    return left.every((message, index) => arePendingValuesEqual(message, right[index]));
+function reconcilePendingMessages<T extends { id: string }>(previous: T[], incoming: T[]): T[] {
+    if (sameStrictJsonValue(previous, incoming)) return previous;
+    const byId = new Map(previous.map(message => [message.id, message]));
+    return incoming.map(message => {
+        const known = byId.get(message.id);
+        return known && sameStrictJsonValue(known, message) ? known : message;
+    });
 }
 
 function replacePendingBucket<S extends PendingDomain & PendingDomainDependencies>(
@@ -211,12 +196,8 @@ function replacePendingBucket<S extends PendingDomain & PendingDomainDependencie
     const existing = state.sessionPending[sessionId];
     const previousMessages = existing?.messages ?? [];
     const previousDiscarded = existing?.discarded ?? [];
-    const nextMessages = arePendingMessageListsEqual(previousMessages, filteredMessages)
-        ? previousMessages
-        : filteredMessages;
-    const nextDiscarded = arePendingMessageListsEqual(previousDiscarded, snapshot.discarded)
-        ? previousDiscarded
-        : snapshot.discarded;
+    const nextMessages = reconcilePendingMessages(previousMessages, filteredMessages);
+    const nextDiscarded = reconcilePendingMessages(previousDiscarded, snapshot.discarded);
     if (
         existing
         && nextMessages === previousMessages
@@ -328,7 +309,7 @@ export function createPendingDomain<S extends PendingDomain & PendingDomainDepen
             }
             const existing = state.sessionPending[sessionId] ?? { messages: [], discarded: [], isLoaded: false };
             const idx = existing.messages.findIndex((m) => m.id === message.id);
-            if (idx >= 0 && arePendingValuesEqual(existing.messages[idx], message)) {
+            if (idx >= 0 && sameStrictJsonValue(existing.messages[idx], message)) {
                 return state;
             }
             const next = idx >= 0

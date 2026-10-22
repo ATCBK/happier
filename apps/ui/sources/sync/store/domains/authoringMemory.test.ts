@@ -5,6 +5,32 @@ import type { AuthoringMemoryValueV1 } from '@happier-dev/protocol';
 import { createAuthoringMemoryDomain, type AuthoringMemoryDomain } from './authoringMemory';
 
 describe('Account authoring-memory materialization', () => {
+    it('retains unchanged path and stored selection rows while their siblings change', () => {
+        const store = createStore<AuthoringMemoryDomain>()((set, get) => createAuthoringMemoryDomain({ set, get }));
+        const memory = { recentMachinePaths: [{ machineId: 'a', path: '/a' }, { machineId: 'b', path: '/b' }],
+            lastEngineSelectionsByScopeV1: { 'home:backend:first': { v: 9, value: 1 }, 'home:backend:second': { v: 9, value: 1 } } };
+        store.getState().applyAuthoringMemory(memory);
+        const before = store.getState().authoringMemory;
+        const changed = structuredClone(memory);
+        changed.recentMachinePaths[1]!.path = '/changed';
+        changed.lastEngineSelectionsByScopeV1['home:backend:second'].value = 2;
+        store.getState().applyAuthoringMemory(changed);
+        expect(store.getState().authoringMemory.recentMachinePaths[0]).toBe(before.recentMachinePaths[0]);
+        expect(store.getState().authoringMemory.lastEngineSelectionsByScopeV1['home:backend:first'])
+            .toBe(before.lastEngineSelectionsByScopeV1['home:backend:first']);
+    });
+    it('does not republish defaults after clearing the last selected profile', () => {
+        const store = createStore<AuthoringMemoryDomain>()((set, get) => createAuthoringMemoryDomain({ set, get }));
+        store.getState().applyAuthoringMemory({ lastUsedProfile: 'profile' });
+        store.getState().applyAuthoringMemory({ lastUsedProfile: null });
+        const before = store.getState();
+        let notifications = 0;
+        const unsubscribe = store.subscribe(() => notifications++);
+        store.getState().resetAuthoringMemory();
+        expect(store.getState()).toBe(before);
+        expect(notifications).toBe(0);
+        unsubscribe();
+    });
     it('retains each unchanged Workflow target when another Workflow target changes', () => {
         const store = createStore<AuthoringMemoryDomain>()((set, get) => createAuthoringMemoryDomain({ set, get }));
         const first = { machineId: 'machine-a', directory: '/first' };

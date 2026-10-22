@@ -91,6 +91,40 @@ const eventDefinitionDetail = AutomationDefinitionDetailSchema.parse({
     },
 });
 
+describe('automation store publication', () => {
+    it('keeps equal definition and Run refreshes quiet while retaining traversal currentness', () => {
+        const store = createStore<State>()((set, get) => ({ profileScope,
+            ...createWorkflowRunsDomain<State>({ set, get }), ...createAutomationsDomain<State>({ set, get }) }));
+        const definition = createAutomationDefinitionSummary(eventDefinitionSummary);
+        const run = createAutomationRunFixture({ id: 'run-publication', automationId: definition.id });
+        store.getState().applyAutomations([definition], null);
+        store.getState().setAutomationRuns(definition.id, [run], null);
+        const before = store.getState();
+        let notifications = 0;
+        const unsubscribe = store.subscribe(() => notifications++);
+        store.getState().applyAutomations([structuredClone(definition)], null);
+        store.getState().upsertAutomation(structuredClone(definition));
+        store.getState().removeAutomation('absent');
+        store.getState().setAutomationRuns(definition.id, [structuredClone(run)], null);
+        store.getState().refreshAutomationRunsWindow(definition.id, [structuredClone(run)], null);
+        store.getState().upsertAutomationRun(structuredClone(run));
+        expect(store.getState()).toBe(before);
+        expect(notifications).toBe(0);
+
+        const firstToken = store.getState().applyAutomations([structuredClone(definition)], 'next');
+        const traversal = store.getState();
+        const secondToken = store.getState().applyAutomations([structuredClone(definition)], 'next');
+        expect(store.getState()).toBe(traversal);
+        expect(firstToken).not.toBe(secondToken);
+        expect(store.getState().appendAutomations('next', firstToken!, [], null)).toBe(false);
+        expect(store.getState().appendAutomations('next', secondToken!, [], null)).toBe(true);
+        expect(store.getState().automations[definition.id]).toBe(before.automations[definition.id]);
+        store.getState().upsertAutomation({ ...definition, updatedAt: definition.updatedAt + 1 });
+        expect(store.getState().automations[definition.id]?.updatedAt).toBe(definition.updatedAt + 1);
+        unsubscribe();
+    });
+});
+
 function createHarness(): {
     state: State;
     get: () => State;
