@@ -63,12 +63,14 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
     }, [onClose, onConfirm]);
 
     useEffect(() => {
-        // Auto-focus the input when modal opens
+        // Auto-focus the input when modal opens. A prompt closed before the timer fires must not
+        // take focus back from the control it returns focus to.
+        if (!visible) return;
         const timer = setTimeout(() => {
             inputRef.current?.focus();
         }, 100);
         return () => clearTimeout(timer);
-    }, []);
+    }, [visible]);
 
     const handleCancel = () => {
         resolveAndClose(null);
