@@ -140,9 +140,8 @@ describe('resolveWorkspaceFileUploadTarget', () => {
         const stagedPath = join(workspace, '.staged-upload');
         const destinationPath = join(workspace, 'nested', 'file.txt');
         writeFileSync(stagedPath, 'hello\n', 'utf8');
-        // No-overwrite publication copies exclusively to the absent destination:
-        // source cleanup fails, then removing the newly published destination fails.
-        // Overwrite uses the guarded atomic writer's private staging path instead.
+        // Overwrite stages into a private sibling before atomic publication.
+        // A source-cleanup failure must retain the upload without publishing it.
         expect(existsSync(destinationPath)).toBe(false);
         let faultArmed = true;
 
@@ -150,7 +149,7 @@ describe('resolveWorkspaceFileUploadTarget', () => {
             workingDirectory: workspace,
             path: 'nested/file.txt',
             sizeBytes: 6,
-            overwrite: false,
+            overwrite: true,
             finalizeFileOperations: ({ uploadId, tempPath, destPath }) => {
                 if (!faultArmed || uploadId !== 'upload-1' || tempPath !== stagedPath || destPath !== destinationPath) {
                     return null;
@@ -159,7 +158,7 @@ describe('resolveWorkspaceFileUploadTarget', () => {
                 return {
                     copyFile,
                     rename: async (from: string, to: string) => {
-                        if (from === stagedPath && to === destinationPath) {
+                        if (from === stagedPath) {
                             const error = new Error('testkit cross-device boundary') as NodeJS.ErrnoException;
                             error.code = 'EXDEV';
                             throw error;
@@ -167,7 +166,7 @@ describe('resolveWorkspaceFileUploadTarget', () => {
                         await rename(from, to);
                     },
                     rm: async (path: string, options?: Parameters<typeof rm>[1]) => {
-                        if (path === stagedPath || path === destinationPath) {
+                        if (path === stagedPath) {
                             const error = new Error('testkit recovery boundary') as NodeJS.ErrnoException;
                             error.code = 'EPERM';
                             throw error;
@@ -191,11 +190,11 @@ describe('resolveWorkspaceFileUploadTarget', () => {
             sha256: 'hash-1',
         })).resolves.toMatchObject({
             success: false,
-            errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
+            errorCode: 'file_replace_failed',
             keepSession: true,
         });
         expect(readFileSync(stagedPath, 'utf8')).toBe('hello\n');
-        expect(readFileSync(destinationPath, 'utf8')).toBe('hello\n');
+        expect(existsSync(destinationPath)).toBe(false);
 
         await expect(finalizeUpload({
             uploadId: 'upload-1',
