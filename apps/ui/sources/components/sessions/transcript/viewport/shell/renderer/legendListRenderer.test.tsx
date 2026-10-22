@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
-import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
+import { createLayoutChangeEvent, createNativeScrollEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
 import { createWebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
 import type { WebScrollMovementFact } from '@/components/sessions/transcript/scroll/resolveWebGenuineScrollMovement';
 import { resolveRendererAtEndViewportChange } from '@/components/sessions/transcript/scroll/rendererAtEndViewportChange';
@@ -6427,6 +6427,69 @@ describe('Legend transcript renderer adapter', () => {
         expect(shellRef.getFirstVisibleIndex?.()).toBe(2);
         expect(shellRef.getLayout?.(2)).toEqual({ x: 0, y: 0, width: 0, height: 100 });
         expect(shellRef.getLayout?.(0)).toEqual({ x: 0, y: 200, width: 0, height: 100 });
+    });
+
+    it('retains a native reading anchor at gesture settlement without measuring the buffered window on every scroll frame', async () => {
+        setPlatformOS('ios');
+        const { legendListRenderer } = await import('./legendListRenderer');
+        const Renderer = legendListRenderer.Component;
+        const lifetime = {};
+        const measurements = vi.fn<(role: string) => void>();
+        let unmountAfterMomentum: () => void = () => undefined;
+        const measureNode = (role: string, height: number, pageY: number) => ({
+            measure: (callback: (x: number, y: number, width: number, height: number, pageX: number, pageY: number) => void) => {
+                measurements(role);
+                callback(0, 0, 320, height, 0, pageY);
+            },
+        });
+        const rowNodes = [measureNode('older-row', 300, -300), measureNode('reading-row', 500, 50)];
+        legendStateOverride = {
+            elementAtIndex: (index: number) => rowNodes[index],
+            contentLength: 4_000, scrollLength: 600, scroll: 480,
+            isAtEnd: false, isNearEnd: false, isWithinMaintainScrollAtEndThreshold: false,
+            start: 0, startBuffered: 0, end: 1, endBuffered: 1,
+        };
+        const render = () => <Renderer
+            webDomObservation={mountedWebDomObservation}
+            viewportRetention={lifetime} dataKey="native-retained-reader"
+            data={[{ id: 'newest' }, { id: 'reading' }, { id: 'oldest' }]}
+            keyExtractor={(item: { id: string }) => item.id}
+            renderItem={({ item }: { item: { id: string } }) => React.createElement('Row', { id: item.id })}
+            frame={resolveMainTranscriptListShellFrame({ legendInitialScrollAtEnd: false, platformOS: 'ios' })}
+            onScrollEndDrag={() => expect(measurements.mock.calls).toHaveLength(4)}
+            onMomentumScrollEnd={() => {
+                // A consumer may navigate immediately: capture must precede its callback.
+                expect(measurements.mock.calls).toHaveLength(4);
+                unmountAfterMomentum();
+            }}
+        />;
+        const screen = await renderScreen(render());
+        unmountAfterMomentum = () => screen.tree.unmount();
+        const contentHost = measureNode('content', 4_000, -1_000);
+        const scrollHost = measureNode('viewport', 600, 100);
+        assignedLegendRef.getNativeScrollRef.mockReturnValue({
+            getInnerViewRef: () => contentHost, getNativeScrollRef: () => scrollHost,
+        });
+        const event = (y: number) => createNativeScrollEvent({
+            contentInset: { top: 0, right: 0, bottom: 0, left: 0 },
+            contentOffset: { x: 0, y }, contentSize: { width: 320, height: 4_000 },
+            layoutMeasurement: { width: 320, height: 600 }, zoomScale: 1,
+        });
+        capturedLegendListProps.onScrollBeginDrag(event(480));
+        for (let frame = 0; frame < 12; frame += 1) capturedLegendListProps.onScroll(event(481 + frame));
+        expect(measurements.mock.calls).toEqual([]);
+        capturedLegendListProps.onScrollEndDrag(event(492));
+        expect(measurements.mock.calls.map(([role]) => role)).toEqual(['content', 'viewport', 'older-row', 'reading-row']);
+        measurements.mockClear();
+        capturedLegendListProps.onMomentumScrollBegin(event(492));
+        for (let frame = 0; frame < 12; frame += 1) capturedLegendListProps.onScroll(event(493 + frame));
+        expect(measurements.mock.calls).toEqual([]);
+        capturedLegendListProps.onMomentumScrollEnd(event(504));
+        expect(measurements.mock.calls.map(([role]) => role)).toEqual(['content', 'viewport', 'older-row', 'reading-row']);
+        await screen.unmount();
+        await renderScreen(render());
+        expect(capturedLegendListProps.initialScrollAtEnd).toBe(false);
+        expect(capturedLegendListProps.initialScrollIndex).toEqual({ index: 1, viewOffset: -50 });
     });
 
     it('captures one native physical viewport fact with source-order identity and invalidates it at a command boundary', async () => {

@@ -966,7 +966,9 @@ function LegendListTranscriptRendererInner<TItem>(
         }
         emitRendererAtEndState({ offsetMoved, pendingCause: cause, webMovementFact });
         tryAcknowledgeInitialPresentationSettlement();
-        captureRetainedViewportRef.current();
+        // Web capture is two synchronous DOM reads. Native capture observes the buffered
+        // window through Fabric and belongs to gesture settlement, not every scroll frame.
+        if (isWebFrame) captureRetainedViewportRef.current();
         if (webMovementFact) {
             props.onScroll?.(event, webMovementFact);
         } else {
@@ -1033,8 +1035,9 @@ function LegendListTranscriptRendererInner<TItem>(
             lastUserInteractionAtMsRef.current = Date.now();
             userScrollIntent.setGestureActive({ active: false, atMs: Date.now(), gesture: 'drag' });
         }
+        if (!isWebFrame) captureRetainedViewportRef.current();
         props.onScrollEndDrag?.(event);
-    }, [props.onScrollEndDrag, userScrollIntent]);
+    }, [isWebFrame, props.onScrollEndDrag, userScrollIntent]);
 
     const handleLegendMomentumScrollBegin = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const nowMs = Date.now();
@@ -1053,8 +1056,9 @@ function LegendListTranscriptRendererInner<TItem>(
             lastUserInteractionAtMsRef.current = Date.now();
             userScrollIntent.setGestureActive({ active: false, atMs: Date.now(), gesture: 'momentum' });
         }
+        if (!isWebFrame) captureRetainedViewportRef.current();
         props.onMomentumScrollEnd?.(event);
-    }, [props.onMomentumScrollEnd, userScrollIntent]);
+    }, [isWebFrame, props.onMomentumScrollEnd, userScrollIntent]);
 
     const handleLegendTouchStart = React.useCallback((event: unknown) => {
         if (isWebFrame) {
