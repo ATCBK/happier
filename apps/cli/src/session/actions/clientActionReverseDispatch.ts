@@ -35,13 +35,13 @@ export function createClientActionReverseDispatcher(
       ok: false as const, errorCode, error: errorCode,
     });
     const client = getMachineClient();
-    // View operations require their addressed Session. Account-wide navigation
-    // and search use the generic client room independently of that view.
-    const accountUiAction = actionId === 'session.pending.next' || actionId === 'search.conversations';
+    // Session callers choose the App viewing their Session even when the
+    // mounted operation itself searches or navigates across the Account.
     const sessionUiAction = actionId === 'ui.find' || actionId === 'ui.prompts.picker.open'
+      || actionId === 'session.pending.next' || actionId === 'search.conversations'
       || actionId === 'composer.transaction.apply'
       || actionId === 'composer.attachments.pick';
-    const requireSingleAnsweringClient = sessionUiAction || accountUiAction || actionId === 'ui.current_context.read';
+    const requireSingleAnsweringClient = sessionUiAction || actionId === 'ui.current_context.read';
     const composerRef = input && typeof input === 'object'
       ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
     const targetSessionId = composerRef

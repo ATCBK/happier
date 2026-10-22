@@ -99,11 +99,10 @@ describe('client Action reverse delivery', () => {
     { actionId: 'session.pending.next', input: {}, result: { status: 'none' } },
     { actionId: 'search.conversations', input: { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' } },
       result: { hits: [], machines: [] } },
-  ] as const)('delivers account-scoped $actionId without requiring the invoking Session view', async ({ actionId, input, result }) => {
+  ] as const)('delivers $actionId to the invoking Session view despite stale advertisements', async ({ actionId, input, result }) => {
     const delivered: string[] = [];
     const dispatch = createClientActionReverseDispatcher(() => ({
-      // A stale positive Session advertisement must not bind Account-wide work.
-      hasConnectedClientRpcHandler: () => true,
+      hasConnectedClientRpcHandler: () => false,
       callConnectedClientRpc: async (method, payload, options) => {
         delivered.push(method);
         expect(UiActionDispatchRequestV1Schema.parse(payload).context.defaultSessionId).toBe('invoking-session');
@@ -114,7 +113,7 @@ describe('client Action reverse delivery', () => {
     }));
     expect(await dispatch({ actionId, input, context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
       .toEqual({ ok: true, result });
-    expect(delivered).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+    expect(delivered).toEqual([`${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify('invoking-session'))}`]);
   });
   it('lets the authenticated server select a connected client after a missed availability advertisement', async () => {
     const methods: string[] = [];
@@ -129,7 +128,7 @@ describe('client Action reverse delivery', () => {
     expect(await dispatch({ actionId: 'session.pending.next', input: {},
       context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
       .toEqual({ ok: true, result: { status: 'none' } });
-    expect(methods).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+    expect(methods).toEqual([`${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify('invoking-session'))}`]);
   });
   it('keeps current UI context global when a Session-originated Agent carries its default Session', async () => {
     const method = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`;

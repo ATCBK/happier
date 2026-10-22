@@ -101,7 +101,7 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
-  it('delivers empty Next and All-Machines search through a connected app without the invoking Session view or an availability hint', async () => {
+  it('delivers unbound empty Next and All-Machines search through a connected app without an availability hint', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { NextPendingNavigationHost } = await import('@/components/sessions/pendingNavigation/NextPendingNavigationHost');
     const { KeyboardShortcutProvider } = await import('@/keyboard/KeyboardShortcutProvider');
@@ -142,7 +142,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       },
     }));
     const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
-    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'unviewed-carrier' } as const;
+    const context = { surface: 'mcp', authority: 'account_automation', defaultSessionId: 'cli-global' } as const;
     expect(await caller.execute('session.pending.next', {}, context))
       .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
     const runtime = await renderScreen(React.createElement(KeyboardShortcutProvider, {},
@@ -157,7 +157,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         { machineId: machine.id, status: 'partial' }, { machineId: offline.id, status: 'offline' },
       ]) } });
       expect(await caller.execute('ui.find', { op: 'read' }, context))
-        .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+        .toEqual({ ok: true, result: { status: 'noMountedSurface' } });
     } finally { await runtime.unmount(); }
     expect(await caller.execute('session.pending.next', {}, context))
       .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
@@ -259,7 +259,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         .toMatchObject({ execution: { ok: false, errorCode: 'target_unavailable' } });
     } finally { pendingNavigation.resolve({ status: 'none' }); await screen.unmount(); }
   });
-  it('keeps Find, picker and composer edits on the client viewing the invoking Session', async () => {
+  it('keeps Agent Next, search, Find, picker and composer on the viewed Session with unrelated generic clients', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
     const { setFocusedSessionId } = await import('@/sync/domains/session/sessionSurfaceVisibility');
@@ -285,8 +285,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
         if (event === SOCKET_RPC_EVENTS.UNREGISTER) {
           registered.delete(payload.method);
-          // Next owns the generic receiver, not the retiring Session view.
-          if (payload.method === `${machine.id}:${RPC_METHODS.UI_ACTION_EXECUTE}`) nextReceiptOrder.push('unregistered');
+          if (payload.method === `${machine.id}:${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify(sessionId))}`) nextReceiptOrder.push('unregistered');
         }
       }
       return socket;
@@ -313,10 +312,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     }));
     let foreignEffects = 0;
     let alsoViewing = false;
-    let foreignConnected = true;
     const foreign = { id: 'a-foreign-client', timeout: () => ({ emitWithAck: async () => {
       foreignEffects++; return { v: 1, execution: { ok: true, result: { status: 'noMountedSurface' } } };
     } }) };
+    const unrelated = { ...foreign, id: 'b-unrelated-generic-client' };
     const viewed = { id: 'z-viewed-client', timeout: () => ({ emitWithAck: async (_event: string, payload: unknown) => {
       if (!payload || typeof payload !== 'object' || !('method' in payload) || !('params' in payload)) throw new Error('Malformed Socket request');
       return await new Promise<unknown>(resolve => {
@@ -327,11 +326,12 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       });
     } }) };
     const reverse = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE || registered.has(`${machine.id}:${method}`),
+      hasConnectedClientRpcHandler: () => false,
       callConnectedClientRpc: async (method, payload, options) => {
         // Only Socket.IO is replaced. Use the real server selection owner over the
-        // two clients' actual method memberships, then the actual app receiver.
-        const targets = [...((method === RPC_METHODS.UI_ACTION_EXECUTE && foreignConnected) || alsoViewing ? [foreign] : []),
+        // clients' actual method memberships, then the actual app receiver.
+        // Two unrelated generic clients must neither receive nor block this call.
+        const targets = [...(method === RPC_METHODS.UI_ACTION_EXECUTE ? [foreign, unrelated] : alsoViewing ? [foreign] : []),
           ...(registered.has(`${machine.id}:${method}`) ? [viewed] : [])];
         const selection = selectRpcTarget({ targets, answeringClient: options.answeringClient });
         if (selection.type === 'ambiguous') return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
@@ -363,17 +363,20 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         transaction: { expectedRevision: draft.revision, operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'needle ' }] } }, context))
         .toEqual({ ok: true, result: { status: 'applied', revision: 2 } });
       expect(draft.text).toBe('needle draft');
+      const searchInput = { query: { v: 1 as const, query: 'needle', scope: { type: 'global' as const }, mode: 'deep' as const }, mode: 'indexed' as const };
+      expect(await caller.execute('search.conversations', searchInput, context))
+        .toMatchObject({ ok: true, result: { hits: [], machines: [{ machineId: machine.id, status: 'partial' }] } });
       expect(foreignEffects).toBe(0);
       alsoViewing = true;
       expect(await caller.execute('ui.find', { op: 'step', direction: -1 }, context))
         .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
       expect(model.status).toMatchObject({ current: 2 });
-      expect(foreignEffects).toBe(0);
-      alsoViewing = false;
       expect(await caller.execute('session.pending.next', {}, context))
         .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+      expect(await caller.execute('search.conversations', searchInput, context))
+        .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
       expect(foreignEffects).toBe(0);
-      foreignConnected = false;
+      alsoViewing = false;
       // Secure storage is an external boundary. A delivered request can fail
       // there before its mounted owner runs; retain a content-free cause in
       // the receipt instead of erasing it as a generic Action failure.
@@ -397,6 +400,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       await act(async () => { setFocusedSessionId(null); });
       expect(await caller.execute('ui.find', { op: 'read' }, context))
         .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+      expect(await caller.execute('session.pending.next', {}, context))
+        .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+      expect(await caller.execute('search.conversations', searchInput, context))
+        .toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
       expect(foreignEffects).toBe(0);
     } finally { await runtime.unmount(); }
     expect(await caller.execute('ui.find', { op: 'read' }, context)).toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
