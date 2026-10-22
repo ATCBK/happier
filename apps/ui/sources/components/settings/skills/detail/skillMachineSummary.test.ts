@@ -11,7 +11,7 @@ function entry(name: string, offline: boolean, delivered: string[] = [], pending
   for (const agentId of delivered) facts.set(agentId, { kind: 'delivered' });
   for (const agentId of pending) facts.set(agentId, { kind: 'pending' });
   return {
-    machine: { machineId: name, platform: 'posix', agentIds: [...delivered, ...pending], name, offline, lastSeenAt: null },
+    machine: { machineId: name, platform: 'posix', agentIds: [...delivered, ...pending], name, online: !offline, offline, lastSeenAt: null },
     skillAgents: [...delivered, ...pending], cannotLoad: [], facts, projectedAgents: [],
   };
 }

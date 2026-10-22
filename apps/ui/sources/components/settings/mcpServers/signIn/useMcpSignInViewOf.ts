@@ -5,7 +5,7 @@ import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProj
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
 
-import { findMcpSignInGrant, mcpSignInGrantView, type McpSignInView } from './mcpSignInGrantView';
+import { aggregateMcpMachineOnline, findMcpSignInGrant, mcpSignInGrantView, type McpSignInView } from './mcpSignInGrantView';
 import { useMcpSignInGrantDiagnostics } from './useMcpSignInGrantDiagnostics';
 
 /**
@@ -21,10 +21,10 @@ export function useMcpSignInViewOf(
   const diagnostics = useMcpSignInGrantDiagnostics(
     grants,
     scope,
-    machines.find((machine) => !machine.offline)?.machineId ?? machines[0]?.machineId ?? null,
+    machines.find((machine) => machine.online)?.machineId ?? machines[0]?.machineId ?? null,
   );
   return React.useMemo(() => {
-    const anyMachineOnline = machines.some((machine) => !machine.offline);
+    const anyMachineOnline = aggregateMcpMachineOnline(machines);
     return (serverId) => {
       const server = settings.servers.find((candidate) => candidate.id === serverId);
       return server

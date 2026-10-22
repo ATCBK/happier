@@ -18,6 +18,7 @@ import {
   mcpServerRoute,
 } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
 import {
+  aggregateMcpMachineOnline,
   findMcpSignInGrant,
   mcpSignInFact,
   mcpSignInGrantView,
@@ -274,7 +275,7 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
   // MCP servers: the Account's catalog and the plugins' servers, each with the sign-in / key status its owner reads.
   const grants = getStorage()((state) => state.profile.connectedAccountsV4);
   const diagnosticMachine =
-    coveredMachines.find((machine) => !machine.offline)?.machineId ??
+    coveredMachines.find((machine) => machine.online)?.machineId ??
     coveredMachines[0]?.machineId ??
     null;
   const diagnostics = useMcpSignInGrantDiagnostics(
@@ -283,7 +284,7 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     diagnosticMachine,
   );
   const savedSecretCatalog = useSavedSecretCatalog({ scope });
-  const anyOnline = coveredMachines.some((machine) => !machine.offline);
+  const anyOnline = aggregateMcpMachineOnline(coveredMachines);
   const mcpRows = React.useMemo<readonly ScopeRowData[]>(() => {
     const bindingsOf = (serverId: string) =>
       settings.bindings.filter((binding) => binding.serverId === serverId);

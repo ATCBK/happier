@@ -75,7 +75,7 @@ export function useMcpServerDetail(
 ): {
   reach: ReturnType<typeof useReachRules>;
   projection: ReturnType<typeof useReachProjection>;
-  placeMachines: { machineId: string; name: string; online: boolean }[];
+  placeMachines: { machineId: string; name: string; online: boolean | null }[];
   projects: ReturnType<typeof useWhereItsOnNames>['projects'];
   agentIds: string[];
   names: ReturnType<typeof useWhereItsOnNames>['names'];
@@ -105,7 +105,7 @@ export function useMcpServerDetail(
       machines.map((machine) => ({
         machineId: machine.machineId,
         name: machine.name ?? machine.machineId,
-        online: !machine.offline,
+        online: machine.online,
       })),
     [machines],
   );
@@ -134,7 +134,7 @@ export function useMcpServerDetail(
       .map((machine) => ({
         machineId: machine.machineId,
         name: machine.name ?? machine.machineId,
-        online: !machine.offline,
+        online: machine.online,
         lastSeenAt: machine.lastSeenAt,
         ...(machine.lastSeenAt
           ? { lastSeen: formatDay(machine.lastSeenAt) }
@@ -384,9 +384,10 @@ export function McpServerMachinesAndDetails(
       machineName: machine.name,
       deviceIcon: 'desktop',
       who,
-      offline: !machine.online,
+      offline: machine.online === false,
       status: rowStatus(detail.machineStatuses.get(machine.machineId)),
-      ...(!machine.online && machine.lastSeenAt
+      ...(machine.online === null ? { note: t('common.unknown') } : {}),
+      ...(machine.online === false && machine.lastSeenAt
         ? {
             note: t('capabilities.mcp.detail.lastKnown', {
               time: formatDay(machine.lastSeenAt),
@@ -398,7 +399,8 @@ export function McpServerMachinesAndDetails(
   const counts = { ready: 0, problems: 0, offline: 0, unchecked: 0 };
   for (const machine of detail.onMachines) {
     const test = detail.tests.results[machine.machineId];
-    if (!machine.online) counts.offline += 1;
+    if (machine.online === null) continue;
+    if (machine.online === false) counts.offline += 1;
     else if (!test) counts.unchecked += 1;
     else if (test.ok) counts.ready += 1;
     else counts.problems += 1;
@@ -418,6 +420,7 @@ export function McpServerMachinesAndDetails(
         description={t('capabilities.mcp.detail.machinesDescription')}
         rows={rows}
         summary={t('capabilities.mcp.detail.summary', counts)}
+        summaryNote={detail.onMachines.some(machine => machine.online === null) ? t('common.unknown') : undefined}
         emptyLabel={t('capabilities.mcp.detail.onNowhere')}
         defaultExpanded={rows.length > 0 && rows.length <= 6}
         sectionAction={{

@@ -228,7 +228,7 @@ export function buildSkillsReach(
       skillIds.push(item.skillId);
       for (const agent of enabled) machineAgents.add(agent.agentId);
     }
-    if (!machine.offline && skillIds.length > 0) {
+    if (machine.online === true && skillIds.length > 0) {
       onlineReachedMachineCount += 1;
       for (const id of skillIds) reached.add(id);
       for (const agentId of machineAgents)
@@ -246,11 +246,11 @@ export function buildSkillsReach(
   const supportedOnline = new Set<string>();
   const unsupported: string[] = [];
   for (const row of rows) {
-    if (row.machine.offline) continue;
+    if (row.machine.online !== true) continue;
     for (const agentId of row.supportedAgentIds) supportedOnline.add(agentId);
   }
   for (const row of rows) {
-    if (row.machine.offline) continue;
+    if (row.machine.online !== true) continue;
     for (const agentId of row.machine.agentIds)
       if (!supportedOnline.has(agentId) && !unsupported.includes(agentId))
         unsupported.push(agentId);
@@ -260,7 +260,7 @@ export function buildSkillsReach(
   // Each group keeps the store's order.
   // Offline machines a skill reaches (they catch up) come before offline ones it never reached.
   const rank = (row: SkillsReachMachine) =>
-    (row.machine.offline ? 2 : 0) + (row.skillIds.length > 0 ? 0 : 1);
+    (row.machine.online === true ? 0 : 2) + (row.skillIds.length > 0 ? 0 : 1);
   rows.sort(
     (a, b) =>
       rank(a) - rank(b) ||
@@ -272,10 +272,10 @@ export function buildSkillsReach(
     machines: rows,
     bodies: rows.map((row) => ({
       key: row.machine.machineId,
-      online: !row.machine.offline,
+      online: row.machine.online === true,
       dots: row.skillIds.map((skillId) => ({
         key: skillId,
-        tone: row.machine.offline ? 'quiet' : 'active',
+        tone: row.machine.online === true ? 'active' : 'quiet',
       })),
     })),
     reachingCount: reached.size,
@@ -286,7 +286,7 @@ export function buildSkillsReach(
       .map((row) => row.machine.machineId),
     unsupportedAgentIds: unsupported,
     onlineInventory: rows.some(
-      (row) => !row.machine.offline && row.machine.agentIds.length > 0,
+      (row) => row.machine.online === true && row.machine.agentIds.length > 0,
     ),
   };
 }
@@ -341,7 +341,7 @@ export function resolveSkillsPresent(
     if (on === 0) return { kind: 'none' };
     if (!reach.onlineInventory) return { kind: 'waiting', on };
     if (reach.unsupportedAgentIds.length > 0 && reach.machines.every(
-      (row) => row.machine.offline || row.supportedAgentIds.length === 0,
+      (row) => row.machine.online !== true || row.supportedAgentIds.length === 0,
     ))
       return { kind: 'unsupported', on, agentIds: reach.unsupportedAgentIds };
     return { kind: 'none' };

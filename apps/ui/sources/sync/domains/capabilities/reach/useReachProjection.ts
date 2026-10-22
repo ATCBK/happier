@@ -28,7 +28,7 @@ import {
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 
 export type ReachMachineProjection = Readonly<
-  ReachProjectionV1[number] & { offline: boolean; projectKey?: string; agentInventoryComplete?: boolean }
+  ReachProjectionV1[number] & { online: boolean | null; offline: boolean; projectKey?: string; agentInventoryComplete?: boolean }
 >;
 const empty: readonly ReachMachineProjection[] = Object.freeze([]);
 const emptyProjects: readonly Readonly<{ projectKey: string; name: string; machineCount: number }>[] = Object.freeze([]);
@@ -74,6 +74,8 @@ export type ReachMachine = Readonly<{
   agentDeclarationsById?: PluginProjectionV2['agentsById'] | null;
   /** Display name from the presence owner; null while unknown. */
   name: string | null;
+  /** null while this Home/Account has no current presence observation. */
+  online: boolean | null;
   offline: boolean;
   /** When an offline machine was last seen; null when online or unknown. */
   lastSeenAt: number | null;
@@ -159,6 +161,8 @@ export function useReachMachines(): Readonly<{
           agentInventoryComplete: inventory.complete,
           agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
           name: withMachineNameHint(presence[index]?.name ?? null, nameHints.get(machine.id)?.hint ?? null),
+          online: presence[index]?.reachability === 'reachable' ? true
+            : presence[index]?.reachability === 'unreachable' ? false : null,
           offline: presence[index]?.reachability === 'unreachable',
           lastSeenAt: presence[index]?.lastSeenAt ?? null,
         };
@@ -180,7 +184,7 @@ export function projectReachOnMachines(
   workspaceRefs: readonly WorkspaceRefV1[] = [],
 ): readonly ReachMachineProjection[] {
   const projected: ReachMachineProjection[] = projectReachForMachinesV1(rules, { projectKey, machines }).map(
-    (row, index) => ({ ...row, offline: machines[index]?.offline ?? false,
+    (row, index) => ({ ...row, online: machines[index]?.online ?? null, offline: machines[index]?.offline ?? false,
       agentInventoryComplete: machines[index]?.agentInventoryComplete }),
   );
   if (projectKey) return projected;
@@ -189,7 +193,7 @@ export function projectReachOnMachines(
     const machineIds = new Set(workspaceRefs.filter(ref => (ref.projectKey ?? ref.id) === key).map(ref => ref.machineId));
     const members = machines.filter(machine => machineIds.has(machine.machineId));
     projected.push(...projectReachForMachinesV1(rules, { projectKey: key, machines: members })
-      .map((row, index) => ({ ...row, projectKey: key, offline: members[index]?.offline ?? false,
+      .map((row, index) => ({ ...row, projectKey: key, online: members[index]?.online ?? null, offline: members[index]?.offline ?? false,
         agentInventoryComplete: members[index]?.agentInventoryComplete })));
   }
   return projected;

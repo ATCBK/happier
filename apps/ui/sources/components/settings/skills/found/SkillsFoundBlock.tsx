@@ -163,7 +163,7 @@ export const SkillsFoundBlock = React.memo(function SkillsFoundBlock(
                     : t('capabilities.skillsFound.add')
                 }
                 loading={busy}
-                disabled={busy || machine?.offline === true}
+                disabled={busy || machine?.online !== true}
                 onPress={() => void add(row)}
               />
             }

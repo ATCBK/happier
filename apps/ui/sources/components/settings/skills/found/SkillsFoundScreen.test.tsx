@@ -24,7 +24,7 @@ const result = SkillFoundListResultV1Schema.parse({ scannedAt: 123, roots: [], i
         happierInstalled: false, pluginOwned: name === 'plugin' ? { pluginName: 'review-kit' } : null })),
 ] });
 const machine = (machineId: string, offline = false): ReachMachine => ({ machineId, name: machineId,
-    platform: 'posix', agentIds: ['codex'], offline, lastSeenAt: offline ? 123 : null });
+    platform: 'posix', agentIds: ['codex'], online: !offline, offline, lastSeenAt: offline ? 123 : null });
 
 it('bulk-adds only addable native rows, retains their positions while settling, and offers plugin copy and masked Compare', async () => {
     const home = await createSkillsSurfaceHarness('https://skills-found-page.test');

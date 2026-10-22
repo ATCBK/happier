@@ -10,8 +10,8 @@ export function summarizeMachines(
   shown: readonly SkillMachineTruth[],
   agentName: (agentId: string) => string,
 ): Readonly<{ summary: string; note: string | undefined }> {
-  const online = shown.filter((entry) => !entry.machine.offline);
-  const offline = shown.length - online.length;
+  const online = shown.filter((entry) => entry.machine.online === true);
+  const offline = shown.filter((entry) => entry.machine.offline).length;
   const groups = new Map<string, { agents: string[]; machines: string[] }>();
   let pending = false;
   for (const entry of online) {
@@ -31,6 +31,8 @@ export function summarizeMachines(
   });
   if (clauses.length === 0 && online.length > 0)
     clauses.push(t(pending ? 'capabilities.skillDetail.machines.checking' : 'capabilities.skillDetail.machines.nowhere'));
+  if (clauses.length === 0 && shown.some(entry => entry.machine.online === null))
+    clauses.push(t('common.unknown'));
   return {
     summary: clauses.join(' · '),
     note: offline > 0 ? t('capabilities.skillDetail.machines.offlineCount', { count: offline }) : undefined,

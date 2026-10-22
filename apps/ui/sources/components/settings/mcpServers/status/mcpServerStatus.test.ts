@@ -42,6 +42,13 @@ const headline = (statuses: ReturnType<typeof mcpServerStatus>) => {
 };
 
 describe('mcpServerStatus', () => {
+    it('does not label an unobserved machine offline or reuse its previous test as a live failure', () => {
+        const status = mcpServerMachineStatuses(input({
+            machines: [{ machineId: 'unknown', name: 'Unknown machine', online: null }],
+            tests: { unknown: { ok: false, errorCode: 'exited', checkedAt: 1 } },
+        }));
+        expect(status.has('unknown')).toBe(false);
+    });
     it('lets current sign-in progress and a connected grant supersede an old sign-in-required Session notice', () => {
         const current = input({ entry: remote, sessionNotices: [{ v: 1, items: [
             { kind: 'mcp_server', itemId: remote.id, name: remote.name, code: 'mcp_sign_in_required' },

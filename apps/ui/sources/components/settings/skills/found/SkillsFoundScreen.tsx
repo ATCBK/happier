@@ -252,7 +252,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
   const groups = React.useMemo(() => groupFoundRowsByName(orderFoundRows(items)), [items]);
   const folded = foldFoundRows(groups, expanded);
   const addAll = React.useMemo(() => foundAddAllItems(groups.map((group) => group.item)), [groups]);
-  const canAdd = !machine.offline;
+  const canAdd = machine.online === true;
 
   const open = React.useCallback(
     (skillId: string) => {
@@ -411,7 +411,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
           title={t('capabilities.skillsFound.olderMachine', { machine: name })}
         />
       ) : null}
-      {!machine.offline && (body.kind === 'failed' || (scan.failure === 'failed' && body.kind !== 'older_machine')) ? (
+      {machine.online === true && (body.kind === 'failed' || (scan.failure === 'failed' && body.kind !== 'older_machine')) ? (
         <SurfaceStateCard
           testID={`skills.found.failed.${machine.machineId}`}
           size="line"

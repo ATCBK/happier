@@ -39,7 +39,12 @@ const { machineAgentInventoryStore } = await import('@/agents/machineAgents/mach
 const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
 const { WhereItsOnControl } = await import('@/components/capabilities/where/WhereItsOnControl');
 const { describeReach } = await import('@/components/capabilities/where/whereItsOnPresentation');
+const { summarizeMachines } = await import('@/components/settings/skills/detail/skillMachineSummary');
+const { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { useMcpAddPlaces } = await import('@/components/settings/mcpServers/add/useMcpAddPlaces');
+const { useMcpSignInViewOf } = await import('@/components/settings/mcpServers/signIn/useMcpSignInViewOf');
+const { useMcpServerSignIn } = await import('@/components/settings/mcpServers/signIn/useMcpServerSignIn');
+const { McpServersSettingsV1Schema } = await import('@happier-dev/protocol/mcp/servers/settingsV1');
 const { useReachRulesState } = await import('./useReachRulesState');
 const { reachRuleKeyV1 } = await import('@happier-dev/protocol/reach/reachRulesChangeV1');
 const { SkillsRulesSetInputV1Schema, McpRulesSetInputV1Schema } = await import('@happier-dev/protocol/actions/specs/capabilityRules');
@@ -52,6 +57,63 @@ const { WorkspaceRefV1Schema } = await import('@happier-dev/protocol/workspaces/
 const before = storage.getState();
 // Global cleanup retires runtimeFetch after each case; reinstall the network boundary before use.
 beforeEach(() => network.resetRequests());
+it('keeps withdrawn capability places unknown until their exact Account observes each machine again', async () => {
+    const serverUrl = 'https://capability-presence.test';
+    await network.addHome(serverUrl, 'capability-presence-account');
+    const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+        homeServerIdentityId: 'srv_capability_presence', canonicalServerUrl: serverUrl, revision: 1,
+        endpoints: [{ kind: 'https', url: serverUrl }] } });
+    await setActiveServerId(home.id);
+    if (!home.serverIdentityId) throw new Error('Expected qualified Home');
+    const scope = { serverId: home.serverIdentityId, accountId: 'capability-presence-account' };
+    const machines = [createMachineFixture({ id: 'online', active: true, activeAt: Date.now() }),
+        createMachineFixture({ id: 'offline', active: false, activeAt: 1 })].map(machine => ({ ...machine,
+            metadata: { ...machine.metadata!, agentInventory: { checkedAt: 2, installedAgentIds: ['codex'] } } }));
+    storage.setState({ settingsScope: scope, profileScope: scope, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, servers: [{ id: 'oauth', name: 'oauth', transport: 'http', env: {},
+        remote: { url: 'https://oauth.example/mcp', headers: {}, auth: { kind: 'oauth' } }, createdAt: 1, updatedAt: 1 }], bindings: [] });
+    const hook = await renderHook(() => {
+        const mcp = useMcpAddPlaces();
+        return { skills: useSkillPlaces(), mcp, signInViewOf: useMcpSignInViewOf(settings, scope),
+            signIn: useMcpServerSignIn(settings.servers[0]!, mcp.placeMachines) };
+    });
+    try {
+        expect(hook.getCurrent().skills.placeMachines.find(machine => machine.machineId === 'online')).toMatchObject({ online: true });
+        expect(hook.getCurrent().signInViewOf('oauth')?.state).toBe('not_connected');
+        expect(hook.getCurrent().signIn.view?.state).toBe('not_connected');
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent().signInViewOf('oauth')?.state).toBe('not_connected');
+        expect(hook.getCurrent().signIn.view?.state).toBe('not_connected');
+        for (const places of [hook.getCurrent().skills, hook.getCurrent().mcp]) {
+            expect(places.placeMachines.every(machine => machine.online === null)).toBe(true);
+            expect(places.machines.every(machine => machine.offline === false)).toBe(true);
+            const projection = projectReachOnMachines([{ id: 'all', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }], places.machines);
+            const consequence = describeReach(projection, places.placeMachines, places.names, () => 'full');
+            expect(consequence.availableAgentIds).toEqual([]);
+            expect(consequence.notes).toEqual([]);
+            expect(consequence.availabilityUnknown).toBe(true);
+            const reach = buildSkillsReach([], places.machines);
+            expect(reach.onlineInventory).toBe(false);
+            expect(reach.offlineMachineIds).toEqual([]);
+            expect(reach.bodies.every(body => !body.online)).toBe(true);
+            expect(summarizeMachines(places.machines.map(machine => ({ machine, skillAgents: ['codex'], cannotLoad: [],
+                facts: new Map([['codex', { kind: 'delivered' as const }]]), projectedAgents: ['codex'] })), id => id))
+                .toEqual({ summary: 'Unknown', note: undefined });
+        }
+        await act(async () => captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })(['online', 'offline']));
+        expect(hook.getCurrent().skills.placeMachines.every(machine => !machine.online)).toBe(true);
+        await act(async () => captureMachinePresenceObservation(scope)(['offline']));
+        expect(hook.getCurrent().skills.machines.find(machine => machine.machineId === 'offline')).toMatchObject({ offline: true });
+        expect(hook.getCurrent().skills.placeMachines.find(machine => machine.machineId === 'online')?.online).toBe(null);
+        expect(hook.getCurrent().signInViewOf('oauth')?.state).toBe('not_connected');
+        expect(hook.getCurrent().signIn.view?.state).toBe('not_connected');
+        await act(async () => captureMachinePresenceObservation(scope)(['online']));
+        expect(hook.getCurrent().skills.placeMachines.find(machine => machine.machineId === 'online')?.online).toBe(true);
+        expect(hook.getCurrent().signInViewOf('oauth')?.state).toBe('not_connected');
+        expect(hook.getCurrent().signIn.view?.state).toBe('not_connected');
+    } finally { await hook.unmount(); clearMachineRequestReachabilityForTest(); }
+});
 it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and writes Only/Except with D33 precedence', async kind => {
     const serverUrl = 'https://project-places.test';
     await network.addHome(serverUrl, 'project-places-account');

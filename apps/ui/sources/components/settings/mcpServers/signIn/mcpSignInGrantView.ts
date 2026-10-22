@@ -38,8 +38,18 @@ export function mcpSignInGrantIdentity(grant: QualifiedConnectedAccountProfileV4
   return grant.providerIdentity?.email ?? grant.displayName ?? grant.providerIdentity?.accountId ?? null;
 }
 
+/** No online machine proves offline only when every supplied presence verdict is known. */
+export function aggregateMcpMachineOnline(machines: readonly Readonly<{ online: boolean | null }>[]): boolean | null {
+  let unknown = false;
+  for (const machine of machines) {
+    if (machine.online === true) return true;
+    if (machine.online === null) unknown = true;
+  }
+  return unknown ? null : false;
+}
+
 /** The ONE projection of grant facts for the detail page, homepage and session sheet. */
-export function mcpSignInGrantView(server: McpServerCatalogEntryV1, grant: QualifiedConnectedAccountProfileV4 | null, anyMachineOnline: boolean, diagnostics?: McpSignInGrantDiagnostics): McpSignInView | null {
+export function mcpSignInGrantView(server: McpServerCatalogEntryV1, grant: QualifiedConnectedAccountProfileV4 | null, anyMachineOnline: boolean | null, diagnostics?: McpSignInGrantDiagnostics): McpSignInView | null {
   if (server.transport === 'stdio' || server.remote?.auth?.kind !== 'oauth') return null;
   const matches = (ref: QualifiedConnectedAccountProfileV4['ref']) => isMcpSignInService(ref.service) && ref.accountId === server.id;
   if (diagnostics?.revoked && matches(diagnostics.revoked.account)) return { state: 'revoked' };
@@ -60,7 +70,7 @@ export function mcpSignInGrantView(server: McpServerCatalogEntryV1, grant: Quali
     if (missing.length) return { state: 'needs_more_access', scope: missing.join(' ') };
     return { state: 'connected', identity: mcpSignInGrantIdentity(grant), scopes: grant.scopes, lastUsedAt: grant.lastUsedAt ?? null };
   }
-  if (!anyMachineOnline) return { state: 'no_machine_online' };
+  if (anyMachineOnline === false) return { state: 'no_machine_online' };
   if (!grant) return { state: 'not_connected' };
   if (grant.status === 'needs_reauth') return { state: 'expired', reason: 'expired' };
   // Profile ids alone cannot establish the resource binding. The existing loading state covers this read.

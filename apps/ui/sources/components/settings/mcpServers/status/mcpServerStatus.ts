@@ -25,7 +25,7 @@ export type McpServerTestFact =
     | Readonly<{ ok: false; errorCode: string; runtimeMissing?: string; checkedAt: number }>;
 
 /** A machine where the server is on (P2 projection), with REACH's presence. */
-export type McpServerMachineFact = Readonly<{ machineId: string; name: string; online: boolean; lastSeen?: string }>;
+export type McpServerMachineFact = Readonly<{ machineId: string; name: string; online: boolean | null; lastSeen?: string }>;
 
 export type McpServerStatusFixes = Readonly<{
     signIn: () => void;
@@ -152,7 +152,8 @@ export function mcpServerMachineStatuses(input: Pick<McpServerStatusInput, 'test
     const result = new Map<string, CapabilityStatus>();
     for (const machine of input.machines) {
         const test = input.tests[machine.machineId];
-        if (!machine.online) {
+        if (machine.online === null) continue;
+        if (machine.online === false) {
             result.set(machine.machineId, { kind: 'offline', machineName: machine.name, ...(machine.lastSeen ? { detail: machine.lastSeen } : {}) });
             continue;
         }

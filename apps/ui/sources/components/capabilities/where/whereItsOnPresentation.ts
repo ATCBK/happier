@@ -255,7 +255,7 @@ export function describeOfflineMachines(machineNames: readonly string[]): string
  */
 export function describeReach(
   projection: readonly Readonly<ReachProjectionV1[number] & { projectKey?: string; agentInventoryComplete?: boolean }>[],
-  machines: readonly Readonly<{ machineId: string; online: boolean }>[],
+  machines: readonly Readonly<{ machineId: string; online: boolean | null }>[],
   names: WhereItsOnNames,
   agentTakes: (agentId: string) => 'full' | 'index' | 'none',
   kind: 'skill' | 'mcp_server' = 'skill',
@@ -287,6 +287,7 @@ export function describeReach(
       if (!offlineMachineNames.includes(machineName)) offlineMachineNames.push(machineName);
       continue;
     }
+    if (online.get(row.machineId) !== true) continue;
     if (row.projectKey) projectKeys.add(row.projectKey); else availableOutsideProjects = true;
     const machineName = names.machineName(row.machineId);
     if (!onlineMachineNames.includes(machineName)) onlineMachineNames.push(machineName);
@@ -296,7 +297,7 @@ export function describeReach(
   const offlineNote = describeOfflineMachines(offlineMachineNames);
   return {
     availabilityUnknown: available.length === 0 && projection.some(row =>
-      row.agentInventoryComplete === false && online.get(row.machineId) !== false),
+      online.get(row.machineId) == null || (row.agentInventoryComplete === false && online.get(row.machineId) === true)),
     availableAgentIds: available,
     onlineMachineNames,
     onlyProjectNames: availableOutsideProjects ? [] : [...projectKeys].map(names.projectName),

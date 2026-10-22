@@ -18,6 +18,16 @@ function configuration(resource = server.remote!.url, stepUpScopes: string[] = [
 }
 
 describe('the shared MCP grant/status projection', () => {
+  it('keeps factual grant absence and diagnostics when presence is unknown without inventing a sign-in', () => {
+    expect(mcpSignInGrantView(server, null, null)).toEqual({ state: 'not_connected' });
+    expect(mcpSignInFact(mcpSignInGrantView(server, null, null))).toEqual({ state: 'not_connected' });
+    expect(mcpSignInGrantView(server, null, false)).toEqual({ state: 'no_machine_online' });
+    expect(mcpSignInGrantView(server, null, true)).toEqual({ state: 'not_connected' });
+    expect(mcpSignInGrantView(server, grant, null, { configuration: configuration() })).toMatchObject({ state: 'connected' });
+    expect(mcpSignInGrantView(server, grant, null, { unavailable: true })).toEqual({ state: 'did_not_finish' });
+    expect(mcpSignInGrantView(server, { ...grant, status: 'needs_reauth' }, null)).toEqual({ state: 'expired', reason: 'expired' });
+    expect(mcpSignInGrantView(server, grant, null)).toEqual({ state: 'starting' });
+  });
   it('compares the full canonical resource rather than only the matching server id', () => {
     expect(mcpSignInGrantView(server, grant, true, { configuration: configuration('https://mcp.linear.app/other') }))
       .toEqual({ state: 'expired', reason: 'address_changed' });

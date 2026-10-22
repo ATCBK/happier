@@ -443,20 +443,20 @@ function machineRow(
 ): CapabilityMachineTruthRow {
   const { machine } = entry;
   const name = machine.name ?? machine.machineId;
-  if (machine.offline) {
+  if (machine.online !== true) {
     return {
       machineId: machine.machineId,
       machineName: name,
       deviceIcon: 'desktop',
-      offline: true,
+      offline: machine.offline,
       who:
         entry.projectedAgents.length > 0 ? (
           <MachineAgents agentIds={entry.projectedAgents} machineId={machine.machineId} quiet />
         ) : (
           t('capabilities.skillDetail.machines.noAgent')
         ),
-      status: { kind: 'offline' },
-      note: lastKnown(machine.lastSeenAt),
+      status: machine.offline ? { kind: 'offline' } : null,
+      note: machine.offline ? lastKnown(machine.lastSeenAt) : t('common.unknown'),
     };
   }
   const delivered: string[] = [];

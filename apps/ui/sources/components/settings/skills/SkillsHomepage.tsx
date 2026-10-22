@@ -482,11 +482,11 @@ const ReachBlock = React.memo(function ReachBlock(
         name: row.machine.name ?? row.machine.machineId,
         offline: row.machine.offline,
         lastSeenAt: row.machine.lastSeenAt,
-        agentIds: row.supportedAgentIds,
+        agentIds: row.machine.online === null ? [] : row.supportedAgentIds,
         noSkillAgents:
           row.machine.agentIds.length > 0 && row.supportedAgentIds.length === 0,
-        inventoryUnknown: row.machine.agentInventoryComplete === false,
-        count: skillsReachLegendCount(row, props.firstVisit),
+        inventoryUnknown: row.machine.online === null || row.machine.agentInventoryComplete === false,
+        count: row.machine.online === null ? null : skillsReachLegendCount(row, props.firstVisit),
       })),
     [props.firstVisit, folded.shown],
   );

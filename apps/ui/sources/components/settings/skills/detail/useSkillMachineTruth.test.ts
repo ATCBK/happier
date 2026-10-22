@@ -21,7 +21,7 @@ const { useSkillMachineTruth } = await import('./useSkillMachineTruth');
 afterEach(standardCleanup);
 
 function machine(machineId: string, agentIds: string[], offline = false): ReachMachine {
-  return { machineId, platform: 'posix', agentIds, name: machineId, offline, lastSeenAt: offline ? 1 : null };
+  return { machineId, platform: 'posix', agentIds, name: machineId, online: !offline, offline, lastSeenAt: offline ? 1 : null };
 }
 
 /** A real preview answer: parsed through the strict producer schema before the hook ever sees it. */
@@ -63,6 +63,7 @@ describe('useSkillMachineTruth', () => {
       machine('nl1', ['claude', 'codex', 'coderabbit']),
       machine('nl2', ['claude']),
       machine('away', ['claude', 'codex'], true),
+      { ...machine('unknown', ['codex']), online: null },
     ];
     const hook = await renderHook(({ rulesKey }: { rulesKey: string }) => {
       const action = useMountedActionExecution(home.home.id);
@@ -78,6 +79,7 @@ describe('useSkillMachineTruth', () => {
       const byMachine = Object.fromEntries(hook.getCurrent().map((entry) => [entry.machine.machineId, entry]));
       expect(byMachine['nl2']!.facts.get('claude')?.kind).toBe('delivered');
       expect(byMachine['away']!.facts.size).toBe(0);
+      expect(byMachine['unknown']!.facts.size).toBe(0);
       expect(byMachine['nl1']!.cannotLoad).toContain('coderabbit');
       expect([...asked].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([
         { machineId: 'nl1', agentId: 'claude' },

@@ -77,7 +77,7 @@ export type WhereItsOnControlProps = Readonly<{
     machines: readonly Readonly<{
       machineId: string;
       name: string;
-      online: boolean;
+      online: boolean | null;
     }>[];
     projects: readonly Readonly<{
       projectKey: string;
@@ -430,7 +430,7 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl(
                     variant="meta"
                     style={{ color: theme.colors.text.tertiary }}
                   >
-                    {t('capabilities.control.offline')}
+                    {t(machine.online === false ? 'capabilities.control.offline' : 'common.unknown')}
                   </Text>
                 ),
               }),

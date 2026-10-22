@@ -74,7 +74,7 @@ export function useSkillMachineTruth(
   const asked = React.useMemo(
     () =>
       targets.flatMap((target) =>
-        target.machine.offline
+        target.machine.online !== true
           ? []
           : target.skillAgents.map(
               (agentId) => `${target.machine.machineId}\u0000${agentId}`,
@@ -159,7 +159,7 @@ export function useSkillMachineTruth(
             )
             .map((agent) => agent.agentId) ?? [];
         const machineFacts = new Map<string, SkillAgentFact>();
-        if (!target.machine.offline) {
+        if (target.machine.online === true) {
           for (const agentId of target.skillAgents) {
             const fact = facts.get(
               `${target.machine.machineId}\u0000${agentId}`,

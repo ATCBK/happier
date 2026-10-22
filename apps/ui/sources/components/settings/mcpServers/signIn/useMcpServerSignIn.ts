@@ -23,7 +23,7 @@ import { normalizeInternalReturnPath } from '@/utils/path/routeUtils';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import type { McpServerSignInFact } from '../status/mcpServerStatus';
-import { findMcpSignInGrant, mcpSignInGrantView, mcpSignInFact, type McpSignInView } from './mcpSignInGrantView';
+import { aggregateMcpMachineOnline, findMcpSignInGrant, mcpSignInGrantView, mcpSignInFact, type McpSignInView } from './mcpSignInGrantView';
 import { useMcpSignInGrantDiagnostics } from './useMcpSignInGrantDiagnostics';
 export { findMcpSignInGrant, mcpSignInGrantIdentity, mcpSignInGrantView, mcpSignInFact, type McpSignInView } from './mcpSignInGrantView';
 
@@ -31,7 +31,7 @@ export { findMcpSignInGrant, mcpSignInGrantIdentity, mcpSignInGrantView, mcpSign
 export type McpSignInMachine = Readonly<{
   machineId: string;
   name: string;
-  online: boolean;
+  online: boolean | null;
 }>;
 
 export type McpSignInCompletion = Readonly<{
@@ -133,7 +133,7 @@ export function useMcpServerSignIn(
     receipt: ReturnType<typeof ConnectedAccountRevokedResponseV1Schema.parse>;
     credentialRevision: NonNullable<typeof grant>['credentialRevision'];
   }> | null>(null);
-  const anyOnline = machines.some((machine) => machine.online);
+  const anyOnline = aggregateMcpMachineOnline(machines);
 
   // An attempt ends when its connected credential lands (from this page, the callback page or another device).
   React.useEffect(() => {

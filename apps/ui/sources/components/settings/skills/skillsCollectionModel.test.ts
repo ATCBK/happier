@@ -64,11 +64,22 @@ const machine = (
   platform: 'posix',
   agentIds,
   name: id,
+  online: !offline,
   offline,
   lastSeenAt: offline ? 1 : null,
 });
 
 describe('Skills collection model', () => {
+  it('keeps an unobserved machine out of live reach and offline catch-up counts while retaining its rules', () => {
+    const unknown = { ...machine('unknown', ['codex']), online: null };
+    const reach = buildSkillsReach([skill('every')], [unknown]);
+    expect(reach.machines[0]?.skillIds).toEqual(['every']);
+    expect(reach.reachingCount).toBe(0);
+    expect(reach.onlineReachedMachineCount).toBe(0);
+    expect(reach.agentIds).toEqual([]);
+    expect(reach.offlineMachineIds).toEqual([]);
+    expect(reach.bodies).toEqual([{ key: 'unknown', online: false, dots: [{ key: 'every', tone: 'quiet' }] }]);
+  });
   it('joins installed Agents with each Machine declaration: none does not reach, index does', () => {
     const agentsById = PluginProjectionV2Schema.shape.agentsById.parse({
       review: { id: 'review', identity: { pluginId: 'acme.skills', localId: 'review' },

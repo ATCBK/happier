@@ -15,7 +15,7 @@ export function useSkillPlaces(serverId?: string | null) {
       machines.map((machine) => ({
         machineId: machine.machineId,
         name: machine.name ?? machine.machineId,
-        online: !machine.offline,
+        online: machine.online,
       })),
     [machines],
   );
