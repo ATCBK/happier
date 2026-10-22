@@ -2918,12 +2918,14 @@ describe('sessionDraftRepository', () => {
             now: () => 2,
         });
         const observedSnapshots: boolean[] = [];
-        repository.subscribeSessionDraftList(scope, () => {
+        const observe = () => {
             observedSnapshots.push(
                 repository.getSessionDraftSnapshot(scope, sessionAddress) !== null
                 && repository.getSessionDraftSnapshot(scope, otherAddress) !== null,
             );
-        });
+        };
+        repository.subscribeSessionDraft(scope, sessionAddress, observe);
+        repository.subscribeSessionDraft(scope, otherAddress, observe);
 
         const hydration = repository.ensureSessionDraftRepositoryHydrated(scope);
         try {
@@ -2934,7 +2936,7 @@ describe('sessionDraftRepository', () => {
             await hydration;
         }
 
-        expect(observedSnapshots).toEqual([true]);
+        expect(observedSnapshots).toEqual([true, true]);
         expect(transport.read).not.toHaveBeenCalled();
     });
 
@@ -3264,6 +3266,50 @@ describe('sessionDraftRepository', () => {
         const before = repository.getSessionDraftSnapshot(scope, address);
         repository.writeSessionDraftLocalSupplement({ scope, address, patch: { launchUserAttemptId: 'attempt-1' } });
         expect(repository.getSessionDraftSnapshot(scope, address)).not.toBe(before);
+    });
+
+    it('wakes new-session list subscribers only when the new-session list projection can change', async () => {
+        let failFlush = false;
+        const repository = createSessionDraftRepository({
+            storage: { ...createMemoryStorage(), flush: async () => { if (failFlush) throw new Error('disk unavailable'); } },
+            syncEnabled: false,
+            cipher: plainCipher(),
+            randomUUID: () => uuid(90),
+            now: () => 1,
+        });
+        const newAddress = { kind: 'newSession', draftId: uuid(91) } as const;
+        repository.writeNewSessionDraft({ scope, draftId: newAddress.draftId, patch: { text: 'new draft' }, materializationIntent: 'userEdit' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const sessionNotifications: string[] = [];
+        repository.subscribeSessionDraft(scope, sessionAddress, () => {
+            sessionNotifications.push(repository.getExistingSessionDraftProjection(scope, 'session-a')?.text ?? 'absent');
+        });
+        let listNotifications = 0;
+        repository.subscribeSessionDraftList(scope, () => { listNotifications += 1; });
+        const before = repository.listNewSessionDraftProjections(scope);
+
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'typing in an existing session' }, materializationIntent: 'userEdit' });
+        await expect(repository.deleteSessionDraft({ scope, address: sessionAddress })).resolves.toBe(true);
+
+        expect(sessionNotifications).toEqual(['typing in an existing session', 'absent']);
+        expect(listNotifications).toBe(0);
+        expect(repository.listNewSessionDraftProjections(scope)).toBe(before);
+
+        repository.writeNewSessionDraft({ scope, draftId: newAddress.draftId, patch: { text: 'edited new draft' }, materializationIntent: 'userEdit' });
+        expect(listNotifications).toBe(1);
+        expect(repository.listNewSessionDraftProjections(scope)).toMatchObject([
+            { draftId: newAddress.draftId, document: { composer: { text: { value: 'edited new draft' } } } },
+        ]);
+
+        failFlush = true;
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'autosave fails' }, materializationIntent: 'userEdit' });
+        await vi.waitFor(() => expect(repository.listNewSessionDraftProjections(scope)).toMatchObject([{ status: 'error' }]));
+        expect(listNotifications).toBe(2);
+
+        failFlush = false;
+        await expect(repository.deleteSessionDraft({ scope, address: newAddress })).resolves.toBe(true);
+        expect(repository.listNewSessionDraftProjections(scope)).toEqual([]);
+        expect(listNotifications).toBeGreaterThanOrEqual(3);
     });
 });
 

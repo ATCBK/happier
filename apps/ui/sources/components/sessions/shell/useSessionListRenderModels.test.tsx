@@ -16,6 +16,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 import { useSessionListRenderModels } from './useSessionListRenderModels';
+import { resetSessionDraftRepositoryForTests, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 
 type SessionListRenderModels = ReturnType<typeof useSessionListRenderModels>;
@@ -691,9 +692,56 @@ describe('useSessionListRenderModels', () => {
             workspaceRefs: [],
             sessionTags: {},
         });
-        expect(refreshed.existingDraftBySessionKey).toBe(first.existingDraftBySessionKey);
         expect(refreshed.reachableSessionDisplayById).toBe(first.reachableSessionDisplayById);
         expect(refreshed.reachableSessionDisplayByKey).toBe(first.reachableSessionDisplayByKey);
+    });
+
+    it('keeps the list render model unchanged while an existing session draft is typed', async () => {
+        const previousState = storage.getState();
+        const draftScope = { serverId: 'server-drafts', accountId: 'account-drafts' };
+        const paneState = {
+            summary: { sessionsReady: true, sessionCount: 2 },
+            visibleSessionListIndex: [
+                { type: 'session', sessionId: 'session-typing', serverId: draftScope.serverId, groupKey: 'active' },
+                { type: 'session', sessionId: 'session-other', serverId: draftScope.serverId, groupKey: 'active' },
+            ] satisfies ReadonlyArray<SessionListIndexItem>,
+            hasHiddenInactiveSessions: false,
+            folderFocus: null,
+            folderFeatureEnabledServerIds: [],
+            showLoading: false,
+            showEmptyState: false,
+        } as VisibleSessionListPaneState;
+        let hook: RenderHookResult<SessionListRenderModels, Record<string, never>> | null = null;
+        try {
+            storage.setState((state) => ({ ...state, profileScope: draftScope }));
+            hook = await renderHook<SessionListRenderModels, Record<string, never>>(() => useSessionListRenderModels({
+                paneState,
+                collapsedGroupKeys: {},
+                machineDisplayById: {},
+                workspaceLabels: {},
+                workspaceRefs: [],
+                pinnedKeySet: new Set<string>(),
+                sessionTags: {},
+                selectedSessionId: null,
+                showServerBadge: false,
+                showPinnedServerBadge: false,
+                clocksActive: false,
+            }), { initialProps: {} });
+            await flushHookEffects({ cycles: 1, turns: 2 });
+            const before = hook.getCurrent();
+
+            await act(async () => {
+                writeExistingSessionDraft({ scope: draftScope, sessionId: 'session-typing', patch: { text: 'h' }, materializationIntent: 'userEdit' });
+                writeExistingSessionDraft({ scope: draftScope, sessionId: 'session-typing', patch: { text: 'he' }, materializationIntent: 'userEdit' });
+            });
+            await flushHookEffects({ cycles: 1, turns: 2 });
+
+            expect(hook.getCurrent()).toBe(before);
+        } finally {
+            await hook?.unmount();
+            resetSessionDraftRepositoryForTests();
+            storage.setState(previousState);
+        }
     });
 
     it('records low-volume render derivation telemetry for non-empty list models', async () => {

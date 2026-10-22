@@ -14,7 +14,7 @@ import { useWorkspaceRefs, useSetting, useSettingMutable, useMachineDisplayById,
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
-import { getAllKnownTags, getTagsForSession, sessionTagKey } from './sessionTagUtils';
+import { getAllKnownTags, getTagsForSession } from './sessionTagUtils';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
 import { resolveSessionListShellFlags } from './resolveSessionListShellFlags';
 import { resolveSessionListDensityViewState } from './resolveSessionListDensityViewState';
@@ -151,7 +151,6 @@ import {
     reuseSessionListSearchCorpus,
     type SessionListSearchCorpus,
 } from './search/sessionListSearchCorpus';
-import { deleteSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import {
     SESSION_LIST_MEMORY_SEARCH_MIN_QUERY_LENGTH,
     useSessionListMemorySearchAugmentationForContext,
@@ -2077,19 +2076,6 @@ export function useSessionListViewStateFromPaneState(
             sectionModeV1: sessionListSectionModeV1,
             orderingModeV1: sessionListOrderingModeV1,
         });
-        const draftServerId = item.serverId ?? draftScope?.serverId ?? null;
-        const draftKey = draftServerId ? sessionTagKey(draftServerId, item.sessionId, item.keyParts) : null;
-        const draft = draftKey ? renderModels.existingDraftBySessionKey.get(draftKey) ?? null : null;
-        const deleteDraft = draftScope
-            && (!item.serverId || item.serverId === draftScope.serverId)
-            && draft
-            ? async (): Promise<void> => {
-                await deleteSessionDraft({
-                    scope: draftScope,
-                    address: { kind: 'session', sessionId: item.sessionId },
-                });
-            }
-            : undefined;
         return (
             <SessionListRowViewModelBoundary
                 audienceScope={item.serverId ? renderModels.audience.scopes.get(item.serverId) : undefined}
@@ -2129,7 +2115,7 @@ export function useSessionListViewStateFromPaneState(
                 identityDisplay={sessionListIdentityDisplay === 'agentLogo' || sessionListIdentityDisplay === 'none'
                     ? sessionListIdentityDisplay
                     : 'avatar'}
-                draft={draft}
+                draftScope={draftScope}
                 pinnedSessionKeys={orderingPersistenceState.pinnedKeySet}
                 reachableSessionDisplayById={renderModels.reachableSessionDisplayById}
                 reachableSessionDisplayByKey={renderModels.reachableSessionDisplayByKey}
@@ -2146,7 +2132,6 @@ export function useSessionListViewStateFromPaneState(
                 onMoveToWorkspaceRoot={canUseSessionFolders ? moveActionHandlers.onMoveToWorkspaceRoot : undefined}
                 onMoveUp={canUseSessionFolders && rowDragPolicy.canReorderSiblings ? moveActionHandlers.onMoveUp : undefined}
                 onMoveDown={canUseSessionFolders && rowDragPolicy.canReorderSiblings ? moveActionHandlers.onMoveDown : undefined}
-                onDeleteDraft={deleteDraft}
                 onSetReportsCollapsed={handleSetReportsCollapsed}
             />
         );
@@ -2171,7 +2156,6 @@ export function useSessionListViewStateFromPaneState(
         homeObservations,
         renderModels.audience,
         renderModels.hasMultipleMachines,
-        renderModels.existingDraftBySessionKey,
         renderModels.reachableSessionDisplayById,
         renderModels.reachableSessionDisplayByKey,
         renderedListItems,
@@ -2343,7 +2327,6 @@ export function useSessionListViewStateFromPaneState(
         draftScope,
         dragSnapshotId: frozenListProjection.snapshotId,
         draggingSessionKey: rowInteractions.draggingSessionKey,
-        existingDraftBySessionKey: renderModels.existingDraftBySessionKey,
         folderActionsEnabled,
         forkActionContext,
         hasMultipleMachines: renderModels.hasMultipleMachines,
@@ -2387,7 +2370,6 @@ export function useSessionListViewStateFromPaneState(
         homeObservations,
         orderingPersistenceState.pinnedKeySet,
         renderModels.audience,
-        renderModels.existingDraftBySessionKey,
         renderModels.hasMultipleMachines,
         renderModels.reachableSessionDisplayById,
         renderModels.reachableSessionDisplayByKey,

@@ -8,7 +8,7 @@ import { SESSION_OPTIMISTIC_PENDING_THINKING_MS } from '@/sync/domains/session/a
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { t } from '@/text';
-import { buildSessionListRowViewModels, resolveSessionListRowViewModelAdjacency } from './sessionListRowViewModels';
+import { buildSessionListRowViewModel, buildSessionListRowViewModels, resolveSessionListRowViewModelAdjacency } from './sessionListRowViewModels';
 
 function createRenderableSession(id: string): SessionListRenderableSession {
     return {
@@ -185,8 +185,10 @@ describe('buildSessionListRowViewModels', () => {
             updatedAt: 500,
         };
 
-        const [row] = buildSessionListRowViewModels({
-            listItems: [item],
+        const row = buildSessionListRowViewModel({
+            item,
+            adjacency: resolveSessionListRowViewModelAdjacency([item], 0),
+            unscopedSelectionIsUnique: false,
             reachableSessionDisplayById: new Map(),
             rowRenderableByKey: new Map([[rowKey(item), createRenderableSession(item.sessionId)]]),
             relativeNowMs: 1000,
@@ -197,7 +199,7 @@ describe('buildSessionListRowViewModels', () => {
             selectedSessionId: null,
             showServerBadge: false,
             showPinnedServerBadge: false,
-            existingDraftBySessionKey: new Map([[rowKey(item), draft]]),
+            existingDraft: draft,
         });
 
         expect(row?.draft).toBe(draft);

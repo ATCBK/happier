@@ -183,7 +183,6 @@ export type BuildSessionListRowViewModelInput = Readonly<{
     attentionStandingEnabled?: boolean;
     attentionStandingPolicy?: SessionAttentionStandingPolicy;
     existingDraft?: ExistingSessionDraftProjection | null;
-    existingDraftBySessionKey?: ReadonlyMap<string, ExistingSessionDraftProjection>;
 }>;
 
 export function buildSessionListRowViewModel(input: BuildSessionListRowViewModelInput): SessionListRowViewModel {
@@ -306,8 +305,7 @@ export function buildSessionListRowViewModel(input: BuildSessionListRowViewModel
             : false,
         reminder,
         attentionStandingEnabled: input.attentionStandingEnabled === true && sessionKey != null,
-        draft: input.existingDraft
-            ?? (sessionKey ? input.existingDraftBySessionKey?.get(sessionKey) ?? null : null),
+        draft: input.existingDraft ?? null,
         // A stopped session that is working again (it woke on a message) shows its working state instead.
         guardState: session?.guardState?.kind === 'stopped' && session.active ? null : session?.guardState ?? null,
     };
@@ -398,7 +396,6 @@ export function buildSessionListRowViewModels(input: Readonly<{
     showPinnedServerBadge: boolean;
     attentionStandingEnabled?: boolean;
     attentionStandingPolicy?: SessionAttentionStandingPolicy;
-    existingDraftBySessionKey?: ReadonlyMap<string, ExistingSessionDraftProjection>;
 }>): ReadonlyArray<SessionListRowViewModel | null> {
     if (input.listItems.length === 0) {
         return EMPTY_SESSION_LIST_ROW_VIEW_MODELS;

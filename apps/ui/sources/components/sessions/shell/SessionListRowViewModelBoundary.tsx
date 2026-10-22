@@ -36,7 +36,8 @@ import type {
     RegisterSessionListTreeRowBounds,
     UnregisterSessionListTreeRowBounds,
 } from './SessionListHeaderFrame';
-import type { ExistingSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { deleteSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { useSessionListRowExistingDraft } from './useSessionListRowExistingDraft';
 import { STAGE_SPOTLIGHT_TARGET_IDS } from '@/components/onboarding/tour/stage/stageSpotlightTargetIds';
 import {
     useSpotlightTarget,
@@ -65,7 +66,8 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     hasMultipleMachines: boolean;
     hideInactiveSessions?: boolean | null;
     identityDisplay?: 'avatar' | 'agentLogo' | 'none' | null;
-    draft?: ExistingSessionDraftProjection | null;
+    /** The active Account scope whose drafts this row shows; the row observes its own draft. */
+    draftScope: ServerAccountScope | null;
     item: Extract<SessionListIndexItem, { type: 'session' }>;
     items: ReadonlyArray<SessionListIndexItem>;
     nativeContextMenuSessionKey: string | null;
@@ -73,7 +75,6 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     onDragStart: UseSessionInlineDragStart;
     onDropResult: (event: UseSessionInlineDragDropResultEvent) => void | Promise<void>;
     onMoveDown?: () => void;
-    onDeleteDraft?: () => void | Promise<void>;
     onSetReportsCollapsed?: SessionItemProps['onSetReportsCollapsed'];
     onMoveToFolder?: () => void;
     onMoveToWorkspaceRoot?: () => void;
@@ -136,6 +137,20 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         scopeKind: 'spawn',
         serverId: props.item.serverId ?? null,
     });
+    const draft = useSessionListRowExistingDraft({
+        activeScope: props.draftScope,
+        serverId: props.item.serverId,
+        sessionId: props.item.sessionId,
+        dataActive: props.dataActive,
+    });
+    const draftScope = props.draftScope;
+    const sessionId = props.item.sessionId;
+    const hasDraft = draft !== null;
+    const onDeleteDraft = React.useMemo(() => (draftScope && hasDraft
+        ? async (): Promise<void> => {
+            await deleteSessionDraft({ scope: draftScope, address: { kind: 'session', sessionId } });
+        }
+        : undefined), [draftScope, hasDraft, sessionId]);
     const adjacency = React.useMemo(
         () => resolveSessionListRowViewModelAdjacency(props.items, props.dataIndex),
         [props.dataIndex, props.items],
@@ -175,7 +190,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         showPinnedServerBadge: props.showPinnedServerBadge,
         attentionStandingEnabled: props.attentionStandingEnabled,
         attentionStandingPolicy: props.attentionStandingPolicy,
-        existingDraft: props.draft,
+        existingDraft: draft,
     }), [
         props.audienceScope,
         props.homeObservation,
@@ -186,7 +201,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         props.hasMultipleMachines,
         props.hideInactiveSessions,
         props.identityDisplay,
-        props.draft,
+        draft,
         props.item,
         props.pinnedSessionKeys,
         props.reachableSessionDisplayById,
@@ -236,7 +251,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
             onMoveToWorkspaceRoot={props.onMoveToWorkspaceRoot}
             onMoveUp={props.onMoveUp}
             onMoveDown={props.onMoveDown}
-            onDeleteDraft={props.onDeleteDraft}
+            onDeleteDraft={onDeleteDraft}
             onSetReportsCollapsed={props.onSetReportsCollapsed}
             measurementTarget={props.item.groupKind === 'attention' ? {
                 ref: stageSpotlightRef,
