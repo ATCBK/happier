@@ -17,6 +17,7 @@ import { createManagedActivityInventory, createLiveWorkProducerGroup } from '@/d
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { MachineUpdateMetadataRequestSchema, MachineUpdateStateRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import type { MachineAgentInventoryObservation } from '@/capabilities/snapshots/machineAgentInventory';
 
 const ioMock = vi.hoisted(() => vi.fn());
 
@@ -34,6 +35,59 @@ describe('ApiMachineClient updates', () => {
     vi.unstubAllEnvs();
     ioMock.mockReset();
     vi.resetModules();
+  });
+
+  it('publishes only changed Agent install facts while preserving newer equal-probe ordering', async () => {
+    const key = new Uint8Array(32).fill(19);
+    const machine = { id: 'machine-agent-publication', encryptionKey: key, encryptionVariant: 'legacy' as const,
+      metadata: { host: 'worker', platform: 'linux', homeDir: '/home/worker', happyHomeDir: '/home/worker/.happier',
+        happyCliVersion: 'test', agentInventory: { checkedAt: 10, installedAgentIds: ['codex'] } },
+      metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
+    const published: unknown[] = [];
+    let failNextMetadataWrite = false;
+    const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, payload) => {
+      if (event !== 'machine-update-metadata') throw new Error(`Unexpected event: ${event}`);
+      if (failNextMetadataWrite) {
+        failNextMetadataWrite = false;
+        throw Object.assign(new Error('Metadata transport unavailable'), { retryable: false });
+      }
+      const write = MachineUpdateMetadataRequestSchema.parse(payload);
+      published.push(decrypt(key, 'legacy', decodeBase64(write.metadata)));
+      return { result: 'success', version: write.expectedVersion + 1, metadata: write.metadata };
+    } });
+    const { ApiMachineClient } = await import('./apiMachine');
+    const client = new ApiMachineClient('token', machine);
+    // The Socket is the real metadata publication boundary; reducers, codecs and CAS stay real.
+    Reflect.set(client, 'socket', socket);
+    const observation = (checkedAt: number, installed: boolean): MachineAgentInventoryObservation => ({ checkedAt,
+      snapshot: { path: null, clis: { codex: { available: installed, installed } },
+        tmux: { available: false }, windowsTerminal: { available: false } },
+    });
+    const observe = (checkedAt: number, installed: boolean) => client.updateMachineMetadata(
+      current => { if (!current) throw new Error('Expected Machine metadata'); return current; },
+      { agentInventoryObservation: observation(checkedAt, installed) },
+    );
+    try {
+      await expect(observe(20, true)).resolves.toBe('unchanged');
+      await expect(observe(15, false)).resolves.toBe('unchanged');
+      expect(published).toEqual([]);
+      expect(machine.metadataVersion).toBe(1);
+      await expect(observe(30, false)).resolves.toBe('published');
+      expect(machine.metadata.agentInventory).toEqual({ checkedAt: 30, installedAgentIds: [] });
+      await expect(observe(40, false)).resolves.toBe('unchanged');
+      await expect(observe(35, true)).resolves.toBe('unchanged');
+      expect(published).toHaveLength(1);
+      await expect(observe(50, true)).resolves.toBe('published');
+      expect(machine.metadata.agentInventory).toEqual({ checkedAt: 50, installedAgentIds: ['codex'] });
+      expect(published).toHaveLength(2);
+      failNextMetadataWrite = true;
+      await expect(observe(60, false)).rejects.toThrow('Metadata transport unavailable');
+      expect(machine.metadata.agentInventory).toEqual({ checkedAt: 50, installedAgentIds: ['codex'] });
+      await expect(observe(70, false)).resolves.toBe('published');
+      expect(machine.metadata.agentInventory).toEqual({ checkedAt: 70, installedAgentIds: [] });
+      await expect(observe(65, true)).resolves.toBe('unchanged');
+      expect(published).toHaveLength(3);
+    } finally { await client.shutdown(); }
   });
 
   it('adopts the authoritative child fact from an equal-version socket echo after a metadata acknowledgement', async () => {
