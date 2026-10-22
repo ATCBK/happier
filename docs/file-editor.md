@@ -35,6 +35,17 @@ Review hunks come from the Protocol hunk engine; Keep/Discard and their content
 keys belong to the review owner. Diagnostics and blame use named decoration
 layers on the same handle. They do not create another editor or buffer store.
 
+### Markdown mode availability
+
+Reading Markdown uses the File header's Preview / Source choices. Editing uses
+the shared field's Raw / Rich menu at the upper right of the editor. That menu
+is offered only for the `markdown` language while the existing
+`files.markdownRichEditor` preference is enabled. This retained experimental
+preference is off by default and requires the Features page's experiments
+switch; the File page does not override that policy. Document eligibility may
+disable Rich with a reason while Raw remains available. Raw Find is owned by
+`CodeEditorWithFind`, not a separate Markdown search implementation.
+
 ## State and rendering locality
 
 The edit session holds the base text/hash, its BOM fact, the draft, a
