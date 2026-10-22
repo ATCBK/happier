@@ -1,6 +1,7 @@
 /** @moduleRealm daemon */
 import { open, stat as nodeStat } from 'node:fs/promises';
 import { isUtf8 } from 'node:buffer';
+import { PluginError } from '../../errors.js';
 import { readSessionInputPromptUserTextV1 } from '../promptDisplay.js';
 
 import { parseDefaultSessionHeader } from './records.js';
@@ -80,6 +81,39 @@ const defaultFileSystem: JsonlScannerFileSystemV1 = {
     }
   },
 };
+
+/** Keep native descriptor custody inside one scan, including callback yields. */
+async function withJsonlReadFile<T>(
+  params: Readonly<{ filePath: string; fileSystem?: JsonlScannerFileSystemV1; signal?: AbortSignal }>,
+  scan: (fileSystem: JsonlScannerFileSystemV1) => Promise<T>,
+): Promise<T> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  const fileSystem: JsonlScannerFileSystemV1 = params.fileSystem ?? {
+    stat: defaultFileSystem.stat,
+    async read(filePath, position, length) {
+      if (length <= 0) return Buffer.alloc(0);
+      handle ??= await open(filePath, 'r');
+      params.signal?.throwIfAborted();
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      return buffer.subarray(0, bytesRead);
+    },
+  };
+  try {
+    params.signal?.throwIfAborted();
+    return await scan({
+      stat: (filePath) => fileSystem.stat(filePath),
+      async read(filePath, position, length) {
+        params.signal?.throwIfAborted();
+        const bytes = await fileSystem.read(filePath, position, length);
+        params.signal?.throwIfAborted();
+        return bytes;
+      },
+    });
+  } finally {
+    await handle?.close();
+  }
+}
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -312,6 +346,25 @@ export function decodeJsonlByteCursor(raw: string | null | undefined): JsonlByte
   return null;
 }
 
+/** Bounded framing must either consume source or explain why continuation cannot advance. */
+function assertJsonlReadProgress(params: Readonly<{
+  consumedBytes: number;
+  remainingSourceBytes: number;
+  pendingLineBytes: number;
+  maxLineBytes: number;
+  direction: 'backward' | 'forward';
+  offsetBytes: number;
+}>): void {
+  if (params.consumedBytes !== 0 || params.remainingSourceBytes <= 0 || params.pendingLineBytes < params.maxLineBytes) return;
+  const { maxLineBytes, direction, offsetBytes } = params;
+  throw new PluginError({
+    code: 'JSONL_RECORD_TOO_LARGE',
+    message: `JSONL record cannot complete within the ${maxLineBytes}-byte read allowance at ${direction} offset ${offsetBytes}. Increase the read allowance to read the record intact.`,
+    retryable: false,
+    details: { maxLineBytes, direction, offsetBytes },
+  });
+}
+
 export async function readJsonlAfterCursor(params: Readonly<{
   filePath: string;
   cursor: JsonlByteCursorV1 | null;
@@ -359,6 +412,8 @@ export async function readJsonlAfterCursor(params: Readonly<{
     consumedBytes = line.endOffsetBytes;
   }
 
+  assertJsonlReadProgress({ consumedBytes, remainingSourceBytes: fileStat.size - startOffset - buffer.byteLength,
+    pendingLineBytes: buffer.byteLength, maxLineBytes: maxBytes, direction: 'forward', offsetBytes: startOffset });
   const nextOffset = Math.min(fileStat.size, startOffset + consumedBytes);
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
@@ -403,6 +458,8 @@ export async function readJsonlRange(params: Readonly<{
     const rawLine = decoded.value;
     if (rawLine.trim().length > 0) lines.push(rawLine);
   }
+  assertJsonlReadProgress({ consumedBytes, remainingSourceBytes: fileStat.size - startOffset - buffer.byteLength,
+    pendingLineBytes: buffer.byteLength, maxLineBytes: maxBytes, direction: 'forward', offsetBytes: startOffset });
   const nextOffset = Math.min(fileStat.size, startOffset + consumedBytes);
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
@@ -421,6 +478,7 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  signal?: AbortSignal;
   /** Retain complete nonblank malformed records as null for a visible transcript fallback. */
   includeMalformedRecords?: boolean;
   /** Consume parsed lines newest first, preserving progress before a read yields. */
@@ -431,9 +489,15 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   diagnostics?: readonly JsonlSourceDiagnosticV1[];
   nextEndOffsetBytes: number;
   reachedStart: boolean;
-  /** Consumed end of this page; null when the terminal line boundary exceeds the read budget. */
+  /** Consumed end of this page; null until a terminal line boundary is established. */
   tailOffsetBytes: number | null;
 }>> {
+  return await withJsonlReadFile(params, (fileSystem) => scanJsonlBackwardPage({ ...params, fileSystem }));
+}
+
+async function scanJsonlBackwardPage(
+  params: Parameters<typeof readJsonlFileBackwardPage>[0],
+): ReturnType<typeof readJsonlFileBackwardPage> {
   const fileSystem = params.fileSystem ?? defaultFileSystem;
   const maxBytes = normalizePositiveInteger(params.maxBytes, DEFAULT_TAIL_BYTES);
   const maxItems = normalizePositiveInteger(params.maxItems, 100);
@@ -565,8 +629,9 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   // Only complete lines establish a continuation. The read limit may leave
   // `end` inside a native row (even inside a UTF-8 scalar); publishing that
   // offset would turn a valid source into a malformed one on the next page.
-  // No progress tells the caller that this row exceeds the scanner budget.
   const nextEndOffsetBytes = oldestConsumedOffsetBytes ?? initialEnd;
+  assertJsonlReadProgress({ consumedBytes: initialEnd - nextEndOffsetBytes, remainingSourceBytes: end,
+    pendingLineBytes: carryLength, maxLineBytes: maxOversizeLineBytes, direction: 'backward', offsetBytes: initialEnd });
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
     items,
@@ -585,6 +650,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  signal?: AbortSignal;
   /** Consume each parsed line immediately without retaining source bodies. */
   onLine?: (line: JsonlForwardLineV1) => void;
   onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
@@ -596,6 +662,12 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   reachedEnd: boolean;
   hitPageLimit: boolean;
 }>> {
+  return await withJsonlReadFile(params, (fileSystem) => scanJsonlForwardLines({ ...params, fileSystem }));
+}
+
+async function scanJsonlForwardLines(
+  params: Parameters<typeof readJsonlFileForwardLines>[0],
+): ReturnType<typeof readJsonlFileForwardLines> {
   const fileSystem = params.fileSystem ?? defaultFileSystem;
   const maxBytes = normalizePositiveInteger(params.maxBytes, DEFAULT_TAIL_BYTES);
   const maxItems = normalizePositiveInteger(params.maxItems, 100);
@@ -710,6 +782,8 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   }
 
   const reachedEnd = carry.length === 0 && nextReadOffset >= fileSize;
+  assertJsonlReadProgress({ consumedBytes: carryStartOffset - offsetBytes, remainingSourceBytes: fileSize - nextReadOffset,
+    pendingLineBytes: carry.length, maxLineBytes: maxOversizeLineBytes, direction: 'forward', offsetBytes });
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
     items,
@@ -729,6 +803,7 @@ export async function readJsonlFileForward(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  signal?: AbortSignal;
   /** Retain complete malformed records as null; an incomplete tail remains retryable. */
   includeMalformedRecords?: boolean;
 }>): Promise<Readonly<{

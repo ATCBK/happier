@@ -239,6 +239,41 @@ describe('bounded JSONL session scanner', () => {
     })).rejects.toBe(stopped);
   });
 
+  it.each(['forward', 'cursor', 'range'] as const)('fails explicitly on a bounded %s record and recovers intact with a larger allowance', async (kind) => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-file-store-read-allowance-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const first = jsonlLine({ id: 1 });
+    const value = { id: 2, text: 'x'.repeat(4096) };
+    const content = first + jsonlLine(value);
+    await writeFile(filePath, content);
+    const read = (offset: number, allowance: number) => kind === 'cursor'
+      ? scanner.readJsonlAfterCursor({ filePath, cursor: { v: 1, kind: 'byteOffset', offset }, maxBytes: allowance, maxItems: 10 })
+      : kind === 'range' ? scanner.readJsonlRange({ filePath, startOffset: offset, maxBytes: allowance })
+      : scanner.readJsonlFileForward({ filePath, offsetBytes: offset, maxBytes: 1024, maxOversizeLineBytes: allowance, maxItems: 10 });
+    const preceding = await read(0, 1024);
+    expect('nextCursor' in preceding ? preceding.nextCursor.offset : 'nextOffset' in preceding ? preceding.nextOffset : preceding.nextOffsetBytes).toBe(first.length);
+    await expect(read(first.length, 1024)).rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
+    const recovered = await read(first.length, Buffer.byteLength(content));
+    expect('lines' in recovered ? recovered.lines.map(line => JSON.parse(line)) : recovered.items.map(line => line.value)).toEqual([value]);
+  });
+
+  it.each(['forward', 'backward'] as const)('accepts exact framing allowance in the %s reader', async (direction) => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-file-store-exact-allowance-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const value = { text: 'é'.repeat(1024) };
+    const content = jsonlLine(value);
+    await writeFile(filePath, content);
+    const bounds = { filePath, maxBytes: 1024, maxOversizeLineBytes: Buffer.byteLength(content), maxItems: 1 };
+    const page = direction === 'forward'
+      ? await scanner.readJsonlFileForward({ ...bounds, offsetBytes: 0 })
+      : await scanner.readJsonlFileBackwardPage({ ...bounds, endOffsetBytes: null });
+    expect(page.items.map(line => line.value)).toEqual([value]);
+  });
+
   it('distinguishes a bounded parsed page from an incomplete EOF without changing raw-line reads', async () => {
     const scanner = await import('./index.js');
     const root = await mkdtemp(join(tmpdir(), 'happier-file-store-incomplete-'));
@@ -273,8 +308,8 @@ describe('bounded JSONL session scanner', () => {
     expect(await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 1024, maxItems: 10 }))
       .toMatchObject({ tailOffsetBytes: (await stat(filePath)).size });
     await writeFile(filePath, first + '{"text":"' + 'x'.repeat(4096));
-    expect(await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 1024, maxOversizeLineBytes: 1024, maxItems: 10 }))
-      .toMatchObject({ tailOffsetBytes: null });
+    await expect(scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 1024, maxOversizeLineBytes: 1024, maxItems: 10 }))
+      .rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
   });
 
   it('refuses an oversize unterminated tail across small read chunks', async () => {
@@ -287,20 +322,9 @@ describe('bounded JSONL session scanner', () => {
     const content = first + '{"text":"' + 'x'.repeat(oversizeLineBytes);
     await writeFile(filePath, content);
 
-    const page = await scanner.readJsonlFileBackwardPage({
-      filePath,
-      endOffsetBytes: null,
-      maxBytes: 8192,
-      maxItems: 1,
-      chunkBytes: 8192,
-    });
-
-    expect(page).toMatchObject({
-      items: [],
-      tailOffsetBytes: null,
-      nextEndOffsetBytes: Buffer.byteLength(content),
-      reachedStart: false,
-    });
+    await expect(scanner.readJsonlFileBackwardPage({
+      filePath, endOffsetBytes: null, maxBytes: 8192, maxItems: 1, chunkBytes: 8192,
+    })).rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
   });
 
   it('never publishes a backward continuation inside a valid oversized UTF-8 row', async () => {
@@ -310,9 +334,8 @@ describe('bounded JSONL session scanner', () => {
     const filePath = join(root, 'transcript.jsonl');
     const content = jsonlLine({ id: 1, pad: '🙂'.repeat(2_100_000) });
     await writeFile(filePath, content);
-    const page = await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 8192, maxItems: 1 });
-    expect(page.diagnostics).toBeUndefined();
-    expect(page).toMatchObject({ items: [], nextEndOffsetBytes: Buffer.byteLength(content), reachedStart: false });
+    await expect(scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 8192, maxItems: 1 }))
+      .rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE', retryable: false });
   });
 
   it.each([false, true])('paginates complete oversize records across read chunks with trailing newline=%s', async (trailingNewline) => {
