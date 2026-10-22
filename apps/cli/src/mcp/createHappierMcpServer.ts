@@ -36,7 +36,7 @@ import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/per
 import { resolveExecutionRunPublicBackendId } from '@/agent/runtime/bridges/executionRun/backendTargets';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import type { ActionId, AccountSettings, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
-import { getActionSpec, isActionSpecSurfacedOn } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, isActionSpecSurfacedOn, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 import { readServerIdentityIdFromFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isMemorySessionSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
@@ -498,6 +498,10 @@ export function createHappierMcpServer(
         };
       },
       executionRunStart: executionRunStartRpc,
+      // Like the registered Run executor, this in-process adapter calls the
+      // current V2 owner directly. Only remote transports need negotiation;
+      // the Session runner has no daemon-local capability catalog to probe.
+      executionRunCheckProtocolV2: async (sessionId) => await runForBoundSession(sessionId, async () => ({ ok: true as const })),
       executionRunList: async (sessionId, request) => await runForBoundSession(sessionId, async () => await executionRuns.list(request)),
       executionRunGet: async (sessionId, request) => await runForBoundSession(sessionId, async () => await executionRuns.get(request)),
       executionRunStop: async (sessionId, request) => await runForBoundSession(sessionId, async () => await executionRuns.stop(request)),
@@ -509,6 +513,13 @@ export function createHappierMcpServer(
       ...(credentials
         ? {}
         : {
+          // Admission reads the credentialed inventory through the same Session
+          // capability as discovery. Run effects retain this host's bound RPC.
+          agentsBackendsList: async (input) => {
+            const outcome = await accountExecutor.execute('agents.backends.list', input, { surface: toolSurface });
+            if (!outcome.ok) throw Object.assign(new Error(outcome.errorCode), { code: outcome.errorCode });
+            return PUBLIC_ACTION_OUTPUT_SCHEMAS['agents.backends.list'].parse(outcome.result);
+          },
           // Compatibility MCP clients without Account credentials can only reach
           // the daemon already bound to their session. Authenticated callers keep
           // the canonical machine-aware dependencies from createCliActionDeps.
