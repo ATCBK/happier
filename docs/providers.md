@@ -176,8 +176,16 @@ revision refuses without committing the draft.
 Agent Models can browse compatible static and manual Provider models without a
 machine. `catalog/accountModelProjectionV1.ts` merges the stored Account catalog
 with admitted Provider declarations and the selected Agent's actual manifest
-`providerRequirements`. The bundled UI declarations come from the existing
-bundled-plugin generator; the CLI uses its admitted manifest registry. Missing
+`providerRequirements`. Without a Machine, UI declarations come from the existing
+bundled-plugin generator; the CLI uses its admitted manifest registry. In 0.3
+development source, Machine-targeted UI readers use that exact Machine's admitted
+registry projection for installed Agent requirements and Provider declarations.
+Team application discovery feeds these declarations into the same broker application
+projector used by the CLI. The picker applies the shared model-capability check
+to Account and Team rows, including an installed Agent's tool-roundtrip requirements.
+An absent Agent declaration or requirements remain explicitly unknown and admit no
+source-backed model rows; another Machine or a matching local Agent name cannot
+fill that gap. Missing
 Agent requirements refuse the projection rather than assuming compatibility.
 These rows are `account_unverified`, with unknown load state, unchecked health,
 no probe observation and no runtime confirmation. Their declaration fingerprint
@@ -594,8 +602,10 @@ Pool gateway choices and vendor-slot writes use the captured Account catalog
 without selecting a machine. Each gateway needs its own admitted declaration;
 an unavailable unrelated managed source does not hide an admitted gateway.
 Declaration-census completeness is diagnostic, not an all-sources admission gate.
-Saved gateway identity comes from bundled admitted declarations, not a machine's
-runtime view. Missing machine runtime evidence leaves status unchecked; it does
+Saved gateway identity comes from admitted declarations: bundled facts remain
+available without a Machine, and exact Machine projections supply installed
+contributions where that target is selected. Runtime status is a separate fact.
+Missing machine runtime evidence leaves status unchecked; it does
 not turn the saved gateway into an external Provider.
 
 The first gateway is created from Connected services without a machine: the
@@ -665,6 +675,14 @@ resolver/target, target failure and cancellation. Diagnostics contain fixed
 classes rather than error messages, URLs, headers, bodies or signed authority;
 the public refusal remains `provider_endpoint_unavailable`. A missing HTTP
 status alone cannot distinguish a rejected stream from a transport failure.
+Account-connection open and fresh-access refusals also retain Home's existing
+closed admission reason as `admissionReasonCode` in those file records. The
+daemon carries that reason in the existing runner failure cause; the runner's
+broker application returns it as its typed refusal code. The outer Provider
+error remains `provider_endpoint_unavailable`. An unknown or absent cause still
+returns `broker_unavailable`; raw exceptions and signed authority are never
+forwarded. This reports Home's decision without changing admission or extending
+consumer authority across a transport failure.
 Compare discovery time with the containing daemon-service request duration;
 that request also includes catalog, grant acquisition and binding revalidation.
 Its total duration is not a native stream timeout measurement.

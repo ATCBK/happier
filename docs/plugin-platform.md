@@ -62,7 +62,24 @@ also inherit their host's main-column visibility; their declared page identity s
 wording. See [Collection presentation](collection-presentation.md) and
 [App shell panes](app-shell-panes.md) for the canonical owners.
 
+The capability row anatomy (status words, tone, fix and blocking order; the source · trust · cost facts
+line; the detail header's speak decision; the blocking notice; the `Collection` row anatomy) is owned by
+Plugin UI `presentation/capabilities/**`. Happier's Skills, MCP and Agents surfaces bind their words and
+primitives to it, and plugins reach it through the public `components` adapters (`CapabilityStatusChip`,
+`CapabilityFacts`, `CapabilityDetailHeader`, `CapabilityBlockingBanner`, `capabilityCollectionAnatomy`).
+The Where-it's-on control, the catalog Add dialog and the reach map remain host-only.
+
 ## Declaration, activation and projection
+
+In 0.3 development source, the existing Machine registry projection carries
+the admitted Agent's optional `providerRequirements` and each Provider's typed
+definition, provenance and source kind. These are declarations, not execution
+grants. Targeted UI catalog readers consume the exact qualified identity through
+this projection; a missing declaration remains unknown. No plugin activation,
+second registry, or bundled-name inference supplies these facts. Account-scoped
+Connected Account declaration agreement has one narrow generated-bundle exception,
+described in [the Agent catalog](agents-catalog.md); external installed declarations
+retain their own supplier-agreement rule.
 
 In 0.3 development source, the existing daemon projection describe request accepts
 `selection: 'settings'` or `selection: 'connectedAccountAdmission'`. Settings reads
@@ -2580,6 +2597,22 @@ theme ink and pointer target floor through the public presentation props. A note
 and its action share one wrapping text run; physical vertical padding, with
 compensating margins, expands a touch target without enlarging the text line.
 The keyboard focus ring stays on the action's ink rather than its hit frame.
+
+### External Session JSONL read progress (0.3 development)
+
+The shared SDK file-store scanners preserve source byte boundaries. When the
+existing read allowance cannot complete the next record and no source has been
+consumed, they fail with a nonretryable `PluginError` whose code is
+`JSONL_RECORD_TOO_LARGE`. Raw byte-cursor reads use the same progress check.
+Transcript adapters preserve this failure through their existing operation result;
+they must not return an unchanged continuation or report `already_current`.
+A caller with a larger supported allowance can read the record intact. The
+scanners do not skip or truncate it, and incomplete parsed EOF records remain
+pending for the writer to finish.
+
+Advisory Codex title and Claude working-directory scans may stop at this boundary,
+with a default stderr warning, retaining metadata already read. Claude's indexed
+title reader still fails instead of marking unread source as verified.
 
 ### External Session content search (0.3 development)
 
