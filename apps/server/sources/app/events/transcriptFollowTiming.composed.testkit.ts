@@ -38,6 +38,7 @@ import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { verifyCurrentExternalActionPrincipal } from '@/app/auth/externalActionExecutionAuthorization';
 import { createSessionMessage } from '@/app/session/sessionWriteService';
+import { deleteOwnedSession } from '@/app/session/delete/deleteOwnedSession';
 import { enqueuePendingMessage, materializeNextPendingMessage, resolveAcceptedPendingDelivery } from '@/app/session/pending/pendingMessageService';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
@@ -241,6 +242,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     return { status: http.status, body: { execution: { ok: true, result } } };
                 });
         };
+        let testFailed = false;
         try {
             await new Promise<void>((resolve, reject) => { daemon.once('connect', resolve); daemon.once('connect_error', reject); });
             const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
@@ -351,19 +353,39 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     await response;
                 }
             }
+        } catch (error) {
+            testFailed = true;
+            throw error;
         } finally {
             releaseWriter?.();
             abort.abort();
-            await registry.dispose();
-            daemon.disconnect();
-            runner.disconnect();
-            eventRouter.clearIo();
-            await new Promise<void>(resolve => io.close(() => resolve()));
-            await network?.stop();
-            await app.close();
-            if (provider === 'postgres') {
-                await db.session.delete({ where: { id: session.id } });
-                await db.account.delete({ where: { id: owner.id } });
+            const cleanupErrors: unknown[] = [];
+            for (const cleanup of [
+                async () => { await registry.dispose(); },
+                async () => {
+                    daemon.disconnect();
+                    runner.disconnect();
+                    eventRouter.clearIo();
+                    await new Promise<void>(resolve => io.close(() => resolve()));
+                },
+                async () => { await network?.stop(); },
+                async () => { await app.close(); },
+                async () => {
+                    if (provider !== 'postgres') return;
+                    // The deletion owner removes transcript children before their parent.
+                    expect(await deleteOwnedSession({ sessionId: session.id, reason: 'retention_policy' }))
+                        .toEqual({ ok: true });
+                    await db.machine.delete({ where: { id: machine.id } });
+                    await db.account.delete({ where: { id: owner.id } });
+                },
+            ]) {
+                try { await cleanup(); } catch (error) { cleanupErrors.push(error); }
+            }
+            if (cleanupErrors.length > 0) {
+                const cleanupError = new AggregateError(cleanupErrors, 'Transcript-follow fixture cleanup failed');
+                if (!testFailed) throw cleanupError;
+                // Keep the deciding response assertion as the test failure.
+                console.error(cleanupError);
             }
         }
     });

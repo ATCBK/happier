@@ -132,6 +132,7 @@ import { registerDaemonLocalServicesMachineRpcHandlers } from '../../../../../..
 import { registerActionSpecRpcHandlers } from '../../../../../../cli/src/rpc/handlers/registerActionSpecRpcHandlers';
 import { ApiClient } from '../../../../../../cli/src/api/api';
 import * as installationStore from '../../../../../../cli/src/daemon/identity/store';
+import * as currentMachineInstallation from '../../../../../../cli/src/daemon/identity/currentMachineInstallation';
 import type { RpcHandlerContext } from '../../../../../../cli/src/api/rpc/types';
 import type { RpcActionExecutorContext } from '../../../../../../cli/src/rpc/handlers/_actionDispatchAdapter';
 import { createManagedServicesOwner } from '../../../../../../cli/src/plugins/runtime/invocation/services/managedServicesOwner';
@@ -165,7 +166,7 @@ import { openExternalActionRequesterAccountContextV1, sealExternalActionRequeste
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { registerAccountProfileRoute } from '@/app/api/routes/account/registerAccountProfileRoute';
 import { machineUpdateHandler } from "@/app/api/socket/machineUpdateHandler";
-import { createFakeSocket, getSocketHandler, createSocketRoomDiscoveryHarness } from "@/app/api/testkit/socketHarness";
+import { createAuthenticatedFakeSocket, createFakeSocket, getSocketHandler, createSocketRoomDiscoveryHarness } from "@/app/api/testkit/socketHarness";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { resolveMachineAccess, resolveMachineAdmission, setMachineAccessGrantInTx, removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
 import { readMachineDevcontainerWorkspaceSyncRouteInTx } from '@/app/machines/managed/managedRows';
@@ -213,10 +214,11 @@ import { serializeAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-de
 import { encodeAutomationSessionLifecycleConfiguration } from '@/app/automations/automationSessionLifecycleConfigurationCodec';
 import { deleteAutomationTrigger } from '@/app/automations/automationCrudService';
 import { registerWorkflowRunStorageRoutes } from '@/app/api/routes/automations/registerWorkflowRunStorageRoutes';
+import { startSocket } from '@/app/api/socket';
 import { createSignedPluginInstallationPublisherHeader } from '@/testkit/pluginInstallationPublisherTestkit';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol';
 import { materializeWorkflowAcceptedSnapshotFixture } from '@/testkit/workflowAcceptedSnapshot';
-import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -1562,8 +1564,23 @@ describe("external Action execution authorization", () => {
         // Session publisher discovery is an external socket boundary. Persisted
         // source custody, issuance, both signatures and route admission stay real.
         let publisherCurrent = true;
+        let onWaitRead: (() => void) | undefined;
         const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null,
-            undefined, false, routes => registerDiscussionRoutes(routes));
+            undefined, false, routes => {
+                registerDiscussionRoutes(routes);
+                if (caller === 'session') {
+                    startSocket(routes);
+                    // The parent Session publisher is the external boundary;
+                    // keep this test's incumbent presence witness. Account
+                    // socket authentication and connection admission stay real.
+                    routes.resolveCurrentSessionMachine = async () => publisherCurrent ? fixture.machine.id : null;
+                }
+                routes.addHook('onResponse', async request => {
+                    if (request.url === '/v3/automations/runs/workflow-storage'
+                        && request.body && typeof request.body === 'object' && 'operation' in request.body
+                        && request.body.operation === 'wait') onWaitRead?.();
+                });
+            });
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
         const homeId = await getOrCreateServerIdentityId();
         const runId = crypto.randomUUID();
@@ -1714,6 +1731,110 @@ describe("external Action execution authorization", () => {
                     headers: { authorization: `Bearer ${token}` }, payload: { operation: 'get', runId } });
                 expect(observed.statusCode, observed.body).toBe(200);
                 expect(observed.json()).toMatchObject({ run: { id: runId, state: 'queued' } });
+            }
+            if (caller === 'session') {
+                // Exercise the real CLI composition, signed HTTP purposes and
+                // Account feed while a native wait outlives its first read.
+                const invocationId = crypto.randomUUID();
+                await db.workflowRunInvocation.create({ data: { id: invocationId, runId, sequence: 1n,
+                    parentRecordId: null, memberOrdinal: 0n, lifecycle: 'running',
+                    contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+                        mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: fixture.account.id,
+                            runId, recordId: invocationId, sequence: '1', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+                        progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step',
+                            invocationPath: { blockId: snapshot.definition.blocks[0]!.id, scope: [] },
+                            attempt: '0', logicalInvocationRecordId: invocationId,
+                            execution: { kind: 'session', sessionId: 'another-workflow-session', localInputId: 'leaf-input' } },
+                    })) } });
+                await db.automationRun.update({ where: { id: runId }, data: { state: 'running', revision: 1 } });
+                const socket = app.machineDaemonPresence;
+                if (!(socket instanceof SocketServer)) throw new Error('Expected the production Socket.IO server');
+                const installation = vi.spyOn(currentMachineInstallation, 'readCurrentMachineInstallation').mockResolvedValue({
+                    machineId: fixture.machine.id, identity: { version: 1, installationId: fixture.machine.installationId!, createdAt: 1,
+                        publicKey: encodeBase64(fixture.keyPair.publicKey, 'base64url'),
+                        privateKey: encodeBase64(fixture.keyPair.secretKey, 'base64url') },
+                });
+                const controller = new AbortController();
+                try {
+                    const origin = await app.listen({ port: 0, host: '127.0.0.1' });
+                    const cli = createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: 'cli-global',
+                        mode: 'plain', ctx: null, serverId: 'workflow-wait-home', serverIdentityId: homeId, serverHttpBaseUrl: origin,
+                        pluginActionExecutionOwner: 'current_process',
+                        externalActionMachineInstallationId: fixture.machine.installationId!, externalActionMachineRequestPrivateKey: fixture.keyPair.secretKey,
+                        resolveServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
+                            features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {},
+                        }) }),
+                    });
+                    const authorization = await issue('workflow.run.wait');
+                    const connected = new Promise<void>(resolve => socket.once('connection', () => resolve()));
+                    let resolveRead: (() => void) | undefined;
+                    const nextRead = () => new Promise<void>(resolve => { resolveRead = resolve; });
+                    onWaitRead = () => resolveRead?.();
+                    const firstRead = nextRead();
+                    const initialTime = Date.now();
+                    vi.useFakeTimers({ toFake: ['Date'] });
+                    const context = { surface: 'agent' as const, authority: 'account_automation' as const, defaultSessionId: session.id,
+                        externalActionTarget: target, externalActionExecutionAuthorization: authorization, signal: controller.signal };
+                    const pending = cli.execute('workflow.run.wait', { runId, conditions: ['terminal'], timeoutSeconds: 300 }, context);
+                    void pending.catch(() => {});
+                    await Promise.race([Promise.all([connected, firstRead]), pending.then(result => {
+                        throw new Error(`Native wait settled before its first observation: ${JSON.stringify(result)}`);
+                    })]);
+                    await vi.waitFor(() => expect(socket.sockets.adapter.rooms.has(`account-stored-content-v3:${fixture.account.id}`)).toBe(true));
+                    const concurrentGet = await issue('workflow.run.get');
+                    await expect(cli.execute('workflow.run.get', { runId }, { ...context,
+                        externalActionExecutionAuthorization: concurrentGet })).resolves.toMatchObject({ ok: true,
+                        result: { run: { id: runId, state: 'running' } } });
+                    vi.setSystemTime(initialTime + 149_000);
+                    await db.automationRun.update({ where: { id: runId }, data: { state: 'interrupted', revision: 2 } });
+                    await db.workflowRunInvocation.update({ where: { id: invocationId }, data: { lifecycle: 'failed' } });
+                    const interruptedRead = nextRead();
+                    await eventRouter.emitUpdate({ userId: fixture.account.id, recipientFilter: { type: 'account-stored-content-v3' }, payload: {
+                        id: 'workflow-interrupted', seq: 1, createdAt: Date.now(), body: { t: 'account-change' },
+                    } });
+                    await interruptedRead;
+                    // Interrupted is nonterminal. Only the caller's authored
+                    // deadline ends this terminal-only observation.
+                    vi.setSystemTime(initialTime + 301_000);
+                    await eventRouter.emitUpdate({ userId: fixture.account.id, recipientFilter: { type: 'account-stored-content-v3' }, payload: {
+                        id: 'workflow-deadline', seq: 2, createdAt: Date.now(), body: { t: 'account-change' },
+                    } });
+                    await expect(pending).resolves.toMatchObject({ ok: true, result: { observation: 'timeout',
+                        run: { id: runId, state: 'interrupted' } } });
+                    const interruptedAuthorization = await issue('workflow.run.wait');
+                    const connectedAgain = new Promise<void>(resolve => socket.once('connection', () => resolve()));
+                    const initiallyInterruptedRead = nextRead();
+                    const initiallyInterrupted = cli.execute('workflow.run.wait', { runId, conditions: ['terminal'], timeoutSeconds: 300 }, {
+                        ...context, externalActionExecutionAuthorization: interruptedAuthorization,
+                    });
+                    void initiallyInterrupted.catch(() => {});
+                    await Promise.race([Promise.all([connectedAgain, initiallyInterruptedRead]), initiallyInterrupted.then(result => {
+                        throw new Error(`Interrupted wait settled before its first observation: ${JSON.stringify(result)}`);
+                    })]);
+                    await vi.waitFor(() => expect(socket.sockets.adapter.rooms.has(`account-stored-content-v3:${fixture.account.id}`)).toBe(true));
+                    const concurrentInterruptedGet = await issue('workflow.run.get');
+                    await expect(cli.execute('workflow.run.get', { runId }, { ...context,
+                        externalActionExecutionAuthorization: concurrentInterruptedGet })).resolves.toMatchObject({ ok: true,
+                        result: { run: { id: runId, state: 'interrupted' } } });
+                    vi.setSystemTime(initialTime + 602_000);
+                    await eventRouter.emitUpdate({ userId: fixture.account.id, recipientFilter: { type: 'account-stored-content-v3' }, payload: {
+                        id: 'interrupted-deadline', seq: 3, createdAt: Date.now(), body: { t: 'account-change' },
+                    } });
+                    await expect(initiallyInterrupted).resolves.toMatchObject({ ok: true, result: { observation: 'timeout',
+                        run: { id: runId, state: 'interrupted' } } });
+                    const getAuthorization = await issue('workflow.run.get');
+                    await expect(cli.execute('workflow.run.get', { runId }, { ...context,
+                        externalActionExecutionAuthorization: getAuthorization })).resolves.toMatchObject({ ok: true,
+                        result: { run: { id: runId, state: 'interrupted' } } });
+                    await vi.waitFor(() => expect(socket.sockets.sockets.size).toBe(0));
+                } finally {
+                    controller.abort();
+                    vi.useRealTimers();
+                    onWaitRead = undefined;
+                    installation.mockRestore();
+                    await new Promise<void>(resolve => socket.close(() => resolve()));
+                    eventRouter.clearIo();
+                }
             }
             if (caller === 'session') publisherCurrent = false;
             else await db.machine.update({ where: { id: fixture.machine.id }, data: { revokedAt: new Date() } });
@@ -3005,17 +3126,22 @@ describe("external Action execution authorization", () => {
         } finally { await app.close(); }
     });
 
-    it('binds signed delivery-mute mutations to the exact receiver route and scope', async () => {
+    it('retains captured receiver resource scope for signed delivery-mute mutations', async () => {
         const fixture = await createFixture({ qualifiedPat: true });
         const [receiver, outside, sender] = await Promise.all(['receiver', 'outside', 'sender'].map(tag => db.session.create({
             data: { accountId: fixture.account.id, tag: `${tag}-${crypto.randomUUID()}`, encryptionMode: 'plain', metadata: '{}' },
         })));
         await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
             sessionId: receiver.id, data: 'opaque-mute-receiver-key' } });
+        // The installed daemon derives plaintext operands; Home enforces the
+        // captured credential's resource ceiling on each signed route operand.
+        const scopedPat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(),
+            label: 'receiver Machine only', grant: { ...API_TOKEN_FULL_GRANT_V1,
+                targets: { sessions: [], machines: [fixture.machine.id] } } });
         const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, registerSessionFollowRoutes);
         try {
             const scope = { kind: 'sender_session' as const, sessionId: sender.id };
-            const root = await mint(app, fixture, 'session.delivery.mute.set', { ...fixture.envelope,
+            const root = await mint(app, { ...fixture, pat: scopedPat }, 'session.delivery.mute.set', { ...fixture.envelope,
                 input: { receiver: { kind: 'session', sessionId: receiver.id }, scope } });
             const write = (sessionId: string) => {
                 const path = `/v2/sessions/${sessionId}/delivery-mutes`;
@@ -3038,6 +3164,7 @@ describe("external Action execution authorization", () => {
                     installationId: fixture.machine.installationId!, method: 'PUT', path: personalPath, body: personalBody,
                     privateKey: fixture.keyPair.secretKey }) });
             expect(personal.statusCode, personal.body).toBe(200);
+            await auth.updateApiToken({ accountId: fixture.account.id, tokenId: scopedPat.tokenId, grant: API_TOKEN_FULL_GRANT_V1 });
             const denied = await write(outside.id);
             expect(denied.statusCode, denied.body).toBe(401);
             expect((await db.session.findUniqueOrThrow({ where: { id: outside.id } })).deliveryMutes).toBeNull();
@@ -7302,7 +7429,7 @@ describe("external Action execution authorization", () => {
                     event: SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, method: SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1,
                     params: request, privateKey: fixture.keyPair.secretKey,
                 }) };
-            const socket = createFakeSocket({ data: { clientType: "machine-scoped", machineId: fixture.machine.id,
+            const socket = createAuthenticatedFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) }, data: { clientType: "machine-scoped", machineId: fixture.machine.id,
                 verifiedMachineInstallationId: fixture.machine.installationId } });
             // Only the Socket.IO transport is a fixture; proof verification and durable admission remain real.
             machineUpdateHandler(fixture.account.id, socket as unknown as Socket, {
@@ -7356,7 +7483,7 @@ describe("external Action execution authorization", () => {
                     event, method: event, params, privateKey: fixture.keyPair.secretKey,
                 }),
             });
-            const socket = createFakeSocket({ data: { clientType: 'machine-scoped', machineId: fixture.machine.id,
+            const socket = createAuthenticatedFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) }, data: { clientType: 'machine-scoped', machineId: fixture.machine.id,
                 verifiedMachineInstallationId: fixture.machine.installationId } });
             // Only Socket.IO is replaced: installed proof, root currentness and durable custody remain real.
             machineUpdateHandler(fixture.account.id, socket as unknown as Socket, {
@@ -7983,12 +8110,12 @@ describe("external Action execution authorization", () => {
         });
         const { app } = await createApp(fixture.team.id);
         try {
-            const actionId = "session.follow.sources.list";
+            const actionId = "follow.list";
             const envelope: ExternalActionRequestEnvelopeV1 = {
                 v: 1,
                 requestId: crypto.randomUUID(),
                 target: { kind: "machine", machineId: fixture.machine.id },
-                input: { destinationSessionId: destination.id },
+                input: { direction: 'following', receiver: { kind: 'session', sessionId: destination.id } },
             };
             const authorization = await mint(app, fixture, actionId, envelope);
             const path = `/v2/sessions/${destination.id}/follows/sessions`;
