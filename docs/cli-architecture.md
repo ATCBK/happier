@@ -1038,6 +1038,14 @@ accounts, including a pool rotation; the storage change does not relax it.
 Configuration inheritance remains a separate policy. Discovery probes and other
 temporary materializers retain disposable roots.
 
+Direct linking recovers a connected-service runtime snapshot only from a marker
+for the same Agent and native conversation. A matching working directory does
+not authorize borrowing another Session's binding or materialization identity,
+including when refreshing an existing link. Exact-conversation recovery remains
+valid across working-directory changes. Historical identities are retained:
+their stored shape does not identify a donor, so linking does not blindly remint
+them or move private state.
+
 When isolated history is imported into shared state and the same file already
 exists with different bytes, the existing importer preserves the destination
 and saves the incoming version under a `.happier-import-*` name. This preserves
