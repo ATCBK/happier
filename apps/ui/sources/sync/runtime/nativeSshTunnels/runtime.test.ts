@@ -92,6 +92,47 @@ function createRequest() {
 }
 
 describe('app native SSH tunnel runtime', () => {
+    it('publishes only changed tunnel snapshots while retaining real lease reference counts and suspension transitions', async () => {
+        const { createNativeSshTunnelSupervisor } = await import('./supervisor');
+        const { createNativeSshTunnelRuntime } = await import('./runtime');
+        // Native tunnel handles and HTTP health are the external boundaries; lease/refcount logic stays real.
+        const supervisor = createNativeSshTunnelSupervisor({ adapter: {
+            startLoopbackTunnel: async () => ({ nativeTunnelId: 'publication-native', localPort: 49152 }),
+            stopLoopbackTunnel: async () => undefined,
+        } });
+        const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.origin === 'http://127.0.0.1:49152' && url.pathname === '/health') return Response.json({ ok: true });
+            throw new Error(`Unexpected tunnel health request ${url.origin}${url.pathname}`);
+        });
+        const runtime = createNativeSshTunnelRuntime({ supervisor });
+        const notifications = vi.fn();
+        const stop = runtime.subscribe(notifications);
+        try {
+            const lease = await runtime.ensureTunnel(createRequest());
+            expect(runtime.listTunnels().leases).toHaveLength(1);
+            expect(notifications).toHaveBeenCalledTimes(1);
+            await runtime.ensureTunnel(createRequest());
+            await runtime.releaseTunnel(lease.leaseId);
+            await runtime.markForeground();
+            expect(runtime.listTunnels().leases).toHaveLength(1);
+            expect(notifications).toHaveBeenCalledTimes(1);
+            runtime.markSuspended();
+            expect(runtime.listTunnels().leases[0]?.status).toBe('degraded');
+            expect(notifications).toHaveBeenCalledTimes(2);
+            runtime.markSuspended();
+            expect(notifications).toHaveBeenCalledTimes(2);
+            await runtime.markForeground();
+            expect(runtime.listTunnels().leases[0]?.status).toBe('ready');
+            expect(notifications).toHaveBeenCalledTimes(3);
+            await runtime.releaseTunnel(lease.leaseId);
+            expect(runtime.listTunnels().leases).toEqual([]);
+            expect(notifications).toHaveBeenCalledTimes(4);
+            await runtime.releaseTunnel(lease.leaseId);
+            expect(notifications).toHaveBeenCalledTimes(4);
+        } finally { stop(); await runtime.dispose(); fetch.mockRestore(); }
+    });
+
     it('withdraws pending native acceptance on Account retirement while the incumbent subscriber follows the next Account', async () => {
         const pendingReached = createDeferred<void>();
         const finishPending = createDeferred<void>();

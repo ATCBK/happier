@@ -1,4 +1,5 @@
 import type { DoctorSnapshotHomeTransportDiagnostics } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 type DiagnosticsProducerIdentity = Readonly<{
     producerId: string;
@@ -128,6 +129,7 @@ export function createIrohHomeTransportDiagnosticsPublisher(
         assertMatchingHome(normalizedIdentity, diagnostics);
         if (released || currentGenerationByIdentity.get(key) !== generation) return;
         const superseded = activeObservationsByIdentity.get(key);
+        if (superseded?.generation === generation && sameStrictJsonValue(superseded.diagnostics, diagnostics)) return;
         if (superseded && superseded.generation !== generation) {
             retainInactiveDiagnostics(superseded.identity.producerId, superseded.diagnostics);
         }

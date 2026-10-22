@@ -65,6 +65,76 @@ function createPendingResult(): Readonly<{
 }
 
 describe('browser automation control service', () => {
+    it('retains equal admitted active targets while publishing actual motion and rejecting malformed targets', async () => {
+        const { createBrowserAutomationControlService } = await import('./controlService');
+        const service = createBrowserAutomationControlService({ nowMs: () => 1000 });
+        const pending = createPendingResult();
+        let report: Parameters<AutomationOwner['executeAction']>[1]['onActiveTarget'];
+        service.registerOwner(createOwner({ executeAction: (_, context) => { report = context.onActiveTarget; return pending.promise; } }));
+        const running = service.executeAction(createRequest({ actionKind: 'click' }));
+        let notifications = 0;
+        service.subscribe(() => { notifications++; });
+        const target = { x: 0.2, y: 0.3, width: 0.1, height: 0.1, label: 'Button' };
+        report!(target);
+        expect(notifications).toBe(1);
+        report!({ ...target });
+        expect(notifications).toBe(1);
+        report!({ ...target, x: -1 });
+        expect(notifications).toBe(1);
+        report!({ ...target, x: 0.4 });
+        expect(notifications).toBe(2);
+        pending.resolve({ status: 'succeeded' });
+        expect(await running).toMatchObject({ status: 'succeeded' });
+    });
+    it('still cancels older work when a replacement owner already carries the current navigation generation', async () => {
+        const { createBrowserAutomationControlService } = await import('./controlService');
+        const pending = createPendingResult();
+        const service = createBrowserAutomationControlService({ nowMs: () => 1000 });
+        let notifications = 0;
+        service.subscribe(() => { notifications++; });
+        const owner = createOwner({ executeAction: () => pending.promise });
+        service.registerOwner(owner);
+        const running = service.executeAction(createRequest());
+        service.registerOwner({ ...owner, navigationGeneration: 3 });
+        service.updateNavigationGeneration({ browserSessionId: owner.browserSessionId, viewId: owner.viewId, navigationGeneration: 3 });
+        const stalePublished = notifications;
+        service.updateNavigationGeneration({ browserSessionId: owner.browserSessionId, viewId: owner.viewId, navigationGeneration: 3 });
+        expect(notifications).toBe(stalePublished);
+        pending.resolve({ status: 'succeeded' });
+        expect(await running).toMatchObject({ status: 'stale', errorCode: 'stale_navigation' });
+    });
+    it('notifies on owner and navigation changes while retaining no-op control updates', async () => {
+        const { createBrowserAutomationControlService } = await import('./controlService');
+        const service = createBrowserAutomationControlService({ nowMs: () => 1000 });
+        let notifications = 0;
+        service.subscribe(() => { notifications++; });
+        const owner = createOwner();
+        const view = { browserSessionId: owner.browserSessionId, viewId: owner.viewId };
+        expect(service.registerOwner(owner)).toEqual({ ok: true });
+        expect(notifications).toBe(1);
+        service.registerOwner(owner);
+        service.updateNavigationGeneration({ ...view, navigationGeneration: owner.navigationGeneration });
+        expect(notifications).toBe(1);
+        service.updateNavigationGeneration({ ...view, navigationGeneration: owner.navigationGeneration + 1 });
+        expect(notifications).toBe(2);
+        service.recordHumanInput({ ...view, inputKind: 'pointer', occurredAtMs: 1000 });
+        expect(notifications).toBe(3);
+        service.recordHumanInput({ ...view, inputKind: 'pointer', occurredAtMs: 1001 });
+        expect(notifications).toBe(3);
+        expect(service.releaseHumanControl(view)).toBe(true);
+        expect(notifications).toBe(4);
+        expect(service.releaseHumanControl(view)).toBe(true);
+        expect(notifications).toBe(4);
+        // A new action remains observable even when only its timeline changes.
+        const action = await service.executeAction(createRequest({ navigationGeneration: owner.navigationGeneration + 1 }));
+        expect(action.status).toBe('succeeded');
+        expect(notifications).toBeGreaterThan(4);
+        expect(service.getActionTimeline(view)).toHaveLength(1);
+        service.closeView(view);
+        const closed = notifications;
+        service.closeView(view);
+        expect(notifications).toBe(closed);
+    });
     it('retains UI admission until canceled engine work settles and reports uncertain acknowledgement', async () => {
         const { createBrowserAutomationControlService } = await import('./controlService');
         const pending = createPendingResult();

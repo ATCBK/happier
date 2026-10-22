@@ -4,6 +4,7 @@ import {
     type NativeSshTunnelHostKeyPromptResolver,
     type NativeSshTunnelCredentialResolution,
 } from './adapter';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isRuntimeActive } from '@/utils/runtime/isRuntimeActive';
@@ -124,8 +125,17 @@ export function createNativeSshTunnelRuntime(params: Readonly<{
     let supervisor = params.supervisor;
     let withdrawn = false;
     let disposal: Promise<void> | null = null;
+    let publishedSnapshot = readSnapshot();
+
+    function readSnapshot(): NativeSshTunnelSnapshot {
+        const snapshot = supervisor.listTunnels();
+        return withdrawn ? { ...snapshot, leases: [] } : snapshot;
+    }
 
     function notify(): void {
+        const next = readSnapshot();
+        if (sameStrictJsonValue(publishedSnapshot, next)) return;
+        publishedSnapshot = next;
         for (const listener of [...listeners]) {
             listener();
         }
@@ -184,8 +194,7 @@ export function createNativeSshTunnelRuntime(params: Readonly<{
             }
         },
         listTunnels(): NativeSshTunnelSnapshot {
-            const snapshot = supervisor.listTunnels();
-            return withdrawn ? { ...snapshot, leases: [] } : snapshot;
+            return readSnapshot();
         },
         async releaseTunnel(leaseId: string): Promise<void> {
             const credentialsRefs = credentialRefsByLeaseId.get(leaseId);

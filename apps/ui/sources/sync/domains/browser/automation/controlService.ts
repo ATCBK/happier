@@ -4,6 +4,7 @@ import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionRes
 import { BrowserAutomationErrorCodeV1Schema, type BrowserAutomationErrorCodeV1 } from '@happier-dev/protocol/browser/automation/errors';
 import type { BrowserAgentPoint } from './copresence';
 import { redactBrowserAutomationActionResultDetails, redactBrowserAutomationTimelineDetails } from '@happier-dev/protocol/browser/automation/redaction';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type BrowserAutomationAuthority = 'uiLocal' | 'daemon' | 'serverBroker';
 export type BrowserAutomationRequesterKind = 'agent' | 'plugin' | 'system' | 'user';
@@ -390,18 +391,21 @@ export function createBrowserAutomationControlService(
         browserSessionId: string;
         viewId: string;
         occurredAtMs: number;
-    }>): void {
+    }>): boolean {
         const viewKey = browserViewKey(inputValue);
         const controller = controllerFor(viewKey);
+        const changed = !controller.humanHeld || controller.activeTarget !== null
+            || controller.requiresObservation === false || controller.controller !== 'human';
         if (!controller.humanHeld) controller.controlEpoch += 1;
         controller.humanHeld = true;
         controller.activeTarget = null;
         controller.requiresObservation ||= 'required';
         controller.controller = 'human';
-        cancelActiveActionsForView(viewKey, 'interrupted', 'human_interrupted', (active) => (
-            isMutatingAction(active.request.actionKind)
+        const canceled = cancelActiveActionsForView(viewKey, 'interrupted', 'human_interrupted', (active) => (
+            !active.interruption && isMutatingAction(active.request.actionKind)
             && active.request.requestedBy !== 'user'
         ));
+        return changed || canceled > 0;
     }
 
     return {
@@ -411,6 +415,7 @@ export function createBrowserAutomationControlService(
             if (existing && existing.ownerId !== owner.ownerId) {
                 return { ok: false, reasonCode: 'owner_conflict' };
             }
+            if (existing === owner) return { ok: true };
             closedViewKeys.delete(viewKey);
             ownersByViewKey.set(viewKey, owner);
             ownerIdToViewKey.set(owner.ownerId, viewKey);
@@ -430,6 +435,7 @@ export function createBrowserAutomationControlService(
 
         closeView(inputValue) {
             const viewKey = browserViewKey(inputValue);
+            if (closedViewKeys.has(viewKey)) return;
             closedViewKeys.add(viewKey);
             const owner = ownersByViewKey.get(viewKey);
             if (owner) {
@@ -456,17 +462,18 @@ export function createBrowserAutomationControlService(
         updateNavigationGeneration(inputValue) {
             const viewKey = browserViewKey(inputValue);
             const owner = ownersByViewKey.get(viewKey);
-            if (owner) {
-                if (owner.navigationGeneration !== inputValue.navigationGeneration) controllerFor(viewKey).requiresObservation ||= 'required';
+            const changed = owner !== undefined && owner.navigationGeneration !== inputValue.navigationGeneration;
+            if (owner && changed) {
+                controllerFor(viewKey).requiresObservation ||= 'required';
                 ownersByViewKey.set(viewKey, {
                     ...owner,
                     navigationGeneration: inputValue.navigationGeneration,
                 });
             }
-            cancelActiveActionsForView(viewKey, 'stale', 'stale_navigation', (active) => (
-                active.request.navigationGeneration !== inputValue.navigationGeneration
+            const canceled = cancelActiveActionsForView(viewKey, 'stale', 'stale_navigation', (active) => (
+                !active.interruption && active.request.navigationGeneration !== inputValue.navigationGeneration
             ));
-            emitChange();
+            if (changed || canceled > 0) emitChange();
         },
 
         executeAction(request, options) {
@@ -545,6 +552,7 @@ export function createBrowserAutomationControlService(
                     || controller.activeAutomationRequestId !== request.automationRequestId) return;
                 const parsed = BrowserActiveTargetV1Schema.safeParse(target);
                 if (!parsed.success) return;
+                if (sameStrictJsonValue(controller.activeTarget, parsed.data)) return;
                 controller.activeTarget = parsed.data;
                 controller.lastPoint = { id: request.automationRequestId, controlEpoch: controller.controlEpoch, target: parsed.data };
                 emitChange();
@@ -577,13 +585,13 @@ export function createBrowserAutomationControlService(
         },
 
         recordHumanInput(inputValue) {
-            handleHumanInput(inputValue);
-            emitChange();
+            if (handleHumanInput(inputValue)) emitChange();
         },
 
         releaseHumanControl(view) {
             const controller = controllerFor(browserViewKey(view));
             if (controller.activeAutomationRequestId) return false;
+            if (!controller.humanHeld && controller.controller === 'none' && controller.requiresObservation !== false) return true;
             if (controller.humanHeld) controller.controlEpoch += 1;
             controller.humanHeld = false;
             controller.controller = 'none';

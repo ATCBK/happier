@@ -65,7 +65,11 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
         finishProbe?.(new Response(null, { status }));
         await vi.advanceTimersByTimeAsync(0);
         expect(peekServerReachabilityState(serverUrl, token)?.phase).toBe(phase);
-        if (phase === 'online') expect(phases).not.toContain('offline');
+        if (phase === 'online') {
+            expect(phases).not.toContain('offline');
+            // A dropped socket still needs the unchanged online verdict to dial again.
+            expect(phases).toContain('online');
+        }
         detachStore();
         unsubscribe();
     });

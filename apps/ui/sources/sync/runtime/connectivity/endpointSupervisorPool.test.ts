@@ -64,6 +64,29 @@ describe('endpointSupervisorPool', () => {
         vi.useRealTimers();
     });
 
+    it('retains an equal blocked endpoint observation without notifying while publishing a real shutdown', async () => {
+        const { acquireEndpointSupervisor, resetEndpointSupervisorPoolForTests } = await import('./endpointSupervisorPool');
+        const lease = await acquireEndpointSupervisor({ serverId: 'invalid-endpoint-owner', endpoint: 'not-an-absolute-url' });
+        const listener = vi.fn();
+        const stop = lease.supervisor.subscribe(listener);
+        try {
+            const blocked = lease.supervisor.getState();
+            expect(blocked.phase).toBe('offline');
+            expect(listener).toHaveBeenCalledTimes(1); // Public subscriptions deliver their current snapshot once.
+            lease.supervisor.invalidate();
+            expect(lease.supervisor.getState()).toBe(blocked);
+            expect(listener).toHaveBeenCalledTimes(1);
+            await lease.supervisor.stop();
+            expect(lease.supervisor.getState().phase).toBe('shutting_down');
+            expect(listener).toHaveBeenCalledTimes(2);
+            const stopped = lease.supervisor.getState();
+            await lease.supervisor.stop();
+            expect(lease.supervisor.getState()).toBe(stopped);
+            expect(listener).toHaveBeenCalledTimes(2);
+            expect(runtimeFetchMock).not.toHaveBeenCalled();
+        } finally { stop(); await lease.release({ immediate: true }); await resetEndpointSupervisorPoolForTests(); }
+    });
+
     it('reuses one endpoint supervisor per server id + url', async () => {
         getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token-1', secret: 'secret' });
         runtimeFetchMock.mockResolvedValue(okResponse());

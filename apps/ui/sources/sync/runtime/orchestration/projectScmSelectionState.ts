@@ -11,18 +11,16 @@ export function markWorkspaceScmTouchedPaths(
     workspace: ScmSelectionWorkspaceState,
     paths: string[],
     touchedAt: number = Date.now(),
-): void {
-    if (paths.length === 0) return;
-
-    if (!workspace.workspaceScmTouchedPaths) {
-        workspace.workspaceScmTouchedPaths = {};
-    }
-
+): boolean {
+    let changed = false;
     for (const path of paths) {
-        if (!path) continue;
+        if (!path || workspace.workspaceScmTouchedPaths?.[path] === touchedAt) continue;
+        workspace.workspaceScmTouchedPaths ??= {};
         workspace.workspaceScmTouchedPaths[path] = touchedAt;
+        changed = true;
     }
-    workspace.updatedAt = Date.now();
+    if (changed) workspace.updatedAt = Date.now();
+    return changed;
 }
 
 export function getWorkspaceScmTouchedPaths(
@@ -36,65 +34,67 @@ export function getWorkspaceScmTouchedPaths(
 export function pruneWorkspaceScmTouchedPaths(
     workspace: ScmSelectionWorkspaceState,
     activePaths: Set<string>,
-): void {
+): boolean {
     const touched = workspace.workspaceScmTouchedPaths;
-    if (!touched) return;
-
+    if (!touched) return false;
+    let changed = false;
     for (const path of Object.keys(touched)) {
         if (!activePaths.has(path)) {
             delete touched[path];
+            changed = true;
         }
     }
-
+    if (!changed) return false;
     if (Object.keys(touched).length === 0) {
         delete workspace.workspaceScmTouchedPaths;
     }
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function markWorkspaceScmCommitSelectionPaths(
     workspace: ScmSelectionWorkspaceState,
     paths: string[],
     selectedAt: number = Date.now(),
-): void {
-    if (paths.length === 0) return;
-
-    if (!workspace.scmCommitSelection) {
-        workspace.scmCommitSelection = {};
-    }
-
+): boolean {
+    let changed = false;
     for (const path of paths) {
-        if (!path) continue;
+        if (!path || workspace.scmCommitSelection?.[path] === selectedAt) continue;
+        workspace.scmCommitSelection ??= {};
         workspace.scmCommitSelection[path] = selectedAt;
+        changed = true;
     }
-    workspace.updatedAt = Date.now();
+    if (changed) workspace.updatedAt = Date.now();
+    return changed;
 }
 
 export function unmarkWorkspaceScmCommitSelectionPaths(
     workspace: ScmSelectionWorkspaceState,
     paths: string[],
-): void {
+): boolean {
     const selection = workspace.scmCommitSelection;
-    if (!selection) return;
-    if (paths.length === 0) return;
-
+    if (!selection) return false;
+    let changed = false;
     for (const path of paths) {
-        if (!path) continue;
+        if (!path || !Object.hasOwn(selection, path)) continue;
         delete selection[path];
+        changed = true;
     }
-
+    if (!changed) return false;
     if (Object.keys(selection).length === 0) {
         delete workspace.scmCommitSelection;
     }
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function clearWorkspaceScmCommitSelectionPaths(
     workspace: ScmSelectionWorkspaceState,
-): void {
-    if (!workspace.scmCommitSelection) return;
+): boolean {
+    if (!workspace.scmCommitSelection) return false;
     delete workspace.scmCommitSelection;
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function getWorkspaceScmCommitSelectionPaths(
@@ -108,30 +108,35 @@ export function getWorkspaceScmCommitSelectionPaths(
 export function pruneWorkspaceScmCommitSelectionPaths(
     workspace: ScmSelectionWorkspaceState,
     activePaths: Set<string>,
-): void {
+): boolean {
     const selection = workspace.scmCommitSelection;
-    if (!selection) return;
-
+    if (!selection) return false;
+    let changed = false;
     for (const path of Object.keys(selection)) {
         if (!activePaths.has(path)) {
             delete selection[path];
+            changed = true;
         }
     }
 
+    if (!changed) return false;
     if (Object.keys(selection).length === 0) {
         delete workspace.scmCommitSelection;
     }
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function upsertWorkspaceScmCommitSelectionPatch(
     workspace: ScmSelectionWorkspaceState,
     patchSelection: ScmCommitSelectionPatch,
     selectedAt: number = Date.now(),
-): void {
+): boolean {
     const path = patchSelection.path;
     const patch = patchSelection.patch;
-    if (!path || !patch.trim()) return;
+    if (!path || !patch.trim()) return false;
+    const previous = workspace.scmCommitSelectionPatches?.[path];
+    if (previous?.patch === patch && previous.selectedAt === selectedAt) return false;
 
     if (!workspace.scmCommitSelectionPatches) {
         workspace.scmCommitSelectionPatches = {};
@@ -142,6 +147,7 @@ export function upsertWorkspaceScmCommitSelectionPatch(
         selectedAt,
     };
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function getWorkspaceScmCommitSelectionPatches(
@@ -155,42 +161,47 @@ export function getWorkspaceScmCommitSelectionPatches(
 export function removeWorkspaceScmCommitSelectionPatch(
     workspace: ScmSelectionWorkspaceState,
     path: string,
-): void {
-    if (!path) return;
+): boolean {
+    if (!path) return false;
 
     const patches = workspace.scmCommitSelectionPatches;
-    if (!patches) return;
+    if (!patches || !Object.hasOwn(patches, path)) return false;
 
     delete patches[path];
     if (Object.keys(patches).length === 0) {
         delete workspace.scmCommitSelectionPatches;
     }
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function clearWorkspaceScmCommitSelectionPatches(
     workspace: ScmSelectionWorkspaceState,
-): void {
-    if (!workspace.scmCommitSelectionPatches) return;
+): boolean {
+    if (!workspace.scmCommitSelectionPatches) return false;
     delete workspace.scmCommitSelectionPatches;
     workspace.updatedAt = Date.now();
+    return true;
 }
 
 export function pruneWorkspaceScmCommitSelectionPatches(
     workspace: ScmSelectionWorkspaceState,
     activePaths: Set<string>,
-): void {
+): boolean {
     const selection = workspace.scmCommitSelectionPatches;
-    if (!selection) return;
-
+    if (!selection) return false;
+    let changed = false;
     for (const path of Object.keys(selection)) {
         if (!activePaths.has(path)) {
             delete selection[path];
+            changed = true;
         }
     }
 
+    if (!changed) return false;
     if (Object.keys(selection).length === 0) {
         delete workspace.scmCommitSelectionPatches;
     }
     workspace.updatedAt = Date.now();
+    return true;
 }

@@ -1,5 +1,6 @@
 import type { ManagedConnectionState, ManagedEndpointSupervisor, ManagedEndpointSupervisorState, ManagedProbeReportScope } from '@happier-dev/connection-supervisor';
 import { AppState } from 'react-native';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 
@@ -199,6 +200,7 @@ function createEndpointSupervisorFacade(endpoint: string, resolveToken: () => Pr
     } | null = null;
 
     const publish = (next: ManagedEndpointSupervisorState) => {
+        if (sameStrictJsonValue(state, next)) return;
         state = next;
         listeners.forEach((listener) => listener(state));
     };

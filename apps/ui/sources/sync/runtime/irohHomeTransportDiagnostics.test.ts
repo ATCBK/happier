@@ -52,6 +52,31 @@ describe('Iroh Home transport diagnostics materializer', () => {
         unsubscribe();
     });
 
+    it('keeps equal same-generation diagnostics quiet without retiring a replacement publisher', async () => {
+        const owner = await import('./irohHomeTransportDiagnostics');
+        const identity = { producerId: 'equal-diagnostics', leaseId: 'lease', homeServerIdentityId: 'equal-home' };
+        const publisher = owner.createIrohHomeTransportDiagnosticsPublisher(identity);
+        const value = diagnostics({ homeServerIdentityId: identity.homeServerIdentityId, state: 'connected', atMs: 10, observedPath: 'relay' });
+        publisher.publish(value);
+        const revision = owner.readIrohHomeTransportDiagnosticsRevision();
+        const listener = vi.fn();
+        const stop = owner.subscribeIrohHomeTransportDiagnostics(listener);
+        try {
+            publisher.publish(structuredClone(value));
+            expect(owner.readIrohHomeTransportDiagnosticsRevision()).toBe(revision);
+            expect(listener).not.toHaveBeenCalled();
+            const replacement = owner.createIrohHomeTransportDiagnosticsPublisher(identity);
+            replacement.publish(structuredClone(value));
+            publisher.release({ ...value, state: 'disconnected' });
+            expect(owner.readIrohHomeTransportDiagnostics().find(row => row.homeServerIdentityId === identity.homeServerIdentityId)?.state).toBe('connected');
+            const beforeTransition = listener.mock.calls.length;
+            replacement.publish({ ...value, lastTransitionAtMs: 20, current: { carrier: 'iroh', observedPath: 'direct' } });
+            expect(listener).toHaveBeenCalledTimes(beforeTransition + 1);
+            replacement.release({ ...value, state: 'disconnected', lastTransitionAtMs: 30 });
+            expect(owner.readIrohHomeTransportDiagnostics().find(row => row.homeServerIdentityId === identity.homeServerIdentityId)?.state).toBe('disconnected');
+        } finally { stop(); }
+    });
+
     it('keeps a same-Home active lease current when a sibling lease releases', async () => {
         const {
             createIrohHomeTransportDiagnosticsPublisher,

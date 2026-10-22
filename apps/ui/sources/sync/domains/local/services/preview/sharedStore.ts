@@ -19,7 +19,7 @@ import {
 // per-mount 15s `setInterval` poll, while the `localServices.preview.*` runtime actions read the
 // same daemon route into a detached action result — two divergent truths and N wall-clock timers.
 //
-// This module is the single backing model (mirroring VS Code's Ports view): keyed by
+// This module is the single backing model: keyed by
 // (serverId, machineId), it does exactly one fetch when a key gains its first subscriber and is
 // otherwise refreshed by invalidation — the runtime-action executor publishes each
 // openOrCreate / revoke / status snapshot straight into the store, so an open pane updates
