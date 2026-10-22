@@ -2898,6 +2898,13 @@ the host integration. Empty paths do not scan the host working directory. This
 is a development-source SDK contract, not a claim of released plugin or loaded
 runtime availability. See the [SDK evolution contract](compatibility.md#sdk-protocol-evolution).
 
+The development External Sessions invocation also offers optional `logger.debug`
+through the host file logger. Readers can attribute failures with exception
+class, identifier-shaped error code or errno, reader phase, stable source item
+identity, basename and byte offset. Transcript text, absolute paths, exception
+messages and stacks must stay out of these diagnostics. An absent logger does
+not change read results or failure semantics.
+
 ### Voice schema composition (0.3 development)
 
 Voice schema exports at `@happier-dev/plugin-sdk/voice` and its client entry
