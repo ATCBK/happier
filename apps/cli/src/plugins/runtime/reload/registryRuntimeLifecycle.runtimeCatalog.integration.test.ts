@@ -535,9 +535,9 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       id: pluginId, entrypoints: { daemon: './daemon.mjs' },
       contributes: {
         languageServers: [{ id: 'native', title: 'Static language', languageIds: { 'static-language': 'native-language' },
-          filePatterns: ['*.static-language'], executable: { kind: 'systemTool', id: 'native' },
+          filePatterns: ['*.static-language'], executable: { kind: 'systemTool', id: 'native-tool' },
           args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), logPath, JSON.stringify({ requiredLanguageId: 'native-language' })] }],
-        systemTools: [{ id: 'native', title: 'Native process fixture', executableNames: [process.execPath] }],
+        systemTools: [{ id: 'native-tool', title: 'Native process fixture', executableNames: [process.execPath] }],
       },
     }));
     await writeFile(manifestPath, JSON.stringify(manifest));
@@ -562,9 +562,12 @@ describe('daemon plugin registry runtime lifecycle owner', () => {
       expect(await installFixtureCandidate(store, fixture.input)).toMatchObject({ status: 'committed' });
       const hot = (await readCurrentDaemonPluginCatalog({ happyHomeDir, reloadController: hotController }))
         .find(entry => entry.pluginId === pluginId)!;
+      expect(hot).toMatchObject({ compatibility: { status: 'compatible', diagnostics: [] },
+        diagnostics: [], manifest: { id: pluginId } });
       expect(hot.desiredGeneration).toEqual(expect.any(String));
-      expect(hot.appliedGeneration).toBe(hot.desiredGeneration);
       await expect(readFile(fixture.counterPath, 'utf8')).resolves.toBe('module\nactivate\n');
+      expect(hotController.getState().activeRegistry?.activatedPluginIds.has(pluginId)).toBe(true);
+      expect(hot.appliedGeneration).toBe(hot.desiredGeneration);
       await hotController.shutdown();
 
       await coldOwner.initialize();
