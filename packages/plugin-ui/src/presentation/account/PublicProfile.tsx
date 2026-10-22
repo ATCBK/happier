@@ -56,6 +56,13 @@ export type HappierPublicProfileLabels = Readonly<{
 export const HAPPIER_PUBLIC_PROFILE_HERO_METRICS = Object.freeze({
   bandHeightPx: Object.freeze({ wide: 420, phone: 300 }),
   avatarPx: Object.freeze({ wide: 84, phone: 64 }),
+  /**
+   * A cold render has no measured width: the server paints the band at these widths (and 2× for
+   * density) and the page shows the one that matches, covering the reserved band height.
+   */
+  rasterWidthPx: Object.freeze({ wide: 1440, phone: 390 }),
+  /** Where a Horizon picture's horizon sits in the band, above the identity (lab `pphero`). */
+  horizonAt: 0.6,
 });
 
 export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;

@@ -12,13 +12,14 @@ import { useAtmosphere, type AtmosphereTarget } from '../useAtmosphere';
 import { useAtmospherePictureCatalog } from '../useAtmospherePictureCatalog';
 import { atmospherePageRgb } from '../atmospherePage';
 import { effectivePictureLook } from './atmosphereEdits';
+import { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 /** In a small window preview the Horizon band covers the top of the page, as it does on Home. */
 const PREVIEW_BAND_SHARE = 0.62;
 /** Without a measured headline, the picture's horizon sits mid-band (Home measures its own). */
 const PREVIEW_HORIZON_AT = 0.5;
-/** A profile header band keeps its horizon a little lower, above the identity (lab `pphero`). */
-const BAND_HORIZON_AT = 0.6;
+/** A profile header band uses the public page's own horizon, so app and server paint the same band. */
+const BAND_HORIZON_AT = HAPPIER_PUBLIC_PROFILE_HERO_METRICS.horizonAt;
 
 /**
  * An atmosphere drawn static and decorative: by default the user's current Home behind a window
