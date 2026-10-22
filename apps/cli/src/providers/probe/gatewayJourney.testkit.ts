@@ -232,6 +232,18 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
       let releaseWrite!: () => void;
       const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve; });
       let holdWrites = false;
+      const committed: Body[] = [];
+      const transcriptWriter = vi.spyOn(base.session, 'enqueueAgentMessageCommitted').mockImplementation(async (_provider, body) => {
+        // Hold the real transcript transport boundary after native settlement.
+        // Cancellation publication must not wait for the partial answer's ACK.
+        if (body.type === 'message') await writeReleased;
+        committed.push(body);
+        return { persisted: true, delivered: true, committedSequence: body.type === 'message' ? 42 : 43 };
+      });
+      Object.assign(base.session, {
+        getLastObservedMessageSeq: () => 43,
+        getCommittedUserMessageSeq: () => 40,
+      });
       const updateAgentState = base.session.updateAgentState.bind(base.session);
       // Replace only Home persistence. Real permission withdrawal, host turn
       // ownership, Codex adapter and streamed Gateway transport remain composed.
@@ -266,6 +278,11 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
             try {
               await vi.waitFor(() => expect(events.some(event => event.kind === 'turn-cancelled')).toBe(true));
               await assertStreamClosed();
+              await vi.waitFor(() => expect(committed.filter(body => body.type === 'turn_cancelled')).toHaveLength(1));
+              await vi.waitFor(() => expect(base.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(
+                expect.objectContaining({ action: 'cancel' }),
+              ));
+              expect(committed.some(body => body.type === 'message')).toBe(false);
             } finally {
               holdWrites = false;
               releaseWrite();
@@ -277,9 +294,15 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
         holdWrites = false;
         releaseWrite();
         writer.mockRestore();
+        transcriptWriter.mockRestore();
         lifetime.abort();
         await context.dispose();
       }
+      expect(committed.filter(body => body.type === 'turn_cancelled')).toHaveLength(1);
+      expect(committed).toContainEqual(expect.objectContaining({ type: 'message', message: 'unfinished prefix' }));
+      expect(base.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'append_transcript_anchors', transcriptAnchors: expect.objectContaining({ finalAssistantMessageSeq: 42 }),
+      }));
       await projection;
     },
     async send(text: string) {
