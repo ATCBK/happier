@@ -138,7 +138,7 @@ export type QualifiedConnectedAccountRefreshRuntime = Readonly<{
     credentialRevision: string;
     configurationRevision: string | null;
   }>>;
-  listScheduledAccounts?(): Promise<
+  listScheduledAccounts?(service?: QualifiedConnectedAccountRef['service']): Promise<
     readonly QualifiedConnectedAccountProfileV4[]
   >;
   onCredentialUpdated?(
@@ -730,7 +730,7 @@ export class ConnectedServiceRefreshCoordinator {
             readGroup: (input) => this.runCurrentAccountOperation(() => runtime.readGroup!(input), true),
           } : {}),
           ...(runtime.listScheduledAccounts ? {
-            listScheduledAccounts: () => this.runCurrentAccountOperation(() => runtime.listScheduledAccounts!(), true),
+            listScheduledAccounts: (service) => this.runCurrentAccountOperation(() => runtime.listScheduledAccounts!(service), true),
           } : {}),
           ...(runtime.onCredentialUpdated ? {
             onCredentialUpdated: (account, options) => this.runCurrentAccountOperation(async () => {
@@ -2299,7 +2299,7 @@ export class ConnectedServiceRefreshCoordinator {
     account: QualifiedConnectedAccountRef,
     credentialRevision?: ConnectedServiceCredentialRevisionV1,
   ): Promise<boolean> {
-    const profiles = await this.params.qualifiedConnectedAccountRuntime?.listScheduledAccounts?.();
+    const profiles = await this.params.qualifiedConnectedAccountRuntime?.listScheduledAccounts?.(account.service);
     return profiles?.some((profile) => qualifiedAccountKey(profile.ref) === qualifiedAccountKey(account)
       && (!credentialRevision || (profile.revisionSemantics === 'revisioned' && profile.credentialRevision === credentialRevision))
       && isReconnectRequiredProfileStatus(profile.status)) === true;

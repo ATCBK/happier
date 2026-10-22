@@ -468,6 +468,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         configurationRevision: null,
       };
     });
+    const requestedInventoryServices: unknown[] = [];
     const coordinator = new ConnectedServiceRefreshCoordinator({
       api,
       credentials,
@@ -487,7 +488,9 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
           if (foregroundStarted) foregroundCredentialRead();
           return snapshot;
         },
-        listScheduledAccounts: async (): Promise<readonly QualifiedConnectedAccountProfileV4[]> => [{
+        listScheduledAccounts: async (service): Promise<readonly QualifiedConnectedAccountProfileV4[]> => {
+          requestedInventoryServices.push(service);
+          return [{
           ref: account,
           status: profileStatus,
           authenticationModeId: 'oauth',
@@ -499,7 +502,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
           expiresAt: null,
           displayName: 'work',
           scopes: ['openid'],
-        }],
+        }]; },
         acquireRefreshLease,
         mutateCredential,
         mutateCredentialHealth,
@@ -565,6 +568,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
         },
       })).resolves.toEqual({ status: providerStatus === 400 ? 'reconnect_required'
         : providerStatus === 503 ? 'refresh_failed' : 'ready' });
+      expect(requestedInventoryServices.length).toBeGreaterThan(0);
+      expect(requestedInventoryServices).toEqual(requestedInventoryServices.map(() => account.service));
       expect(tokenExchangeRequests()).toHaveLength(1);
       if (providerStatus === 200) {
         expect(qualifiedRevision).toBe(secondRevision);

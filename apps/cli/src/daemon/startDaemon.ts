@@ -3015,7 +3015,7 @@ export async function startDaemon(
         establishedConnectedAccountRuntimeOwner,
       resolveConnectedAccountUsageIdentity,
       listScheduledQualifiedConnectedAccounts:
-        connectedAccountPurposeBindingRuntime.listCoordinatorAccounts,
+        service => connectedAccountPurposeBindingRuntime.listCoordinatorAccounts(undefined, service),
       subscribeConnectedAccountInvalidations:
         connectedAccountPurposeBindingRuntime.subscribeInvalidations,
       listQualifiedConnectedAccountGroupQuotaTargets:

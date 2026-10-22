@@ -168,7 +168,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
     }>,
   ) => QualifiedConnectedAccountPeerOperationTransport;
   resolveConnectedAccountUsageIdentity?: ProviderAccountUsageUsageIdentityResolver;
-  listScheduledQualifiedConnectedAccounts?: () => Promise<
+  listScheduledQualifiedConnectedAccounts?: (service?: QualifiedConnectedAccountRef['service']) => Promise<
     readonly QualifiedConnectedAccountProfileV4[]
   >;
   subscribeConnectedAccountInvalidations?: (listener: () => void) => () => void;

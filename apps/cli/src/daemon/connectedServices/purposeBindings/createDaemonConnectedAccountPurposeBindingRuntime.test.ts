@@ -520,12 +520,13 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     for (const cleanup of coordinatorCleanups.splice(0)) await cleanup();
   });
 
-  async function coordinatorFixture(observed = true, serviceRef: QualifiedConnectedAccountProfileV4['ref']['service'] = openAiService) {
+  async function coordinatorFixture(observed = true, serviceRef: QualifiedConnectedAccountProfileV4['ref']['service'] = openAiService,
+    additionalPluginIds: readonly string[] = []) {
     const qualifiedApi = testQualifiedApi();
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-coordinator-inventory-'));
     const resolveRegistry = () => resolveExecutablePluginRuntimeRegistry({
       happyHomeDir,
-      pluginIds: [serviceRef.pluginId],
+      pluginIds: [serviceRef.pluginId, ...additionalPluginIds],
       resolveDevelopmentSourceAuthority,
     });
     const reloadController = createPluginReloadController({ happyHomeDir, resolveRuntimeRegistry: resolveRegistry });
@@ -601,6 +602,34 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     runtime.invalidate();
     expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
     expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('reads only the demanded refresh service while preserving independent inventory and invalidation (observed=%s)', async (observed) => {
+    const { runtime, qualifiedApi, inventoryReads } = await coordinatorFixture(observed, openAiService, ['happier.agent.codex']);
+    expect(await runtime.listCoordinatorAccounts(undefined, openAiService)).toEqual([testQualifiedProfile()]);
+    expect(inventoryReads.mock.calls.map(([service]) => service)).toEqual([openAiService]);
+    inventoryReads.mockClear();
+    const all = await runtime.listCoordinatorAccounts();
+    expect(all).toEqual([testQualifiedProfile()]);
+    expect(inventoryReads.mock.calls.length).toBeGreaterThan(1);
+    inventoryReads.mockClear();
+    runtime.invalidate();
+    qualifiedApi.listAccounts.mockImplementationOnce(async () => {
+      runtime.invalidate();
+      return { service: openAiService, accounts: [testQualifiedProfile()] };
+    });
+    qualifiedApi.listAccounts.mockResolvedValueOnce({ service: openAiService, accounts: [] });
+    expect(await runtime.listCoordinatorAccounts(undefined, openAiService)).toEqual([]);
+    expect(inventoryReads.mock.calls.map(([service]) => service)).toEqual([openAiService, openAiService]);
+  });
+
+  it('reuses an already observed complete inventory for a scoped refresh without another acquisition', async () => {
+    const { runtime, inventoryReads } = await coordinatorFixture(true, openAiService, ['happier.agent.codex']);
+    expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
+    expect(inventoryReads.mock.calls.length).toBeGreaterThan(1);
+    inventoryReads.mockClear();
+    expect(await runtime.listCoordinatorAccounts(undefined, openAiService)).toEqual([testQualifiedProfile()]);
+    expect(inventoryReads).not.toHaveBeenCalled();
   });
 
   it('does not publish inventory invalidated during the read and retries failed reads', async () => {

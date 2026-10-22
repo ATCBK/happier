@@ -250,7 +250,8 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     connectedAccountsOwner: purposes.owner,
     activatePurposeBindings: purposes.activatePurposeBindings,
     providerAccountUsageStore, connectedServiceRuntimeQuotaSnapshots, daemonSessionMutationCustody,
-    qualifiedConnectedAccountEstablishedRuntimeOwner: established, listScheduledQualifiedConnectedAccounts: purposes.listCoordinatorAccounts,
+    qualifiedConnectedAccountEstablishedRuntimeOwner: established,
+    listScheduledQualifiedConnectedAccounts: service => purposes.listCoordinatorAccounts(undefined, service),
     subscribeConnectedAccountInvalidations: listener => {
       const releasePurpose = purposes.subscribeInvalidations(listener);
       const settingsSubscription = store.subscribe(listener);

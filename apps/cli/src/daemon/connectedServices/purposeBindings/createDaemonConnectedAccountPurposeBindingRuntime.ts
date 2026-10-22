@@ -126,6 +126,7 @@ export type DaemonConnectedAccountPurposeBindingRuntime = Readonly<{
   }>): Promise<readonly DaemonConnectedAccountActionFormOption[]>;
   listCoordinatorAccounts(
     signal?: AbortSignal,
+    service?: QualifiedConnectedAccountRef['service'],
   ): Promise<readonly QualifiedConnectedAccountProfileV4[]>;
   listGroupQuotaTargets(input: Readonly<{
     service: QualifiedConnectedAccountRef['service'];
@@ -480,11 +481,12 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     isCurrent: () => boolean;
     promise: Promise<readonly QualifiedConnectedAccountProfileV4[]>;
   };
-  let coordinatorInventory: CoordinatorInventoryRead | undefined;
+  const coordinatorInventories = new Map<string, CoordinatorInventoryRead>();
   let sessionRestartOwner: DaemonConnectedAccountPurposeSessionRestartOwner | null = null;
 
   const readCoordinatorInventory = async (
     setCurrentness: (isCurrent: () => boolean) => void,
+    demandedService?: QualifiedConnectedAccountRef['service'],
   ): Promise<readonly QualifiedConnectedAccountProfileV4[]> => {
     // A coordinator's cancellation must not cancel the other coordinator's read.
     // The HTTP boundary retains its existing request timeout.
@@ -494,7 +496,9 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       setCurrentness(lease.isCurrent);
       assertCurrentRegistry(lease, signal);
       const services = (lease.listServices?.() ?? [])
-        .filter((service) => service.availability === 'available');
+        .filter((service) => service.availability === 'available'
+          && (!demandedService || service.service.pluginId === demandedService.pluginId
+            && service.service.localId === demandedService.localId));
       const accounts = (await Promise.all(services.map(async (service) => {
         const result = await params.qualifiedApi!.listAccounts(service.service, signal);
         if (result.service.pluginId !== service.service.pluginId
@@ -510,16 +514,19 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     }
   };
 
-  const startCoordinatorInventoryRead = (): CoordinatorInventoryRead => {
+  const startCoordinatorInventoryRead = (
+    key: string,
+    demandedService?: QualifiedConnectedAccountRef['service'],
+  ): CoordinatorInventoryRead => {
     const read: CoordinatorInventoryRead = {
       valid: true,
       pending: true,
       isCurrent: () => true,
-      promise: readCoordinatorInventory((isCurrent) => { read.isCurrent = isCurrent; }),
+      promise: readCoordinatorInventory((isCurrent) => { read.isCurrent = isCurrent; }, demandedService),
     };
-    coordinatorInventory = read;
+    coordinatorInventories.set(key, read);
     const discard = () => {
-      if (coordinatorInventory === read) coordinatorInventory = undefined;
+      if (coordinatorInventories.get(key) === read) coordinatorInventories.delete(key);
     };
     void read.promise.then(() => {
       read.pending = false;
@@ -1267,7 +1274,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     resolveBindingIntent: bindingOwner.resolveBindingIntent,
     resolveBindingIntentSelection: bindingOwner.resolveBindingIntentSelection,
     listActionFormConnectedAccountOptions,
-    async listCoordinatorAccounts(signal = new AbortController().signal) {
+    async listCoordinatorAccounts(signal = new AbortController().signal, demandedService?: QualifiedConnectedAccountRef['service']) {
       signal.throwIfAborted();
       if (
         params.resolveQualifiedConnectedAccountV4Support() !== 'advertised'
@@ -1275,11 +1282,20 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       ) {
         return Object.freeze([]);
       }
+      // The refresh preflight needs one service; background coordinators still
+      // demand all services. Both share this inventory's freshness/invalidation
+      // owner, without making one service wait for unrelated network reads.
+      const key = demandedService ? buildQualifiedPluginContributionKey(demandedService) : 'all-services';
       for (;;) {
         signal.throwIfAborted();
-        const read = coordinatorInventory?.valid && coordinatorInventory.isCurrent()
-          && (coordinatorInventory.pending || params.coordinatorInventoryIsObserved?.() === true)
-          ? coordinatorInventory : startCoordinatorInventoryRead();
+        // Reuse a settled observed census, but do not queue one service behind
+        // an unfinished census of unrelated services.
+        const complete = demandedService ? coordinatorInventories.get('all-services') : undefined;
+        const existing = complete?.valid && !complete.pending && complete.isCurrent()
+          && params.coordinatorInventoryIsObserved?.() === true ? complete : coordinatorInventories.get(key);
+        const read = existing?.valid && existing.isCurrent()
+          && (existing.pending || params.coordinatorInventoryIsObserved?.() === true)
+          ? existing : startCoordinatorInventoryRead(key, demandedService);
         try {
           await waitForChangeOrDeadline({ signal, waitForChange: async () => {
             await read.promise;
@@ -1287,7 +1303,9 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
           signal.throwIfAborted();
           const accounts = await read.promise;
           if (!read.valid || !read.isCurrent()) continue;
-          return accounts;
+          return demandedService ? Object.freeze(accounts.filter(profile =>
+            profile.ref.service.pluginId === demandedService.pluginId
+            && profile.ref.service.localId === demandedService.localId)) : accounts;
         } catch (error) {
           signal.throwIfAborted();
           if (!read.valid || !read.isCurrent()) continue;
@@ -1355,8 +1373,8 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       };
     },
     invalidate() {
-      if (coordinatorInventory) coordinatorInventory.valid = false;
-      coordinatorInventory = undefined;
+      for (const read of coordinatorInventories.values()) read.valid = false;
+      coordinatorInventories.clear();
       for (const listener of invalidationListeners) listener();
     },
   });
