@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
-import { createProviderModelProjectionFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createDeferred, renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
+import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
@@ -18,6 +18,9 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 const account = createProviderSettingsAccountHarness();
 const { useExactModelChoice } = await import('./useExactModelChoice');
 const { ModalProvider, Modal } = await import('@/modal');
+const { loadDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { readAccountAgentProviderRequirements } = await import('@/providers/catalog/accountProviderDeclarations');
 await loadSyncSingletonForTests();
 
 let serverId = '';
@@ -51,6 +54,59 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => { Modal.hideAll(); }); await standardCleanup(); await account.reset(); });
 
 describe('exact model choice uses machine catalogs and preserves failures', () => {
+  it.each(['deferred', 'missed'] as const)('updates source rows in the open picker after a %s shared Machine answer and withdraws a failed answer', async (outcome) => {
+    enabled = true;
+    const ref = { agentTargetKey, providerConnectionId: 'pc_gateway', modelId: 'gateway-model' };
+    const group = createProviderModelProjectionGroupFixture({ connectionId: ref.providerConnectionId,
+      rows: [{ ref, descriptor: { id: ref.modelId, name: 'Gateway model' },
+        sources: { probe: true, manual: false, static: false }, confidence: 'probe',
+        compatibility: { result: { status: 'verified', selectedProtocol: 'openai-responses',
+          evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-22' } },
+          compatibilityFingerprint: 'compatibility:v1:gateway-model', confirmed: true },
+        endpointHealth: 'available', catalog: { stale: false }, loadState: 'loaded', visibility: 'visible' }],
+    });
+    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
+      codex: { id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+        providerRequirements: readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' }) },
+    } });
+    const original = transport.call.getMockImplementation();
+    if (!original) throw new Error('Expected Machine transport');
+    let answer = createDeferred<unknown>();
+    transport.call.mockImplementation(request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+      ? answer.promise : request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+        ? Promise.resolve(createProviderModelProjectionFixture({ agentTargetKey, groups: [group] })) : original(request));
+    const read = () => loadDaemonMergedProjectionCacheEntry({ serverId, machineId: 'machine-a',
+      accountLifetime: captureActiveServerAccountScopeLifetime() });
+    let pending = read();
+    const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>);
+    const selected = vi.fn();
+    const optionId = `model-picker-overlay-option:${JSON.stringify([agentTargetKey, ref.providerConnectionId, ref.modelId])}`;
+    await act(async () => { open(selected); });
+    expect(screen.findByTestId(optionId)).toBeNull();
+    expect(selected).not.toHaveBeenCalled();
+    if (outcome === 'missed') {
+      await act(async () => { answer.reject(new Error('Transport unavailable')); await pending; });
+      answer = createDeferred<unknown>();
+      pending = read();
+      await screen.pressByTestIdAsync('model-picker-overlay-refresh');
+    }
+    await act(async () => { answer.resolve({ protocolVersion: 1, projection }); await pending; });
+    await waitForHomeGovernance(() => {
+      expect(screen.findByTestId(optionId)).not.toBeNull();
+      expect(screen.findByTestId(optionId)?.props.disabled).not.toBe(true);
+    });
+    await screen.pressByTestIdAsync(optionId);
+    expect(selected).toHaveBeenCalledWith(group.rows[0]!.ref);
+
+    await act(async () => { open(selected); });
+    answer = createDeferred<unknown>();
+    pending = read();
+    await act(async () => { answer.reject(new Error('Transport unavailable')); await pending; });
+    selected.mockClear();
+    expect(screen.findByTestId(optionId)).toBeNull();
+    expect(selected).not.toHaveBeenCalled();
+  });
+
   it('loads the machine native catalog only on demand and commits its exact native choice', async () => {
     const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>);
     const retainedOpen = open;

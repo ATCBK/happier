@@ -154,23 +154,37 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
     // stale render before that effect has run.
     const stateAccountLifetimeRef = React.useRef<ActiveServerAccountScopeLifetime | null>(accountLifetime);
 
+    const readObservedCacheState = React.useCallback((): DaemonMergedProjectionInputsState | null => {
+        const reusable = readReusableDaemonMergedProjectionCacheEntry({ machineId, serverId, accountLifetime, staleMs });
+        if (reusable?.kind === 'ready') return { phase: 'ready', inputs: reusable.inputs };
+        if (reusable?.kind === 'unsupported') return { phase: 'unsupported', inputs: null };
+        const cached = readCachedDaemonMergedProjectionCacheEntry({ machineId, serverId });
+        // A failed read is observable state, never an answer that suppresses
+        // renewed demand. All mounted readers must withdraw its old authority.
+        if (cached?.kind === 'error'
+            && cached.projectionRevision === getMachineContributionRegistryProjectionRevision({ machineId, serverId })
+            && cached.locale === getPreferredLanguage()
+            && accountLifetime?.isCurrent()
+            && areServerAccountScopesEqual(cached.accountScope, accountLifetime.scope)
+            && cached.accountCurrentness?.isCurrent() !== false) {
+            return { phase: 'error', inputs: cached.inputs ?? null, failureReason: cached.reason };
+        }
+        return null;
+    }, [accountLifetime, machineId, serverId, staleMs]);
+
     React.useEffect(() => {
         if (!hasProjectionScope || !accountLifetime) return;
         // App-shell and detail readers publish through this same cache. A
         // mounted reader must observe their answers even when it owns no RPC.
         return subscribeDaemonMergedProjectionSummary({ machineId, serverId }, () => {
-            const entry = readReusableDaemonMergedProjectionCacheEntry({
-                machineId, serverId, accountLifetime, staleMs,
-            });
-            if (!entry) return;
+            const observed = readObservedCacheState();
+            if (!observed) return;
             stateAccountLifetimeRef.current = accountLifetime;
-            setState((previous) => entry.kind === 'ready'
-                ? previous.phase === 'ready' && previous.inputs === entry.inputs
-                    ? previous : { phase: 'ready', inputs: entry.inputs }
-                : previous.phase === 'unsupported'
-                    ? previous : { phase: 'unsupported', inputs: null });
+            setState((previous) => previous.phase === observed.phase
+                && previous.inputs === observed.inputs && previous.failureReason === observed.failureReason
+                ? previous : observed);
         });
-    }, [accountLifetime, hasProjectionScope, machineId, serverId, staleMs]);
+    }, [accountLifetime, hasProjectionScope, machineId, readObservedCacheState, serverId]);
 
     React.useEffect(() => {
         const forceReload = refreshKeyRef.current !== params.refreshKey
@@ -219,17 +233,8 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
         });
         if (params.load === false) {
             stateAccountLifetimeRef.current = accountLifetime;
-            setState(reusable?.kind === 'ready'
-                ? { phase: 'ready', inputs: reusable.inputs }
-                : reusable?.kind === 'unsupported'
-                    ? { phase: 'unsupported', inputs: null }
-                    : cached?.kind === 'error'
-                        && cached.projectionRevision === projectionRevision
-                        && accountLifetime?.isCurrent()
-                        && areServerAccountScopesEqual(cached.accountScope, accountLifetime.scope)
-                        && cached.accountCurrentness?.isCurrent() !== false
-                        ? { phase: 'error', inputs: cached.inputs ?? null, failureReason: cached.reason }
-                    : { phase: 'idle', inputs: cached?.kind === 'ready' || cached?.kind === 'error' ? cached.inputs ?? null : null });
+            setState(readObservedCacheState()
+                ?? { phase: 'idle', inputs: cached?.kind === 'ready' || cached?.kind === 'error' ? cached.inputs ?? null : null });
             return;
         }
         if (cached) {
@@ -309,6 +314,7 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
         params.refreshKey,
         params.retainInputsAcrossScopeChange,
         projectionRevision,
+        readObservedCacheState,
         serverId,
         staleMs,
     ]);

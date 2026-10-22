@@ -669,6 +669,34 @@ describe('useDaemonMergedProjectionInputs', () => {
         });
         expect(daemonDescribe).toHaveBeenCalledTimes(2);
     });
+    it('withdraws a mounted cache reader after a failed shared read and recovers on renewed demand', async () => {
+        await primeCache(1);
+        const hook = await renderHook(({ load }: { load: boolean }) => useDaemonMergedProjectionInputs({
+            machineId: 'machine-1', serverId, load,
+        }), { initialProps: { load: false } });
+        expect(hook.getCurrent().phase).toBe('ready');
+
+        daemonDescribe.mockRejectedValueOnce(new RpcError('Private transport details', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE));
+        await act(async () => {
+            await loadDaemonMergedProjectionCacheEntry({ machineId: 'machine-1', serverId,
+                accountLifetime: captureActiveServerAccountScopeLifetime() });
+        });
+        expect(hook.getCurrent()).toMatchObject({
+            phase: 'error', failureReason: 'transport-unavailable',
+            inputs: { pluginProjectionV2: { generation: 1 } },
+        });
+
+        const answer = createDeferred<ReturnType<typeof readyResponse>>();
+        daemonDescribe.mockImplementationOnce(() => answer.promise);
+        await hook.rerender({ load: true });
+        expect(hook.getCurrent().phase).toBe('loading');
+        await act(async () => { answer.resolve(readyResponse(2)); });
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({
+            phase: 'ready', inputs: { pluginProjectionV2: { generation: 2 } },
+        }));
+        expect(hook.getCurrent().failureReason).toBeUndefined();
+        expect(daemonDescribe).toHaveBeenCalledTimes(2);
+    });
     it('restores inert stale metadata from an error cache entry after remount', async () => {
         await primeCache(1, true);
         daemonDescribe.mockRejectedValueOnce(new Error('Transport still unavailable'));
