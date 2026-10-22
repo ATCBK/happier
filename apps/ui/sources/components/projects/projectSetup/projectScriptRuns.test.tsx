@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -26,7 +28,7 @@ import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExec
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 const inspectionTransport = vi.hoisted(() => ({ accounts: [] as string[], answer: null as unknown,
-    workerAnswer: null as unknown, hold: null as Promise<void> | null }));
+    workerAnswer: null as unknown, hold: null as Promise<void> | null, failure: null as string | null }));
 
 // Passive inspection uses the original Account's external Action ingress even on its own Machine.
 async function inspectActionResponse(path: string, init?: RequestInit): Promise<Response | null> {
@@ -37,6 +39,8 @@ async function inspectActionResponse(path: string, init?: RequestInit): Promise<
     const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
     if (!bearer) throw new Error('Inspection must carry its captured Account');
     inspectionTransport.accounts.push(parseToken(bearer));
+    if (inspectionTransport.failure) return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+        requestId: envelope.requestId, execution: { ok: false, errorCode: inspectionTransport.failure, error: inspectionTransport.failure } }));
     const answer = ProjectDefinitionInspectOutputSchema.parse(inspectionTransport.answer);
     await inspectionTransport.hold;
     return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
@@ -66,14 +70,76 @@ installDisconnectedServerSocketBoundary();
 // Its connection graph otherwise reaches the harness's default internal stub during static imports.
 const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 const { useProjectScriptRun, useProjectSetupRun } = await import('./projectScriptRuns');
-const { useProjectDefinitionInspection } = await import('./useProjectDefinitionInspection');
+const { useProjectDefinitionInspection, projectDefinitionInspectionKey } = await import('./useProjectDefinitionInspection');
 const { useProjectScriptsController } = await import('./useProjectScriptsController');
 const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const NO_CHANGE = () => {};
 afterEach(() => { standardCleanup(); actionOperationStore.reset(); inspectionTransport.accounts = []; inspectionTransport.answer = null;
-    inspectionTransport.workerAnswer = null; inspectionTransport.hold = null; });
+    inspectionTransport.workerAnswer = null; inspectionTransport.hold = null; inspectionTransport.failure = null; });
 
 describe('Scripts canonical operation subscriptions', () => {
+    it('keeps hidden inspection idle and retains one shared checkout result through close, reopen and remount', async () => {
+        const disposeExecutor = await installRealActionExecutorModuleLoader();
+        const connection = await restoreServerAccountForTest({
+            serverUrl: 'https://script-definition-demand.test', serverIdentityId: 'srv_script_definition_demand', accountId: 'account',
+            credentials: { token: createAccountTokenForTests('account', { currentAccount: true }) },
+            request: async (url, init) => {
+                const path = new URL(String(url)).pathname;
+                const inspection = await inspectActionResponse(path, init);
+                if (inspection) return inspection;
+                if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'source-machine', accountId: 'account' })]);
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+                return Response.json({}, { status: 404 });
+            },
+        });
+        const refreshing = createDeferred<void>();
+        let presented = false;
+        const wrapper = ({ children }: React.PropsWithChildren) => <PluginSurfaceFocusEligibilityProvider active={presented}>{children}</PluginSurfaceFocusEligibilityProvider>;
+        try {
+            const workspace: WorkspaceAddressV1 = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), machineId: 'source-machine', workspaceId: 'source', rootPath: '/source' };
+            inspectionTransport.answer = ProjectDefinitionInspectOutputSchema.parse({ definition: { basis: { kind: 'absent' }, document: null },
+                detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+                setupReadiness: { kind: 'current', reviewedEffectDigest: 'inspected-effect', completedAtMs: 123 },
+                setupConsent: { kind: 'admitted' } });
+            const homes = [workspace.serverId];
+            const useInspection = () => useProjectDefinitionInspection(workspace, useServerCredentialAccountScopeBindings(homes).get(workspace.serverId) ?? null);
+            const hook = await renderHook(useInspection, { wrapper });
+            expect(inspectionTransport.accounts).toEqual([]);
+            presented = true;
+            await hook.rerender();
+            await vi.waitFor(() => expect(hook.getCurrent().read).toHaveProperty('value'));
+            const success = hook.getCurrent().read;
+            if (!success || !('value' in success)) throw new Error('Expected admitted inspection');
+            expect(inspectionTransport.accounts).toEqual(['account']);
+            presented = false;
+            await hook.rerender();
+            await act(async () => { hook.getCurrent().retry(); });
+            expect(inspectionTransport.accounts).toEqual(['account']);
+            inspectionTransport.hold = refreshing.promise;
+            presented = true;
+            await hook.rerender();
+            expect(hook.getCurrent().read).toMatchObject({ refreshing: true, value: { definition: success.value.definition } });
+            const reopened = hook.getCurrent().read;
+            expect(reopened && 'value' in reopened ? reopened.value : null).not.toHaveProperty('setupConsent');
+            expect(reopened && 'value' in reopened ? reopened.value : null).not.toHaveProperty('setupReadiness');
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account']));
+            await act(async () => { refreshing.resolve(); });
+            await vi.waitFor(() => expect(hook.getCurrent().read).toMatchObject({ refreshing: false }));
+            await hook.unmount();
+            const nextRead = createDeferred<void>();
+            inspectionTransport.hold = nextRead.promise;
+            const remounted = await renderHook(useInspection, { wrapper });
+            expect(remounted.getCurrent().read).toMatchObject({ refreshing: true, value: { definition: success.value.definition } });
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account']));
+            await act(async () => { nextRead.resolve(); });
+            inspectionTransport.failure = 'permission_denied';
+            await act(async () => { remounted.getCurrent().retry(); });
+            await vi.waitFor(() => expect(remounted.getCurrent().read).toEqual({ key: projectDefinitionInspectionKey(workspace), error: 'permission_denied' }));
+            await remounted.unmount();
+        } finally { refreshing.resolve(); await connection.dispose(); disposeExecutor(); }
+    });
     it.each([
         { policy: 'direct', reason: 'not_accepting' }, { policy: 'ask-first', reason: 'not_accepting' },
         { policy: 'direct', reason: 'worker_copy_missing' }, { policy: 'ask-first', reason: 'worker_copy_missing' },

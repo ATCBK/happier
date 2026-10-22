@@ -220,7 +220,7 @@ describe('uploadAttachmentDraftsToSession', () => {
                 sha256: 'h1',
                 structuredInput: {
                     type: 'localImage',
-                    kind: 'image',
+                    kind: 'localImage',
                     localPath: '.happier/uploads/messages/m1/screen.png',
                     path: '.happier/uploads/messages/m1/screen.png',
                     mimeType: 'image/png',
@@ -251,7 +251,7 @@ describe('uploadAttachmentDraftsToSession', () => {
                 imageInputs: [
                     {
                         type: 'localImage',
-                        kind: 'image',
+                        kind: 'localImage',
                         localPath: '.happier/uploads/messages/m1/screen.png',
                         path: '.happier/uploads/messages/m1/screen.png',
                         provenance: { kind: 'sessionAttachmentUpload' },

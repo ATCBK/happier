@@ -1733,7 +1733,8 @@ describe('VoiceSessionRuntime', () => {
       });
       await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
       expect(sdk.startSession).toHaveBeenCalledOnce();
-      expect(getVoiceSessionSnapshot()).toEqual({ ...active, status: 'connecting' });
+      // Teardown keeps Stop and does not announce a new connection (`ending` projects as connected).
+      expect(getVoiceSessionSnapshot()).toEqual(active);
       await act(async () => {
         stopped.resolve();
         await stopped.promise;

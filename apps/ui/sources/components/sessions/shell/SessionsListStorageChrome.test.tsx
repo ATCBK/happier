@@ -119,9 +119,10 @@ describe('SessionsListStorageChrome', () => {
         expect(browseRowStyle.minHeight).toBe(sessionRowHeight);
         expect(screen.findAllByType('SessionListStorageTabsBar' as never)).toHaveLength(0);
         const browseContainerStyle = flattenStyle(itemGroups[0]?.props.style);
-        // Cancels the untitled group's own top spacer exactly, rather than approximating it.
+        // Cancels the untitled group's own top spacer exactly, then keeps the column's small gap
+        // under the title strip (ColumnDestinationRows `column` placement).
         expect(browseContainerStyle.marginTop).toBe(
-            -(Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX) ?? 0),
+            -(Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX) ?? 0) + 8,
         );
         expect(browseContainerStyle.maxWidth).toBeUndefined();
         expect(browseContainerStyle.backgroundColor).toBeUndefined();

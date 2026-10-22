@@ -47,19 +47,19 @@ describe('workspaceSyncEngineReadinessStore', () => {
         subscribeWorkspaceSyncEngineReadiness(scope, listener);
         applyWorkspaceSyncEngineReadinessEvent(scope, {
             engine: { state: 'unavailable', errorCode: 'engine_unavailable' },
-            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+            carrier: { state: 'unavailable', errorCode: 'machine_carrier_unavailable' },
         });
         const unavailable = getWorkspaceSyncEngineReadinessSnapshot(scope);
         applyWorkspaceSyncEngineReadinessEvent(scope, {
             engine: { state: 'unavailable', errorCode: 'engine_unavailable' },
-            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+            carrier: { state: 'unavailable', errorCode: 'machine_carrier_unavailable' },
         });
         expect(getWorkspaceSyncEngineReadinessSnapshot(scope)).toBe(unavailable);
         expect(listener).toHaveBeenCalledOnce();
 
         applyWorkspaceSyncEngineReadinessEvent(scope, {
             engine: { state: 'unavailable', errorCode: 'engine_not_installed' },
-            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+            carrier: { state: 'unavailable', errorCode: 'machine_carrier_unavailable' },
         });
         expect(getWorkspaceSyncEngineReadinessSnapshot(scope).errorCode).toBe('engine_not_installed');
         applyWorkspaceSyncEngineReadinessEvent(scope, {

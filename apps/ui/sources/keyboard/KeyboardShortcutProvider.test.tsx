@@ -218,7 +218,7 @@ describe('KeyboardShortcutProvider', () => {
         const markOpened = vi.fn(async () => {});
         let execute: ReturnType<typeof useKeyboardCommand> | undefined;
         function Inbox() {
-            useInboxItemNavigation({ items, focus, view: 'needs_you', enabled: true,
+            useInboxItemNavigation({ items, focus, view: 'needs_you', selectedResolved: false, enabled: true,
                 select: () => {}, close: () => {}, open, markOpened });
             execute = useKeyboardCommand();
             return <Child />;

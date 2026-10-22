@@ -94,7 +94,7 @@ import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/
 import { SessionAttachmentUploadInitRequestV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentUploadInitRequestV1';
 import { SessionAttachmentHandleV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentHandleV1';
 import { writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
-import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS, type BundledAgentDeclaration } from '@/agents/registry/generatedBundledPluginEntries';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { projectAgentProviderBrokerApplications } from '@happier-dev/protocol/providers/catalog/brokerApplicationProjectionV1';
@@ -139,13 +139,14 @@ const readyAgentInventory = createReadyMachineAgentInventoryFixture([
   { agentId: 'gemini', title: 'Gemini' },
 ]);
 // Match the admitted Machine producer, including c108's declaration facts.
+const bundledAgentDeclarations: Readonly<Record<string, BundledAgentDeclaration | undefined>> = BUNDLED_CANONICAL_AGENT_DECLARATIONS;
 readyAgentInventory.projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
   protocolVersion: 1,
   projection: { ...readyAgentInventory.projection,
     agentsById: Object.fromEntries(Object.entries(readyAgentInventory.projection.agentsById).map(([id, agent]) => [id, {
       ...agent,
-      identity: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.identity,
-      providerRequirements: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.providerRequirements ?? undefined,
+      identity: bundledAgentDeclarations[id]?.identity,
+      providerRequirements: bundledAgentDeclarations[id]?.providerRequirements ?? undefined,
     }])),
     familiesById: { providers: { family: 'providers', entriesById: Object.fromEntries(
       readAccountProviderDeclarations({ kind: 'account' }).map(declaration => {
@@ -1277,10 +1278,10 @@ describe('SessionView (direct sessions)', () => {
       const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
       const { sessionModelSelectionKey } = await import('@/components/sessions/modelPicker/sessionModelSelectionKey');
       const readTeamOption = () => detail.root.findByType(SelectionList).props.rootStep.sections
-        .flatMap((section: { options?: readonly { id: string; disabled?: boolean }[] }) => section.options ?? [])
-        .find((option: { id: string }) => option.id === sessionModelSelectionKey(selection));
+        .flatMap(section => section.kind === 'static' ? section.options : [])
+        .find(option => option.id === sessionModelSelectionKey(selection));
       expect(detail.root.findByType(SessionModelPicker).props.teamCredentialResources
-        .flatMap((resource: { providerModels: unknown[] }) => resource.providerModels)).toEqual([]);
+        ?.flatMap((resource: { providerModels: unknown[] }) => resource.providerModels)).toEqual([]);
       expect(readTeamOption()).toBeUndefined();
 
       await act(async () => { pendingProjectionReceipt!.resolve(
@@ -6965,7 +6966,7 @@ describe('SessionView (direct sessions)', () => {
     if (withMedia) {
       const projection = connectedAccountProjection?.projection ?? readyAgentInventory.projection;
       connectedAccountProjection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
-        projection: { v: 2, generation: 7, agentsById: {}, ...projection, familiesById: { ...projection?.familiesById,
+        projection: { ...projection, familiesById: { ...projection?.familiesById,
           composerAttachments: { family: 'composerAttachments', entriesById: { 'acme.issues/issue': {
             id: 'acme.issues/issue', pluginId: 'acme.issues', identity: mediaHandle.owner, occurrenceId: 'issue-generation-a',
             definition: { id: 'issue', title: 'Issue', icon: 'warning', cardinality: 'many',

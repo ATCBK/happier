@@ -146,6 +146,8 @@ vi.mock('@/sync/sync', () => ({
             decryptAutomationTemplateRaw: vi.fn(async () => null),
         },
         reconfigureSessionDraftRepositoryForAccountMode: vi.fn(),
+        // No admitted Account socket exists in this fixture, so reads use the focused Home request.
+        getAccountEncryptionObservationBinding: () => null,
     },
 }));
 

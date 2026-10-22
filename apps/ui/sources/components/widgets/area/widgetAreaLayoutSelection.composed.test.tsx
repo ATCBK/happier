@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createActionExecutor, normalizeActionsSettingsV1, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
@@ -179,7 +180,9 @@ it('delivers Project selection through both reverse dispatchers using the portab
     const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
         hasConnectedClientRpcHandler: method => method === connectedMethod,
         // Only the network hop is replaced; both dispatchers and Action owners run.
-        callConnectedClientRpc: async (_method, payload, options) => {
+        callConnectedClientRpc: async (method, payload, options) => {
+            // The server selects the receiver; no client bound to this RPC is typed absence.
+            if (method !== connectedMethod) return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
             const request = UiActionDispatchRequestV1Schema.parse(payload);
             options.onIssued();
             return { ok: true, result: await receive(request, { signal: options.signal ?? new AbortController().signal }) };
