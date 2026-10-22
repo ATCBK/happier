@@ -297,6 +297,7 @@ import {
   WorkflowActionIdV1Schema,
 } from './actionIds.js';
 import { WorkflowActionInputSchemasV1 } from '../workflows/actionsV1.js';
+import { executeWorkflowDiscussionRoundProjectV1 } from './executor/workflowDiscussionRound.js';
 import { ArtifactAccessActionIdV1Schema, ArtifactAccessActionInputSchemasV1, ArtifactAccessActionOutputSchemasV1, ArtifactAccessErrorCodeV1Schema } from '../artifacts/artifactAccessV1.js';
 import { ArtifactActionIdV1Schema, ArtifactActionInputSchemasV1, ArtifactActionOutputSchemasV1 } from '../artifacts/artifactActionsV1.js';
 import { executeDocReadV1, executeDocDiscussionWriteV1, executeDocEditDecisionV1 } from './executor/docCollaborationActions.js';
@@ -5372,6 +5373,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return readActionFailureEnvelope(result) ?? { ok: true, result };
       }
 
+      if (actionId === 'workflow.discussion.round.project') return await executeWorkflowDiscussionRoundProjectV1(parsed.data, ctx, deps);
       if (actionId === 'webhooks.call' || actionId === 'machines.command.run') {
         const result = actionId === 'webhooks.call'
           ? await deps.webhookCall?.(WorkflowWebhookInputV1Schema.parse(parsed.data), ctx)
