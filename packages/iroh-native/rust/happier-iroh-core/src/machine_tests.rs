@@ -165,6 +165,11 @@ async fn recording_admission_server(
     let addr = listener.local_addr().expect("recording admission addr");
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
+            // A closed loopback connection carries no admission request.
+            let mut first_byte = [0u8; 1];
+            if !matches!(socket.peek(&mut first_byte).await, Ok(1)) {
+                continue;
+            }
             let request = read_http_request(&mut socket).await;
             let request = String::from_utf8(request).expect("utf8 admission request");
             let (_, body) = request.split_once("\r\n\r\n").expect("request head/body");
@@ -1051,6 +1056,14 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
         move || {
             let witness = sequence.fetch_add(1, Ordering::SeqCst) + 1;
             Box::pin(async move {
+                if witness == 2 {
+                    // Fresh Home authorization is application work, governed
+                    // by its caller's lifetime rather than wire framing.
+                    tokio::time::sleep(
+                        crate::machine::MACHINE_CONTROL_TIMEOUT + Duration::from_millis(1),
+                    )
+                    .await;
+                }
                 Ok(format!(
                     r#"{{"v":1,"kind":"provider_broker","witness":{witness}}}"#
                 ))
@@ -1080,11 +1093,15 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
             body.len(),
             body,
         );
-        let _ = exchange_echo(
+        let echoed = exchange_echo(
             tunnel.local_addr().expect("HTTP loopback addr"),
             request.as_bytes(),
         )
         .await;
+        assert!(
+            echoed.starts_with(b"app-reply:"),
+            "{body}: {:?}, {:?}", tunnel.status(), acceptor.status()
+        );
     }
 
     assert_eq!(
@@ -1092,7 +1109,9 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
         vec![
             r#"{"v":1,"kind":"provider_broker","witness":1}"#.to_owned(),
             r#"{"v":1,"kind":"provider_broker","witness":2}"#.to_owned(),
-        ]
+        ],
+        "{:?}",
+        tunnel.status()
     );
     assert_eq!(sequence.load(Ordering::SeqCst), 2);
     tunnel.stop_and_wait().await;

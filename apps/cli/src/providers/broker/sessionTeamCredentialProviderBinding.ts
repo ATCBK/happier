@@ -204,7 +204,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
   await assertAdmission();
   input.signal.throwIfAborted();
   const discovery = createProviderBrokerEndpointDiscovery();
-  const tunnel = await input.openTunnel({
+  const tunnel = await discovery.openTunnel(() => input.openTunnel({
     brokerOpen: opened,
     // An established tunnel renews by presenting the prior signed authority it
     // already holds. How the Home first selected this exact target is not a
@@ -214,7 +214,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
       refreshAuthority: opened.authority,
     }, signal), signal),
     signal: input.signal,
-  });
+  }), input.signal);
   let composed: Awaited<ReturnType<typeof composeProviderBindingMaterialization>> | null = null;
   try {
     input.signal.throwIfAborted();

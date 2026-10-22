@@ -57,7 +57,7 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog'] as const)(
+it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
@@ -91,6 +91,9 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
         },
         openBroker: async request => {
           brokerOpens++;
+          if (request.refreshAuthority && metadata === 'slow refresh') {
+            await new Promise(resolve => setTimeout(resolve, MACHINE_CONTROL_TIMEOUT_MS + 1));
+          }
           if (request.refreshAuthority && metadata === 'refresh refused') return { ok: false, reasonCode: 'broker_unavailable' };
           if (workerEndpoint && brokerEndpoint) {
             const issuedAt = Date.now();
@@ -171,7 +174,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     return get(url, options);
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
-  if (metadata === 'slow catalog') {
+  if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'refresh refused') {
     // The target HTTP service is the external boundary. Keep real signed
     // cross-Account admission, native Iroh and capability gating in the path.
     const http = createServer((request, response) => {
@@ -213,7 +216,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     if (target.pathname === AGENT_RUNTIME_DAEMON_SERVICES_PATH && target.hostname === '127.0.0.1'
       && target.port === String(boundary.port)) return nativeFetch(url, options);
     if (target.pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
-      if (metadata === 'slow catalog') return nativeFetch(url, options);
+      if (metadata === 'slow catalog' || metadata === 'slow refresh') return nativeFetch(url, options);
       // Native transport is the boundary: a failed fresh handshake closes its
       // local HTTP socket without returning an HTTP response to the real binder.
       if (metadata === 'refresh refused') await refreshStream?.();
@@ -253,7 +256,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     expect(readSessionPreparationFailureDiagnostic(refused).originalCode).toBe('team_credential_provider_selection_not_current');
     return;
   }
-  if (metadata !== 'ready' && metadata !== 'slow catalog') {
+  if (metadata !== 'ready' && metadata !== 'slow catalog' && metadata !== 'slow refresh') {
     const refused = await openThroughRunner().then(() => null, (error: unknown) => error);
     expect(brokerOpens).toBe(metadata === 'refresh refused' ? 2 : 1);
     expect(warnings.mock.calls).toContainEqual(['[ProviderBroker] Endpoint discovery refused', expect.objectContaining({
@@ -281,7 +284,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
   const opened = await openThroughRunner();
   expect(opened).toMatchObject({ kind: 'provider_broker.binding', status: 'opened',
     providerBinding: { source: { kind: 'team_resource', resourceId: 'resource', resourceRevision: 2 }, model: model.descriptor,
-      upstream: { protocol: 'openai-responses', normalizedUrl: metadata === 'slow catalog'
+      upstream: { protocol: 'openai-responses', normalizedUrl: metadata === 'slow catalog' || metadata === 'slow refresh'
         ? expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/u) : 'http://127.0.0.1:43123/v1', credential: 'apiKey' } } });
   const config = parseCodexProviderBindingEngineConfigV1(opened.providerBinding);
   if (!config) throw new Error('Expected Codex engine config');
@@ -290,10 +293,10 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
   });
   expect(h.requester.readAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
   expect(getActiveAccountSettingsSnapshot()).toEqual(ambient);
-  expect(brokerOpens).toBe(metadata === 'slow catalog' ? 2 : 1);
+  expect(brokerOpens).toBe(metadata === 'slow catalog' || metadata === 'slow refresh' ? 2 : 1);
   h.f.retire();
   await expect(open()).rejects.toThrow('requester_session_not_current');
-  expect(brokerOpens).toBe(metadata === 'slow catalog' ? 2 : 1);
+  expect(brokerOpens).toBe(metadata === 'slow catalog' || metadata === 'slow refresh' ? 2 : 1);
   } finally {
     await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
       publicReleaseRing: configuration.publicReleaseRing, path, capabilityDigest: published.capabilityDigest });

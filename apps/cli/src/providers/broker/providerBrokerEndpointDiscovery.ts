@@ -47,8 +47,28 @@ export function createProviderBrokerEndpointDiscovery() {
     ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(discoveryCause === undefined ? {} : { discoveryCause }),
   });
+  const refuse = (error: unknown, signal: AbortSignal, startedAt: number): never => {
+    discoveryCause ??= endpointDiscoveryFailureCause(error, signal, httpStatus);
+    try {
+      logger.warnLocalFile('[ProviderBroker] Endpoint discovery refused', {
+        reason: 'endpoint_discovery_failed', ...failureDiagnostic(),
+        discoveryElapsedMs: Date.now() - startedAt, refreshOutcome,
+        ...(refreshStartedAt === undefined ? {} : { refreshElapsedMs: refreshElapsedMs ?? Date.now() - refreshStartedAt }),
+      });
+    } catch { /* Diagnostic failure must not replace the refusal. */ }
+    signal.throwIfAborted();
+    throw new SessionTeamCredentialLaunchUnavailableError('provider_endpoint_unavailable');
+  };
   return {
     failureDiagnostic,
+    async openTunnel<T>(open: () => Promise<T>, signal: AbortSignal): Promise<T> {
+      const startedAt = Date.now();
+      try { return await open(); }
+      catch (error) {
+        if (refreshOutcome === 'refused' || refreshOutcome === 'failed') return refuse(error, signal, startedAt);
+        throw error;
+      }
+    },
     async refreshBrokerOpen<T extends Readonly<{ ok: boolean }>>(open: () => Promise<T>, signal: AbortSignal): Promise<T> {
       refreshOutcome = 'pending';
       refreshStartedAt = Date.now();
@@ -75,18 +95,7 @@ export function createProviderBrokerEndpointDiscovery() {
           return response;
         } });
       } catch (error) {
-        discoveryCause ??= endpointDiscoveryFailureCause(error, input.signal, httpStatus);
-        try {
-          logger.warnLocalFile('[ProviderBroker] Endpoint discovery refused', {
-            reason: 'endpoint_discovery_failed', ...failureDiagnostic(),
-            discoveryElapsedMs: Date.now() - startedAt, refreshOutcome,
-            ...(refreshStartedAt === undefined ? {} : { refreshElapsedMs: refreshElapsedMs ?? Date.now() - refreshStartedAt }),
-          });
-        } catch { /* Diagnostic failure must not replace the refusal. */ }
-        input.signal.throwIfAborted();
-        // Both adapters expose the existing typed endpoint refusal, including
-        // when native closed the socket before an HTTP response existed.
-        throw new SessionTeamCredentialLaunchUnavailableError('provider_endpoint_unavailable');
+        return refuse(error, input.signal, startedAt);
       }
     },
   };

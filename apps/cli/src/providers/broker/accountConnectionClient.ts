@@ -123,11 +123,12 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     failedReason = 'tunnel_open_failed';
     let tunnel: BrokerTunnel;
     try {
-      tunnel = await input.openTunnel({ brokerOpen: opened, signal: input.signal,
+      tunnel = await discovery.openTunnel(() => input.openTunnel({ brokerOpen: opened, signal: input.signal,
         refreshBrokerOpen: (signal = input.signal) => discovery.refreshBrokerOpen(
           () => input.openBroker({ ...request, refreshAuthority: opened.authority }, signal), signal),
-      });
+      }), input.signal);
     } catch (error) {
+      if (discovery.failureDiagnostic().discoveryCause !== undefined) failedReason = 'endpoint_discovery_failed';
       // Classify the carrier's closed signature/binding failures, without
       // inspecting native messages or changing its verification decision.
       if (error instanceof MachineCarrierError && [

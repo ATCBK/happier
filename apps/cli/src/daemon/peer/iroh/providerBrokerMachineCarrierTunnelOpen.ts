@@ -114,12 +114,7 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
     let releasing = false;
 
     const handshake = IrohProviderBrokerHandshakeSchema.parse({ v: payload.v, kind: 'provider_broker', authority });
-    const transportInput: ProviderBrokerMachineCarrierTransportOpenInput = {
-      alpn: MACHINE_ALPN,
-      remoteEndpointId: payload.target.endpointId,
-      flow: 'provider_broker',
-      handshake,
-      handshakeProvider: async () => {
+    const refreshHandshake = async () => {
         if (releasing) {
           throw new MachineCarrierError('broker_consumer_closed', 'Provider broker consumer has been withdrawn.');
         }
@@ -150,6 +145,26 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
           kind: 'provider_broker',
           authority: freshAuthority,
         });
+    };
+    // Home work can outlive native's first-stream custody window. Complete
+    // the first refresh before dial, then consume that exact witness once.
+    // Later streams still acquire their own fresh authority.
+    let firstHandshake = refreshBrokerOpen ? await refreshHandshake() : null;
+    const transportInput: ProviderBrokerMachineCarrierTransportOpenInput = {
+      alpn: MACHINE_ALPN,
+      remoteEndpointId: payload.target.endpointId,
+      flow: 'provider_broker',
+      handshake: firstHandshake ?? handshake,
+      handshakeProvider: async () => {
+        if (!firstHandshake) return refreshHandshake();
+        const first = firstHandshake;
+        firstHandshake = null;
+        if (releasing) throw new MachineCarrierError('broker_consumer_closed', 'Provider broker consumer has been withdrawn.');
+        signal?.throwIfAborted();
+        // Dial may have waited. A cached witness never bypasses expiry.
+        const verified = verifyAuthority(first.authority, (input.nowMs ?? Date.now)());
+        if (!verified.valid) throw new MachineCarrierError(verified.reasonCode, 'Provider broker authority is no longer current.');
+        return first;
       },
     };
     const tunnel = await awaitMachineCarrierTunnelOpen(

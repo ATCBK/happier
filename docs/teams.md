@@ -104,8 +104,9 @@ the Team source before applying the new selection.
 
 Team and Account broker consumers share the endpoint-discovery owner described
 in [Providers](providers.md). In development source, the recipient revalidates
-the Team catalog and its own compatibility consent before acquiring the native
-connection, sends endpoint discovery as its first stream, then revalidates before
+the Team catalog, its own compatibility consent and the first fresh Home grant
+before acquiring the native connection. The carrier rechecks that grant after
+dial, sends endpoint discovery as its first stream, then revalidates before
 publishing the binding. Slow Home reads therefore do not hold an unused
 connection past native's pre-application custody window.
 For a failed Team launch, read the recipient's

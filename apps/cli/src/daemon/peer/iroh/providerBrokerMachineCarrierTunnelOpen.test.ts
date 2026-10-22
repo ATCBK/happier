@@ -100,6 +100,13 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     const opened = brokerOpen(authority(consumerBinding));
     const refreshBrokerOpen = vi.fn(async () => brokerOpen(authority({ ...consumerBinding, grantId: 'grant-2' })));
 
+    openHttpTunnel.mockImplementation(async () => {
+      expect(refreshBrokerOpen).toHaveBeenCalledOnce();
+      return { localPort: 41_001, localCapability: 'c'.repeat(64), remoteEndpointId: targetEndpoint,
+        observedPath: 'relay', close };
+    });
+
+
     await expect(open({ brokerOpen: opened, refreshBrokerOpen })).resolves.toMatchObject({
       localPort: 41_001,
       localCapability: 'c'.repeat(64),
@@ -236,7 +243,9 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     });
     // Home refuses a fresh inference admission precisely because the Session
     // that ended is the reason we are releasing.
-    const refreshBrokerOpen = vi.fn(async () => ({ ok: false as const, reasonCode: 'session_not_active' as const }));
+    let ended = false;
+    const refreshBrokerOpen = vi.fn(async () => ended
+      ? { ok: false as const, reasonCode: 'session_not_active' as const } : brokerOpen(signed));
     const open = createProviderBrokerMachineCarrierTunnelOpen({
       accountId: 'account-worker',
       localMachineId: 'machine-worker',
@@ -247,6 +256,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     });
 
     const tunnel = await open({ brokerOpen: brokerOpen(signed), refreshBrokerOpen, signal: binding.signal });
+    ended = true;
     binding.abort();
 
     await expect(tunnel.retire()).rejects.toThrow();
@@ -254,7 +264,7 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     // retries only the same signed claim at the exact target.
     await expect(tunnel.retire()).resolves.toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(refreshBrokerOpen).not.toHaveBeenCalled();
+    expect(refreshBrokerOpen).toHaveBeenCalledOnce();
     await expect(openHttpTunnel.mock.calls[0]?.[0].handshakeProvider?.()).rejects.toMatchObject({ code: 'broker_consumer_closed' });
   });
 
@@ -271,11 +281,13 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       runtime: { endpoint: { endpointId: initiatorEndpoint }, openHttpTunnel } as never,
       resolveTrustRoots: () => [root], nowMs: () => 200,
     });
+    let refreshes = 0;
     await open({
       brokerOpen: brokerOpen(),
-      refreshBrokerOpen: async () => brokerOpen(authority({ resourceId: 'other-resource' })),
+      refreshBrokerOpen: async () => ++refreshes === 1 ? brokerOpen() : brokerOpen(authority({ resourceId: 'other-resource' })),
     });
     const transport = openHttpTunnel.mock.calls[0]?.[0];
+    await expect(transport?.handshakeProvider?.()).resolves.toMatchObject({ kind: 'provider_broker' });
     await expect(transport?.handshakeProvider?.()).rejects.toMatchObject({ code: 'broker_binding_changed' });
   });
 
@@ -305,12 +317,12 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     expect(opened).toBe(2);
   });
 
-  it('requests Home again and rejects an expired witness before a later stream opens', async () => {
+  it.each(['first', 'later'] as const)('rejects an expired witness before the %s stream opens', async stream => {
     const openHttpTunnel = vi.fn<DaemonMachineIrohRuntime['openHttpTunnel']>(async () => ({
       localPort: 41_004, localCapability: 'f'.repeat(64), remoteEndpointId: targetEndpoint,
       observedPath: 'direct' as const, close: vi.fn(async () => undefined),
     }));
-    const times = [200, 200, 200, 20_000];
+    const times = stream === 'first' ? [200, 200, 200, 20_000] : [200, 200, 200, 200, 20_000];
     const refreshBrokerOpen = vi.fn(async () => brokerOpen(authority({ grantId: `fresh-${refreshBrokerOpen.mock.calls.length}` })));
     const open = createProviderBrokerMachineCarrierTunnelOpen({
       accountId: 'account-worker', localMachineId: 'machine-worker',
@@ -319,9 +331,9 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
     });
     await open({ brokerOpen: brokerOpen(), refreshBrokerOpen });
     const provider = openHttpTunnel.mock.calls[0]?.[0].handshakeProvider;
-    await expect(provider?.()).resolves.toMatchObject({ kind: 'provider_broker' });
+    if (stream === 'later') await expect(provider?.()).resolves.toMatchObject({ kind: 'provider_broker' });
     await expect(provider?.()).rejects.toMatchObject({ code: 'grant_expired' });
-    expect(refreshBrokerOpen).toHaveBeenCalledTimes(2);
+    expect(refreshBrokerOpen).toHaveBeenCalledTimes(stream === 'first' ? 1 : 2);
   });
 
   it('rejects either a substituted open witness or a tampered signed endpoint before dialing', async () => {

@@ -1281,8 +1281,10 @@ async fn pump_local(
         return;
     }
     let handshake = if let Some(provider) = handshake_provider {
-        let Ok(Ok(handshake)) = tokio::time::timeout(MACHINE_CONTROL_TIMEOUT, provider()).await
-        else {
+        // Home authorization is application work with its caller's lifetime.
+        // The wire-control budget starts only after the witness is available.
+        // Tunnel shutdown still cancels this stream task and its pending future.
+        let Ok(handshake) = provider().await else {
             return;
         };
         if !matches!(

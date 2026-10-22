@@ -620,9 +620,12 @@ matching Team source acquisition. The hub revalidates the source before returnin
 endpoint metadata or forwarding inference; a source refusal returns typed HTTP
 failure. Closing the stream cancels acquisition and releases its joined access;
 explicit retirement still ends only the exact signed consumer claim.
-Recipient currentness, Team catalog and experimental-consent reads finish before
-the native connection is acquired. Endpoint discovery then sends the first stream
-without another Home read in between: native's pre-application custody window
+Recipient currentness, Team catalog, experimental-consent reads and the first
+fresh Home grant finish before the native connection is acquired. The carrier
+consumes that verified grant once, rechecking its expiry after dial; subsequent
+streams refresh their own grants under the containing operation's lifetime.
+Endpoint discovery then sends the first stream without another Home read in
+between: native's pre-application custody window
 owns connections that have not sent any application stream. Both adapters retain
 their post-discovery revalidation before publishing a binding. A refused
 pre-connection check acquires no tunnel or source claim.
@@ -635,7 +638,7 @@ and the per-stream grant's `refreshOutcome` with `refreshElapsedMs` when request
 The refresh outcome distinguishes an unanswered refresh from an accepted,
 refused or failed refresh. Its elapsed time is the completed refresh duration,
 or the time still pending when discovery fails.
-A refused per-stream Home grant refresh is retained as
+A refused Home grant refresh, including the first refresh before dial, is retained as
 `broker_refresh_refused` before native transport can turn it into a closed
 socket. Account failures also retain these closed cause/status facts in the
 existing `[ProviderBroker] Account connection open refused` and runner dispatch
