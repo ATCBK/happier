@@ -45,6 +45,17 @@ requests server settlement. The server transaction commits or updates the
 transcript message and removes that Pending row before publishing the message
 event and the separate Pending count/version event.
 
+In development source, Claude's Agent SDK and legacy remote runtimes share
+`createClaudeRemotePromptSettlementTracker`. They request the documented
+[`--replay-user-messages`](https://code.claude.com/docs/en/cli-reference) acknowledgment and correlate its main-chain user UUID
+with the exact submitted Pending prompt. Local enqueue, SDK iterable consumption,
+and stdin writes do not settle Pending or retire its replay handoff. A submitted
+prompt without acknowledgment has an uncertain delivery outcome; its handoff
+remains available and Pending does not automatically resend it. Inputs rejected
+before submission remain retryable. Matching acknowledgment echoes carry
+provider-only context and are excluded from the visible transcript. Locally
+handled commands retain their explicit local settlement.
+
 In development source, Claude unified terminal reports exact transcript-proven acceptance before stopping
 for missing required session hooks. The hook failure still stops the wrapper and
 surfaces a runtime issue; it does not make an already accepted prompt undelivered

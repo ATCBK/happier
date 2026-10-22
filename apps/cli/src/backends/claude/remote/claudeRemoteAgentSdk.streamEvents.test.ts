@@ -164,7 +164,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
         });
     });
 
-    it('accepts a prompt when the Agent SDK input API takes custody, even if the query later fails', async () => {
+    it('keeps a prompt accepted after its exact native acknowledgment even if the query later fails', async () => {
         const onPromptAcceptedByProvider = vi.fn();
         const onPromptTransportFailure = vi.fn();
         let didSendPrompt = false;
@@ -172,6 +172,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
             async *[Symbol.asyncIterator]() {
                 const consumed = await (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
                 if (consumed.done) throw new Error('expected claimed prompt');
+                yield { ...(consumed.value as object), isReplay: true, session_id: 'native-session' };
                 throw new Error('SDK stopped after accepting prompt input');
             },
             close: vi.fn(),
@@ -214,7 +215,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
         expect(onPromptTransportFailure).not.toHaveBeenCalled();
     });
 
-    it('does not depend on the Agent SDK child-process stdin implementation to accept prompt custody', async () => {
+    it('waits for native acknowledgment without depending on the SDK child-process stdin implementation', async () => {
         const onPromptAcceptedByProvider = vi.fn();
         let didSendPrompt = false;
         let acceptedAtCreateQuery = -1;
@@ -224,6 +225,8 @@ describe('claudeRemoteAgentSdk stream events', () => {
                 async *[Symbol.asyncIterator]() {
                     const consumed = await (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
                     if (consumed.done) throw new Error('expected Agent SDK prompt');
+                    expect(onPromptAcceptedByProvider).not.toHaveBeenCalled();
+                    yield { ...(consumed.value as object), isReplay: true, session_id: 'native-session' };
                     yield { type: 'result' } as any;
                 },
                 close: vi.fn(),
@@ -275,10 +278,14 @@ describe('claudeRemoteAgentSdk stream events', () => {
         let secondPromptArrivedBeforeResult = false;
         const steerabilityChanges: boolean[] = [];
         const interrupt = vi.fn(async () => {});
+        const accepted = vi.fn();
+        const onMessage = vi.fn();
         const createQuery = vi.fn((params: any) => ({
             async *[Symbol.asyncIterator]() {
                 const promptIterator = (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
-                await promptIterator.next();
+                const first = await promptIterator.next();
+                if (first.done) throw new Error('Expected initial prompt');
+                yield { ...(first.value as object), isReplay: true, session_id: 'native-session' };
                 const timeout = Symbol('timeout');
                 const second = await Promise.race([
                     promptIterator.next(),
@@ -287,6 +294,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
                 if (second !== timeout && !second.done) {
                     receivedSecondPrompt = second.value;
                     secondPromptArrivedBeforeResult = true;
+                    yield { ...(second.value as object), isReplay: true, session_id: 'native-session' };
                 }
                 yield { type: 'result' } as any;
             },
@@ -309,7 +317,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
             nextMessage: async () => {
                 nextMessageCall += 1;
                 if (nextMessageCall === 1) {
-                    return { message: 'initial', mode: makeMode({ claudeRemoteAgentSdkEnabled: true }) };
+                    return { message: 'initial', mode: makeMode({ claudeRemoteAgentSdkEnabled: true }), userMessageLocalIds: ['initial-local'] };
                 }
                 if (nextMessageCall === 2) {
                     return {
@@ -323,7 +331,8 @@ describe('claudeRemoteAgentSdk stream events', () => {
             },
             onReady: () => {},
             onSessionFound: () => {},
-            onMessage: () => {},
+            onMessage,
+            onPromptAcceptedByProvider: accepted,
             onInFlightSteerAvailabilityChange: (available: boolean) => steerabilityChanges.push(available),
             createQuery,
         } as any);
@@ -336,6 +345,8 @@ describe('claudeRemoteAgentSdk stream events', () => {
         }));
         expect(interrupt).not.toHaveBeenCalled();
         expect(steerabilityChanges).toContain(true);
+        expect(accepted.mock.calls.map(([outcome]) => outcome.userMessageLocalIds)).toEqual([['initial-local'], ['steer-local']]);
+        expect(onMessage.mock.calls.some(([message]) => message.type === 'user')).toBe(false);
     });
 
     it('interrupts the active Agent SDK turn before streaming an exact interrupt-and-send action', async () => {
