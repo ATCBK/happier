@@ -122,7 +122,7 @@ describe('stack editor catalog source', () => {
         expect(Boolean(screen.findHostByTestId('promptStack.entry.profile-entry.enabled')?.props.disabled)).toBe(false);
         expect(Boolean(screen.findHostByTestId('promptStack.add')?.props.disabled)).toBe(false);
     });
-    it('draws Your memory with search and + only while the Account memory is on (lab c-ctx A)', async () => {
+    it('draws Your memory with search, + and the entry switch in both states (lab c-ctx A)', async () => {
         storage.setState({ isDataReady: true });
         storage.getState().applyArtifacts([{ id: 'memory-1', title: 'Memory', headerVersion: 1, bodyVersion: 1,
             ownerAccountId: scope.accountId, access: 'owner', header: { kind: 'memory_doc.v1', title: 'Memory' },
@@ -133,7 +133,26 @@ describe('stack editor catalog source', () => {
             tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
         const screen = await renderScreen(<PromptStackEditorScreen surface="coding" title="Context" />);
         expect(screen.findHostByTestId('context.accountMemory.search')).toBeTruthy();
-        expect(screen.findHostByTestId('context.accountMemory.enabled')).toBeNull();
+        expect(screen.findHostByTestId('context.accountMemory.enabled')?.props.value).toBe(true);
+    });
+    it('turns an enabled Account memory off through the stack update', async () => {
+        const memoryEntry = { id: 'account.memory', ref: { kind: 'doc' as const, artifactId: 'memory-1' },
+            enabled: true, placement: 'system_append' as const };
+        const fixture = await createPlainPromptLibraryCatalogHomeFixture('https://stack-memory-switch.test', {
+            key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [memoryEntry] },
+        });
+        onTestFinished(fixture.dispose);
+        const capturedScope = storage.getState().settingsScope;
+        if (!capturedScope) throw new Error('Missing admitted memory Account');
+        storage.setState({ isDataReady: true });
+        applyPromptLibraryCatalogSnapshot(capturedScope, { catalog: { status: 'ready', rows: [fixture.read()],
+            tombstones: fixture.tombstones, diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        storage.getState().applyArtifacts([{ id: 'memory-1', title: 'Memory', headerVersion: 1, bodyVersion: 1,
+            ownerAccountId: capturedScope.accountId, access: 'owner', header: { kind: 'memory_doc.v1', title: 'Memory' },
+            body: null, createdAt: 1, updatedAt: 1, seq: 1, isDecrypted: true }]);
+        const screen = await renderScreen(<PromptStackEditorScreen surface="coding" title="Context" />);
+        await act(async () => { screen.findHostByTestId('context.accountMemory.enabled')?.props.onValueChange(false); });
+        await vi.waitFor(() => expect(fixture.read().record.value).toMatchObject({ entries: [{ id: 'account.memory', enabled: false }] }));
     });
     it('keeps a turned-off Account memory switch and the budget read-only while its stack catalog refreshes', async () => {
         storage.setState({ isDataReady: true });

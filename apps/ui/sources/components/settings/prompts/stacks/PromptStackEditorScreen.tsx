@@ -164,9 +164,8 @@ export const PromptStackEditorScreen = React.memo(
             onBudgetChange={setMemoryBudget}
             disabled={!stack.canUpdate}
             // Whether sessions use memory is the defaults above and each session's own switch (plan 65 D45,
-            // lab `c-ctx A`): the header carries search and + only. A memory turned off at this layer keeps
-            // its way back on here, since no session can turn an upstream entry on.
-            onEnabledChange={memoryEntry && !memoryEntry.enabled ? (enabled) => update({ kind: 'set_enabled', entryId: memoryEntry.id, enabled }) : undefined}
+            // lab `c-ctx A`); this switch is the layer's own on/off, both ways like Project Context.
+            onEnabledChange={memoryEntry ? (enabled) => update({ kind: 'set_enabled', entryId: memoryEntry.id, enabled }) : undefined}
           />
         ) : null}
         {!stack.hasLoadedEntries || stack.status !== 'ready' || stack.stale ? (
