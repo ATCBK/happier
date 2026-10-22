@@ -118,6 +118,39 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('defers bundled execution custody until Account availability is admitted', () => {
+        const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
+        const packageName = '@happier-dev/plugins-fixture';
+        const expected = availability.computePluginAccountBundledCustodyV1({ packageName, manifest, artifacts: [] });
+        // Forward to the real digest owner: this measures startup work, not a substituted admission path.
+        const custody = vi.spyOn(availability, 'computePluginAccountBundledCustodyV1');
+        onTestFinished(() => custody.mockRestore());
+        const bundle = {
+            pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName, normalizedManifest: manifest, entriesById: {}, artifactGraphs: [],
+        };
+        const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: [bundle] });
+        // The deferred computation consumes the acquired snapshot, not later caller edits.
+        bundle.packageName = '@happier-dev/plugins-replaced';
+        const reader = store.bind(scope);
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(reader.readAccountUiProjection()).toBeNull();
+        expect(custody).not.toHaveBeenCalled();
+
+        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        store.replace({ scope, snapshot: empty });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({
+            kind: 'available', manifest, custodyId: expected.custodyId,
+        });
+        for (let index = 0; index < 50; index += 1) {
+            expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', custodyId: expected.custodyId });
+        }
+        expect(custody).toHaveBeenCalledTimes(1);
+        store.retire([manifest.id]);
+        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
+        expect(custody).toHaveBeenCalledTimes(1);
+    });
     it.each(['equal', 'different'] as const)('prepares %s bundled Account Action graphs once, without repeating graph traversal during currentness checks', (duplicate) => {
         const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
             artifactId: 'account-actions', tier: 'reactNative', entry: 'react-native/account-actions/entry.cjs.bundle',

@@ -1269,9 +1269,10 @@ function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDecla
         });
         const artifactGraphsByContributionId = new Map([...indexAvailabilityRows(declaredArtifactGraphs, entry => entry.contributionId)]
             .map(([id, entries]) => [id, Object.freeze(entries.map(entry => entry.graph))]));
-        const custody = manifest ? computePluginAccountBundledCustodyV1({
-            packageName: bundle.packageName, manifest, artifacts: artifactGraphs,
-        }) : null;
+        // These immutable package facts are needed only after Account availability
+        // admits an execution selection. Anonymous boot still validates the bundle,
+        // but must not serialize and hash every manifest just to create the store.
+        let accountExecution: BundledAccountExecution | null | undefined;
         return Object.freeze({
             ...declaration,
             entriesById,
@@ -1281,11 +1282,18 @@ function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDecla
             ...(manifest ? { normalizedManifest: manifest } : {}),
             ...(bundle.declaredExecution ? { declaredExecution: Object.freeze({ ...bundle.declaredExecution }) } : {}),
             ...(bundle.collectionContracts ? { collectionContracts: Object.freeze(bundle.collectionContracts.map(ref => Object.freeze({ ...ref }))) } : {}),
-            accountExecution: manifest && custody ? Object.freeze({
-                manifest, custodyId: custody.custodyId, declarationDigest: custody.declarationDigest,
-                sourceCustody: Object.freeze({ kind: 'bundled_first_party' as const,
-                    packagedRuntime: Object.freeze({ kind: 'app_bundle' as const, bundleId: custody.custodyId }) }),
-            }) : null,
+            get accountExecution(): BundledAccountExecution | null {
+                if (accountExecution !== undefined) return accountExecution;
+                if (!manifest) return accountExecution = null;
+                const custody = computePluginAccountBundledCustodyV1({
+                    packageName: declaration.packageName, manifest, artifacts: artifactGraphs,
+                });
+                return accountExecution = Object.freeze({
+                    manifest, custodyId: custody.custodyId, declarationDigest: custody.declarationDigest,
+                    sourceCustody: Object.freeze({ kind: 'bundled_first_party' as const,
+                        packagedRuntime: Object.freeze({ kind: 'app_bundle' as const, bundleId: custody.custodyId }) }),
+                });
+            },
         });
     }));
 }
