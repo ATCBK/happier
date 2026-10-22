@@ -65,33 +65,34 @@ export class PrismaClient {
   );
 }
 
-async function writeYarnVersionShim(binDir) {
-  const yarnPath = join(binDir, 'yarn');
+async function writePnpmVersionShim(binDir) {
+  const pnpmPath = join(binDir, 'pnpm');
   await mkdir(binDir, { recursive: true });
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const args = process.argv.slice(2);",
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
       'process.exit(0);',
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
 async function createServerLightProbeFixture(root) {
   const serverDir = join(root, 'server');
   await mkdir(serverDir, { recursive: true });
   await writeJson(join(serverDir, 'package.json'), { name: 'server', version: '0.0.0', type: 'module' });
-  await writeFile(join(serverDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(serverDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(serverDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(serverDir, 'node_modules'), { recursive: true });
-  await writeFile(join(serverDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(serverDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   await writeServerLightProbeStubs(serverDir);
 
   const binDir = join(root, 'bin');
-  await writeYarnVersionShim(binDir);
+  await writePnpmVersionShim(binDir);
   return { serverDir, binDir };
 }
 

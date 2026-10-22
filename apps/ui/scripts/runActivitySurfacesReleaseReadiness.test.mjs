@@ -7,9 +7,10 @@ test('runActivitySurfacesReleaseReadiness runs rollout-local certification befor
     const recordedCalls = [];
 
     const report = runActivitySurfacesReleaseReadiness({
+        env: { npm_execpath: '/native/pnpm' },
         cwd: '/tmp/happier-ui',
         runRolloutCertification({ cwd, env, spawnSyncImpl }) {
-            spawnSyncImpl(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'certify:activity-surfaces'], {
+            spawnSyncImpl('/native/pnpm', ['--silent', 'run', 'certify:activity-surfaces'], {
                 cwd,
                 env,
                 stdio: 'inherit',
@@ -32,13 +33,13 @@ test('runActivitySurfacesReleaseReadiness runs rollout-local certification befor
         })),
         [
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'certify:activity-surfaces'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'certify:activity-surfaces'],
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'typecheck'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'typecheck'],
                 cwd: '/tmp/happier-ui',
             },
         ],

@@ -1,6 +1,6 @@
 const path = require('node:path');
 
-// Keep this module dependency-free so it can run in GitHub Actions before `yarn install`.
+// Keep this module dependency-free so it can run in GitHub Actions before `pnpm install`.
 // We load the canonical release ring catalog from the checked-in CJS entrypoint.
 const releaseRings = require(path.resolve(__dirname, '..', '..', 'packages', 'release-runtime', 'releaseRings.cjs'));
 const { getReleaseRingCatalogEntry, normalizeReleaseRingId } = releaseRings;

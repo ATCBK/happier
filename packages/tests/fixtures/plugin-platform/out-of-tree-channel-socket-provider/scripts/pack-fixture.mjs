@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { resolveNpmCommandInvocation } from '../../../../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveNpmCommandInvocation } from '../../../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
 const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');

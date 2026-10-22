@@ -9,7 +9,7 @@ import ts from 'typescript';
 
 import { validateApiSurfaceInventory } from '../../plugin-sdk/scripts/apiSurface.mjs';
 import { readCurrentApiSurfaceInventory } from '../../plugin-sdk/scripts/apiSurfaceCli.mjs';
-import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
 const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));

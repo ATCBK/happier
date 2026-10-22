@@ -15,9 +15,10 @@ function findHappyMonorepoRoot(startDir) {
   let dir = resolve(startDir);
   for (let i = 0; i < 12; i++) {
     const pkg = join(dir, 'package.json');
-    const lock = join(dir, 'yarn.lock');
+    const lock = join(dir, 'pnpm-lock.yaml');
+    const workspace = join(dir, 'pnpm-workspace.yaml');
     const packagesDir = join(dir, 'packages');
-    if (existsSync(pkg) && existsSync(lock) && existsSync(packagesDir)) {
+    if (existsSync(pkg) && existsSync(lock) && existsSync(workspace) && existsSync(packagesDir)) {
       try {
         // lightweight name check (don’t parse unless needed)
         const text = readFileSync(pkg, 'utf8');

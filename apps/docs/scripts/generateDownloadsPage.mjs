@@ -6,7 +6,7 @@
  * a 125-page site whose first section is called Getting started. Meanwhile
  * `apps/website/src/data/downloads.ts` already held every URL, was already the
  * single source of truth for the marketing site, and already had a link checker
- * (`yarn --cwd apps/website check:links`) HEADing all of them before deploy.
+ * (`pnpm --dir apps/website run check:links`) HEADing all of them before deploy.
  *
  * So this page is generated from that file rather than retyped. The alternative
  * is two hand-maintained copies of the same URLs, which is how the website ended

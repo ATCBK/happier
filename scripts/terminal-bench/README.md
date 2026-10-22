@@ -31,7 +31,7 @@ non-fast benchmark and writes both xterm parser/write completion and a
 two-animation-frame display observation; neither value claims GPU paint timing:
 
 ```bash
-yarn benchmark:terminal:xterm-web --repeat 3 --out .project/logs/terminal-bench/xterm-web.json
+pnpm run benchmark:terminal:xterm-web --repeat 3 --out .project/logs/terminal-bench/xterm-web.json
 ```
 
 Loaded xterm WebView and native comparisons must use the same canonical

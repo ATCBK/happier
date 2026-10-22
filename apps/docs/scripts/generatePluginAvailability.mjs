@@ -18,7 +18,7 @@
  * projects all four matrix sections instead, so the page cannot disagree with
  * the artifact it cites.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

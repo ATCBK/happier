@@ -64,13 +64,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install system dependencies
         run: |
@@ -88,17 +82,16 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Generate server provider client (postgres)
         env:
           HAPPIER_BUILD_DB_PROVIDERS: postgres
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports[5432] }}/happier?sslmode=disable
-        run: yarn -s workspace @happier-dev/server generate:providers
+        run: pnpm --filter @happier-dev/server run generate:providers
 
       - name: Run core e2e database suite (postgres)
         env:
@@ -107,7 +100,7 @@ jobs:
           HAPPIER_E2E_DB_PROVIDER: postgres
           HAPPIER_E2E_PROVIDER_SKIP_SERVER_GENERATE: "1"
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports[5432] }}/happier?sslmode=disable
-        run: yarn test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1
+        run: pnpm run test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1
 
       - name: Upload e2e diagnostics (on failure)
         if: failure()
@@ -150,13 +143,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install system dependencies
         run: |
@@ -174,17 +161,16 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Generate server provider client (mysql)
         env:
           HAPPIER_BUILD_DB_PROVIDERS: mysql
           DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
-        run: yarn -s workspace @happier-dev/server generate:providers
+        run: pnpm --filter @happier-dev/server run generate:providers
 
       - name: Run core e2e database suite (mysql)
         env:
@@ -193,7 +179,7 @@ jobs:
           HAPPIER_E2E_DB_PROVIDER: mysql
           HAPPIER_E2E_PROVIDER_SKIP_SERVER_GENERATE: "1"
           DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
-        run: yarn test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1
+        run: pnpm run test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1
 
       - name: Upload e2e diagnostics (on failure)
         if: failure()
@@ -237,24 +223,17 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Check provider schema synchronization
-        run: yarn --cwd apps/server schema:sync:check
+        run: pnpm --dir apps/server run schema:sync:check
 
       - name: Run Session System Record preview upgrade contract (Postgres)
         run: node packages/tests/scripts/run-extended-db-docker.mjs --db postgres --mode session-system-record-upgrade
@@ -263,14 +242,14 @@ jobs:
         env:
           HAPPIER_DB_PROVIDER: postgres
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports[5432] }}/happier?sslmode=disable
-        run: yarn --cwd apps/server -s migrate:full:deploy
+        run: pnpm --dir apps/server run migrate:full:deploy
 
       - name: Run db contract suite (Postgres)
         env:
           HAPPIER_DB_PROVIDER: postgres
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports[5432] }}/happier?sslmode=disable
           HAPPIER_TEST_POSTGRES_DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports[5432] }}/happier?sslmode=disable
-        run: yarn --cwd apps/server test:db-contract
+        run: pnpm --dir apps/server run test:db-contract
 
   db-contract-mysql:
     if: ${{ github.event_name != 'workflow_call' || inputs.run_db_contract_mysql }}
@@ -300,24 +279,17 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Check provider schema synchronization
-        run: yarn --cwd apps/server schema:sync:check
+        run: pnpm --dir apps/server run schema:sync:check
 
       - name: Run Session System Record preview upgrade contract (MySQL)
         run: node packages/tests/scripts/run-extended-db-docker.mjs --db mysql --mode session-system-record-upgrade
@@ -327,18 +299,18 @@ jobs:
           HAPPIER_DB_PROVIDER: mysql
           DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
         run: |
-          yarn --cwd apps/server generate:mysql
-          yarn --cwd apps/server test:mysql-voice-identity-upgrade-contract
+          pnpm --dir apps/server run generate:mysql
+          pnpm --dir apps/server run test:mysql-voice-identity-upgrade-contract
 
       - name: Migrate (MySQL)
         env:
           DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
           HAPPIER_DB_MIGRATION_APPROVAL: 20260729102000_add_voice_conversation_grant_provenance
-        run: yarn --cwd apps/server -s migrate:mysql:deploy
+        run: pnpm --dir apps/server run migrate:mysql:deploy
 
       - name: Run db contract suite (MySQL)
         env:
           HAPPIER_DB_PROVIDER: mysql
           DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
           HAPPIER_TEST_MYSQL_DATABASE_URL: mysql://root:happier@127.0.0.1:${{ job.services.mysql.ports[3306] }}/happier
-        run: yarn --cwd apps/server test:db-contract
+        run: pnpm --dir apps/server run test:db-contract

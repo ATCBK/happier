@@ -27,6 +27,14 @@ test('pipeline CLI smoke consumes the mode-aware managed-runtime coherence asser
   assert.ok(assertIndex > packIndex, 'expected managed-runtime coherence validation after pack resolution');
 });
 
+test('pipeline smoke builds other workspaces through pnpm filter and run', () => {
+  const out = execFileSync(process.execPath, [
+    resolve(repoRoot, 'scripts/pipeline/smoke/cli-smoke.mjs'), '--dry-run',
+    '--package-dir', 'apps/bootstrap', '--workspace-name', '@happier-dev/bootstrap',
+  ], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(out, /pnpm --filter @happier-dev\/bootstrap run build/u);
+});
+
 test('pipeline CLI smoke dry-run schedules installed Provider verification on the canonical prefix', async () => {
   const out = execFileSync(
     process.execPath,
@@ -58,7 +66,7 @@ test('pipeline CLI smoke dry-run schedules installed Provider verification on th
       `expected the canonical publication step ${step.name} to run before the pack`,
     );
   }
-  assert.doesNotMatch(out, /yarn workspace @happier-dev\/cli build/);
+  assert.doesNotMatch(out, /pnpm --filter @happier-dev\/cli run build/);
   assert.match(out, /\bnpm install\b/);
   assert.match(out, /\bhappier\b.*--help/);
   assert.match(out, /\bhappier\b.*--version/);

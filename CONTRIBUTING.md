@@ -134,44 +134,50 @@ instead (below).
 ### Running from source
 
 ```bash
-npm i -g yarn
 git clone https://github.com/happier-dev/happier.git
 cd happier
-yarn
-yarn build
-yarn cli:activate
-yarn tui
+node scripts/ci/setup-pnpm.mjs
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run cli:activate
+pnpm run tui
 ```
 
-From the monorepo root, the `yarn` scripts run in **repo-local mode** (stackless + isolated per checkout).
+Use Node.js 22.13 or newer and npm for the setup helper. It installs the exact pnpm
+version in the root `packageManager` field after checking the archive's SHA512
+integrity. It does not require Corepack, which is not bundled with Node.js 25+.
+`pnpm-workspace.yaml` owns workspace packages, dependency policy, and the hoisted
+`node_modules` layout; `pnpm-lock.yaml` is the repository lockfile.
+
+From the monorepo root, the pnpm scripts run in **repo-local mode** (stackless + isolated per checkout).
 These scripts wrap `hstack` with repo-local defaults so you can run from source safely.
 
 Most-used commands:
 
-- `yarn dev`: local dev stack (server + UI + daemon)
-- `yarn tui`, `yarn tui:with-mobile`: dev stack in the integrated TUI (logs + controls)
-- `yarn tui --rescue`: macOS/Linux recovery mode that prioritizes stack controls during severe system load
-- `yarn build`, `yarn start`, `yarn stop`: prod-like build/start/stop flows
-- `yarn auth login`, `yarn daemon`, `yarn happier`: auth + daemon + CLI flows
-- `yarn env list|set|unset`: manage persisted env vars for your repo-local stack
-- `yarn logs`, `yarn logs:all|server|expo|ui|daemon|service`: stream/select logs
-- `yarn service:*`: install/manage OS service
-- `yarn tailscale:*`: configure/query Tailscale Serve URL
-- `yarn mobile`, `yarn mobile:install`, `yarn mobile-dev-client`: mobile workflows
-- `yarn providers`, `yarn eas`, `yarn setup`, `yarn remote`, `yarn self-host`, `yarn menubar`: advanced workflows
+- `pnpm run dev`: local dev stack (server + UI + daemon)
+- `pnpm run tui`, `pnpm run tui:with-mobile`: dev stack in the integrated TUI (logs + controls)
+- `pnpm run tui --rescue`: macOS/Linux recovery mode that prioritizes stack controls during severe system load
+- `pnpm run build`, `pnpm run start`, `pnpm run stop`: prod-like build/start/stop flows
+- `pnpm run auth login`, `pnpm run daemon`, `pnpm run happier`: auth + daemon + CLI flows
+- `pnpm run env list|set|unset`: manage persisted env vars for your repo-local stack
+- `pnpm run logs`, `pnpm run logs:all|server|expo|ui|daemon|service`: stream/select logs
+- `pnpm run service:*`: install/manage OS service
+- `pnpm run tailscale:*`: configure/query Tailscale Serve URL
+- `pnpm run mobile`, `pnpm run mobile:install`, `pnpm run mobile-dev-client`: mobile workflows
+- `pnpm run providers`, `pnpm run eas`, `pnpm run setup`, `pnpm run remote`, `pnpm run self-host`, `pnpm run menubar`: advanced workflows
 
 [Run from a monorepo clone docs](./apps/docs/content/docs/self-hosting/repo-local.mdx)
 
 Arguments:
 
-- Forward extra flags/args with `--` (Yarn v1), for example:
-  - `yarn logs -- --component=daemon --lines 200 --no-follow`
-  - `yarn auth login -- --method=mobile --no-open`
-  - `yarn service:enable -- --auth-now -- --method=web --webapp=hosted`
+- Put script arguments after the script name. Keep a later `--` only when the wrapped command requires it, for example:
+  - `pnpm run logs --component=daemon --lines 200 --no-follow`
+  - `pnpm run auth login --method=mobile --no-open`
+  - `pnpm run service:enable --auth-now -- --method=web --webapp=hosted`
 
 `hstack` and `npx`:
 
-- To run `hstack`/`happier` from any terminal using this clone, run `yarn cli:activate`.
+- To run `hstack`/`happier` from any terminal using this clone, run `pnpm run cli:activate`.
 - You can run published `hstack` via `npx` (for example `npx --yes -p @happier-dev/stack@latest hstack <command>`), but that is **not** the same as repo-local wrappers from this checkout.
 
 More dev docs: [hstack docs index](./apps/docs/content/docs/hstack/index.mdx), [development docs](./apps/docs/content/docs/development/index.mdx).
@@ -179,7 +185,7 @@ More dev docs: [hstack docs index](./apps/docs/content/docs/hstack/index.mdx), [
 ### Lint and format
 
 The 0.3 development checkout uses root-owned [Oxlint](https://oxc.rs/docs/guide/usage/linter)
-and [Oxfmt](https://oxc.rs/docs/guide/usage/formatter) configurations. Run `yarn lint`
+and [Oxfmt](https://oxc.rs/docs/guide/usage/formatter) configurations. Run `pnpm run lint`
 or `hstack lint all` to check authored source throughout the repository. `hstack lint ui`
 also checks plugin UI contributions; `hstack lint cli` and `hstack lint server` narrow
 the source paths while using the same root policy. CI runs lint in the existing
@@ -193,17 +199,17 @@ produced widespread noise; there is no suppression baseline.
 
 Oxfmt uses an 80-column target, single quotes in JavaScript/TypeScript, and leaves
 package.json key ordering intact. Generated, vendored and build outputs are ignored.
-Format just your edited files with `yarn oxfmt path/to/file.ts path/to/other.tsx`.
+Format just your edited files with `pnpm exec oxfmt path/to/file.ts path/to/other.tsx`.
 Claude Code's `PostToolUse` hook and [Codex's edit hook](https://developers.openai.com/codex/hooks)
 use the same `scripts/formatEditedFiles.mjs` adapter and root configuration. They
 format only the paths named by the edit, including Codex patch destinations; shell
 commands and external editors still need the explicit command. Start a new agent
 session after changing hook configuration and accept Codex's hook trust review when
-prompted. The hooks require the root development dependencies installed by `yarn`.
+prompted. The hooks require the root development dependencies installed by `pnpm install`.
 
 The repository-wide reformat is deferred while the shared checkout is busy.
-At a quiet commit boundary, the owner can run `yarn format` (equivalent to
-`oxfmt .`), inspect the diff, and then run `yarn format:check`. Until that reformat
+At a quiet commit boundary, the owner can run `pnpm run format` (equivalent to
+`oxfmt .`), inspect the diff, and then run `pnpm run format:check`. Until that reformat
 lands, `format:check` is advisory and is deliberately absent from CI.
 
 The pinned Oxc packages ship native bindings for Linux x64/arm64 (GNU and musl),

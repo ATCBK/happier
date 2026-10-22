@@ -25,7 +25,7 @@ function createStubBin(prefix) {
   );
 
   writeExecutable(
-    path.join(binDir, 'yarn'),
+    path.join(binDir, 'pnpm'),
     ['#!/usr/bin/env bash', 'set -euo pipefail', 'exit 0', ''].join('\n'),
   );
 

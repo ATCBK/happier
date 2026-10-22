@@ -164,7 +164,7 @@ describe('Vitest lane separation', () => {
         ) as { scripts?: Record<string, string> };
 
         expect(rootPackageJson.scripts?.['test:import-cycles']).toBe(
-            'yarn workspace @happier-dev/cli test:import-cycles',
+            'pnpm --filter @happier-dev/cli run test:import-cycles',
         );
         expect(cliPackageJson.scripts?.['test:unit']).toContain('--script=test:unit:local');
         expect(cliPackageJson.scripts?.['test:unit:local']).toContain('--unit-checks');

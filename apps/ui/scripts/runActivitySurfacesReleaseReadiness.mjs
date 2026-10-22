@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 import {
     ACTIVITY_SURFACES_ROLLOUT_LOCAL_EXCLUDED_CHECKS,
@@ -13,10 +14,12 @@ const scriptsDir = dirname(scriptPath);
 const packageRoot = dirname(scriptsDir);
 
 function runStep(command, args, { cwd = packageRoot, env = process.env, spawnSyncImpl = spawnSync } = {}) {
-    const result = spawnSyncImpl(command, args, {
+    const invocation = resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath });
+    const result = spawnSyncImpl(invocation.command, invocation.args, {
         cwd,
         env,
         stdio: 'inherit',
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
 
     if (result.error) {
@@ -40,7 +43,7 @@ export function runActivitySurfacesReleaseReadiness({
         spawnSyncImpl,
     });
 
-    runStep(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'typecheck'], {
+    runStep('pnpm', ['--silent', 'run', 'typecheck'], {
         cwd,
         env,
         spawnSyncImpl,

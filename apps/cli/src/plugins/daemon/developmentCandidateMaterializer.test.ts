@@ -46,7 +46,8 @@ describe('preparePluginDevelopmentRoot', () => {
     try {
       await mkdir(sourceRootPath, { recursive: true });
       await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['packages/plugins/*'] }));
-      await writeFile(join(repoRoot, 'yarn.lock'), '');
+      await writeFile(join(repoRoot, 'pnpm-lock.yaml'), '');
+      await writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       await writeFile(join(sourceRootPath, 'package.json'), JSON.stringify({
         name: '@happier-dev/plugins-fixture',
         dependencies: { '@fixture/dependency': '^1.0.0' },
@@ -96,7 +97,8 @@ describe('preparePluginDevelopmentRoot', () => {
     try {
       await mkdir(sourceRootPath, { recursive: true });
       await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['packages/plugins/*'] }));
-      await writeFile(join(repoRoot, 'yarn.lock'), '');
+      await writeFile(join(repoRoot, 'pnpm-lock.yaml'), '');
+      await writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       await writeFile(join(sourceRootPath, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-fixture' }));
       const prepared = await preparePluginDevelopmentRoot({ sourceRootPath, prepareDependencies: true }, {
         runManagedPluginPnpm: (params) => runManagedPluginPnpm(params, {

@@ -96,7 +96,6 @@ test('managed Lima guest provisioning streams the canonical script and writes a 
     scriptSource,
     profile: 'happier',
     nodeMajor: '24',
-    yarnVersion: '1.22.22',
   });
 
   assert.equal(result.changed, true);
@@ -105,7 +104,7 @@ test('managed Lima guest provisioning streams the canonical script and writes a 
   assert.ok(provision);
   assert.deepEqual(provision.args.slice(0, 4), ['shell', 'happier-agent-primary', '--', 'env']);
   assert.ok(provision.args.includes('HAPPIER_PROVISION_NODE_MAJOR=24'));
-  assert.ok(provision.args.includes('HAPPIER_PROVISION_YARN_VERSION=1.22.22'));
+  assert.ok(!provision.args.some(arg => arg.startsWith('HAPPIER_PROVISION_YARN_VERSION=')));
   assert.ok(provision.args.includes('HAPPIER_PROVISION_MUTAGEN_VERSION=0.18.1'));
   assert.ok(provision.args.includes('HAPPIER_PROVISION_AGENT_BROWSER_VERSION=0.34.0'));
   assert.ok(provision.args.includes('HAPPIER_PROVISION_PLAYWRIGHT_VERSION=1.58.2'));
@@ -232,7 +231,7 @@ test('managed Lima guest toolchain health requires the managed runtime, sandbox,
     error: 'ripgrep (rg) is required in the managed Lima guest',
   });
   assert.match(calls[0].args.at(-1), /command -v node/);
-  assert.match(calls[0].args.at(-1), /command -v corepack/);
+  assert.match(calls[0].args.at(-1), /command -v npm/);
   assert.match(calls[0].args.at(-1), /command -v rg/);
   assert.match(calls[0].args.at(-1), /command -v gh/);
   assert.match(calls[0].args.at(-1), /command -v go/);

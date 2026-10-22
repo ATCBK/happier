@@ -23,7 +23,8 @@ test('hstack lint uses the root lint owner for all sources and propagates failur
     join(fixture.root, 'package.json'),
     JSON.stringify({ scripts: { lint: 'oxlint' } }),
   );
-  await writeFile(join(fixture.root, 'yarn.lock'), '');
+  await writeFile(join(fixture.root, 'pnpm-lock.yaml'), '');
+  await writeFile(join(fixture.root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(fixture.root, 'node_modules'));
   const log = join(fixture.root, 'calls.jsonl');
   const fake = writeLoggedJsonBin({
@@ -74,7 +75,8 @@ test('hstack lint inferred UI scope runs root policy against that app and plugin
     join(fixture.root, 'package.json'),
     JSON.stringify({ scripts: { lint: 'oxlint' } }),
   );
-  await writeFile(join(fixture.root, 'yarn.lock'), '');
+  await writeFile(join(fixture.root, 'pnpm-lock.yaml'), '');
+  await writeFile(join(fixture.root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(fixture.root, 'node_modules'));
   await mkdir(
     join(fixture.root, 'packages', 'plugins', 'example', 'src', 'ui'),

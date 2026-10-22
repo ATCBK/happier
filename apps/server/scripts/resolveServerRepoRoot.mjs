@@ -6,7 +6,7 @@ export function resolveServerRepoRoot(params) {
     const existsSync = params.existsSync ?? defaultExistsSync;
 
     for (let i = 0; i < 10; i += 1) {
-        if (existsSync(resolve(dir, "package.json")) && existsSync(resolve(dir, "yarn.lock"))) {
+        if (existsSync(resolve(dir, "package.json")) && existsSync(resolve(dir, "pnpm-lock.yaml")) && existsSync(resolve(dir, "pnpm-workspace.yaml"))) {
             return dir;
         }
         const parent = resolve(dir, "..");

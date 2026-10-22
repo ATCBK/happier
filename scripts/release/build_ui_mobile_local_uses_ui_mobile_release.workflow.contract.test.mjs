@@ -220,9 +220,8 @@ test('build-ui-mobile-local passes approved release notes and projects exact ret
 test('immutable APK recovery installs the release verifier runtime before promotion', () => {
   const workflow = YAML.parse(fs.readFileSync(path.join(repoRoot, '.github/workflows/build-ui-mobile-local.yml'), 'utf8'));
   const publish = workflow.jobs.promote_existing_apk;
-  const install = publish.steps.find((step) => step.uses === './.github/actions/install-yarn-dependencies');
+  const install = publish.steps.find((step) => step.uses === './.github/actions/install-pnpm-dependencies');
   assert.equal(install?.env?.HAPPIER_INSTALL_SCOPE, 'release-runtime');
-  assert.ok(publish.steps.find((step) => step.run?.includes('corepack enable')));
-  assert.ok(publish.steps.findIndex((step) => step.uses === './.github/actions/install-yarn-dependencies')
+  assert.ok(publish.steps.findIndex((step) => step.uses === './.github/actions/install-pnpm-dependencies')
     < publish.steps.findIndex((step) => step.name === 'Recover rolling APK projection from immutable bytes'));
 });

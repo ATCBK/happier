@@ -34,7 +34,8 @@ test('findRepoRoot returns the nearest repo root marker directory', () => {
     const nested = join(repoRoot, 'apps', 'stack', 'scripts');
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(repoRoot, 'package.json'), '{}\n', 'utf8');
-    writeFileSync(join(repoRoot, 'yarn.lock'), '\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n', 'utf8');
     assert.equal(findRepoRoot(nested), repoRoot);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

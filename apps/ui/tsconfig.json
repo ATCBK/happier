@@ -3,6 +3,9 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
+      // Hoisted imports and vendored SDK declarations share the host Zod brand identity.
+      "zod": ["../../node_modules/zod"],
+      "zod/*": ["../../node_modules/zod/*"],
       "@/*": [
         "./sources/*"
       ],

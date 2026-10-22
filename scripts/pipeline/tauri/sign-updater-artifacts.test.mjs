@@ -45,7 +45,7 @@ test('signUpdaterArtifacts signs every updater artifact and replaces only its pa
     env,
     platform: 'linux',
   }, {
-    resolveYarnInvocation: () => ({ cmd: 'yarn', prefixArgs: ['exec'] }),
+    resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
     runSigner: (cmd, args, options) => {
       calls.push({ cmd, args, options });
       // Tauri is the external process boundary; materialization and environment
@@ -69,9 +69,9 @@ test('signUpdaterArtifacts signs every updater artifact and replaces only its pa
   assert.equal(count, 2);
   assert.deepEqual(calls.map((call) => call.args.at(-1)).sort(), [...fixture.artifacts].sort());
   for (const call of calls) {
-    assert.equal(call.cmd, 'yarn');
-    assert.deepEqual(call.args.slice(0, 7), [
-      'exec', '--silent', 'tauri', 'signer', 'sign', '--private-key-path', path.join(fixture.root, 'tauri.signing.key'),
+    assert.equal(call.cmd, 'pnpm');
+    assert.deepEqual(call.args.slice(0, 6), [
+      'exec', 'tauri', 'signer', 'sign', '--private-key-path', path.join(fixture.root, 'tauri.signing.key'),
     ]);
     assert.deepEqual(call.args.slice(7, 9), ['--password', 'opaque-password']);
     assert.equal(call.options.cwd, fixture.root);
@@ -97,7 +97,7 @@ test('signUpdaterArtifacts rejects orphaned signatures before invoking the signe
     env: { TAURI_SIGNING_PRIVATE_KEY: 'opaque-key' },
     platform: 'linux',
   }, {
-    resolveYarnInvocation: () => ({ cmd: 'yarn', prefixArgs: [] }),
+    resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
     runSigner: () => {
       invoked = true;
       return '';
@@ -145,7 +145,7 @@ test('signUpdaterArtifacts rejects invalid signer output without replacing the c
     env: { TAURI_SIGNING_PRIVATE_KEY: 'opaque-key' },
     platform: 'linux',
   }, {
-    resolveYarnInvocation: () => ({ cmd: 'yarn', prefixArgs: [] }),
+    resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
     runSigner: () => 'not-a-signature',
   }), /invalid updater signature/);
   assert.equal(fs.readFileSync(`${fixture.artifacts[0]}.sig`, 'utf8'), 'candidate-placeholder');

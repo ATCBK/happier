@@ -38,8 +38,8 @@ test('npm candidate packing is permission-minimized and secret-free', async () =
   assert.ok(contractTests);
   const tempRoot = await mkdtemp(join(tmpdir(), 'happier-npm-contract-env-'));
   try {
-    // Yarn is the external process boundary; execute the actual workflow shell unchanged.
-    await writeFile(join(tempRoot, 'yarn'), `#!/usr/bin/env node
+    // pnpm is the external process boundary; execute the actual workflow shell unchanged.
+    await writeFile(join(tempRoot, 'pnpm'), `#!/usr/bin/env node
 process.stdout.write(JSON.stringify({
   args: process.argv.slice(2),
   nodeAuthTokenPresent: Object.hasOwn(process.env, 'NODE_AUTH_TOKEN'),
@@ -58,7 +58,7 @@ process.stdout.write(JSON.stringify({
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
-      args: ['-s', 'test:release:contracts'],
+      args: ['run', 'test:release:contracts'],
       nodeAuthTokenPresent: false,
       npmTokenPresent: false,
     });
@@ -78,19 +78,19 @@ process.stdout.write(JSON.stringify({
         'test:release:contracts': `${JSON.stringify(process.execPath)} -e 'process.stdout.write(JSON.stringify({nodeAuthTokenPresent:Object.hasOwn(process.env,"NODE_AUTH_TOKEN"),npmTokenPresent:Object.hasOwn(process.env,"NPM_TOKEN")}))'`,
       },
     }));
-    const configuredYarn = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', contractTests.run], {
+    const configuredPnpm = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', contractTests.run], {
       cwd: tempRoot,
       env: {
         ...process.env,
         NODE_AUTH_TOKEN: 'inherited-node-token-for-test',
         NPM_TOKEN: 'inherited-npm-token-for-test',
         NPM_CONFIG_USERCONFIG: npmrc,
-        YARN_CACHE_FOLDER: join(tempRoot, 'yarn-cache'),
+        pnpm_config_store_dir: join(tempRoot, 'pnpm-store'),
       },
       encoding: 'utf8',
     });
-    assert.equal(configuredYarn.status, 0, configuredYarn.stderr);
-    assert.deepEqual(JSON.parse(configuredYarn.stdout), {
+    assert.equal(configuredPnpm.status, 0, configuredPnpm.stderr);
+    assert.deepEqual(JSON.parse(configuredPnpm.stdout.trim().split('\n').at(-1)), {
       nodeAuthTokenPresent: false,
       npmTokenPresent: false,
     });
@@ -155,7 +155,7 @@ test('every npm credential-bearing job executes workflow-SHA control and only pu
 
     const source = JSON.stringify(job);
     assert.match(source, /scripts\/pipeline\/npm\/publish-tarball\.mjs/);
-    assert.doesNotMatch(source, /scripts\/pipeline\/run\.mjs|install-yarn-dependencies|npm-release/);
+    assert.doesNotMatch(source, /scripts\/pipeline\/run\.mjs|install-pnpm-dependencies|npm-release/);
     assert.match(source, new RegExp(`npm-pack-${packageKey}-.*needs\\.release\\.outputs\\.sha.*needs\\.release\\.outputs\\.${packageKey === 'server' ? 'server_version' : `${packageKey}_version`}`));
     const download = job.steps.find((step) => step.uses === 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
     assert.equal(download?.with?.path, `dist/release-assets/${packageKey}`);

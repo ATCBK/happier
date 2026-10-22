@@ -766,7 +766,7 @@ test('buildTypeScriptPackageDist composes an explicit staged UI producer before 
     args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
     stdio: 'ignore',
     resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
-    resolveYarnCommandInvocationImpl: () => ({ command: 'yarn', args: ['-s', 'build:ui'] }),
+    resolvePnpmCommandInvocationImpl: () => ({ command: 'pnpm', args: ['-s', 'build:ui'] }),
     runCommandImpl: (_command, args, options) => {
       if (args.includes('--outDir')) {
         writeTypeScriptFixtureOutput(args);
@@ -815,7 +815,7 @@ test('buildTypeScriptPackageDist builds UI from the current staged manifest with
       args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
       stdio: 'ignore',
       resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
-      resolveYarnCommandInvocationImpl: args => ({ command: 'yarn', args }),
+      resolvePnpmCommandInvocationImpl: args => ({ command: 'pnpm', args }),
       // Only the external compiler/process boundary is replaced. Staging,
       // manifest import/serialization and dist promotion remain real.
       runCommandImpl: async (_command, args, options) => {
@@ -894,7 +894,7 @@ test('buildTypeScriptPackageDist preserves the complete prior dist when the stag
       args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
       stdio: 'ignore',
       resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
-      resolveYarnCommandInvocationImpl: () => ({ command: 'yarn', args: ['-s', 'build:ui'] }),
+      resolvePnpmCommandInvocationImpl: () => ({ command: 'pnpm', args: ['-s', 'build:ui'] }),
       runCommandImpl: (_command, args) => {
         if (args.includes('--outDir')) {
           writeTypeScriptFixtureOutput(args);
@@ -954,7 +954,7 @@ test('buildTypeScriptPackageDist does not invoke a staged output producer when T
       args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
       stdio: 'ignore',
       resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
-      resolveYarnCommandInvocationImpl: () => ({ command: 'yarn', args: ['-s', 'build:ui'] }),
+      resolvePnpmCommandInvocationImpl: () => ({ command: 'pnpm', args: ['-s', 'build:ui'] }),
       runCommandImpl: (_command, args) => {
         if (args.includes('--outDir')) return { status: 1 };
         if (args.includes('build:ui')) uiBuildCalls += 1;
@@ -1193,7 +1193,7 @@ test('buildTypeScriptPackageDist does not invalidate compiler output for a wildc
         env: { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue },
         stdio: 'ignore',
         resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
-        resolveYarnCommandInvocationImpl: () => ({ command: 'yarn', args: ['-s', 'build:ui'] }),
+        resolvePnpmCommandInvocationImpl: () => ({ command: 'pnpm', args: ['-s', 'build:ui'] }),
         runCommandImpl: (_command, args, options) => {
           if (args.includes('--outDir')) {
             const tsBuildInfoFile = args[args.indexOf('--tsBuildInfoFile') + 1];
@@ -1234,7 +1234,8 @@ test('buildTypeScriptPackageDist permits an incremental repeat but does not repl
   await mkdir(dirname(packageDir), { recursive: true });
   await cp(fixtureDir, packageDir, { recursive: true });
   await writeJson(join(repoDir, 'package.json'), { private: true, workspaces: ['apps/*', 'packages/*'] });
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'server', 'ui']) {
     await mkdir(join(repoDir, 'apps', app), { recursive: true });
     await writeJson(join(repoDir, 'apps', app, 'package.json'), { name: `@fixture/${app}` });
@@ -1342,7 +1343,7 @@ test('native strict package promotion checks identical QA output and preserves t
     runPackageBuild: (_dir, { env }) => buildTypeScriptPackageDist({
       packageDir, env, outputDir: env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR,
       args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
-      resolveYarnCommandInvocationImpl: () => ({ command: 'fixture-ui-process', args: [] }),
+      resolvePnpmCommandInvocationImpl: () => ({ command: 'fixture-ui-process', args: [] }),
       async runCommandImpl(command, args, options) {
         if (command === 'fixture-ui-process') {
           uiBuilds += 1;

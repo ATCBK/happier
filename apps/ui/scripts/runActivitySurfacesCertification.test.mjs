@@ -7,6 +7,7 @@ test('runActivitySurfacesCertification runs rollout-local script tests, narrowed
     const recordedCalls = [];
 
     const report = runActivitySurfacesCertification({
+        env: { npm_execpath: '/native/pnpm' },
         cwd: '/tmp/happier-ui',
         runVitestSuite({ cwd, env, spawnSyncImpl }) {
             spawnSyncImpl(process.execPath, ['vitest-suite-stub'], {
@@ -32,13 +33,13 @@ test('runActivitySurfacesCertification runs rollout-local script tests, narrowed
         })),
         [
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'test:activity-surfaces:contracts:local'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'test:activity-surfaces:contracts:local'],
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'typecheck:activity-surfaces'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'typecheck:activity-surfaces'],
                 cwd: '/tmp/happier-ui',
             },
             {

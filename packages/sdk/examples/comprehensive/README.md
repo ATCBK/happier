@@ -15,7 +15,7 @@ HAPPIER_API_ENDPOINT="http://127.0.0.1:$DAEMON_PORT" \
 HAPPIER_TOKEN='hap_v1_…' \
 HAPPIER_ENDPOINT_MODE=daemon \
 HAPPIER_AGENT_ID=codex \
-yarn tsx packages/sdk/examples/comprehensive/index.ts
+pnpm exec tsx packages/sdk/examples/comprehensive/index.ts
 ```
 
 For the configured Account server, set the server origin. The example selects
@@ -29,7 +29,7 @@ HAPPIER_TOKEN='hap_v1_…' \
 HAPPIER_ENDPOINT_MODE=server \
 HAPPIER_MACHINE_ID='machine-id' \
 HAPPIER_AGENT_ID=codex \
-yarn tsx packages/sdk/examples/comprehensive/index.ts
+pnpm exec tsx packages/sdk/examples/comprehensive/index.ts
 ```
 
 Contributed Action discovery and invocation are documented in the main SDK

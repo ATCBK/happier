@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { getConfig } from '@expo/config';
 import { resolveEasBuildProfileEnv } from '../../../scripts/pipeline/expo/resolve-eas-build-profile-env.mjs';
+import { collectWorkspacePackageJsonPaths } from '../../stack/scripts/utils/proc/workspace_package_manifests.mjs';
 
 const execFile = promisify(execFileCallback);
 
@@ -81,19 +82,16 @@ function expectedAutolinkingConfig(excludedPackages) {
 }
 
 async function findUiFirstPartyNativeExpoModules() {
-    const rootPackageJson = await readJson(join(repoRoot, 'package.json'));
     const appPackageJson = await readJson(join(appRoot, 'package.json'));
-    const workspacePackagePaths = Array.isArray(rootPackageJson?.workspaces?.packages)
-        ? rootPackageJson.workspaces.packages
-        : [];
+    const workspacePackageJsonPaths = await collectWorkspacePackageJsonPaths(repoRoot);
     const appDependencies = {
         ...(appPackageJson.dependencies ?? {}),
         ...(appPackageJson.optionalDependencies ?? {}),
     };
     const modules = [];
 
-    for (const workspacePath of workspacePackagePaths) {
-        const packageJsonPath = join(repoRoot, workspacePath, 'package.json');
+    for (const packageJsonPath of workspacePackageJsonPaths) {
+        const workspacePath = dirname(packageJsonPath).slice(repoRoot.length + 1);
         const expoModuleConfigPath = join(repoRoot, workspacePath, 'expo-module.config.json');
         if (!(await pathExists(packageJsonPath)) || !(await pathExists(expoModuleConfigPath))) continue;
 
@@ -1233,10 +1231,10 @@ test('terminal-native podspec links GhosttyKit only when the XCFramework artifac
 });
 
 test('terminal-native is registered as a workspace and UI dependency', async () => {
-    const rootPackageJson = await readJson(join(repoRoot, 'package.json'));
+    const workspacePackageJsonPaths = await collectWorkspacePackageJsonPaths(repoRoot);
     const appPackageJson = await readJson(join(appRoot, 'package.json'));
 
-    assert.ok(rootPackageJson.workspaces.packages.includes('packages/terminal-native'));
+    assert.ok(workspacePackageJsonPaths.includes(join(repoRoot, 'packages/terminal-native/package.json')));
     assert.equal(appPackageJson.dependencies['@happier-dev/terminal-native'], '0.0.0');
 });
 

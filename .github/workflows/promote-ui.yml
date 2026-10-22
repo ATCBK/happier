@@ -393,30 +393,22 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack Yarn
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install candidate dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_EMBEDDED_POLICY_ENV: ${{ inputs.environment == 'production' && 'production' || 'preview' }}
           HAPPIER_INSTALL_SCOPE: "ui,protocol,session-core,agents,cli-common,peer-mediation,release-runtime,transfers,connection-supervisor,audio-stream-native,iroh-native,sherpa-native,terminal-native"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        run: bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+        uses: ./.github/actions/install-pnpm-dependencies
       - name: Verify generated Mermaid WebView bundle
-        run: yarn --cwd apps/ui verify:mermaid-webview-bundle
+        run: pnpm --dir apps/ui run verify:mermaid-webview-bundle
       - name: Run app tests
         if: inputs.run_tests
         run: |
-          yarn --cwd apps/ui test:unit
-          yarn --cwd apps/ui test:integration
+          pnpm --dir apps/ui run test:unit
+          pnpm --dir apps/ui run test:integration
       - name: Generate release notes manifest
-        run: yarn --cwd apps/ui tsx sources/scripts/parseReleaseNotes.ts
+        run: pnpm --dir apps/ui exec tsx sources/scripts/parseReleaseNotes.ts
       - name: Build release notes assets
         run: node scripts/pipeline/release/release-notes/build-release-notes-assets.mjs --out-dir "$RUNNER_TEMP/release-notes-assets"
       - name: Project approved release notes from exact candidate
@@ -516,20 +508,12 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack Yarn
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install trusted promotion dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_INSTALL_SCOPE: "ui,protocol,session-core,agents,cli-common,peer-mediation,release-runtime,transfers,connection-supervisor,audio-stream-native,iroh-native,sherpa-native,terminal-native"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        run: bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+        uses: ./.github/actions/install-pnpm-dependencies
       - name: Download release notes assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:

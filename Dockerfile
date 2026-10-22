@@ -10,87 +10,72 @@ WORKDIR /repo
 # and will fall back to node-gyp. Install the minimal toolchain + Python for reliable builds.
 RUN apk add --no-cache libc6-compat python3 build-base
 ENV REDISMS_DISABLE_POSTINSTALL=1
-ENV YARN_CACHE_FOLDER=/tmp/.yarn-cache
-
- COPY package.json yarn.lock ./
-RUN mkdir -p apps/ui apps/server apps/cli apps/website apps/docs packages/agents packages/cli-common packages/connection-supervisor packages/protocol packages/release-runtime packages/transfers packages/audio-stream-native packages/sherpa-native scripts/pipeline/expo
- COPY apps/ui/package.json apps/ui/
- COPY apps/server/package.json apps/server/
- COPY apps/cli/package.json apps/cli/
- COPY apps/website/package.json apps/website/
- COPY apps/docs/package.json apps/docs/
- COPY packages/agents/package.json packages/agents/
- COPY packages/cli-common/package.json packages/cli-common/
- COPY packages/connection-supervisor/package.json packages/connection-supervisor/
- COPY packages/protocol/package.json packages/protocol/
- COPY packages/release-runtime/package.json packages/release-runtime/
- COPY packages/transfers/package.json packages/transfers/
- COPY packages/audio-stream-native/package.json packages/audio-stream-native/
- COPY packages/sherpa-native/package.json packages/sherpa-native/
-COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
-
-COPY scripts/ci/yarn-install-with-retry.sh /usr/local/bin/yarn-install-with-retry
-RUN chmod +x /usr/local/bin/yarn-install-with-retry
-
-RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
-    yarn config set registry https://registry.npmjs.org/ \
-    && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./
+COPY apps/ui/tools/postinstall ./apps/ui/tools/postinstall
 COPY scripts/workspaces ./scripts/workspaces
+COPY scripts/ci/setup-pnpm.mjs ./scripts/ci/
+COPY packages/cli-common/windowsCommandInvocation.mjs ./packages/cli-common/
+COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
+RUN node scripts/ci/setup-pnpm.mjs
+RUN --mount=type=cache,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --prefer-offline
+COPY apps/cli/scripts/build-owned/bundledPluginMembership.ts ./apps/cli/scripts/build-owned/bundledPluginMembership.ts
+COPY apps/cli/scripts/buildPublication.mjs ./apps/cli/scripts/buildPublication.mjs
+COPY apps/stack/bin/hstack-exec ./apps/stack/bin/hstack-exec
+COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
+COPY apps/stack/scripts/build/sourceWebExportArgs.mjs ./apps/stack/scripts/build/sourceWebExportArgs.mjs
+COPY apps/stack/scripts/provision/linux-inotify.mjs ./apps/stack/scripts/provision/linux-inotify.mjs
 
 # Shared deps (alpine) for web UI export embeds.
 # We build the web export on the BUILDPLATFORM because the output is architecture-agnostic, and
-# running Node/Yarn under QEMU for linux/arm64 has proven unstable (SIGILL).
+# running Node/pnpm under QEMU for linux/arm64 has proven unstable (SIGILL).
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build
 WORKDIR /repo
 RUN apk add --no-cache libc6-compat python3 build-base
 ENV REDISMS_DISABLE_POSTINSTALL=1
-ENV YARN_CACHE_FOLDER=/tmp/.yarn-cache
-
- COPY package.json yarn.lock ./
-RUN mkdir -p apps/ui apps/server apps/cli apps/website apps/docs packages/agents packages/cli-common packages/connection-supervisor packages/protocol packages/release-runtime packages/transfers packages/audio-stream-native packages/sherpa-native scripts/pipeline/expo
- COPY apps/ui/package.json apps/ui/
- COPY apps/server/package.json apps/server/
- COPY apps/cli/package.json apps/cli/
- COPY apps/website/package.json apps/website/
- COPY apps/docs/package.json apps/docs/
- COPY packages/agents/package.json packages/agents/
- COPY packages/cli-common/package.json packages/cli-common/
- COPY packages/connection-supervisor/package.json packages/connection-supervisor/
- COPY packages/protocol/package.json packages/protocol/
- COPY packages/release-runtime/package.json packages/release-runtime/
- COPY packages/transfers/package.json packages/transfers/
- COPY packages/audio-stream-native/package.json packages/audio-stream-native/
- COPY packages/sherpa-native/package.json packages/sherpa-native/
-COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
-
-COPY scripts/ci/yarn-install-with-retry.sh /usr/local/bin/yarn-install-with-retry
-RUN chmod +x /usr/local/bin/yarn-install-with-retry
-
-RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
-    yarn config set registry https://registry.npmjs.org/ \
-    && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./
+COPY apps/ui/tools/postinstall ./apps/ui/tools/postinstall
 COPY scripts/workspaces ./scripts/workspaces
+COPY scripts/ci/setup-pnpm.mjs ./scripts/ci/
+COPY packages/cli-common/windowsCommandInvocation.mjs ./packages/cli-common/
+COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
+RUN node scripts/ci/setup-pnpm.mjs
+RUN --mount=type=cache,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --prefer-offline
+COPY apps/cli/scripts/build-owned/bundledPluginMembership.ts ./apps/cli/scripts/build-owned/bundledPluginMembership.ts
+COPY apps/cli/scripts/buildPublication.mjs ./apps/cli/scripts/buildPublication.mjs
+COPY apps/stack/bin/hstack-exec ./apps/stack/bin/hstack-exec
+COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
+COPY apps/stack/scripts/build/sourceWebExportArgs.mjs ./apps/stack/scripts/build/sourceWebExportArgs.mjs
+COPY apps/stack/scripts/provision/linux-inotify.mjs ./apps/stack/scripts/provision/linux-inotify.mjs
 
 # Shared deps (debian) for server builds (needs toolchain for native deps)
 FROM node:${NODE_VERSION} AS deps-debian
 RUN apt-get update && apt-get install -y python3 ffmpeg make g++ build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 ENV REDISMS_DISABLE_POSTINSTALL=1
-ENV YARN_CACHE_FOLDER=/tmp/.yarn-cache
-
- COPY package.json yarn.lock ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./
 COPY apps/ui/tools/postinstall ./apps/ui/tools/postinstall
+COPY scripts/workspaces ./scripts/workspaces
+COPY scripts/ci/setup-pnpm.mjs ./scripts/ci/
+COPY packages/cli-common/windowsCommandInvocation.mjs ./packages/cli-common/
 COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
 
-COPY scripts/ci/yarn-install-with-retry.sh /usr/local/bin/yarn-install-with-retry
-RUN chmod +x /usr/local/bin/yarn-install-with-retry
-
-RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
-    yarn config set registry https://registry.npmjs.org/ \
-    && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
-COPY scripts/workspaces ./scripts/workspaces
+RUN node scripts/ci/setup-pnpm.mjs
+RUN --mount=type=cache,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --prefer-offline
+COPY apps/cli/scripts/build-owned/bundledPluginMembership.ts ./apps/cli/scripts/build-owned/bundledPluginMembership.ts
+COPY apps/cli/scripts/buildPublication.mjs ./apps/cli/scripts/buildPublication.mjs
+COPY apps/stack/bin/hstack-exec ./apps/stack/bin/hstack-exec
+COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
+COPY apps/stack/scripts/build/sourceWebExportArgs.mjs ./apps/stack/scripts/build/sourceWebExportArgs.mjs
+COPY apps/stack/scripts/provision/linux-inotify.mjs ./apps/stack/scripts/provision/linux-inotify.mjs
 
 #
 # Targets
@@ -101,7 +86,7 @@ FROM deps-alpine AS website-builder
 ARG WEBSITE_VARIANT=prerelease
 COPY apps/website ./apps/website
 RUN test -f "apps/website/index.${WEBSITE_VARIANT}.html" && cp "apps/website/index.${WEBSITE_VARIANT}.html" "apps/website/index.html"
-RUN yarn workspace @happier-dev/website build
+RUN pnpm --filter @happier-dev/website run build
 
 FROM nginxinc/nginx-unprivileged:alpine AS website
 USER root
@@ -167,14 +152,14 @@ COPY packages/transfers ./packages/transfers
 COPY scripts/pipeline/release/precompress-ui-web-assets.mjs ./scripts/pipeline/release/precompress-ui-web-assets.mjs
 COPY apps/stack/scripts/build/precompress_ui_web_assets.mjs ./apps/stack/scripts/build/precompress_ui_web_assets.mjs
 
-RUN yarn workspace @happier-dev/protocol postinstall:real \
-    && yarn workspace @happier-dev/release-runtime postinstall:real \
-    && yarn workspace @happier-dev/agents postinstall:real \
-    && yarn workspace @happier-dev/connection-supervisor postinstall:real \
-    && yarn workspace @happier-dev/transfers postinstall:real
-RUN yarn workspace @happier-dev/app postinstall:real
+RUN pnpm --filter @happier-dev/protocol run postinstall:real \
+    && pnpm --filter @happier-dev/release-runtime run postinstall:real \
+    && pnpm --filter @happier-dev/agents run postinstall:real \
+    && pnpm --filter @happier-dev/connection-supervisor run postinstall:real \
+    && pnpm --filter @happier-dev/transfers run postinstall:real
+RUN pnpm --filter @happier-dev/app run postinstall:real
 RUN rm -rf apps/ui/dist
-RUN yarn workspace @happier-dev/app expo export --platform web --output-dir dist --max-workers 1
+RUN pnpm --filter @happier-dev/app exec expo export --platform web --output-dir dist --max-workers 1
 RUN node scripts/pipeline/release/precompress-ui-web-assets.mjs --dir apps/ui/dist --gzip-only
 
 FROM nginxinc/nginx-unprivileged:alpine AS webapp
@@ -251,7 +236,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY apps/docs ./apps/docs
 COPY apps/ui/sources/assets/fonts ./apps/ui/sources/assets/fonts
-RUN yarn workspace docs postinstall:real && yarn workspace docs build
+RUN pnpm --filter docs run postinstall:real && pnpm --filter docs run build
 
 FROM node:${NODE_VERSION}-alpine AS docs
 WORKDIR /repo
@@ -262,7 +247,8 @@ ENV PORT=3000
 COPY --from=docs-builder /repo/node_modules /repo/node_modules
 COPY --from=docs-builder /repo/apps/docs /repo/apps/docs
 EXPOSE 3000
-CMD ["yarn", "--cwd", "apps/docs", "start"]
+WORKDIR /repo/apps/docs
+CMD ["node", "/repo/node_modules/next/dist/bin/next", "start"]
 
 # Server
 FROM deps-debian AS server-builder
@@ -274,9 +260,9 @@ COPY .github/feature-policy ./.github/feature-policy
 COPY apps/server ./apps/server
 COPY packages ./packages
 COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
-RUN yarn workspace @happier-dev/server build:shared
-RUN yarn workspace @happier-dev/server postinstall:real
-RUN yarn workspace @happier-dev/server build
+RUN pnpm --filter @happier-dev/server run build:shared
+RUN pnpm --filter @happier-dev/server run postinstall:real
+RUN pnpm --filter @happier-dev/server run build
 
 # Share the existing production dependency projection between server image variants.
 FROM server-builder AS server-runtime
@@ -413,6 +399,8 @@ ARG SENTRY_RELEASE=""
 ENV SENTRY_RELEASE=$SENTRY_RELEASE
 ENV HAPPIER_RELEASE_SOURCE_SHA=$SENTRY_RELEASE
 COPY --from=server-runtime --chown=node:node /repo/node_modules /repo/node_modules
+COPY --from=server-runtime --chown=node:node /repo/scripts/workspaces /repo/scripts/workspaces
+COPY --from=server-runtime --chown=node:node /repo/packages/cli-common/windowsCommandInvocation.mjs /repo/packages/cli-common/windowsCommandInvocation.mjs
 COPY --from=server-runtime --chown=node:node /repo/apps/server /repo/apps/server
 COPY --from=server-runtime --chown=node:node /repo/packages/agents /repo/packages/agents
 COPY --from=server-runtime --chown=node:node /repo/packages/brand /repo/packages/brand

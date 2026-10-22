@@ -79,12 +79,12 @@ host or make a primary cutover safe.
 
 ### Select the command primary
 
-Once the workload is ready on an enrolled POSIX target, keep running `yarn tui`
+Once the workload is ready on an enrolled POSIX target, keep running `pnpm run tui`
 and ordinary hstack commands on the Mac by selecting its command destination:
 
 ```bash
 hstack dev-vm primary assign nl2 --stack=repo-dev
-yarn tui
+pnpm run tui
 ```
 
 Use the actual Stack name that owns the Mac's enrolled dev-target configuration.
@@ -122,7 +122,7 @@ The controller also supervises service forwarding for all named workspaces.
 API and Expo ports come from each remote Stack's declarations, using the same
 service projection as Lima. Existing listeners, including manual SSH tunnels,
 are left in place and reported. Release the manual forwards yourself, then
-run `yarn tui`; supervision can bind the declared ports once they are free.
+run `pnpm run tui`; supervision can bind the declared ports once they are free.
 
 An unreachable target or unavailable mapped directory refuses execution with
 an SSH-primary diagnostic; the controller never falls back to running the
@@ -142,7 +142,7 @@ hstack dev-vm primary assign lima
 Both named checkouts use this controller when their repo-local entrypoints
 already forward through the profile's `controllerEntrypoint`; the current 0.2
 adapter does so without a separate SSH implementation.
-From either checkout, `yarn dev-vm primary assign nl2 --stack=repo-dev` reaches
+From either checkout, `pnpm run dev-vm primary assign nl2 --stack=repo-dev` reaches
 the same Mac controller and writes that same profile. The 0.2 shortcut requires
 the existing configured 0.3 controller; it does not create its own VM or SSH owner.
 
@@ -216,10 +216,10 @@ provisions its Linux guest, and records the candidate configuration:
 hstack dev-vm setup
 ```
 
-The checkout-local Yarn entry point is equivalent:
+The checkout-local pnpm entry point is equivalent:
 
 ```bash
-yarn dev-vm -- setup
+pnpm run dev-vm setup
 ```
 
 The default setup uses the `balanced` managed Lima profile. To inspect the
@@ -387,7 +387,7 @@ hstack dev-vm skills sync
 The checkout-local form is:
 
 ```bash
-yarn dev-vm skills sync
+pnpm run dev-vm skills sync
 ```
 
 Each source root that exists on macOS is an exact, one-way projection into the
@@ -436,10 +436,10 @@ hstack dev-vm shell --guest-cwd=/absolute/path
 hstack dev-vm exec --guest-cwd=/absolute/path -- COMMAND ARG...
 ```
 
-The repository-local Yarn form forwards the same arguments after `--`:
+The repository-local pnpm form forwards the same arguments after the script name:
 
 ```bash
-yarn dev-vm -- exec --guest-cwd=/absolute/path -- COMMAND ARG...
+pnpm run dev-vm exec --guest-cwd=/absolute/path -- COMMAND ARG...
 ```
 
 `exec` starts the VM if needed and runs the managed Lima health checks before
@@ -450,13 +450,13 @@ the command. A failed health check stops the command and points to
 
 An active delegated Stack command starts a short-lived credential broker in
 the macOS execution-host process. Inside that managed Linux session,
-`yarn ghops` can request the `happier-bot` credential from macOS Keychain
+`pnpm run ghops` can request the `happier-bot` credential from macOS Keychain
 through the configured `mac-host` target. Git and GitHub commands still run in
 the authoritative guest checkout. The token is not written to disk or placed
 in the guest environment, and the broker stops with the delegated Stack
 command.
 
-Store or update the credential from macOS with `yarn ghops auth store`. If a
+Store or update the credential from macOS with `pnpm run ghops auth store`. If a
 guest command reports that the broker is unavailable, restart the Stack
 command from its Mac execution host; an already-running delegated command does
 not acquire a broker after its launch.

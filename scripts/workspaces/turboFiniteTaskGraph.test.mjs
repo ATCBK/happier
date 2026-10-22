@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
+import { readWorkspacePatterns } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
 import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fixture.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
@@ -41,7 +42,7 @@ test('the finite Turbo graph is activated through the current package manager wi
 
   assert.equal(rootPackage.devDependencies.turbo, '2.10.11');
   assert.match(gitignore, /^\.turbo\/$/mu);
-  assert.ok(rootPackage.workspaces.packages.includes('packages/plugins/[a-z]*'));
+  assert.ok((await readWorkspacePatterns(repoRoot)).includes('packages/plugins/[a-z]*'));
   assert.equal(JSON.stringify(turbo).includes('@happier-dev/plugins-'), false);
   assert.equal(turbo.concurrency, '75%');
   const buildPackages = rootPackage.scripts['build:packages'];
@@ -64,7 +65,7 @@ test('the finite Turbo graph is activated through the current package manager wi
   );
   assert.equal(
     rootPackage.scripts['prepare:typecheck:workspaces'],
-    'node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs --for-component=packages/terminal-native --for-component=packages/plugin-ui --for-component=apps/ui --for-component=apps/cli --for-component=apps/server --for-component=packages/tests && yarn --cwd apps/ui -s generate:bundled-plugin-ui-artifacts',
+    'pnpm --silent run build:packages --for-component=packages/terminal-native --for-component=packages/plugin-ui --for-component=apps/ui --for-component=apps/cli --for-component=apps/server --for-component=packages/tests && pnpm --dir apps/ui --silent run generate:bundled-plugin-ui-artifacts',
   );
   assert.equal(
     rootPackage.scripts['check:public-sdk:finite'],
@@ -147,7 +148,7 @@ test('the finite Turbo graph is activated through the current package manager wi
   assert.equal(turbo.tasks['build:finite'].cache, false);
   assert.deepEqual(turbo.tasks['project:finite'].outputs, []);
 
-  assert.equal(pluginSdk.scripts['generated:finite'], 'yarn -s check:action-type-map && yarn -s check:hosted-html-guest');
+  assert.equal(pluginSdk.scripts['generated:finite'], 'pnpm --silent run check:action-type-map && pnpm --silent run check:hosted-html-guest');
   assert.equal(
     pluginSdk.scripts['prepare:finite'],
     'node ./scripts/bundleWorkspaceDeps.mjs --declarations',
@@ -156,7 +157,7 @@ test('the finite Turbo graph is activated through the current package manager wi
     pluginSdk.scripts['build:finite'],
     'node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=build:finite:prepared',
   );
-  assert.equal(pluginSdk.scripts['build:finite:prepared'], 'yarn -s build:compiled');
+  assert.equal(pluginSdk.scripts['build:finite:prepared'], 'pnpm --silent run build:compiled');
   assert.equal(
     pluginSdk.scripts['api:finite'],
     'node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=api:finite:prepared',
@@ -165,32 +166,32 @@ test('the finite Turbo graph is activated through the current package manager wi
     pluginSdk.scripts['api:finite:prepared'],
     'node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --check',
   );
-  assert.equal(pluginSdk.scripts['test:finite'], 'yarn -s test:prepared');
+  assert.equal(pluginSdk.scripts['test:finite'], 'pnpm --silent run test:prepared');
   assert.equal(
     pluginSdk.scripts['typecheck:finite'],
-    'yarn -s typecheck:tests:prepared',
+    'pnpm --silent run typecheck:tests:prepared',
   );
 
   assert.equal(pluginUi.scripts['prepare:finite'], undefined);
   assert.equal(
     pluginUi.scripts['typecheck:source:finite'],
-    'yarn --cwd ../plugin-sdk -s check:public-toolchain:prepared && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit --tsBuildInfoFile node_modules/.cache/tsc/plugin-ui.typecheck.tsbuildinfo -p tsconfig.json',
+    'pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit --tsBuildInfoFile node_modules/.cache/tsc/plugin-ui.typecheck.tsbuildinfo -p tsconfig.json',
   );
-  assert.equal(pluginUi.scripts['build:finite'], 'yarn -s build:compiled');
+  assert.equal(pluginUi.scripts['build:finite'], 'pnpm --silent run build:compiled');
   assert.equal(
     pluginUi.scripts['api:finite'],
-    'yarn --cwd ../plugin-sdk -s check:public-toolchain:prepared && yarn -s check:api-governance:prepared',
+    'pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && pnpm --silent run check:api-governance:prepared',
   );
-  assert.equal(pluginUi.scripts['test:finite'], 'yarn -s test:local');
+  assert.equal(pluginUi.scripts['test:finite'], 'pnpm --silent run test:local');
 
   assert.equal(sdk.scripts['prepare:finite'], undefined);
-  assert.equal(sdk.scripts['generated:finite'], 'yarn -s check:actions');
-  assert.equal(sdk.scripts['build:finite'], 'yarn -s build:compiled');
-  assert.equal(sdk.scripts['api:finite'], 'yarn -s check:api-governance:prepared');
-  assert.equal(sdk.scripts['test:finite'], 'yarn -s test:local');
+  assert.equal(sdk.scripts['generated:finite'], 'pnpm --silent run check:actions');
+  assert.equal(sdk.scripts['build:finite'], 'pnpm --silent run build:compiled');
+  assert.equal(sdk.scripts['api:finite'], 'pnpm --silent run check:api-governance:prepared');
+  assert.equal(sdk.scripts['test:finite'], 'pnpm --silent run test:local');
   assert.equal(
     sdk.scripts['typecheck:finite'],
-    'node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json && yarn -s test:external-consumer',
+    'node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json && pnpm --silent run test:external-consumer',
   );
 });
 
@@ -248,9 +249,9 @@ esac
     await writeFile(fixture.path('package.json'), JSON.stringify({
       name: 'turbo-admission-fixture', private: true,
       packageManager: rootPackage.packageManager,
-      workspaces: ['packages/*'],
     }));
-    await writeFile(fixture.path('yarn.lock'), '# yarn lockfile v1\n');
+    await writeFile(fixture.path('pnpm-lock.yaml'), '# pnpm lockfile v1\n');
+    await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
     await writeFile(fixture.path('turbo.json'), JSON.stringify({
       ...turbo,
       tasks: { 'build:finite': { cache: false } },
@@ -309,17 +310,17 @@ process.exit(result.status ?? 1);
   });
 
 test('direct Turbo finite source task refuses without public dispatch', () => {
-  const yarn = resolveYarnCommandInvocation([
-    '-s', 'turbo', 'run', 'typecheck:source:finite', '--filter=@happier-dev/terminal-native', '--force',
+  const pnpm = resolvePnpmCommandInvocation([
+    'exec', 'turbo', 'run', 'typecheck:source:finite', '--filter=@happier-dev/terminal-native', '--force',
   ]);
-  const result = spawnSync(yarn.command, yarn.args, {
+  const result = spawnSync(pnpm.command, pnpm.args, {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, HAPPIER_TYPECHECK_DISPATCHED: '' },
   });
   assert.ifError(result.error);
   assert.equal(result.status, 1, result.stderr);
-  assert.match(`${result.stdout}\n${result.stderr}`, /run `yarn typecheck` \(routed\) instead of `typecheck:source:finite`/);
+  assert.match(`${result.stdout}\n${result.stderr}`, /run `pnpm typecheck` \(routed\) instead of `typecheck:source:finite`/);
 });
 
 test('source-only typecheck projects persist compiler state outside authored and packaged files', async () => {
@@ -368,7 +369,7 @@ test('first-party plugins project independently before one aggregate check', asy
 
   const pluginRoot = path.join(repoRoot, 'packages/plugins');
   const pluginTemplate = await readJson('packages/plugins/_template/package.json');
-  assert.equal(pluginTemplate.scripts['build:finite'], 'yarn -s build');
+  assert.equal(pluginTemplate.scripts['build:finite'], 'pnpm --silent run build');
   assert.equal(
     pluginTemplate.scripts['project:finite'],
     'node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs',
@@ -382,7 +383,7 @@ test('first-party plugins project independently before one aggregate check', asy
   for (const manifest of manifests) {
     assert.equal(
       manifest.scripts['build:finite'],
-      'yarn -s build',
+      'pnpm --silent run build',
       manifest.name,
     );
     assert.equal(
@@ -405,7 +406,7 @@ test('external plugin development does not depend on Turbo', async () => {
 
 test('CI invokes the activated finite public-package graph once', async () => {
   const workflow = await readFile(path.join(repoRoot, '.github/workflows/tests.yml'), 'utf8');
-  assert.match(workflow, /yarn -s check:public-sdk:finite/u);
+  assert.match(workflow, /pnpm run check:public-sdk:finite/u);
   assert.match(workflow, /key: turbo-public-sdk-\$\{\{ runner\.os \}\}-\$\{\{ github\.sha \}\}/u);
   assert.match(workflow, /key: turbo-typecheck-\$\{\{ runner\.os \}\}-\$\{\{ github\.sha \}\}/u);
   assert.match(workflow, /apps\/cli\/node_modules\/\.cache\/tsc\/\*\.tsbuildinfo/u);

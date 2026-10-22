@@ -35,9 +35,9 @@ vi.mock('react-native', async () => {
  * `react-native` specifier is deliberately left intact so `Platform.OS` is the mocked `'ios'`.
  */
 function loadNativeLegendDist(): Promise<Record<string, unknown>> {
-    const distPath = resolve(process.cwd(), 'node_modules/@legendapp/list/react-native.mjs');
-    const reactPath = resolve(process.cwd(), 'node_modules/react/index.js');
-    const shimPath = resolve(process.cwd(), 'node_modules/use-sync-external-store/shim/index.js');
+    const distPath = resolve(process.cwd(), '../../node_modules/@legendapp/list/react-native.mjs');
+    const reactPath = resolve(process.cwd(), '../../node_modules/react/index.js');
+    const shimPath = resolve(process.cwd(), '../../node_modules/use-sync-external-store/shim/index.js');
     const source = readFileSync(distPath, 'utf8')
         .replaceAll(" from 'react';", ` from '${reactPath}';`)
         .replaceAll(" from 'use-sync-external-store/shim';", ` from '${shimPath}';`);

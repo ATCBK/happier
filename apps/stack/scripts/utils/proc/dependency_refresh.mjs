@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat, readFile, readdir, readlink, realpath, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { pathExists } from '../fs/fs.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { coerceHappyMonorepoRootFromPath, getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { describeJsonOwnerLock, isJsonOwnerFileLockActive, readJsonOwnerLockSnapshot, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
-import { collectWorkspacePackageJsonPaths } from './workspace_package_manifests.mjs';
+import { collectWorkspacePackageJsonPaths, isYarnWorkspace } from './workspace_package_manifests.mjs';
 import { stopExpoDependencyConsumers } from '../expo/dependency_barrier.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -173,7 +174,8 @@ async function collectDependencyInputPaths({ installDir, componentDir }) {
     }
   }
   return Array.from(new Set([
-    join(installDir, 'yarn.lock'),
+    join(installDir, 'pnpm-lock.yaml'),
+    join(installDir, 'pnpm-workspace.yaml'),
     join(installDir, 'package.json'),
     ...workspaceManifests,
     ...await collectPatchPaths(installDir),
@@ -201,11 +203,8 @@ function dependencyInputIdentityPath({ installDir, componentDir, inputPath }) {
   throw new Error(`Dependency freshness input is outside its installation and component roots: ${inputPath}`);
 }
 
-// Yarn Classic 1.22.22: install.fetchRequestFromCwd/workspace resolution,
-// package-linker (bins/bundled dependencies/peers), package-compatibility,
-// normalize-manifest (directories.bin), and PackageInstallScripts.INSTALL_STAGES.
-// Root lifecycle also runs prepare/prepublish.
-// Keep the package-manager declarations requested by the install contract too.
+// Package manifests describe dependency edges, platform selection and lifecycle
+// inputs. pnpm's workspace settings, overrides and patches are hashed above.
 const manifestInstallFields = [
   'name', 'version', 'private', 'dependencies', 'devDependencies', 'optionalDependencies',
   'peerDependencies', 'peerDependenciesMeta', 'bin', 'workspaces', 'resolutions', 'overrides',
@@ -417,10 +416,20 @@ export async function assertDependenciesReady({ installDir, componentDir = insta
     }
   };
   checkActiveWriter();
-  const readiness = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
+  const manifest = await readJsonIfExists(join(installDir, 'package.json'));
+  const isYarnPredecessor = isYarnWorkspace(manifest);
+  // A sibling checkout owns its installed-tree format and lifecycle evidence.
+  // Read its canonical decision; never rewrite its admission with this line's
+  // pnpm inputs or apply this line's newer UI-postinstall contract to it.
+  const inspect = isYarnPredecessor
+    ? (await import(pathToFileURL(join(installDir, 'apps/stack/scripts/utils/proc/dependency_refresh.mjs')).href)).inspectDependencyRefresh
+    : inspectDependencyRefresh;
+  const readiness = await inspect({ installDir, componentDir, runtimeIdentity, installMode });
   if (readiness.required) requireRefresh('stale-or-unadmitted');
-  const failures = await inspectUiPostinstallOutputs(join(installDir, 'apps', 'ui'), installDir, { env });
-  if (failures.length > 0) requireRefresh('ui-postinstall-incomplete', failures.join('; '));
+  if (!isYarnPredecessor) {
+    const failures = await inspectUiPostinstallOutputs(join(installDir, 'apps', 'ui'), installDir, { env });
+    if (failures.length > 0) requireRefresh('ui-postinstall-incomplete', failures.join('; '));
+  }
   checkActiveWriter();
   return readiness;
 }
@@ -518,13 +527,16 @@ export async function withDependencyRefresh({
       }
       return result;
     };
-    const uiPrerequisites = onDependenciesReady
+    // The verifier can itself depend on the new dependency inputs. Probe it
+    // only when reusing installed bytes; a scheduled install precedes probing.
+    const willRefresh = (force || afterDependencyLock.required) && refreshExisting;
+    const uiPrerequisites = onDependenciesReady && !willRefresh
       ? await inspectUiPostinstallOutputs(join(installDir, 'apps', 'ui'), installDir, { env })
       : [];
-    const componentPrerequisites = onDependenciesReady && resolve(componentDir) !== resolve(join(installDir, 'apps', 'ui'))
+    const componentPrerequisites = onDependenciesReady && !willRefresh && resolve(componentDir) !== resolve(join(installDir, 'apps', 'ui'))
       ? await inspectUiPostinstallOutputs(componentDir, installDir, { env })
       : [];
-    if (((force || afterDependencyLock.required) && refreshExisting)
+    if (willRefresh
       || afterDependencyLock.selfReferentialNodeModulesLinkPath !== null
       || uiPrerequisites.length > 0 || componentPrerequisites.length > 0) {
       await stopExpoDependencyConsumers({ installDir, env });

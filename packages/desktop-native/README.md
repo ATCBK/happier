@@ -61,9 +61,9 @@ otherwise.
 ## Build and verify
 
 ```sh
-yarn workspace @happier-dev/desktop-native build:native     # cargo build + place native/*.node
-yarn workspace @happier-dev/desktop-native verify:native    # headless load check
-yarn workspace @happier-dev/desktop-native test             # TypeScript surface
+pnpm --filter @happier-dev/desktop-native run build:native     # cargo build + place native/*.node
+pnpm --filter @happier-dev/desktop-native run verify:native    # headless load check
+pnpm --filter @happier-dev/desktop-native run test             # TypeScript surface
 cd rust/happier-desktop-native && cargo test --target aarch64-apple-darwin
 ```
 

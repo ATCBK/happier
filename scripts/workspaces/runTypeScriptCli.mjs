@@ -41,7 +41,7 @@ const lifecycleTask = process.env.npm_lifecycle_event === 'typecheck:tests:prepa
 const finiteTask = [lifecycleTask, process.env.TURBO_TASK_ID?.split('#').at(-1)]
   .find((task) => task === 'typecheck:finite' || task === 'typecheck:source:finite');
 if (finiteTask && process.env.HAPPIER_TYPECHECK_DISPATCHED !== '1') {
-  process.stderr.write(`run \`yarn typecheck\` (routed) instead of \`${finiteTask}\`\n`);
+  process.stderr.write(`run \`pnpm run typecheck\` (routed) instead of \`${finiteTask}\`\n`);
   process.exit(1);
 }
 

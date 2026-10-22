@@ -57,7 +57,7 @@ function usage() {
   console.error(
     [
       'Usage:',
-      '  yarn providers:token-ledger:summary [--file <path>]',
+      '  pnpm run providers:token-ledger:summary [--file <path>]',
       '',
       'Defaults:',
       '  --file uses HAPPIER_E2E_PROVIDER_TOKEN_LEDGER_PATH (or HAPPY_*) when set,',

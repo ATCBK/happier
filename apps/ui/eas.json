@@ -6,11 +6,11 @@
   "build": {
     "base": {
       "node": "22.14.0",
+      "pnpm": "12.14.0",
       "env": {
       "HAPPIER_EAS_ENSURE_UI_WORKSPACES_BUILT": "1",
       "HAPPIER_INSTALL_SCOPE": "ui,protocol,session-core,agents,cli-common,peer-mediation,release-runtime,transfers,connection-supervisor,audio-stream-native,iroh-native,sherpa-native,terminal-native",
       "REDISMS_DISABLE_POSTINSTALL": "1",
-      "YARN_PRODUCTION": "false",
       "npm_config_production": "false",
       "HAPPIER_ENABLE_NATIVE_SSH": "0",
       "HAPPIER_ENABLE_TERMINAL_NATIVE": "1",

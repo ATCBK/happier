@@ -11,15 +11,15 @@ test('the shared-package suite includes previously unwired package and harness t
   const commandText = SHARED_PACKAGE_TEST_COMMANDS.map(({ args }) => args.join(' ')).join('\n');
 
   for (const expected of [
-    '@happier-dev/protocol test',
-    '@happier-dev/peer-transport test',
-    '@happier-dev/release-runtime test',
-    '@happier-dev/session-core test',
-    '@happier-dev/desktop test',
-    '@happier-dev/desktop-native test',
-    '@happier-dev/iroh-native test',
-    '@happier-dev/website test',
-    '@happier-dev/tests test:scripts:self',
+    '@happier-dev/protocol --silent run test',
+    '@happier-dev/peer-transport --silent run test',
+    '@happier-dev/release-runtime --silent run test',
+    '@happier-dev/session-core --silent run test',
+    '@happier-dev/desktop --silent run test',
+    '@happier-dev/desktop-native --silent run test',
+    '@happier-dev/iroh-native --silent run test',
+    '@happier-dev/website --silent run test',
+    '@happier-dev/tests --silent run test:scripts:self',
   ]) {
     assert.match(commandText, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
   }
@@ -30,8 +30,8 @@ test('the shared-package suite delegates every declared command to the aggregate
 
   const commands = await runSharedPackageTests({
     commands: [
-      { id: 'alpha', args: ['workspace', 'alpha', 'test'] },
-      { id: 'beta', args: ['workspace', 'beta', 'test'] },
+      { id: 'alpha', args: ['--filter', 'alpha', '--silent', 'run', 'test'] },
+      { id: 'beta', args: ['--filter', 'beta', '--silent', 'run', 'test'] },
     ],
     runCommand: async (command) => {
       executed.push(command.id);

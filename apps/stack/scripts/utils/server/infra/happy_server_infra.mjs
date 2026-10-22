@@ -7,7 +7,7 @@ import { ensureEnvFileMutated } from '../../env/env_file.mjs';
 import { readEnvObjectFromFile } from '../../env/read.mjs';
 import { sanitizeDnsLabel } from '../../net/dns.mjs';
 import { pickNextFreeTcpPort } from '../../net/ports.mjs';
-import { pmExecBin } from '../../proc/pm.mjs';
+import { pmExecScript } from '../../proc/pm.mjs';
 import { run, runCapture } from '../../proc/proc.mjs';
 import { randomToken } from '../../crypto/tokens.mjs';
 import { coercePort, INFRA_RESERVED_PORT_KEYS } from '../port.mjs';
@@ -497,16 +497,16 @@ export async function ensureHappyServerManagedInfra({
 
 export async function applyHappyServerMigrations(
   { serverDir, env, quiet = false, dbProvider },
-  { pmExecBinImpl = pmExecBin } = {},
+  { pmExecScriptImpl = pmExecScript } = {},
 ) {
   const effectiveDbProvider = applyEffectiveDbProviderEnv({
     serverComponentName: 'happier-server',
     env: dbProvider == null ? env : { HAPPIER_DB_PROVIDER: dbProvider },
     targetEnv: { ...env },
   });
-  await pmExecBinImpl({
+  await pmExecScriptImpl({
     dir: serverDir,
-    bin: 'migrate:deploy',
+    script: 'migrate:deploy',
     args: [],
     env: { ...env, HAPPIER_DB_PROVIDER: effectiveDbProvider },
     quiet,

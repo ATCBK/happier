@@ -1,10 +1,13 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'vitest/config';
-import { resolve as resolvePath } from 'node:path';
+import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 import baseConfig from './vitest.config';
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
+
+const requirePackageDependency = createRequire(new URL('./package.json', import.meta.url));
 
 const packageRoot = fileURLToPath(new URL('.', import.meta.url));
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths);
@@ -15,7 +18,7 @@ const integrationAliases = Array.isArray(base.resolve?.alias)
         // tsconfigPaths otherwise routes this runtime import to the compiler-only
         // declaration mapping in tsconfig.json. Exercise the installed web entry.
         find: /^react-native-unistyles$/,
-        replacement: resolve('./node_modules/react-native-unistyles/lib/module/index.js'),
+        replacement: resolvePath(dirname(requirePackageDependency.resolve('react-native-unistyles/package.json')), 'lib/module/index.js'),
     }, ...base.resolve.alias.filter((entry: unknown) => (
         !entry
         || typeof entry !== 'object'

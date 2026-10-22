@@ -84,7 +84,8 @@ test('CLI reload descriptors own source inputs and exclude generated refresh out
   ]) {
     await writeFile(path, '{}\n', 'utf-8');
   }
-  await writeFile(join(root, 'yarn.lock'), '# workspace build input\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# workspace build input\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n', 'utf-8');
   await mkdir(join(cliDir, 'dist'), { recursive: true });
   await writeFile(join(cliDir, 'dist', 'index.mjs'), 'export {};\n', 'utf-8');
 
@@ -99,7 +100,8 @@ test('CLI reload descriptors own source inputs and exclude generated refresh out
   assert.ok(paths.includes(join(root, 'packages', 'transfers', 'src')));
   assert.ok(paths.includes(join(root, 'scripts', 'workspaces')));
   assert.ok(paths.includes(join(root, 'package.json')));
-  assert.ok(paths.includes(join(root, 'yarn.lock')));
+  assert.ok(paths.includes(join(root, 'pnpm-lock.yaml')));
+  assert.ok(paths.includes(join(root, 'pnpm-workspace.yaml')));
   assert.equal(descriptors.find((descriptor) => descriptor.id === 'shared:plugin-sdk')?.target, 'daemon');
   const serverDir = join(root, 'apps', 'server');
   await mkdir(serverDir, { recursive: true });

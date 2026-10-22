@@ -53,10 +53,10 @@
     "check:api-governance:local": "node scripts/generateThemeTokenIds.mjs --check && node scripts/bundleWorkspaceDeps.mjs && node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json && node ../../scripts/api-governance/cli.mjs --profile embed --check",
     "check:api-governance:prepared": "node ../../scripts/api-governance/cli.mjs --profile embed --check",
     "api-governance": "node ../../scripts/api-governance/cli.mjs --profile embed --write",
-    "generated:finite": "yarn -s check:theme-token-ids",
+    "generated:finite": "pnpm --silent run check:theme-token-ids",
     "build:finite": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
-    "api:finite": "yarn -s check:api-governance:prepared",
-    "test:finite": "yarn -s test:local",
+    "api:finite": "pnpm --silent run check:api-governance:prepared",
+    "test:finite": "pnpm --silent run test:local",
     "typecheck:finite": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {

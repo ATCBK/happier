@@ -344,9 +344,9 @@ test('build-tauri finalizer generates its ephemeral password without platform UU
     const binDir = join(fixtureRoot, 'bin');
     fs.mkdirSync(binDir);
     fs.symlinkSync(process.execPath, join(binDir, 'node'));
-    const fakeYarn = join(binDir, 'yarn');
-    fs.writeFileSync(fakeYarn, '#!/bin/sh\nexit 0\n');
-    fs.chmodSync(fakeYarn, 0o755);
+    const fakePnpm = join(binDir, 'pnpm');
+    fs.writeFileSync(fakePnpm, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(fakePnpm, 0o755);
 
     const githubEnv = join(fixtureRoot, 'github-env');
     const result = spawnSync('/bin/bash', ['-c', String(generateStep.run ?? '')], {

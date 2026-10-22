@@ -2,7 +2,7 @@ import {
   describeWorkspaceScriptTarget,
   matchesWorkspaceScriptTarget,
   resolveRootScriptWorkspaceTargets,
-  scanYarnInvocations,
+  scanPnpmInvocations,
 } from './rootScriptWorkspaceTargets.ts';
 import { ROOT_UNIT_LANE_SCRIPT_NAME, TEST_LANE_DEFINITIONS, type LaneId } from './testLaneMap.ts';
 
@@ -45,7 +45,7 @@ const CANONICAL_LANE_PARITY: readonly ParityDefinition[] = Object.freeze([
     // (see collectRootUnitLaneWorkflowIssues), not from a second maintained command list.
     id: 'test',
     rootScriptName: 'test',
-    docsCommands: ['yarn test'],
+    docsCommands: ['pnpm run test'],
     workflowCommands: [],
     workflowMode: 'all',
     triggerMode: 'required',
@@ -53,28 +53,28 @@ const CANONICAL_LANE_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:plugin-workspaces',
     rootScriptName: 'test:plugin-workspaces',
-    docsCommands: ['yarn test:plugin-workspaces'],
-    workflowCommands: ['yarn test:plugin-workspaces'],
+    docsCommands: ['pnpm run test:plugin-workspaces'],
+    workflowCommands: ['pnpm run test:plugin-workspaces'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:plugin-platform:source',
     rootScriptName: 'test:plugin-platform:source',
-    docsCommands: ['yarn test:plugin-platform:source'],
-    workflowCommands: ['yarn workspace @happier-dev/tests test:plugin-platform:source'],
+    docsCommands: ['pnpm run test:plugin-platform:source'],
+    workflowCommands: ['pnpm --filter @happier-dev/tests run test:plugin-platform:source'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:integration',
     rootScriptName: 'test:integration',
-    docsCommands: ['yarn test:integration'],
+    docsCommands: ['pnpm run test:integration'],
     workflowCommands: [
-      'yarn workspace @happier-dev/app test:integration',
-      'yarn workspace @happier-dev/cli test:integration',
-      'yarn --cwd apps/server test:integration',
-      'yarn --cwd apps/stack test:integration',
+      'pnpm --filter @happier-dev/app run test:integration',
+      'pnpm --filter @happier-dev/cli run test:integration',
+      'pnpm --dir apps/server run test:integration',
+      'pnpm --dir apps/stack run test:integration',
     ],
     workflowMode: 'all',
     triggerMode: 'required',
@@ -82,47 +82,47 @@ const CANONICAL_LANE_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'cli:test:workspace-sync:real',
     rootScriptName: 'test:workspace-sync:real',
-    docsCommands: ['yarn test:workspace-sync:real'],
-    workflowCommands: ['yarn test:workspace-sync:real'],
+    docsCommands: ['pnpm run test:workspace-sync:real'],
+    workflowCommands: ['pnpm run test:workspace-sync:real'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:db-contract:docker',
     rootScriptName: 'test:db-contract:docker',
-    docsCommands: ['yarn test:db-contract:docker'],
-    workflowCommands: ['yarn --cwd apps/server test:server:db-contract'],
+    docsCommands: ['pnpm run test:db-contract:docker'],
+    workflowCommands: ['pnpm --dir apps/server run test:server:db-contract'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
   {
     id: 'test:e2e:core:fast',
     rootScriptName: 'test:e2e:core:fast',
-    docsCommands: ['yarn test:e2e:core:fast'],
-    workflowCommands: ['yarn test:e2e:core:fast'],
+    docsCommands: ['pnpm run test:e2e:core:fast'],
+    workflowCommands: ['pnpm run test:e2e:core:fast'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:e2e:core:slow',
     rootScriptName: 'test:e2e:core:slow',
-    docsCommands: ['yarn test:e2e:core:slow'],
-    workflowCommands: ['yarn test:e2e:core:slow'],
+    docsCommands: ['pnpm run test:e2e:core:slow'],
+    workflowCommands: ['pnpm run test:e2e:core:slow'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
   {
     id: 'test:e2e:ui',
     rootScriptName: 'test:e2e:ui',
-    docsCommands: ['yarn test:e2e:ui'],
-    workflowCommands: ['yarn -s test:e2e:ui', 'yarn test:e2e:ui'],
+    docsCommands: ['pnpm run test:e2e:ui'],
+    workflowCommands: ['pnpm --silent run test:e2e:ui', 'pnpm run test:e2e:ui'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
   {
     id: 'test:e2e:desktop:native',
     rootScriptName: 'test:e2e:desktop:native',
-    docsCommands: ['yarn test:e2e:desktop:native'],
+    docsCommands: ['pnpm run test:e2e:desktop:native'],
     workflowCommands: [],
     workflowMode: 'any',
     triggerMode: 'local-only',
@@ -130,24 +130,24 @@ const CANONICAL_LANE_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:e2e:mobile',
     rootScriptName: 'test:e2e:mobile',
-    docsCommands: ['yarn test:e2e:mobile'],
-    workflowCommands: ['yarn -s test:e2e:mobile', 'yarn test:e2e:mobile'],
+    docsCommands: ['pnpm run test:e2e:mobile'],
+    workflowCommands: ['pnpm --silent run test:e2e:mobile', 'pnpm run test:e2e:mobile'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
   {
     id: 'test:agents',
     rootScriptName: 'test:agents',
-    docsCommands: ['yarn test:agents'],
-    workflowCommands: ['yarn workspace @happier-dev/tests providers:run'],
+    docsCommands: ['pnpm run test:agents'],
+    workflowCommands: ['pnpm --filter @happier-dev/tests run providers:run'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
   {
     id: 'test:stress',
     rootScriptName: 'test:stress',
-    docsCommands: ['yarn test:stress'],
-    workflowCommands: ['yarn test:stress'],
+    docsCommands: ['pnpm run test:stress'],
+    workflowCommands: ['pnpm run test:stress'],
     workflowMode: 'any',
     triggerMode: 'optional',
   },
@@ -157,23 +157,23 @@ const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:wiring:self',
     rootScriptName: 'test:wiring:self',
-    docsCommands: ['yarn test:wiring:self'],
-    workflowCommands: ['yarn test:wiring:self'],
+    docsCommands: ['pnpm run test:wiring:self'],
+    workflowCommands: ['pnpm run test:wiring:self'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:wiring',
     rootScriptName: 'test:wiring',
-    docsCommands: ['yarn test:wiring'],
-    workflowCommands: ['yarn test:wiring'],
+    docsCommands: ['pnpm run test:wiring'],
+    workflowCommands: ['pnpm run test:wiring'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:policy:self',
     rootScriptName: 'test:policy:self',
-    docsCommands: ['yarn test:policy:self'],
+    docsCommands: ['pnpm run test:policy:self'],
     workflowCommands: [],
     workflowMode: 'any',
     triggerMode: 'local-only',
@@ -185,24 +185,24 @@ const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:policy',
     rootScriptName: 'test:policy',
-    docsCommands: ['yarn test:policy'],
-    workflowCommands: ['yarn test:policy'],
+    docsCommands: ['pnpm run test:policy'],
+    workflowCommands: ['pnpm run test:policy'],
     workflowMode: 'any',
     triggerMode: 'required',
   },
   {
     id: 'test:inventory',
     rootScriptName: 'test:inventory',
-    docsCommands: ['yarn test:inventory'],
-    workflowCommands: ['yarn test:inventory'],
+    docsCommands: ['pnpm run test:inventory'],
+    workflowCommands: ['pnpm run test:inventory'],
     workflowMode: 'any',
     triggerMode: 'report-only',
   },
   {
     id: 'test:migration:inventory',
     rootScriptName: 'test:migration:inventory',
-    docsCommands: ['yarn test:migration:inventory'],
-    workflowCommands: ['yarn test:migration:inventory'],
+    docsCommands: ['pnpm run test:migration:inventory'],
+    workflowCommands: ['pnpm run test:migration:inventory'],
     workflowMode: 'any',
     triggerMode: 'report-only',
     requiredScriptBodyPatterns: [/scripts\/testing\/migrations\/validateMigrationInventory\.ts/],
@@ -210,8 +210,8 @@ const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:migration:v2-zero:enforce',
     rootScriptName: 'test:migration:v2-zero:enforce',
-    docsCommands: ['yarn test:migration:v2-zero:enforce'],
-    workflowCommands: ['yarn test:migration:v2-zero:enforce', 'yarn test:migration:governance'],
+    docsCommands: ['pnpm run test:migration:v2-zero:enforce'],
+    workflowCommands: ['pnpm run test:migration:v2-zero:enforce', 'pnpm run test:migration:governance'],
     workflowMode: 'any',
     triggerMode: 'required',
     requiredScriptBodyPatterns: [/scripts\/testing\/migrations\/validateV2ZeroInventory\.ts/, /--enforce/],
@@ -220,7 +220,7 @@ const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
     id: 'test:migration:bundled-plugin-projections',
     rootScriptName: 'test:migration:bundled-plugin-projections',
     docsCommands: [],
-    workflowCommands: ['yarn test:migration:governance'],
+    workflowCommands: ['pnpm run test:migration:governance'],
     workflowMode: 'any',
     triggerMode: 'local-only',
     requiredScriptBodyPatterns: [
@@ -232,8 +232,8 @@ const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
   {
     id: 'test:migration:governance',
     rootScriptName: 'test:migration:governance',
-    docsCommands: ['yarn test:migration:governance'],
-    workflowCommands: ['yarn test:migration:governance'],
+    docsCommands: ['pnpm run test:migration:governance'],
+    workflowCommands: ['pnpm run test:migration:governance'],
     workflowMode: 'any',
     triggerMode: 'required',
     requiredScriptBodyPatterns: [
@@ -277,9 +277,9 @@ function parseScripts(packageJsonText: string): Record<string, string> {
 }
 
 function extractRootCommandMentions(text: string): CommandMention[] {
-  const matches = text.matchAll(/\byarn(?:\s+-s)?\s+(test(?::[a-z0-9:-]+)?)(?=\s|$|`)/gi);
+  const matches = text.matchAll(/\bpnpm(?:\s+(?:--silent|-s))?\s+run\s+(test(?::[a-z0-9:-]+)?)(?=\s|$|`)/gi);
   return Array.from(matches, (match) => ({
-    command: match[0]!.trim(),
+    command: `pnpm run ${match[1]!.trim()}`,
     scriptName: match[1]!.trim(),
   }));
 }
@@ -330,14 +330,14 @@ function collectRootUnitLaneWorkflowIssues(
   scripts: Readonly<Record<string, string>>,
 ): WorkflowScriptParityIssue[] {
   const issues: WorkflowScriptParityIssue[] = [];
-  const workflowScan = scanYarnInvocations(input.workflowText);
+  const workflowScan = scanPnpmInvocations(input.workflowText);
   const workflowTargets = [
     ...workflowScan.workspaceTargets,
     ...workflowScan.rootScriptRefs.flatMap((scriptName) => resolveRootScriptWorkspaceTargets(scripts, scriptName)),
   ]
     .filter((target) => target.scriptName.startsWith('test'));
   const seen = new Set<string>();
-  const finitePublicSdkTaskRuns = /\byarn(?:\s+-s)?\s+check:public-sdk:finite(?:\s|$)/u.test(input.workflowText);
+  const finitePublicSdkTaskRuns = /\bpnpm(?:\s+(?:--silent|-s))?\s+run\s+check:public-sdk:finite(?:\s|$)/u.test(input.workflowText);
   const finitePublicSdkWorkspaces = resolveFinitePublicSdkTestWorkspaces(scripts);
 
   for (const target of resolveRootScriptWorkspaceTargets(scripts, ROOT_UNIT_LANE_SCRIPT_NAME)) {

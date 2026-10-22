@@ -40,21 +40,19 @@ function runUiPostinstall({
 
     if (!fs.existsSync(path.resolve(physicalCwd, 'tools', 'postinstall.mjs'))) return 0;
 
-    const run = (command, args) => spawnSync(command, args, {
+    const { resolvePnpmCommandInvocation } = require(path.resolve(physicalCwd, '../../scripts/workspaces/execPnpmCommand.mjs'));
+    const invocation = resolvePnpmCommandInvocation(['--silent', 'run', 'postinstall:real'], {
+        npmExecPath: String(env.npm_execpath ?? ''),
+        platform,
+        processExecPath: execPath,
+        comspec: env.COMSPEC ?? env.ComSpec ?? env.comspec,
+    });
+    const result = spawnSync(invocation.command, invocation.args, {
         cwd: physicalCwd,
         env,
         stdio: 'inherit',
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
-    const npmExecPath = env.npm_execpath;
-    let result;
-    if (npmExecPath) {
-        result = run(execPath, [npmExecPath, 'run', '-s', 'postinstall:real']);
-    } else {
-        result = run(platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'postinstall:real']);
-        if (result.error && platform === 'win32') {
-            result = run('yarn', ['-s', 'postinstall:real']);
-        }
-    }
 
     if (result.error) {
         console.error(result.error.message);

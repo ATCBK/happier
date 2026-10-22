@@ -1,6 +1,9 @@
+import { createRequire } from 'node:module';
 import { mergeConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import base from './vitest.config';
+
+const requirePackageDependency = createRequire(new URL('./package.json', import.meta.url));
 
 const resolve = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
@@ -9,8 +12,8 @@ const config = mergeConfig(base, {
     resolve: {
         extensions: ['.web.tsx', '.web.ts', '.web.js', '.tsx', '.ts', '.js', '.jsx', '.json'],
         alias: [
-            { find: /^react-native-gesture-handler$/, replacement: resolve('./node_modules/react-native-gesture-handler/src/index.ts') },
-            { find: /^react-native$/, replacement: resolve('./node_modules/react-native-web/dist/index.js') },
+            { find: /^react-native-gesture-handler$/, replacement: requirePackageDependency.resolve('react-native-gesture-handler/src/index.ts') },
+            { find: /^react-native$/, replacement: requirePackageDependency.resolve('react-native-web/dist/index.js') },
         ],
     },
     test: {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHook } from 'node:async_hooks';
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,37 @@ import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fi
 import { withPatchedProcessEnv } from '../../apps/stack/scripts/testkit/core/env_scope.mjs';
 import { ensureWorkspacePackagesBuiltForComponent } from './ensureWorkspacePackagesBuilt.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
+
+test('captured dependencies survive reusing a captured workspace through its source alias', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-captured-dependency-alias-' });
+  const installed = fixture.path('installed');
+  const sourceDir = fixture.path('repo');
+  const workspace = 'packages/agents';
+  const installedBin = join(installed, workspace, 'node_modules/.bin');
+  await mkdir(installedBin, { recursive: true });
+  await writeFile(join(installed, workspace, 'package.json'), '{"name":"@happier-dev/agents"}');
+  await writeFile(join(installedBin, 'probe'), 'installed tool');
+  await mkdir(sourceDir);
+  const sourceAlias = join(sourceDir, 'packages');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  await symlink(join(installed, 'packages'), sourceAlias, linkType);
+
+  for (const name of ['first', 'second']) {
+    const captureDir = fixture.path(name);
+    await captureBuildInputFiles({ sourceDir, captureDir, readPaths: () => [`${workspace}/package.json`] });
+    await convergence.mountCapturedWorkspaceDependencies({ sourceDir, captureDir, workspaceDirs: [workspace] });
+    if (name === 'first') {
+      // Source preparation reuses the captured package sources by replacing
+      // this alias. Dependency links must still reach the installed tree.
+      await rm(sourceAlias);
+      await symlink(join(captureDir, 'packages'), sourceAlias, linkType);
+    }
+    const capturedBin = join(captureDir, workspace, 'node_modules/.bin');
+    assert.equal(await readFile(join(capturedBin, 'probe'), 'utf8'), 'installed tool');
+    assert.equal(await realpath(capturedBin), await realpath(installedBin));
+    assert.equal((await lstat(capturedBin)).isSymbolicLink(), true, 'the installed tools are shared, not copied');
+  }
+});
 
 test('finite captured dependency consumption excludes refresh until its last read', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-finite-dependency-reader-' });
@@ -122,7 +153,8 @@ test('component dependency consumption waits without holding a package publicati
       ...(app === 'ui' ? { dependencies: { '@happier-dev/example': '0.0.0' } } : {}) }));
   }
   await writeFile(join(sourceDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
-  await writeFile(join(sourceDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(sourceDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(sourceDir, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - apps/*\n');
   const manifest = { name: '@happier-dev/example', main: './dist/index.js', scripts: { build: 'fixture-build' } };
   await writeFile(join(packageDir, 'package.json'), JSON.stringify(manifest));
   await writeFile(join(packageDir, 'src/index.ts'), 'export const ready = true;\n');

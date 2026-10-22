@@ -70,7 +70,7 @@ function runLocalCanonicalWriterContract() {
 }
 
 if (!siblingArgument) {
-  console.error('Usage: yarn test:contracts:runtime-activity <sibling-checkout-path>');
+  console.error('Usage: pnpm run test:contracts:runtime-activity <sibling-checkout-path>');
   process.exitCode = 2;
 } else {
   const siblingCheckout = resolve(repoRoot, siblingArgument);

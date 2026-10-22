@@ -32,7 +32,7 @@ export async function stageCliProxyApiManagedRuntime({
   repoRoot,
   payloadDir,
   target,
-  yarn,
+  pnpm,
   runCommand,
   prebuiltExecutablePath,
   publicationFailures = [],
@@ -40,7 +40,7 @@ export async function stageCliProxyApiManagedRuntime({
   repoRoot: string;
   payloadDir: string;
   target: BinaryTarget;
-  yarn: Readonly<{ cmd: string; args: string[] }>;
+  pnpm: Readonly<{ cmd: string; args: string[] }>;
   runCommand: RunCommand;
   prebuiltExecutablePath?: string;
   publicationFailures?: ReturnType<typeof parseBundledPluginPublicationFailures>;
@@ -78,11 +78,12 @@ export async function stageCliProxyApiManagedRuntime({
     await cp(prebuiltExecutablePath, executablePath);
   } else {
     await runCommand(
-      yarn.cmd,
+      pnpm.cmd,
       [
-        ...yarn.args,
-        'workspace',
+        ...pnpm.args,
+        '--filter',
         CLIPROXYAPI_MANAGED_RUNTIME_PACKAGE,
+        'run',
         CLIPROXYAPI_MANAGED_RUNTIME_BUILD_SCRIPT,
         '--target',
         resolveGoTarget(target),

@@ -156,41 +156,29 @@ async function getComponentPm(dir, env = process.env) {
   })();
   void happyMonorepoRoot;
 
-  // Preserve the package-manager invocation selected by the caller. Stack augments PATH with
-  // the active Node runtime so package-manager child scripts can always launch Node; that must
-  // not accidentally make a sibling Yarn shim outrank the explicit Yarn JS entrypoint inherited
-  // through npm_execpath.
+  // Preserve the caller's package manager before Stack adds the Node runtime to PATH.
   const searchEnv = packageManagerSearchEnvByPreparedEnv.get(env) ?? env;
-  const { resolveYarnCommandInvocation } = await loadSourceWorkspaceModule('execYarnCommand.mjs');
-  const inheritedYarnInvocation = resolveYarnCommandInvocation([], {
-    npmExecPath: searchEnv.npm_execpath,
+  const { resolvePnpmInvocation } = await loadSourceWorkspaceModule('execPnpmCommand.mjs');
+  const inherited = resolvePnpmInvocation(searchEnv.npm_execpath, {
   });
-  if (
-    inheritedYarnInvocation.command === process.execPath
-    && inheritedYarnInvocation.args.length > 0
-  ) {
+  if (String(searchEnv.npm_execpath ?? '').trim() && !/(^|[\\/])npm-cli\.js$/i.test(searchEnv.npm_execpath)) {
     return {
-      name: 'yarn',
-      cmd: inheritedYarnInvocation.command,
-      prefixArgs: inheritedYarnInvocation.args,
+      name: 'pnpm',
+      cmd: inherited.command,
+      prefixArgs: inherited.args,
     };
   }
 
   const binaryMode = String(env.HAPPIER_STACK_BINARY_MODE ?? '').trim() === '1'
     || String(env.HAPPIER_STACK_INSTALL_SOURCE ?? '').trim() === 'binary';
-  // IMPORTANT: probe with cwd=componentDir; Yarn can be blocked depending on Corepack context.
-  // Resolve the caller's complete PATH policy before consulting directories Stack added for
-  // child-runtime compatibility. Otherwise a sibling Yarn shim beside the preferred Node binary
-  // can incorrectly outrank an explicit caller-provided Corepack (or npm in binary mode).
+  // Resolve the caller's PATH before consulting directories added for child runtimes.
   const resolveFromPath = async (candidateEnv) => {
-    const yarnPath = await resolveCommandPath('yarn', { cwd: dir, env: candidateEnv });
-    if (yarnPath) return { name: 'yarn', cmd: yarnPath, prefixArgs: [], directCommand: true };
+    const pnpmPath = await resolveCommandPath('pnpm', { cwd: dir, env: candidateEnv });
+    if (pnpmPath) return { name: 'pnpm', cmd: pnpmPath, prefixArgs: [], directCommand: true };
     const npmPath = binaryMode
       ? await resolveCommandPath('npm', { cwd: dir, env: candidateEnv })
       : '';
     if (npmPath) return { name: 'npm', cmd: npmPath, prefixArgs: [], directCommand: true };
-    const corepackPath = await resolveCommandPath('corepack', { cwd: dir, env: candidateEnv });
-    if (corepackPath) return { name: 'yarn', cmd: corepackPath, prefixArgs: ['yarn'], directCommand: false };
     return null;
   };
   const resolvedPm = await resolveFromPath(searchEnv)
@@ -210,7 +198,7 @@ async function getComponentPm(dir, env = process.env) {
     };
   }
 
-  throw new Error(`[local] yarn is required for component at ${dir}. Install it via Corepack: \`corepack enable\``);
+  throw new Error(`[local] pnpm is required for component at ${dir}. Run the repository's scripts/ci/setup-pnpm.mjs setup command.`);
 }
 
 function resolvePmArgs(pm, args) {
@@ -273,9 +261,9 @@ function buildDependencyInstallArgs(packageManagerName, { force = false, preserv
   if (force) {
     args.push('--force');
   }
-  if (packageManagerName === 'yarn') {
-    args.push('--production=false', '--ignore-engines');
-    if (preserveLockfile) args.push('--pure-lockfile');
+  if (packageManagerName === 'pnpm') {
+    args.push('--prod=false');
+    if (preserveLockfile) args.push('--frozen-lockfile');
   }
   return args;
 }
@@ -294,8 +282,8 @@ async function repairCorruptedCliPkgrollInstallIfNeeded(cliDir, { quiet = false,
     preserveLockfile: String(env?.HAPPIER_DEV_TARGET_EXECUTION ?? '').trim() === '1',
   });
 
-  if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: installDir, env, quiet, pm });
+  if (pm.name === 'pnpm') {
+    await ensurePnpmReady({ dir: installDir, env, quiet, pm });
   }
 
   if (!quiet) {
@@ -432,7 +420,7 @@ async function preparePmEnv(dir, envIn = process.env) {
   if (preferredNodeBinDir) {
     prependPathEntry(env, preferredNodeBinDir);
   }
-  // Yarn owns installed `node_modules/.bin` entries. Replacing those symlinks while a
+  // pnpm owns installed `node_modules/.bin` entries. Replacing those symlinks while a
   // long-lived crawler (notably Metro) is reading them can leave the crawler with stale
   // symlink metadata and make `readlink` fail with EINVAL. Publish Stack's deterministic
   // command shims in the checkout-local ignored workspace instead.
@@ -449,7 +437,7 @@ async function preparePmEnv(dir, envIn = process.env) {
   return env;
 }
 
-const _yarnReadyKeys = new Set();
+const _pnpmReadyKeys = new Set();
 
 async function readPackageJsonIfExists(pkgJsonPath) {
   if (!(await pathExists(pkgJsonPath))) {
@@ -478,9 +466,9 @@ async function ensureServerGeneratedProviderOutputs(componentDir, installDir, { 
     console.log('[local] checking happier-server Prisma provider outputs...');
   }
 
-  if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: installDir, env, quiet, pm });
-    await runPm(pm, ['-s', 'workspace', '@happier-dev/server', 'generate:providers'], {
+  if (pm.name === 'pnpm') {
+    await ensurePnpmReady({ dir: installDir, env, quiet, pm });
+    await runPm(pm, ['--filter', '@happier-dev/server', 'run', '--silent', 'generate:providers'], {
       cwd: installDir,
       stdio,
       env,
@@ -508,9 +496,9 @@ export async function ensureUiPostinstallOutputs(componentDir, installDir, { qui
     quiet, force, env,
     runPostinstall: async (postinstallEnv) => {
       await prepare();
-      if (pm.name === 'yarn') {
-        await ensureYarnReady({ dir: installDir, env, quiet, pm });
-        await runPm(pm, ['-s', 'workspace', '@happier-dev/app', 'postinstall:real'], { cwd: installDir, stdio, env: postinstallEnv });
+      if (pm.name === 'pnpm') {
+        await ensurePnpmReady({ dir: installDir, env, quiet, pm });
+        await runPm(pm, ['--filter', '@happier-dev/app', 'run', '--silent', 'postinstall:real'], { cwd: installDir, stdio, env: postinstallEnv });
       } else {
         await runPm(pm, ['run', '-s', 'postinstall:real'], { cwd: componentDir, stdio, env: postinstallEnv });
       }
@@ -533,7 +521,7 @@ async function ensureComponentPrerequisites(componentDir, _label, { quiet = fals
   await ensureUiPostinstallOutputs(componentDir, installDir, { quiet, env, pm });
 }
 
-async function ensureYarnReady({ dir, env, quiet = false, pm }) {
+async function ensurePnpmReady({ dir, env, quiet = false, pm }) {
   const e = env && typeof env === 'object' ? env : process.env;
   // In stack mode we isolate HOME/cache; key by effective HOME+XDG cache so we only do this once.
   const key = [
@@ -543,16 +531,11 @@ async function ensureYarnReady({ dir, env, quiet = false, pm }) {
     pm.cmd,
     ...(pm.prefixArgs ?? []),
   ].join('|');
-  if (_yarnReadyKeys.has(key)) return;
+  if (_pnpmReadyKeys.has(key)) return;
 
-  const stdio = quiet ? 'ignore' : ['pipe', 'ignore', 'inherit'];
-  // Corepack sometimes prompts on first use:
-  //   "Corepack is about to download ... Do you want to continue? [Y/n]"
-  //
-  // In TUI mode, the terminal is interactive but keyboard input is consumed by the TUI itself,
-  // so Corepack's prompt can deadlock. Always provide a single "yes" to unblock the download.
-  await runPm(pm, ['--version'], { cwd: dir, env: e, stdio, input: 'y\n' });
-  _yarnReadyKeys.add(key);
+  const stdio = quiet ? 'ignore' : ['ignore', 'ignore', 'inherit'];
+  await runPm(pm, ['--version'], { cwd: dir, env: e, stdio });
+  _pnpmReadyKeys.add(key);
 }
 
 export async function requireDir(label, dir) {
@@ -586,11 +569,11 @@ function resolveStackCacheBaseDirFromEnv(env) {
 export async function applyStackCacheEnv(baseEnv) {
   const env = { ...(baseEnv && typeof baseEnv === 'object' ? baseEnv : process.env) };
   // IMPORTANT:
-  // Stack setup/bootstrap frequently runs `yarn install` inside the Happier monorepo.
+  // Stack setup/bootstrap frequently runs `pnpm install` inside the Happier monorepo.
   // Many workspace lifecycle scripts depend on devDependencies (e.g. TypeScript for `tsc`).
   //
-  // If a user (or CI) has NODE_ENV=production / *production* npm/Yarn flags set globally,
-  // Yarn can skip devDependencies and the install fails in confusing ways.
+  // If a user (or CI) has NODE_ENV=production / *production* npm/pnpm flags set globally,
+  // pnpm can skip devDependencies and the install fails in confusing ways.
   //
   // Default: scrub production-mode flags for stack-invoked package-manager commands.
   // Opt-out via: HAPPIER_STACK_PM_ALLOW_PRODUCTION=1
@@ -601,12 +584,12 @@ export async function applyStackCacheEnv(baseEnv) {
   };
   const wantsProduction =
     String(env.NODE_ENV ?? '').trim().toLowerCase() === 'production'
-    || isTruthy(env.YARN_PRODUCTION)
+    || isTruthy(env.pnpm_config_production)
     || isTruthy(env.npm_config_production)
     || isTruthy(env.NPM_CONFIG_PRODUCTION);
   if (!allowProduction && wantsProduction) {
     env.NODE_ENV = 'development';
-    env.YARN_PRODUCTION = '0';
+    env.pnpm_config_production = 'false';
     env.npm_config_production = 'false';
     env.NPM_CONFIG_PRODUCTION = 'false';
   }
@@ -616,7 +599,7 @@ export async function applyStackCacheEnv(baseEnv) {
   if (!stackCacheBase) return env;
 
   // Prisma engines currently default to ~/.cache/prisma (via os.homedir()).
-  // In stack mode, isolate HOME for package-manager driven commands so Prisma/Yarn/NPM don't
+  // In stack mode, isolate HOME for package-manager driven commands so Prisma/pnpm/NPM don't
   // depend on global home caches (and so sandboxed runs can succeed).
   const isolateHomeRaw = (env.HAPPIER_STACK_PM_ISOLATE_HOME ?? '').toString().trim();
   const isolateHome = isolateHomeRaw ? isolateHomeRaw !== '0' : true;
@@ -633,22 +616,15 @@ export async function applyStackCacheEnv(baseEnv) {
     }
   }
 
-  // Corepack caches downloaded package managers (like Yarn) under COREPACK_HOME.
-  // In stack mode we want this to be stable and writable so first-run downloads don't prompt/hang in TUI.
+  // Keep the pnpm store/cache and npm's provisioning cache stack-owned.
   for (const [key, path] of Object.entries(resolvePackageManagerCachePaths(stackCacheBase))) {
     if (!(env[key] ?? '').toString().trim()) env[key] = path;
   }
-  // Avoid Corepack mutating package.json by auto-adding a packageManager field.
-  // (This is safe and reduces noise when Corepack is used implicitly.)
-  if (!(env.COREPACK_ENABLE_AUTO_PIN ?? '').toString().trim()) {
-    env.COREPACK_ENABLE_AUTO_PIN = '0';
-  }
-
   try {
     await mkdir(env.XDG_CACHE_HOME, { recursive: true });
-    await mkdir(env.YARN_CACHE_FOLDER, { recursive: true });
+    await mkdir(env.pnpm_config_store_dir, { recursive: true });
+    await mkdir(env.pnpm_config_cache_dir, { recursive: true });
     await mkdir(env.npm_config_cache, { recursive: true });
-    await mkdir(env.COREPACK_HOME, { recursive: true });
   } catch {
     // best-effort
   }
@@ -692,28 +668,31 @@ async function ensureComponentDependenciesInstalled(
   const nodeModules = join(installDir, 'node_modules');
   const stdio = quiet ? 'ignore' : 'inherit';
   // Stack explicitly prepares component-owned lifecycle outputs. UI postinstall
-  // is run explicitly below: Yarn may skip lifecycle scripts after a scriptless
+  // is run explicitly below: pnpm may skip lifecycle scripts after a scriptless
   // bootstrap, and its outputs must precede freshness publication. Server
   // provider generation is already owned explicitly by ensureComponentPrerequisites;
   // its postinstall also runs build:shared and would duplicate the source-dev/package
   // publication owners.
   const env = resolveLockedInstallEnv(await preparePmEnv(installDir, envIn));
   const pm = await getComponentPm(installDir, env);
-  if (onDependenciesReady && pm.name !== 'yarn') {
-    throw new Error(`[local] ${label} dependency-ready actions require the canonical Yarn dependency refresh owner`);
+  if (onDependenciesReady && pm.name !== 'pnpm') {
+    throw new Error(`[local] ${label} dependency-ready actions require the canonical pnpm dependency refresh owner`);
   }
-  const ensureCanonicalYarnReady = async () => {
-    if (pm.name === 'yarn') {
-      await ensureYarnReady({ dir: installDir, env, quiet, pm });
+  const ensureCanonicalPnpmReady = async () => {
+    if (pm.name === 'pnpm') {
+      await ensurePnpmReady({ dir: installDir, env, quiet, pm });
     }
   };
   const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
   const sharedUiDir = monorepoRoot && resolve(monorepoRoot) === resolve(installDir)
     ? join(monorepoRoot, 'apps', 'ui') : null;
-  const needsSharedUiRepair = sharedUiDir && (await inspectUiPostinstallOutputs(sharedUiDir, installDir, { env })).length > 0;
+  const needsSharedUiRepair = sharedUiDir && (
+    (await inspectDependencyRefresh({ installDir, componentDir })).required
+    || (await inspectUiPostinstallOutputs(sharedUiDir, installDir, { env })).length > 0
+  );
   const guardedDependencyReadyAction = onDependenciesReady || prepareComponentOutputs || needsSharedUiRepair
     ? async () => {
-        await ensureCanonicalYarnReady();
+        await ensureCanonicalPnpmReady();
         // CLI, server and Stack callers share UI's installed dependencies too.
         // Inspection is read-only when healthy; repairs remain under admission.
         if (sharedUiDir) await ensureUiPostinstallOutputs(sharedUiDir, installDir, { quiet, env, pm });
@@ -729,7 +708,7 @@ async function ensureComponentDependenciesInstalled(
   // reused and the tree rechecked after it exits), never a long-lived reader.
   // Stale or incomplete trees fall through to the owner's writer path.
   const admitCurrentTree = async ({ refreshExisting }) => {
-    if (pm.name !== 'yarn' || onDependenciesReady || needsSharedUiRepair) return false;
+    if (pm.name !== 'pnpm' || onDependenciesReady || needsSharedUiRepair) return false;
     const readiness = await inspectDependencyRefresh({ installDir, componentDir });
     if (readiness.required || (await inspectUiPostinstallOutputs(componentDir, installDir, { env })).length > 0) return false;
     await withDependencyRefresh({ installDir, componentDir, env, refreshExisting }, refreshDependencies);
@@ -739,7 +718,7 @@ async function ensureComponentDependenciesInstalled(
   const prepareWithoutInstall = async () => {
     if (!guardedDependencyReadyAction) return;
     if (await admitCurrentTree({ refreshExisting: false })) return;
-    if (pm.name === 'yarn') {
+    if (pm.name === 'pnpm') {
       await withDependencyRefresh({ installDir, componentDir, env,
         refreshExisting: false, onDependenciesReady: guardedDependencyReadyAction }, async () => {});
     } else {
@@ -759,10 +738,10 @@ async function ensureComponentDependenciesInstalled(
     await ensureUiPostinstallOutputs(uiDir, installDir, { quiet, env, pm, force: true });
   };
   const refreshDependencies = async () => {
-    await ensureCanonicalYarnReady();
+    await ensureCanonicalPnpmReady();
     if (!quiet) {
       // eslint-disable-next-line no-console
-      console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json/workspace package.json/patches changed)...`);
+      console.log(`[local] refreshing ${label} dependencies (pnpm-lock.yaml/pnpm-workspace.yaml/package.json/patches changed)...`);
     }
     await installAndPrepare();
   };
@@ -796,7 +775,7 @@ async function ensureComponentDependenciesInstalled(
 
     if (await admitCurrentTree({ refreshExisting: true })) return;
 
-    if (pm.name === 'yarn') {
+    if (pm.name === 'pnpm') {
       await withDependencyRefresh({
         installDir,
         componentDir,
@@ -805,21 +784,21 @@ async function ensureComponentDependenciesInstalled(
       }, refreshDependencies);
     }
 
-    if (prepareComponentOutputs && pm.name !== 'yarn') {
+    if (prepareComponentOutputs && pm.name !== 'pnpm') {
       await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
     }
     return;
   }
 
   const installFirstRun = async () => {
-    await ensureCanonicalYarnReady();
+    await ensureCanonicalPnpmReady();
     if (!quiet) {
       // eslint-disable-next-line no-console
       console.log(`[local] installing ${label} dependencies (first run)...`);
     }
     await installAndPrepare();
   };
-  if (pm.name === 'yarn') {
+  if (pm.name === 'pnpm') {
     await withDependencyRefresh(
       {
         installDir,
@@ -832,14 +811,14 @@ async function ensureComponentDependenciesInstalled(
   } else {
     await installFirstRun();
   }
-  if (pm.name !== 'yarn') await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
+  if (pm.name !== 'pnpm') await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
 }
 
-async function runStackWorkspacePackageScript(packageDir, script, { env, quiet, timeoutMs, captureFailureDiagnostic = quiet }) {
+async function runStackWorkspacePackageScript(packageDir, script, { env, quiet, args = [], timeoutMs, captureFailureDiagnostic = quiet }) {
   const pm = await getComponentPm(packageDir, env);
   const stdio = quiet ? 'ignore' : 'inherit';
-  if (pm.name === 'yarn') await ensureYarnReady({ dir: packageDir, env, quiet, pm });
-  await runPm(pm, pm.name === 'yarn' ? ['-s', script] : ['run', '-s', script], {
+  if (pm.name === 'pnpm') await ensurePnpmReady({ dir: packageDir, env, quiet, pm });
+  await runPm(pm, ['run', '--silent', script, ...args], {
     ownedProcessGroup: true,
     cwd: packageDir,
     stdio,
@@ -1204,7 +1183,7 @@ async function ensureCliBuiltUnderLock({ cliDir, buildCli, quiet, lockPath,
         }
         // Rebuilt workspace outputs or a refreshed source-dev bundle change the
         // inputs consumed by pkgroll without changing the CLI source fingerprint.
-        // Run the full Yarn lifecycle before admitting this CLI publication.
+        // Run the full pnpm lifecycle before admitting this CLI publication.
       }
     }
 
@@ -1217,7 +1196,7 @@ async function ensureCliBuiltUnderLock({ cliDir, buildCli, quiet, lockPath,
         ...env,
         HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
       };
-      await runPm(pm, ['build:prepared'], {
+      await runPm(pm, ['run', 'build:prepared'], {
         ownedProcessGroup: true,
         cwd: cliDir,
         env: buildEnv,
@@ -1240,7 +1219,7 @@ async function ensureCliBuiltUnderLock({ cliDir, buildCli, quiet, lockPath,
       await probeCliDistRuntimeImport(distEntrypoint, { cwd: cliDir, env: buildEnv });
 
       const nowFreshness = await readHappyCliRuntimeInputFreshness(cliDir);
-      // The canonical Yarn prebuild may publish generated CLI source before
+      // The canonical pnpm prebuild may publish generated CLI source before
       // build.mjs snapshots the inputs it actually compiles. Judge the result
       // against the manifest recorded by that builder, not the earlier Stack
       // admission, so a coherent prebuild publication does not trigger an
@@ -1377,6 +1356,14 @@ exit 1
   return { ok: true, cliRoot, binDir, happierShim, removedLegacyHappyShim: true };
 }
 
+export async function pmExecScript({ dir, script, args = [], env = process.env, quiet = false }) {
+  await runStackWorkspacePackageScript(dir, script, {
+    args,
+    env: await preparePmEnv(dir, env),
+    quiet,
+  });
+}
+
 export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
   const usesObjectStyle = typeof dirOrOpts === 'object' && dirOrOpts !== null;
 
@@ -1390,10 +1377,10 @@ export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
   const stdio = quiet ? 'ignore' : 'inherit';
 
   const pm = await getComponentPm(dir, env);
-  if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir, env, quiet, pm });
+  if (pm.name === 'pnpm') {
+    await ensurePnpmReady({ dir, env, quiet, pm });
   }
-  await runPm(pm, ['run', bin, ...args], { cwd: dir, env, stdio });
+  await runPm(pm, [pm.name === 'pnpm' ? 'exec' : 'run', bin, ...args], { cwd: dir, env, stdio });
 }
 
 export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = {}) {
@@ -1408,11 +1395,11 @@ export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = 
 
   const effectiveEnv = await preparePmEnv(componentDir, componentEnv);
   const pm = await getComponentPm(componentDir, effectiveEnv);
-  if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet, pm });
+  if (pm.name === 'pnpm') {
+    await ensurePnpmReady({ dir: componentDir, env: effectiveEnv, quiet, pm });
   }
   const envForChild = applyStackInfraProcessKind(effectiveEnv);
-  return spawnPm(componentLabel, pm, ['run', componentBin, ...componentArgs], envForChild, { cwd: componentDir, ...options });
+  return spawnPm(componentLabel, pm, [pm.name === 'pnpm' ? 'exec' : 'run', componentBin, ...componentArgs], envForChild, { cwd: componentDir, ...options });
 }
 
 export async function pmSpawnScript(dir, label, script, args, { env = process.env } = {}) {
@@ -1427,8 +1414,8 @@ export async function pmSpawnScript(dir, label, script, args, { env = process.en
 
   const effectiveEnv = await preparePmEnv(componentDir, componentEnv);
   const pm = await getComponentPm(componentDir, effectiveEnv);
-  if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet, pm });
+  if (pm.name === 'pnpm') {
+    await ensurePnpmReady({ dir: componentDir, env: effectiveEnv, quiet, pm });
   }
   const envForChild = applyStackInfraProcessKind(effectiveEnv);
   return spawnPm(componentLabel, pm, ['run', componentScript, ...componentArgs], envForChild, { cwd: componentDir, ...options });

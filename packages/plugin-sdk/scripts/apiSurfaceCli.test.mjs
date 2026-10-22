@@ -183,6 +183,7 @@ const VOICE_PUBLIC_EXPORTS_BY_ENTRYPOINT = Object.freeze({
     'VoiceOutputInterruptionResolution',
     'VoiceProviderConversationService',
     'VoiceProviderExecutionAuthority',
+    'VoiceRealtimeAttemptPolicy',
     'VoiceRealtimeCanonicalEvent',
     'VoiceRealtimeConnection',
     'VoiceRealtimeConnectionCloseReason',
@@ -223,6 +224,49 @@ const VOICE_PUBLIC_EXPORTS_BY_ENTRYPOINT = Object.freeze({
     'VoiceSpeechTranscribeResult',
   ]),
 });
+
+const HOST_REGISTRATION_TARGETED_SYMBOLS = Object.freeze([
+  ['createAdmittedTargetedOperationExecutionHandle', 'value', 'admittedTargetedOperation'],
+  ['readAdmittedTargetedOperationExecutionBinding', 'value', 'admittedTargetedOperation'],
+  ['requireAdmittedTargetedOperationExecutionBinding', 'value', 'admittedTargetedOperation'],
+  ['AdmittedTargetedOperationExecutionBinding', 'type', 'admittedTargetedOperation'],
+  ['AdmittedTargetedOperationSelectedActionInput', 'type', 'admittedTargetedOperation'],
+  ['resolveAdmittedTargetedContributions', 'value', 'targetedContributionAdmission'],
+  ['dropTargetedContributionAdmissionDiagnostics', 'value', 'targetedContributionAdmission'],
+  ['projectTargetedContributionActionDefinition', 'value', 'targetedContributionAdmission'],
+  ['resolveManifestTargetedContributions', 'value', 'targetedContributionAdmission'],
+  ['mergeTargetedContributionManifestDeclarations', 'value', 'targetedContributionAdmission'],
+  ['TargetedContributionAdmissionResult', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionPointDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionActionDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionRendererDeclaration', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionCompatibilityDiagnostic', 'type', 'targetedContributionAdmission'],
+  ['TargetedContributionManifestDeclaration', 'type', 'targetedContributionAdmission'],
+  ['createTargetedContributionsService', 'value', 'targetedContributions'],
+  ['createManifestTargetedContributionsService', 'value', 'targetedContributions'],
+  ['projectAdmittedTargetedContributionSnapshot', 'value', 'targetedContributions'],
+  ['TargetedContributionsAdmissionSource', 'type', 'targetedContributions'],
+  ['StableTargetedContributionsOwner', 'type', 'targetedContributions'],
+  ['buildPluginUiRendererContributionKey', 'value', 'targetedContributionRendererChain'],
+  ['resolvePluginUiRendererChain', 'value', 'targetedContributionRendererChain'],
+  ['PluginUiRendererChainResolution', 'type', 'targetedContributionRendererChain'],
+  ['AdmittedTargetedContributionSnapshot', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContribution', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContributionOperation', 'type', 'targetedContributionTypes'],
+  ['AdmittedTargetedContributionSurface', 'type', 'targetedContributionTypes'],
+  ['validateTargetedOperationInput', 'value', 'targetedOperationValidation'],
+  ['validateTargetedOperationResult', 'value', 'targetedOperationValidation'],
+  ['TargetedOperationValidationFailure', 'type', 'targetedOperationValidation'],
+  ['resolveAdmittedTargetedOperationInput', 'value', 'targetedOperationInput'],
+].map(([exportName, kind, moduleName]) => Object.freeze({
+  specifier: './host/registration',
+  exportName,
+  kind,
+  sourceModule: `src/host/registration/${moduleName}.ts`,
+  sourceExport: exportName,
+  realm: 'any',
+})));
 
 const INVENTORY = Object.freeze({
   schemaVersion: 1,
@@ -273,6 +317,7 @@ const INVENTORY = Object.freeze({
     }),
   ]),
   symbols: Object.freeze([
+    ...HOST_REGISTRATION_TARGETED_SYMBOLS,
     Object.freeze({
       specifier: './actions',
       exportName: 'ActionsService',
@@ -379,6 +424,12 @@ const INVENTORY = Object.freeze({
   ]),
 });
 
+async function createWorkspaceRootFixture(root, packages) {
+  await writeFixtureFile(root, 'package.json', '{"private":true}\n');
+  await writeFixtureFile(root, 'pnpm-workspace.yaml', `packages: ${JSON.stringify(packages)}\n`);
+  await writeFixtureFile(root, 'pnpm-lock.yaml', 'lockfileVersion: 9\n');
+}
+
 async function writeFixtureFile(root, relativePath, contents) {
   const target = join(root, relativePath);
   await mkdir(dirname(target), { recursive: true });
@@ -444,6 +495,9 @@ async function createPackageFixture(root = undefined) {
     '',
   ].join('\n'));
   await writeFixtureFile(root, 'src/host/registration/index.ts', [
+    ...HOST_REGISTRATION_TARGETED_SYMBOLS.map(({ exportName, kind, sourceModule }) => (
+      `export ${kind === 'type' ? 'type ' : ''}{ ${exportName} } from './${sourceModule.split('/').at(-1).replace(/\.ts$/u, '.js')}';`
+    )),
     "export type { PluginAgentRuntimeRegistration } from './scope.js';",
     "export type { PluginRegistrationRight } from './scope.js';",
     "export type { PluginRuntimeRegistration } from './scope.js';",
@@ -456,6 +510,14 @@ async function createPackageFixture(root = undefined) {
     "export { readPluginActionInputParser, readPluginActionResultParser } from './actionInputParser.js';",
     '',
   ].join('\n'));
+  for (const sourceModule of new Set(HOST_REGISTRATION_TARGETED_SYMBOLS.map((symbol) => symbol.sourceModule))) {
+    await writeFixtureFile(root, sourceModule, HOST_REGISTRATION_TARGETED_SYMBOLS
+      .filter((symbol) => symbol.sourceModule === sourceModule)
+      .map(({ exportName, kind }) => kind === 'type'
+        ? `export type ${exportName} = Readonly<{ fixture: true }>;\n`
+        : `export function ${exportName}() {}\n`)
+      .join(''));
+  }
   await writeFixtureFile(
     root,
     'src/host/registration/actionHandlerInvocation.ts',
@@ -523,7 +585,8 @@ async function createVendoredDeclarationStalenessFixture() {
   const repoRoot = await mkdtemp(join(tmpdir(), 'plugin-sdk-api-surface-vendored-stale-'));
   const root = join(repoRoot, 'packages/plugin-sdk');
   const workspaceProtocolRoot = join(repoRoot, 'packages/protocol');
-  await writeFile(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  await writeFile(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  await writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFixtureFile(
     repoRoot,
     'package.json',
@@ -1417,6 +1480,31 @@ test('explicit write preflights and materializes exports, barrels, and author AP
   }
 });
 
+test('source materialization repairs and checks split browser barrel drift', async () => {
+  const root = await createPackageFixture();
+  try {
+    await writeFixtureFile(root, 'src/actions/index.browser.ts', 'export {};\n');
+
+    const written = await runApiSurfaceMaterializer({ packageRoot: root, write: true });
+    assert.equal(written.status, 'current');
+    assert.match(
+      await readFile(join(root, 'src/actions/index.browser.ts'), 'utf8'),
+      /export type \{ ActionsService \} from '\.\/service\.js';/u,
+    );
+    const current = await runApiSurfaceMaterializer({ packageRoot: root, check: true });
+    assert.equal(current.summary.changedFiles, 0);
+
+    await writeFixtureFile(root, 'src/actions/index.browser.ts', 'export {};\n');
+    const drifted = await runApiSurfaceMaterializer({ packageRoot: root, check: true });
+    assert.ok(drifted.files.some((output) => (
+      output.path === 'src/actions/index.browser.ts' && output.changed
+    )));
+    assert.equal(await readFile(join(root, 'src/actions/index.browser.ts'), 'utf8'), 'export {};\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('publication mode stamps and retains @since from the immediately prior inventory', async () => {
   const root = await createPackageFixture();
   const firstInventoryPath = join(root, 'published-1.0.0-api-surface.json');
@@ -2163,10 +2251,7 @@ test('browser value closures follow bare workspace imports under browser conditi
   const root = join(workspaceRoot, 'packages/plugin-sdk');
   const sharedRoot = join(workspaceRoot, 'packages/portable-workspace');
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk', 'packages/portable-workspace'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk', 'packages/portable-workspace']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2234,10 +2319,7 @@ test('browser and React Native value closures inspect ordinary installed package
       const root = join(workspaceRoot, 'packages/plugin-sdk');
       const installedRoot = join(workspaceRoot, 'node_modules/@fixture/portable-installed');
       try {
-        await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-          private: true,
-          workspaces: { packages: ['packages/plugin-sdk'] },
-        }, null, 2)}\n`);
+        await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
         await createPackageFixture(root);
         await addPortableValueFixture(
           root,
@@ -2283,10 +2365,7 @@ test('client value closures independently inspect browser and React Native packa
       const root = join(workspaceRoot, 'packages/plugin-sdk');
       const installedRoot = join(workspaceRoot, 'node_modules/@fixture/client-installed');
       try {
-        await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-          private: true,
-          workspaces: { packages: ['packages/plugin-sdk'] },
-        }, null, 2)}\n`);
+        await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
         await createPackageFixture(root);
         await addPortableValueFixture(
           root,
@@ -2378,10 +2457,7 @@ test('browser value closures accept a safe installed package selected by browser
   const root = join(workspaceRoot, 'packages/plugin-sdk');
   const installedRoot = join(workspaceRoot, 'node_modules/@fixture/portable-installed');
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2418,10 +2494,7 @@ test('runtime dependency wildcard exports preserve conditional targets and Node 
   const root = join(workspaceRoot, 'packages/plugin-sdk');
   const installedRoot = join(workspaceRoot, 'node_modules/@fixture/wildcard-exports');
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(root, 'any', [
       "import { installedValue as locale } from '@fixture/wildcard-exports/locales/en.js';",
@@ -2484,10 +2557,7 @@ test('portable dependency export conditions follow declaration order', async (t)
       const root = join(workspaceRoot, 'packages/plugin-sdk');
       const installedRoot = join(workspaceRoot, 'node_modules/@fixture/ordered-conditions');
       try {
-        await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-          private: true,
-          workspaces: { packages: ['packages/plugin-sdk'] },
-        }, null, 2)}\n`);
+        await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
         await createPackageFixture(root);
         await addPortableValueFixture(
           root,
@@ -2530,10 +2600,7 @@ test('browser and any value closures resolve legacy package entry targets withou
       const packageName = `portable-legacy-${field}`;
       const installedRoot = join(workspaceRoot, 'node_modules', packageName);
       try {
-        await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-          private: true,
-          workspaces: { packages: ['packages/plugin-sdk'] },
-        }, null, 2)}\n`);
+        await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
         await createPackageFixture(root);
         await addPortableValueFixture(
           root,
@@ -2563,10 +2630,7 @@ test('daemon value closures resolve trailing-slash legacy package root imports',
   const packageName = 'portable-legacy-root-slash';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2594,10 +2658,7 @@ test('package exports maps do not reinterpret trailing-slash imports as package 
   const packageName = 'portable-exported-root-slash';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2629,10 +2690,7 @@ test('legacy package entry targets cannot escape the runtime package root', asyn
   const packageName = 'portable-legacy-escape';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2665,10 +2723,7 @@ test('any value closures resolve extensionless deep subpaths from legacy package
   const packageName = 'portable-legacy-subpath';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2701,9 +2756,7 @@ test('value closures resolve conditional wildcard exports without reviving priva
   const packageName = 'portable-pattern';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true, workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(root, 'browser',
       `import { installedValue } from '${packageName}/v4/locales/en.js';\nexport const PortableValue = installedValue;\n`);
@@ -2737,10 +2790,7 @@ test('package exports maps keep unmapped deep subpaths private', async () => {
   const packageName = 'portable-private-subpath';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2773,10 +2823,7 @@ test('runtime closure treats contained JSON requires as data leaves', async () =
   const packageName = 'portable-json-leaf';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2809,10 +2856,7 @@ test('runtime closure rejects JSON data leaves symlinked outside the runtime pac
   const packageName = 'portable-json-link';
   const installedRoot = join(workspaceRoot, 'node_modules', packageName);
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2852,10 +2896,7 @@ test('browser value closures resolve nested installed dependencies transitively'
   const outerRoot = join(workspaceRoot, 'node_modules/@fixture/portable-outer');
   const nestedRoot = join(outerRoot, 'node_modules/@fixture/portable-nested');
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -2904,10 +2945,7 @@ test('browser value closures select require conditions for static CommonJS depen
   const outerRoot = join(workspaceRoot, 'node_modules/@fixture/portable-cjs-outer');
   const nestedRoot = join(outerRoot, 'node_modules/@fixture/portable-cjs-nested');
   try {
-    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
-      private: true,
-      workspaces: { packages: ['packages/plugin-sdk'] },
-    }, null, 2)}\n`);
+    await createWorkspaceRootFixture(workspaceRoot, ['packages/plugin-sdk']);
     await createPackageFixture(root);
     await addPortableValueFixture(
       root,
@@ -4453,6 +4491,9 @@ test('current Actions canonical source does not reach its generated entrypoint b
       '',
     ].join('\n'));
     await writeFixtureFile(root, 'src/apiSurfaceReachabilityProbe.ts', [
+      ...HOST_REGISTRATION_TARGETED_SYMBOLS.map(({ exportName, kind }) => kind === 'type'
+        ? `export type ${exportName} = Readonly<{ fixture: true }>;`
+        : `export function ${exportName}() {}`),
       'export type PluginRegistrationRight = Readonly<{ family: string }>;',
       'export type PluginAgentRuntimeRegistration = Readonly<{ localId: string }>;',
       'export type PluginRuntimeRegistration = Readonly<{ family: string }>;',
@@ -4473,6 +4514,9 @@ test('current Actions canonical source does not reach its generated entrypoint b
       '',
     ].join('\n'));
     await writeFixtureFile(root, 'src/host/registration/index.public.ts', [
+      ...HOST_REGISTRATION_TARGETED_SYMBOLS.map(({ exportName, kind }) => (
+        `export ${kind === 'type' ? 'type ' : ''}{ ${exportName} } from '../../apiSurfaceReachabilityProbe.js';`
+      )),
       "export { createExecutionRunHostBackendFromSessionRuntime } from '../../apiSurfaceReachabilityProbe.js';",
       "export type { PluginAgentRuntimeRegistration } from '../../apiSurfaceReachabilityProbe.js';",
       "export type { PluginRegistrationRight } from '../../apiSurfaceReachabilityProbe.js';",
@@ -4494,6 +4538,7 @@ test('current Actions canonical source does not reach its generated entrypoint b
     // The fixture declares four entrypoints and publication specs are the
     // topology owner, so ./host/ui needs its own spec after the sweep above.
     await writeFixtureFile(root, 'src/host/ui/index.public.ts', [
+      "export { HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT } from './hostedHtmlGuestBootstrap.generated.js';",
       "export { decodePluginUiClipboardReadResult, decodePluginUiConfirmResult, decodePluginUiResourceContent, encodePluginUiDiagnostic } from './hostApiCodecs.js';",
       "export type { PluginUiHostApiDecodeResult } from './hostApiCodecs.js';",
       '',

@@ -8,7 +8,8 @@ describe("resolveServerRepoRoot", () => {
             startDir: "/repo/apps/server/scripts",
             existsSync: (path: string) => (
                 path === "/repo/package.json"
-                || path === "/repo/yarn.lock"
+                || path === "/repo/pnpm-lock.yaml"
+                || path === "/repo/pnpm-workspace.yaml"
             ),
         });
 

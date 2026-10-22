@@ -14,7 +14,8 @@ test('gate selection includes changed workspace consumers, including peer consum
     await mkdir(join(rootDir, directory), { recursive: true });
     await writeFile(join(rootDir, directory, 'package.json'), JSON.stringify(manifest));
   };
-  await writeManifest('.', { workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] });
+  await writeManifest('.', { private: true });
+  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n  - packages/plugins/*\n');
   await writeManifest('apps/cli', { name: '@happier-dev/cli', dependencies: { '@happier-dev/shared': '*' } });
   await writeManifest('apps/ui', { name: '@happier-dev/app', peerDependencies: { '@happier-dev/shared': '*' } });
   await writeManifest('apps/server', { name: '@happier-dev/server' });
@@ -26,13 +27,13 @@ test('gate selection includes changed workspace consumers, including peer consum
   assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['packages/protocol/src/wire.ts'] }), ['cli', 'plugins', 'protocol', 'ui']);
   assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['apps/server/sources/route.ts'] }), ['server']);
   assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['packages/plugins/deleted/package.json'] }), ['cli', 'plugins', 'protocol', 'server', 'ui']);
-  assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['yarn.lock'] }), ['cli', 'plugins', 'protocol', 'server', 'ui']);
+  assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['pnpm-lock.yaml'] }), ['cli', 'plugins', 'protocol', 'server', 'ui']);
   assert.deepEqual(await selectAffectedGatePackages({ rootDir, changedPaths: ['docs/testing.md', '.project/plans/lane.md'] }), []);
 
   const output = join(rootDir, 'github-output');
   await writeFile(output, '');
   const loader = join(rootDir, 'preinstall-loader.mjs');
-  // The Node dependency-resolution boundary models checkout before yarn install.
+  // The Node dependency-resolution boundary models checkout before pnpm install.
   await writeFile(loader, [
     'export async function resolve(specifier, context, nextResolve) {',
     '  if (!specifier.startsWith(".") && !specifier.startsWith("node:") && !specifier.startsWith("file:") && !specifier.startsWith("/")) {',
@@ -54,7 +55,7 @@ test('gate selection includes changed workspace consumers, including peer consum
   execFileSync(process.execPath, ['--experimental-loader', pathToFileURL(loader).href, fileURLToPath(new URL('./selectAffectedGatePackages.mjs', import.meta.url))], {
     cwd: rootDir,
     env: { ...process.env, GITHUB_OUTPUT: unitOutput },
-    input: 'yarn.lock\0apps/server/prisma/schema.prisma\0',
+    input: 'pnpm-lock.yaml\0apps/server/prisma/schema.prisma\0',
   });
   const unitLines = await readFile(unitOutput, 'utf8');
   const matrixLine = unitLines.split('\n').find((line) => line.startsWith('unit_matrix='));

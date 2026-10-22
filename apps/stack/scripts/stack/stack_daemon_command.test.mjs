@@ -25,7 +25,8 @@ test('explicit source daemon restart prepares current source while status retain
     await mkdir(join(repoDir, directory), { recursive: true });
   }
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  await writeFile(join(repoDir, 'yarn.lock'), '');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module', exports: {} }));
   await writeFile(join(repoDir, 'apps/cli/tsconfig.json'), '{}');
   await writeFile(join(repoDir, 'apps/cli/src/index.ts'), 'export const sourceReload = "current-source";');

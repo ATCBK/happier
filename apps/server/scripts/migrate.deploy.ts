@@ -17,7 +17,7 @@ export function resolveMigrationDeployScript(env: NodeJS.ProcessEnv): string {
 
 async function main(): Promise<void> {
     const env = resolveMigrationEnv(process.env, requireDbProviderFromEnv(process.env, 'postgres'));
-    await runCommand('yarn', ['-s', resolveMigrationDeployScript(env)], env);
+    await runCommand('pnpm', ['--silent', 'run', resolveMigrationDeployScript(env)], env);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

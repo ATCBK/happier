@@ -77,7 +77,7 @@ export async function checkGeneratedPages({ generators = GENERATORS } = {}) {
     if (readFileSync(generator.outputPath, 'utf8') !== rendered) {
       problems.push({
         at: relative(process.cwd(), generator.outputPath),
-        reason: `${generator.name}: published page is stale — run \`yarn --cwd apps/docs generate:reference\``,
+        reason: `${generator.name}: published page is stale — run \`pnpm --dir apps/docs run generate:reference\``,
       });
     }
   }

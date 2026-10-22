@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { runCommandSuite, type CommandSuiteEntry } from './lib/runCommandSuite.ts';
-import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { runPnpmCommand } from './lib/runPnpmCommand.ts';
 import { selectSharedPackageTestCommands } from './runSharedPackageTests.ts';
 import { resolveGatePackageForWorkspaceDirectory } from '../ci/selectAffectedGatePackages.mjs';
 import { discoverWorkspaceManifests } from './lib/workspaceManifests.ts';
@@ -11,19 +11,19 @@ import { discoverPluginWorkspaceTestPackageReport } from './lib/pluginWorkspaceT
 export const ROOT_TEST_COMMANDS = {
   unit: [
     ...selectSharedPackageTestCommands('local'),
-    { id: '@happier-dev/plugin-sdk', args: ['workspace', '@happier-dev/plugin-sdk', 'test'] },
-    { id: '@happier-dev/plugin-ui', args: ['workspace', '@happier-dev/plugin-ui', 'test'] },
-    { id: '@happier-dev/sdk', args: ['workspace', '@happier-dev/sdk', 'test'] },
-    { id: '@happier-dev/app', args: ['workspace', '@happier-dev/app', 'test'] },
-    { id: '@happier-dev/cli', args: ['workspace', '@happier-dev/cli', 'test:unit'] },
-    { id: 'apps/server', args: ['--cwd', 'apps/server', 'test:unit'] },
-    { id: 'apps/stack', args: ['--cwd', 'apps/stack', 'test:unit'] },
+    { id: '@happier-dev/plugin-sdk', args: ['--filter', '@happier-dev/plugin-sdk', '--silent', 'run', 'test'] },
+    { id: '@happier-dev/plugin-ui', args: ['--filter', '@happier-dev/plugin-ui', '--silent', 'run', 'test'] },
+    { id: '@happier-dev/sdk', args: ['--filter', '@happier-dev/sdk', '--silent', 'run', 'test'] },
+    { id: '@happier-dev/app', args: ['--filter', '@happier-dev/app', '--silent', 'run', 'test'] },
+    { id: '@happier-dev/cli', args: ['--filter', '@happier-dev/cli', '--silent', 'run', 'test:unit'] },
+    { id: 'apps/server', args: ['--dir', 'apps/server', '--silent', 'run', 'test:unit'] },
+    { id: 'apps/stack', args: ['--dir', 'apps/stack', '--silent', 'run', 'test:unit'] },
   ],
   integration: [
-    { id: '@happier-dev/app', args: ['workspace', '@happier-dev/app', 'test:integration'] },
-    { id: '@happier-dev/cli', args: ['workspace', '@happier-dev/cli', 'test:integration'] },
-    { id: 'apps/server', args: ['--cwd', 'apps/server', 'test:integration'] },
-    { id: 'apps/stack', args: ['--cwd', 'apps/stack', 'test:integration'] },
+    { id: '@happier-dev/app', args: ['--filter', '@happier-dev/app', '--silent', 'run', 'test:integration'] },
+    { id: '@happier-dev/cli', args: ['--filter', '@happier-dev/cli', '--silent', 'run', 'test:integration'] },
+    { id: 'apps/server', args: ['--dir', 'apps/server', '--silent', 'run', 'test:integration'] },
+    { id: 'apps/stack', args: ['--dir', 'apps/stack', '--silent', 'run', 'test:integration'] },
   ],
 } as const satisfies Record<string, readonly CommandSuiteEntry[]>;
 
@@ -59,7 +59,7 @@ export async function runRootTests(lane: string, args: readonly string[] = [], r
   await runCommandSuite<CommandSuiteEntry>({
     commands: ROOT_TEST_COMMANDS[lane],
     suiteName: `Root ${lane} test suite`,
-    runCommand: (command) => runYarnCommand(command, rootDir),
+    runCommand: (command) => runPnpmCommand(command, rootDir),
   });
 }
 

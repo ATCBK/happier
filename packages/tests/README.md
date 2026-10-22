@@ -37,17 +37,17 @@ Out of scope for this package:
 
 ## Commands
 
-- Core deterministic e2e: `yarn workspace @happier-dev/tests test`
-- Core deterministic e2e (fast lane): `yarn workspace @happier-dev/tests test:core:fast`
-- Core deterministic e2e (slow lane): `yarn workspace @happier-dev/tests test:core:slow`
-- Core deterministic e2e (handoff slice): `yarn workspace @happier-dev/tests test:core:handoff`
-- UI E2E (Playwright, web UI): `yarn workspace @happier-dev/tests test:ui:e2e`
-- Current managed-Stack Plugin UI (opt-in, attaches without starting or stopping services): `HAPPIER_QA_STACKS_DIR="$HOME/.happier/stacks" HAPPIER_QA_STACK_NAME=<stack> yarn workspace @happier-dev/tests test:ui:e2e:plugin-current-stack`
-- Stress (configuration-driven scale harness): `yarn workspace @happier-dev/tests test:stress`
-- Stress (full Compose topology): `yarn workspace @happier-dev/tests test:stress:full-compose`
-- Stress Compose topology only: `yarn workspace @happier-dev/tests stress:compose:up|status|down`
-- Providers (real provider CLIs, opt-in): `yarn workspace @happier-dev/tests test:agents`
-- Typecheck: `yarn workspace @happier-dev/tests typecheck`
+- Core deterministic e2e: `pnpm --filter @happier-dev/tests run test`
+- Core deterministic e2e (fast lane): `pnpm --filter @happier-dev/tests run test:core:fast`
+- Core deterministic e2e (slow lane): `pnpm --filter @happier-dev/tests run test:core:slow`
+- Core deterministic e2e (handoff slice): `pnpm --filter @happier-dev/tests run test:core:handoff`
+- UI E2E (Playwright, web UI): `pnpm --filter @happier-dev/tests run test:ui:e2e`
+- Current managed-Stack Plugin UI (opt-in, attaches without starting or stopping services): `HAPPIER_QA_STACKS_DIR="$HOME/.happier/stacks" HAPPIER_QA_STACK_NAME=<stack> pnpm --filter @happier-dev/tests run test:ui:e2e:plugin-current-stack`
+- Stress (configuration-driven scale harness): `pnpm --filter @happier-dev/tests run test:stress`
+- Stress (full Compose topology): `pnpm --filter @happier-dev/tests run test:stress:full-compose`
+- Stress Compose topology only: `pnpm --filter @happier-dev/tests run stress:compose:up|status|down`
+- Providers (real provider CLIs, opt-in): `pnpm --filter @happier-dev/tests run test:agents`
+- Typecheck: `pnpm --filter @happier-dev/tests run typecheck`
 
 ### Current managed-Stack Plugin UI QA
 
@@ -61,7 +61,7 @@ Add `HAPPIER_E2E_PLUGIN_UI_CURRENT_STACK_MUTATIONS=1` to run the reversible publ
 
 This is moving-development-source QA. It does not produce or certify a tarball, archive, frozen candidate, or release artifact. The opt-in mutation scenario builds only its disposable public plugin source. The Composer rows above prove real mounted draft-document behavior; they do not claim submit acceptance: this browser row uses a disposable plain Session and never selects or opens the fixture's deterministic Agent. Existing/New/Pending acceptance is therefore unexercised by this row. Targeted update coverage proves real old-generation retirement and restored-generation mounting; it does not claim an intermediate diagnostic was visible if projection convergence made that phase unobservable. This browser row is attributed to one existing Account and does not prove Account-switch isolation. Its observable accessibility checks cover keyboard focus and 200% zoom, not RTL or reduced-motion behavior.
 
-Root aliases may exist (e.g. `yarn test:e2e`), but the workspace commands above are the source of truth.
+Root aliases may exist (e.g. `pnpm run test:e2e`), but the workspace commands above are the source of truth.
 
 ### Plugin Platform native QA
 
@@ -112,34 +112,34 @@ Socket assertion surface:
 
 ## Providers convenience commands
 
-The provider suite is opt-in, but you can run common presets via yarn scripts:
+The provider suite is opt-in, but you can run common presets via pnpm scripts:
 
-- `yarn workspace @happier-dev/tests providers:opencode:smoke`
-- `yarn workspace @happier-dev/tests providers:claude:smoke`
-- `yarn workspace @happier-dev/tests providers:codex:smoke`
-- `yarn workspace @happier-dev/tests providers:kilo:smoke`
-- `yarn workspace @happier-dev/tests providers:qwen:smoke`
-- `yarn workspace @happier-dev/tests providers:kimi:smoke`
-- `yarn workspace @happier-dev/tests providers:auggie:smoke`
-- `yarn workspace @happier-dev/tests providers:all:smoke`
-- `yarn workspace @happier-dev/tests providers:opencode:extended`
-- `yarn workspace @happier-dev/tests providers:all:extended`
+- `pnpm --filter @happier-dev/tests run providers:opencode:smoke`
+- `pnpm --filter @happier-dev/tests run providers:claude:smoke`
+- `pnpm --filter @happier-dev/tests run providers:codex:smoke`
+- `pnpm --filter @happier-dev/tests run providers:kilo:smoke`
+- `pnpm --filter @happier-dev/tests run providers:qwen:smoke`
+- `pnpm --filter @happier-dev/tests run providers:kimi:smoke`
+- `pnpm --filter @happier-dev/tests run providers:auggie:smoke`
+- `pnpm --filter @happier-dev/tests run providers:all:smoke`
+- `pnpm --filter @happier-dev/tests run providers:opencode:extended`
+- `pnpm --filter @happier-dev/tests run providers:all:extended`
 
 Baseline updates are explicit:
 
-- `yarn workspace @happier-dev/tests providers:opencode:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:claude:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:codex:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:kilo:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:qwen:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:kimi:smoke:update-baselines`
-- `yarn workspace @happier-dev/tests providers:auggie:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:opencode:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:claude:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:codex:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:kilo:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:qwen:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:kimi:smoke:update-baselines`
+- `pnpm --filter @happier-dev/tests run providers:auggie:smoke:update-baselines`
 
 ## Suites
 
 - `suites/core-e2e/*`: release-gate candidates (fast + slow split)
 - `suites/ui-e2e/*`: Playwright-driven browser E2E against Expo web (covers critical UI flows like auth + terminal connect)
-- Native desktop E2E (Tauri MCP) is app-owned in `apps/ui/scripts/qa/**` and is invoked via `yarn test:e2e:desktop:native` (or `yarn workspace @happier-dev/tests test:desktop:native`).
+- Native desktop E2E (Tauri MCP) is app-owned in `apps/ui/scripts/qa/**` and is invoked via `pnpm run test:e2e:desktop:native` (or `pnpm --filter @happier-dev/tests run test:desktop:native`).
 - `suites/stress/*`: nightly/on-demand configuration-driven scale harness (`light`, `full-compose`, `external`)
 - `suites/agents/*`: opt-in “real provider contract” tests (slow, may consume provider credits)
 
@@ -196,14 +196,14 @@ Artifacts are written on failure by default. On failure in `full-compose`, the h
 
 You can force keeping artifacts even on success:
 
-- `HAPPIER_E2E_SAVE_ARTIFACTS=1 yarn workspace @happier-dev/tests test`
+- `HAPPIER_E2E_SAVE_ARTIFACTS=1 pnpm --filter @happier-dev/tests run test`
 
 Common local entrypoints:
 
-- `yarn workspace @happier-dev/tests test:stress`
-- `yarn workspace @happier-dev/tests test:stress:full-compose`
-- `yarn workspace @happier-dev/tests test:stress:full-compose:reuse`
-- `HAPPIER_STRESS_BASE_URL=https://stress.example.com yarn workspace @happier-dev/tests test:stress:external`
+- `pnpm --filter @happier-dev/tests run test:stress`
+- `pnpm --filter @happier-dev/tests run test:stress:full-compose`
+- `pnpm --filter @happier-dev/tests run test:stress:full-compose:reuse`
+- `HAPPIER_STRESS_BASE_URL=https://stress.example.com pnpm --filter @happier-dev/tests run test:stress:external`
 
 Recommended build-once / test-many full-compose loop:
 
@@ -211,7 +211,7 @@ Recommended build-once / test-many full-compose loop:
 
 ```bash
 HAPPIER_STRESS_COMPOSE_IMAGE_BUILD_STRATEGY=always \
-yarn workspace @happier-dev/tests stress:compose:up
+pnpm --filter @happier-dev/tests run stress:compose:up
 ```
 
 If Docker Desktop stalls during BuildKit image export on your machine, you can force the legacy builder for the one-time image build:
@@ -219,7 +219,7 @@ If Docker Desktop stalls during BuildKit image export on your machine, you can f
 ```bash
 DOCKER_BUILDKIT=0 \
 HAPPIER_STRESS_COMPOSE_IMAGE_BUILD_STRATEGY=always \
-yarn workspace @happier-dev/tests stress:compose:up
+pnpm --filter @happier-dev/tests run stress:compose:up
 ```
 
 2. Reuse that running topology across scenario runs without rebuilding the image:
@@ -227,7 +227,7 @@ yarn workspace @happier-dev/tests stress:compose:up
 ```bash
 HAPPIER_STRESS_TARGET_MODE=full-compose \
 HAPPIER_STRESS_COMPOSE_REUSE_RUNNING=1 \
-yarn workspace @happier-dev/tests test:stress:sticky-affinity
+pnpm --filter @happier-dev/tests run test:stress:sticky-affinity
 ```
 
 `HAPPIER_STRESS_COMPOSE_IMAGE_BUILD_STRATEGY` semantics:
@@ -241,7 +241,7 @@ To launch a new topology from that exact frozen image after the original topolog
 ```bash
 HAPPIER_STRESS_COMPOSE_IMAGE_BUILD_STRATEGY=never \
 HAPPIER_STRESS_COMPOSE_IMAGE_FINGERPRINT="$FROZEN_IMAGE_FINGERPRINT" \
-yarn workspace @happier-dev/tests stress:compose:up
+pnpm --filter @happier-dev/tests run stress:compose:up
 ```
 
 Set `FROZEN_IMAGE_FINGERPRINT` to the exact `image.freshnessFingerprint` recorded by the build run before invoking this command.
@@ -249,13 +249,13 @@ Set `FROZEN_IMAGE_FINGERPRINT` to the exact `image.freshnessFingerprint` recorde
 3. Inspect the running topology metadata at any point:
 
 ```bash
-yarn workspace @happier-dev/tests stress:compose:status
+pnpm --filter @happier-dev/tests run stress:compose:status
 ```
 
 4. Tear it down when you are finished:
 
 ```bash
-yarn workspace @happier-dev/tests stress:compose:down
+pnpm --filter @happier-dev/tests run stress:compose:down
 ```
 
 UI E2E (Playwright) notes:
@@ -268,28 +268,28 @@ These tests always boot a real local server (local files backend) and use real s
 
 By default, core e2e runs against embedded Postgres via `pglite`, but you can opt into other providers:
 
-- `HAPPIER_E2E_DB_PROVIDER=pglite yarn workspace @happier-dev/tests test`
-- `HAPPIER_E2E_DB_PROVIDER=sqlite yarn workspace @happier-dev/tests test`
+- `HAPPIER_E2E_DB_PROVIDER=pglite pnpm --filter @happier-dev/tests run test`
+- `HAPPIER_E2E_DB_PROVIDER=sqlite pnpm --filter @happier-dev/tests run test`
 
 Extended (requires an external DB URL):
 
-- `HAPPIER_E2E_DB_PROVIDER=postgres DATABASE_URL='postgresql://...' yarn workspace @happier-dev/tests test`
-- `HAPPIER_E2E_DB_PROVIDER=mysql DATABASE_URL='mysql://...' yarn workspace @happier-dev/tests test`
+- `HAPPIER_E2E_DB_PROVIDER=postgres DATABASE_URL='postgresql://...' pnpm --filter @happier-dev/tests run test`
+- `HAPPIER_E2E_DB_PROVIDER=mysql DATABASE_URL='mysql://...' pnpm --filter @happier-dev/tests run test`
 
 Local convenience (auto-provision Docker DB):
 
-- `yarn test:e2e:core:postgres:docker`
-- `yarn test:e2e:core:mysql:docker`
-- `yarn test:extended-db:docker` (Postgres + MySQL, includes db contract suite)
+- `pnpm run test:e2e:core:postgres:docker`
+- `pnpm run test:e2e:core:mysql:docker`
+- `pnpm run test:extended-db:docker` (Postgres + MySQL, includes db contract suite)
 
 Core e2e across *all* supported DBs (embedded + docker):
 
-- `yarn test:e2e:core:all-db`
+- `pnpm run test:e2e:core:all-db`
 
 Shortcuts:
 
-- `yarn test:e2e:core:embedded` (pglite + sqlite)
-- `yarn test:e2e:core:docker` (postgres + mysql)
+- `pnpm run test:e2e:core:embedded` (pglite + sqlite)
+- `pnpm run test:e2e:core:docker` (postgres + mysql)
 
 Reconnect + catch-up:
 - `suites/core-e2e/reconnect.multiDevice.test.ts`: device B goes offline; messages arrive while offline; on reconnect, HTTP transcript includes all messages; no duplicate `localId`s.
@@ -332,13 +332,13 @@ These are intentionally slower and are meant for nightly/on-demand runs.
 - `suites/stress/rollingRestart.test.ts`: restarts the configured service in the active topology and verifies reconnect/RPC convergence afterward.
 
 Focused full-compose entrypoints:
-- `yarn workspace @happier-dev/tests test:stress:sticky-affinity`
-- `yarn workspace @happier-dev/tests test:stress:cross-replica-failover`
-- `yarn workspace @happier-dev/tests test:stress:redis-interruption`
-- `yarn workspace @happier-dev/tests test:stress:long-idle-proxy`
-- `yarn workspace @happier-dev/tests test:stress:duplicate-listener-policy`
-- `yarn workspace @happier-dev/tests test:stress:presence-worker-crash`
-- `yarn workspace @happier-dev/tests test:stress:mixed-realistic`
+- `pnpm --filter @happier-dev/tests run test:stress:sticky-affinity`
+- `pnpm --filter @happier-dev/tests run test:stress:cross-replica-failover`
+- `pnpm --filter @happier-dev/tests run test:stress:redis-interruption`
+- `pnpm --filter @happier-dev/tests run test:stress:long-idle-proxy`
+- `pnpm --filter @happier-dev/tests run test:stress:duplicate-listener-policy`
+- `pnpm --filter @happier-dev/tests run test:stress:presence-worker-crash`
+- `pnpm --filter @happier-dev/tests run test:stress:mixed-realistic`
 
 Built-in capacity profiles:
 - `capacity.small`: `1 API / 1 worker`, `250` users, `250` msg/s, `10` rpc/s
@@ -380,7 +380,7 @@ The goal is to fail loudly when a provider changes its tool formats or our norma
 By default, `test:agents` is a fast no-op. Enable explicitly:
 
 ```bash
-HAPPIER_E2E_PROVIDERS=1 HAPPIER_E2E_PROVIDER_OPENCODE=1 yarn workspace @happier-dev/tests test:agents
+HAPPIER_E2E_PROVIDERS=1 HAPPIER_E2E_PROVIDER_OPENCODE=1 pnpm --filter @happier-dev/tests run test:agents
 ```
 
 ### Provider matrix runner
@@ -437,7 +437,7 @@ Two quick examples (current at time of writing):
 - Starts a real local `server-light`
 - Creates auth via `/v1/auth`
 - Creates a session with legacy encryption and writes a session-attach file
-- Spawns `yarn workspace @happier-dev/cli dev <provider> --existing-session <id> ...`
+- Spawns `pnpm --filter @happier-dev/cli run dev <provider> --existing-session <id> ...`
 - Sends encrypted prompts to `/v2/sessions/:id/messages`
 - Waits for tool trace (`HAPPIER_STACK_TOOL_TRACE_FILE`)
 - Extracts fixtures using `@happier-dev/cli tool:trace:extract`
@@ -452,12 +452,12 @@ Implementation: `src/testkit/providers/harness/index.ts`
 2) Create a real auth token via `/v1/auth`
 3) Create a session via `/v1/sessions` using **legacy encryption** (for now) and write a session attach file
 4) Spawn a real agent via the Happier CLI:
-   - `yarn workspace @happier-dev/cli dev <provider> --existing-session <id> [--yolo]`
+   - `pnpm --filter @happier-dev/cli run dev <provider> --existing-session <id> [--yolo]`
 5) Send the prompt via POST `/v2/sessions/:id/messages` (encrypted)
 6) If YOLO is off, auto-respond to permission requests via `${sessionId}:permission` RPC
 7) Wait for the tool trace file to contain the events required by the scenario (correlated by callId/tool_use_id)
 8) Extract fixtures from the tool trace using:
-   - `yarn workspace @happier-dev/cli tool:trace:extract --out <fixtures.json> <trace.jsonl>`
+   - `pnpm --filter @happier-dev/cli run tool:trace:extract --out <fixtures.json> <trace.jsonl>`
 9) Validate:
    - schema validation (canonical tools where available, plus raw Claude envelope checks)
    - baseline drift (fixture keys + payload shape)
@@ -505,8 +505,8 @@ Baselines should be updated when:
 
 To update baselines:
 - run the scenario(s) with `HAPPIER_E2E_PROVIDER_UPDATE_BASELINES=1`
-  - easiest: `yarn workspace @happier-dev/tests providers:opencode:smoke:update-baselines`
-  - or: `HAPPIER_E2E_PROVIDER_UPDATE_BASELINES=1 HAPPIER_E2E_PROVIDERS=1 HAPPIER_E2E_PROVIDER_OPENCODE=1 yarn workspace @happier-dev/tests test:agents`
+  - easiest: `pnpm --filter @happier-dev/tests run providers:opencode:smoke:update-baselines`
+  - or: `HAPPIER_E2E_PROVIDER_UPDATE_BASELINES=1 HAPPIER_E2E_PROVIDERS=1 HAPPIER_E2E_PROVIDER_OPENCODE=1 pnpm --filter @happier-dev/tests run test:agents`
 
 After updating:
 - review the baseline JSON diff (keys and shapes)

@@ -25,7 +25,8 @@ test(`dev isolates a cold Expo ${failure} failure instead of terminating the dis
     await writeFile(join(fakeRepo, 'apps', app, 'package.json'), JSON.stringify({ name: `fixture-${app}` }));
   }
   await writeFile(join(fakeRepo, 'package.json'), '{"private":true}');
-  await writeFile(join(fakeRepo, 'yarn.lock'), '# fixture');
+  await writeFile(join(fakeRepo, 'pnpm-lock.yaml'), '# fixture');
+  await writeFile(join(fakeRepo, 'pnpm-workspace.yaml'), 'packages: []\n');
   if (failure === 'preflight') {
     await mkdir(join(fakeRepo, 'apps/ui/scripts'));
     await writeFile(join(fakeRepo, 'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'), `
@@ -230,5 +231,5 @@ esac
   const sideEffects = await readFile(sideEffectMarker, 'utf8').catch((error) => error?.code === 'ENOENT' ? '' : Promise.reject(error));
   assert.match(`${devResult.stdout}\n${devResult.stderr}`, /expo|ui|package|workspace/i);
   assert.doesNotMatch(sideEffects, /prisma|migrat|happier-server(?:-light)?/i);
-  await assert.rejects(() => readFile(join(fakeRepo, 'yarn.lock'), 'utf8'), /ENOENT/);
+  await assert.rejects(() => readFile(join(fakeRepo, 'pnpm-lock.yaml'), 'utf8'), /ENOENT/);
 });

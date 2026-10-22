@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { resolvePnpmCommandInvocation } from '../../../../scripts/workspaces/execPnpmCommand.mjs';
 
 export function isTauriMcpCliErrorText(text) {
   const trimmed = String(text ?? '').trimStart();
@@ -68,8 +69,8 @@ export function throwIfTauriMcpCliError({ stdout, stderr } = {}) {
 
 export function buildTauriMcpCliCommand(args) {
   return {
-    command: 'yarn',
-    args: ['-s', 'tauri:mcp:cli', ...args],
+    command: 'pnpm',
+    args: ['--silent', 'run', 'tauri:mcp:cli', ...args],
   };
 }
 
@@ -117,13 +118,15 @@ export async function runTauriMcpCli(args, {
   spawnImpl = spawn,
   killProcessTree = killSpawnedProcessTree,
 } = {}) {
-  const invocation = buildTauriMcpCliCommand(args);
+  const plan = buildTauriMcpCliCommand(args);
+  const invocation = resolvePnpmCommandInvocation(plan.args, { npmExecPath: (env ?? process.env).npm_execpath });
   const child = spawnImpl(invocation.command, invocation.args, {
     cwd,
     env,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   let stdout = '';
   let stderr = '';

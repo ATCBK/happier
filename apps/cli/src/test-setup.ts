@@ -18,7 +18,7 @@ import {
   type RunCommand,
 } from '@happier-dev/cli-common/componentArtifacts'
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs'
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs'
 import { createWorkspaceChildBuildEnv } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs'
 import { readBundledPluginPackageNames } from '../scripts/build-owned/bundledPluginMembership'
 import { ensureBuildArtifactsReadyOnce, withCliTestBuildLock } from './testSetupBuildCoordinator'
@@ -45,7 +45,7 @@ function resolveCliProjectRoot(): string {
 function resolveRepoRoot(projectRoot: string): string {
   let dir = resolve(projectRoot)
   for (let index = 0; index < 5; index += 1) {
-    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'yarn.lock'))) {
+    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'pnpm-lock.yaml')) && existsSync(join(dir, 'pnpm-workspace.yaml'))) {
       return dir
     }
     const parent = resolve(dir, '..')
@@ -63,8 +63,8 @@ function resolveBuildLockPath(projectRoot: string): string {
   return join(resolveRepoRoot(projectRoot), '.project', 'tmp', 'cli-dist-build.lock')
 }
 
-function spawnYarnSync(args: readonly string[], cwd: string, env = process.env) {
-  const invocation = resolveYarnCommandInvocation(args)
+function spawnPnpmSync(args: readonly string[], cwd: string, env = process.env) {
+  const invocation = resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath })
   return spawnSync(invocation.command, invocation.args, {
     cwd,
     env,
@@ -83,8 +83,8 @@ async function ensureDistBuiltOnce(projectRoot: string): Promise<void> {
     markerPaths: [distEntrypoint],
     lockLabel: 'CLI dist build',
     runBuild: ({ heldLockValue }) => {
-      const buildResult = spawnYarnSync(
-        ['build'],
+      const buildResult = spawnPnpmSync(
+        ['run', 'build'],
         projectRoot,
         createWorkspaceChildBuildEnv({ heldLockValue }),
       )

@@ -27,7 +27,7 @@ const repoRoot = resolveRepoRoot();
 const tsxImportHook = resolveTsxImportHook(repoRoot);
 if (!tsxImportHook) {
   // eslint-disable-next-line no-console
-  console.error('[tests] Missing `tsx` dependency. Run `yarn install` and retry.');
+  console.error('[tests] Missing `tsx` dependency. Run `pnpm install` and retry.');
   process.exit(1);
 }
 

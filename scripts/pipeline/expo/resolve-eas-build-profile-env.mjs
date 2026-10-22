@@ -6,7 +6,7 @@ import fs from 'node:fs';
  * Resolve the env var map for an EAS build profile, following `extends`.
  * This is used to make OTA updates compute the same fingerprint-based runtimeVersion as native builds.
  *
- * Keep this module dependency-free (Node built-ins only) so it can run in CI before `yarn install`.
+ * Keep this module dependency-free (Node built-ins only) so it can run in CI before `pnpm install`.
  */
 
 /**

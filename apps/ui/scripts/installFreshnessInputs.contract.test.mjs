@@ -13,16 +13,18 @@ test('UI manifest declares every local postinstall input through the canonical i
   const declaredInputs = packageJson?.happier?.installFreshnessInputs;
   const tasks = resolveUiPostinstallTasks({ env: { HAPPIER_UI_VENDOR_WEB_ASSETS: '1' } });
   const localInputsByTask = new Map([
-    ['patch-package', ['patches']],
-    ['verify-native-patch-compilation', ['patches', 'app.config.js']],
-    ['verify-vendored-reanimated-patch', ['patches']],
-    ['verify-vendored-legend-patch', ['patches']],
-    ['verify-expo-router-web-modal-patch', ['patches']],
-    ['verify-sentry-native-replay-postinit-patch', ['patches']],
+    ['verify-patched-dependencies', []],
+    ['verify-native-patch-compilation', ['app.config.js']],
+    ['verify-vendored-reanimated-patch', []],
+    ['verify-vendored-legend-patch', []],
+    ['verify-expo-router-web-modal-patch', []],
+    ['verify-sentry-native-replay-postinit-patch', []],
     ['install-react-native-enriched-markdown-web-wasm', ['tools/react-native-enriched-markdown']],
-    ['verify-react-native-enriched-markdown-web-streaming-patch', ['patches', 'tools/react-native-enriched-markdown']],
+    ['verify-react-native-enriched-markdown-web-streaming-patch', ['tools/react-native-enriched-markdown']],
     ['setup-skia-web', []],
     ['vendor-monaco', []],
+    ['vendor-pdfjs', ['tools/pdfjs']],
+    ['vendor-pdfjs-webview-bundle', ['tools/pdfjs']],
     ['vendor-pierre-diffs-worker', ['tools/diffs']],
     ['vendor-password-kdf-worker', ['tools/password', 'tools/sourceAsset.mjs']],
     ['vendor-crypto-worker', ['tools/crypto', 'tools/sourceAsset.mjs']],
@@ -52,7 +54,6 @@ test('UI manifest declares every local postinstall input through the canonical i
   const expectedInputs = [...new Set([
     'tools/postinstall.mjs',
     'tools/resolveUiPostinstallTasks.mjs',
-    'tools/ensureNohoistPeerLinks.mjs',
     'tools/postinstall',
     ...[...localInputsByTask.values()].flat(),
   ])].sort();

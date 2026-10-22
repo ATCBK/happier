@@ -796,7 +796,8 @@ describe('buildCliDist', () => {
     mkdirSync(physicalPackageRoot, { recursive: true });
     writeBuildPackageManifest(physicalPackageRoot);
     writeFileSync(join(fixtureRoot, 'package.json'), '{"private":true}\n', 'utf8');
-    writeFileSync(join(fixtureRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+    writeFileSync(join(fixtureRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+    writeFileSync(join(fixtureRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     symlinkSync(
       physicalPackageRoot,
       aliasPackageRoot,

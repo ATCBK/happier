@@ -399,8 +399,8 @@ export function formatVendoredLegendPatchFailure(result) {
     }
     lines.push('');
     lines.push('This usually means the patch was regenerated against a partially-reverted node_modules.');
-    lines.push('Do NOT hand-edit the .patch file. Restore the behaviour in node_modules, then run:');
-    lines.push('  npx patch-package @legendapp/list');
+    lines.push('Do NOT hand-edit the .patch file. Use pnpm patch to restore the behaviour in its edit directory, then commit:');
+    lines.push('  pnpm patch @legendapp/list; pnpm patch-commit <edit-directory>');
     return lines.join('\n');
 }
 

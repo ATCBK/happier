@@ -71,7 +71,8 @@ export function resolveHappyCliRuntimeInputGroups({
       paths: [
         join(repoRoot, 'scripts', 'workspaces'),
         join(repoRoot, 'package.json'),
-        join(repoRoot, 'yarn.lock'),
+        join(repoRoot, 'pnpm-lock.yaml'),
+        join(repoRoot, 'pnpm-workspace.yaml'),
       ],
     },
     ...runtimePackages.map(({ id, dir }) => ({

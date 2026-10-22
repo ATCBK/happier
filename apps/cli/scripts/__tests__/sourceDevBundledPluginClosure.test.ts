@@ -164,7 +164,8 @@ describe('CLI source-dev bundled plugin closure', () => {
         private: true,
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
       }), 'utf8');
-      writeFileSync(resolve(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       writeFileSync(resolve(cliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         bundledDependencies: [...declaredNames],

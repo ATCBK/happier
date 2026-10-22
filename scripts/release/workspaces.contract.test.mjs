@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
+import { readWorkspacePatterns } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
 
 function escapeRegex(value) {
   return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
@@ -34,13 +35,10 @@ function workspacePathExists(repoRoot, rel) {
   });
 }
 
-test('repo workspaces paths exist on disk', () => {
+test('repo workspaces paths exist on disk', async () => {
   const repoRoot = resolve(import.meta.dirname, '..', '..');
-  const pkgJsonPath = resolve(repoRoot, 'package.json');
-  const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
-
-  const workspacePkgs = pkg?.workspaces?.packages;
-  assert.ok(Array.isArray(workspacePkgs), 'package.json workspaces.packages must be an array');
+  const workspacePkgs = await readWorkspacePatterns(repoRoot);
+  assert.ok(workspacePkgs.length > 0, 'pnpm-workspace.yaml must declare workspace packages');
 
   const missing = [];
   for (const rel of workspacePkgs) {
@@ -51,6 +49,6 @@ test('repo workspaces paths exist on disk', () => {
   assert.deepEqual(
     missing,
     [],
-    `workspaces.packages contains paths that do not exist:\n${missing.map((p) => `- ${p}`).join('\n')}`
+    `pnpm-workspace.yaml packages contains paths that do not exist:\n${missing.map((p) => `- ${p}`).join('\n')}`
   );
 });

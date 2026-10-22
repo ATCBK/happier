@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 import { runActivitySurfacesVitestSuite } from './runActivitySurfacesVitestSuite.mjs';
 
@@ -30,10 +31,12 @@ export function formatActivitySurfacesManualQaScopeNote(report) {
 }
 
 function runStep(command, args, { cwd = packageRoot, env = process.env, spawnSyncImpl = spawnSync } = {}) {
-  const result = spawnSyncImpl(command, args, {
+  const invocation = command === 'pnpm' ? resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath }) : { command, args };
+  const result = spawnSyncImpl(invocation.command, invocation.args, {
     cwd,
     env,
     stdio: 'inherit',
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
 
   if (result.error) {
@@ -51,12 +54,12 @@ export function runActivitySurfacesCertification({
   spawnSyncImpl = spawnSync,
   runVitestSuite = runActivitySurfacesVitestSuite,
 } = {}) {
-  runStep(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'test:activity-surfaces:contracts:local'], {
+  runStep('pnpm', ['--silent', 'run', 'test:activity-surfaces:contracts:local'], {
     cwd,
     env,
     spawnSyncImpl,
   });
-  runStep(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'typecheck:activity-surfaces'], {
+  runStep('pnpm', ['--silent', 'run', 'typecheck:activity-surfaces'], {
     cwd,
     env,
     spawnSyncImpl,

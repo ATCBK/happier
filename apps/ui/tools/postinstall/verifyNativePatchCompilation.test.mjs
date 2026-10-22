@@ -41,12 +41,18 @@ const APP_CONFIG_WITHOUT_SOURCE_BUILD = `const plugin = [
 `;
 
 function createUiDir(files) {
-    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-patch-gate-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-patch-gate-'));
+    const uiDir = path.join(root, 'apps/ui');
+    const patchedDependencies = {};
     for (const [relativePath, contents] of Object.entries(files)) {
-        const target = path.join(uiDir, relativePath);
+        const patchMatch = /^patches\/(.+)\+([^+]+)\.patch$/.exec(relativePath);
+        const nativePath = patchMatch ? `patches/${patchMatch[1]}@${patchMatch[2]}.patch` : relativePath;
+        const target = path.join(patchMatch ? root : uiDir, nativePath);
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, contents, 'utf8');
+        fs.writeFileSync(target, patchMatch ? contents.replaceAll(`node_modules/${patchMatch[1]}/`, '') : contents, 'utf8');
+        if (patchMatch) patchedDependencies[`${patchMatch[1]}@${patchMatch[2]}`] = nativePath;
     }
+    fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), JSON.stringify({ patchedDependencies }));
     return uiDir;
 }
 

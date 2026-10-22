@@ -71,16 +71,14 @@ test('downloaded happier provisioning fails before OS writes without a valid com
 
 test('QA provisioning reuses only the browser install owner and preserves user Agent configuration', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-qa-provision-' });
-  const realCorepack = spawnSync('bash', ['-c', 'command -v corepack'], { encoding: 'utf8' });
-  assert.equal(realCorepack.status, 0, realCorepack.stderr);
-  const manifest = JSON.stringify({ packageManager: 'yarn@1.22.22' });
+  const manifest = JSON.stringify({ packageManager: 'pnpm@12.14.0' });
   await writeFile(join(root, 'package.json'), manifest);
   const log = join(root, 'browser.log');
   const { binDir } = writeFakeBin({ root, name: 'agent-browser', content:
     '#!/bin/sh\nif [ "$1" = --version ]; then echo "agent-browser 0.34.0"; else printf "%s\\n" "$*" >> "$QA_BROWSER_LOG"; fi\n' });
   writeFakeBin({ root, name: 'uname', content: '#!/bin/sh\necho x86_64\n' });
   // If QA takes the full worker setup path, fail at its first OS/package boundary.
-  for (const name of ['sudo', 'apt-get', 'corepack', 'python3']) {
+  for (const name of ['sudo', 'apt-get', 'npm', 'python3']) {
     writeFakeBin({ root, name, content: '#!/bin/sh\necho "unexpected non-browser setup" >&2\nexit 77\n' });
   }
   const result = spawnSync('bash', [join(__dirname, 'linux-ubuntu-provision.sh'), '--profile=qa'], {
@@ -92,37 +90,28 @@ test('QA provisioning reuses only the browser install owner and preserves user A
   // An absent browser CLI must install through the narrow non-interactive root boundary.
   const installed = join(root, 'installed');
   const privilegeLog = join(root, 'privilege.log');
-  const corepackCache = join(root, 'corepack-cache');
-  const npmPackage = join(corepackCache, 'v1', 'npm', '11.0.0');
-  await mkdir(join(npmPackage, 'bin'), { recursive: true });
-  await writeFile(join(corepackCache, 'lastKnownGood.json'), JSON.stringify({ npm: '11.0.0' }));
-  await writeFile(join(npmPackage, '.corepack'), JSON.stringify({ bin: { npm: 'bin/npm-cli.js' }, hash: 'fixture' }));
   // npm's package acquisition/install is the external boundary. The real
-  // Corepack still resolves the Yarn project and invokes this cached npm CLI.
-  await writeFile(join(npmPackage, 'bin/npm-cli.js'), `
+  writeFakeBin({ root, name: 'npm', content: `#!${process.execPath}
+
 require('node:assert/strict').deepEqual(process.argv.slice(2), ['install', '--global', '--no-audit', '--no-fund', '--allow-scripts=agent-browser', 'agent-browser@0.34.0']);
 require('node:fs').writeFileSync(process.env.QA_INSTALLED, 'installed');
-`);
+` });
   writeFakeBin({ root, name: 'id', content: '#!/bin/sh\necho 1000\n' });
   writeFakeBin({ root, name: 'agent-browser', content:
     '#!/bin/sh\nif [ "$1" = --version ]; then if [ -f "$QA_INSTALLED" ]; then echo "agent-browser 0.34.0"; else echo 0.0.0; fi; fi\n' });
   writeFakeBin({ root, name: 'sudo', content:
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$QA_PRIVILEGE_LOG"\n[ "$1" = -n ] || exit 78\nshift\nunset COREPACK_ENABLE_PROJECT_SPEC\nexec "$@"\n' });
-  writeFakeBin({ root, name: 'corepack', content:
-    '#!/bin/sh\nCOREPACK_HOME="$QA_COREPACK_CACHE" COREPACK_ENABLE_NETWORK=0 COREPACK_DEFAULT_TO_LATEST=0 exec "$QA_NODE_REAL" "$QA_COREPACK_REAL" "$@"\n' });
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$QA_PRIVILEGE_LOG"\n[ "$1" = -n ] || exit 78\nshift\nexec "$@"\n' });
   writeFakeBin({ root, name: 'node', content:
-    '#!/bin/sh\nif [ "$1" = -p ]; then printf "%s\\n" "$QA_NODE_EXEC"; else exec "$@"; fi\n' });
+    '#!/bin/sh\nif [ "$1" = -p ]; then printf "%s\\n" "$QA_NODE_EXEC"; else exec "$QA_NODE_REAL" "$@"; fi\n' });
   const initialSetup = spawnSync('bash', [join(__dirname, 'linux-ubuntu-provision.sh'), '--profile=qa'], {
     cwd: root,
     env: { ...process.env, HOME: root, PATH: `${binDir}:${process.env.PATH}`, QA_NODE_EXEC: join(binDir, 'node'),
-      QA_INSTALLED: installed, QA_PRIVILEGE_LOG: privilegeLog, QA_COREPACK_CACHE: corepackCache,
-      QA_NODE_REAL: process.execPath, QA_COREPACK_REAL: realCorepack.stdout.trim(),
-      COREPACK_ENABLE_PROJECT_SPEC: '1', COREPACK_ENABLE_STRICT: '1', COREPACK_ENV_FILE: '0' }, encoding: 'utf8',
+      QA_INSTALLED: installed, QA_PRIVILEGE_LOG: privilegeLog, QA_NODE_REAL: process.execPath }, encoding: 'utf8',
   });
   assert.equal(initialSetup.status, 0, initialSetup.stderr);
   assert.equal(await readFile(installed, 'utf8'), 'installed');
   assert.equal(await readFile(join(root, 'package.json'), 'utf8'), manifest);
-  assert.match(await readFile(privilegeLog, 'utf8'), new RegExp(`^-n (?:env COREPACK_ENABLE_PROJECT_SPEC=0 )?${binDir}/node ${binDir}/corepack npm install --global`));
+  assert.match(await readFile(privilegeLog, 'utf8'), new RegExp(`^-n env ${binDir}/node ${binDir}/npm install --global`));
 });
 
 async function readIfExists(path) {
@@ -133,7 +122,7 @@ async function readIfExists(path) {
   }
 }
 
-test('linux provision consumes its companion Bun pin and runs corepack enable as root', async () => {
+test('linux provision consumes its companion Bun pin and installs browser tools through npm', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-linux-provision-test-'));
   const binDir = join(root, 'bin');
   const logDir = join(root, 'logs');
@@ -162,7 +151,7 @@ test('linux provision consumes its companion Bun pin and runs corepack enable as
     'utf8',
   );
 
-  const corepackLog = join(logDir, 'corepack.log');
+  const npmLog = join(logDir, 'npm.log');
   const aptLog = join(logDir, 'apt.log');
   const mutagenLog = join(logDir, 'mutagen.log');
   const bunDownloadLog = join(logDir, 'bun-download.log');
@@ -204,40 +193,24 @@ test('linux provision consumes its companion Bun pin and runs corepack enable as
   );
   await chmod(aptPath, 0o755);
 
-  const mkdirPath = join(binDir, 'mkdir');
-  await writeFile(
-    mkdirPath,
-    [
-      '#!/usr/bin/env bash',
-      'set -euo pipefail',
-      'for a in "$@"; do',
-      '  if [[ "$a" == "/usr/local/share/corepack" ]]; then',
-      '    exit 0',
-      '  fi',
-      'done',
-      'exec /bin/mkdir "$@"',
-    ].join('\n') + '\n',
-    'utf-8'
-  );
-  await chmod(mkdirPath, 0o755);
 
   const nodePath = join(binDir, 'node');
-  await writeFile(nodePath, ['#!/usr/bin/env bash', 'echo "v24.0.0"'].join('\n') + '\n', 'utf-8');
+  await writeFile(nodePath, ['#!/usr/bin/env bash', 'if [[ "${1:-}" == "--version" ]]; then echo v24.0.0; elif [[ "${1:-}" == "-p" ]]; then echo ' + JSON.stringify(nodePath) + '; else exec "$@"; fi'].join('\n') + '\n', 'utf-8');
   await chmod(nodePath, 0o755);
 
-  const corepackPath = join(binDir, 'corepack');
+  const npmPath = join(binDir, 'npm');
   await writeFile(
-    corepackPath,
+    npmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      'echo "corepack $* root=${RUN_AS_ROOT:-0} project_spec=${COREPACK_ENABLE_PROJECT_SPEC:-unset}" >> ' + JSON.stringify(corepackLog),
-      'if [[ "${1:-}" == "enable" && "${RUN_AS_ROOT:-0}" != "1" ]]; then',
-      '  echo "enable must run as root" >&2',
-      '  exit 13',
+      'echo "npm $* root=${RUN_AS_ROOT:-0}" >> ' + JSON.stringify(npmLog),
+      'if [[ "${1:-}" == "--version" ]]; then',
+      '  echo "11.0.0"',
+      '  exit 0',
       'fi',
-      `if [[ "\${1:-}" == "npm" && "$*" == *"agent-browser@0.34.0"* ]]; then : > ${JSON.stringify(agentBrowserInstalled)}; fi`,
-      'if [[ "${1:-}" == "npm" && "$*" == *"playwright@1.58.2"* ]]; then',
+      `if [[ "\${1:-}" == "install" && "$*" == *"agent-browser@0.34.0"* ]]; then : > ${JSON.stringify(agentBrowserInstalled)}; fi`,
+      'if [[ "${1:-}" == "exec" && "$*" == *"playwright@1.58.2"* ]]; then',
       '  browser_dir="$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1208/chrome-linux"',
       '  /bin/mkdir -p "$browser_dir"',
       '  : > "$browser_dir/headless_shell"',
@@ -247,11 +220,8 @@ test('linux provision consumes its companion Bun pin and runs corepack enable as
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(corepackPath, 0o755);
+  await chmod(npmPath, 0o755);
 
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, ['#!/usr/bin/env bash', 'echo "1.22.22"'].join('\n') + '\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
 
   const agentBrowserPath = join(binDir, 'agent-browser');
   await writeFile(
@@ -387,9 +357,7 @@ test('linux provision consumes its companion Bun pin and runs corepack enable as
   assert.match(happierJobsSliceUnit, /^MemoryHigh=80%$/m);
   assert.doesNotMatch(happierJobsSliceUnit, /^(?:MemoryMax|TasksMax|OOM\w*)=/mu);
 
-  const corepackOut = await readIfExists(corepackLog);
-  assert.match(corepackOut, /corepack enable root=1/, 'expected corepack enable to be invoked via sudo/as_root');
-  assert.ok(!corepackOut.includes('corepack enable root=0'), 'expected corepack enable not to run unprivileged');
+  const npmOut = await readIfExists(npmLog);
 
   const aptOut = await readIfExists(aptLog);
   assert.match(aptOut, /apt-get update/, 'expected apt-get update to run');
@@ -411,12 +379,12 @@ test('linux provision consumes its companion Bun pin and runs corepack enable as
   assert.match(mutagenOut, /install .* \/etc\/apparmor\.d\/happier-bwrap/);
   assert.match(await readIfExists(apparmorLog), /apparmor_parser -r \/etc\/apparmor\.d\/happier-bwrap/);
   assert.match(
-    corepackOut,
-    /corepack npm install --global --no-audit --no-fund --allow-scripts=agent-browser agent-browser@0\.34\.0 root=1/,
+    npmOut,
+    /npm install --global --no-audit --no-fund --allow-scripts=agent-browser agent-browser@0\.34\.0 root=1/,
   );
   assert.match(
-    corepackOut,
-    /corepack npm exec --yes --package=playwright@1\.58\.2 -- playwright install --with-deps chromium-headless-shell root=0 project_spec=0/,
+    npmOut,
+    /npm exec --yes --package=playwright@1\.58\.2 -- playwright install --with-deps chromium-headless-shell root=0/,
   );
   assert.doesNotMatch(await readIfExists(agentBrowserLog), /agent-browser install --with-deps/);
   assert.deepEqual(
@@ -511,7 +479,7 @@ test('linux provision maps both managed Linux architectures to Bun release asset
   assert.match(script, /x86_64\|amd64\) BUN_ARCH="x64"/);
 });
 
-test('linux provision (installer profile) does not touch node/corepack', async () => {
+test('linux provision (installer profile) does not touch node/npm', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-linux-provision-installer-test-'));
   const binDir = join(root, 'bin');
   const logDir = join(root, 'logs');
@@ -519,7 +487,7 @@ test('linux provision (installer profile) does not touch node/corepack', async (
   await mkdir(binDir, { recursive: true });
   await mkdir(logDir, { recursive: true });
 
-  const corepackLog = join(logDir, 'corepack.log');
+  const npmLog = join(logDir, 'npm.log');
 
   const idPath = join(binDir, 'id');
   await writeFile(idPath, ['#!/usr/bin/env bash', 'echo 1000'].join('\n') + '\n', 'utf-8');
@@ -533,17 +501,17 @@ test('linux provision (installer profile) does not touch node/corepack', async (
   await writeFile(aptPath, ['#!/usr/bin/env bash', 'exit 0'].join('\n') + '\n', 'utf-8');
   await chmod(aptPath, 0o755);
 
-  const corepackPath = join(binDir, 'corepack');
+  const npmPath = join(binDir, 'npm');
   await writeFile(
-    corepackPath,
+    npmPath,
     [
       '#!/usr/bin/env bash',
-      `echo "corepack $*" >> ${JSON.stringify(corepackLog)}`,
+      `echo "npm $*" >> ${JSON.stringify(npmLog)}`,
       'exit 0',
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(corepackPath, 0o755);
+  await chmod(npmPath, 0o755);
 
   const scriptPath = join(__dirname, 'linux-ubuntu-provision.sh');
   const res = spawnSync('bash', [scriptPath, '--profile=installer'], {
@@ -554,6 +522,6 @@ test('linux provision (installer profile) does not touch node/corepack', async (
 
   assert.equal(res.status, 0, `expected exit 0\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
 
-  const corepackOut = await readIfExists(corepackLog);
-  assert.equal(corepackOut.trim(), '', 'expected no corepack calls in installer profile');
+  const npmOut = await readIfExists(npmLog);
+  assert.equal(npmOut.trim(), '', 'expected no npm calls in installer profile');
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdown } from '../../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown';
-import type { ASTNode } from '../../../../node_modules/react-native-enriched-markdown/src/web/types';
+import { parseMarkdown } from 'react-native-enriched-markdown/src/web/parseMarkdown';
+import type { ASTNode } from 'react-native-enriched-markdown/src/web/types';
 import { applyEnrichedMarkdownImagePolicy } from './enrichedMarkdownLinkHandling';
 
 function collectNodes(root: ASTNode): ASTNode[] {

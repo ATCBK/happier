@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime/server";
+import { resolveServerScriptCommandInvocation } from "../../scripts/runCommand";
 
 import { applyLightDefaultEnv, ensureHandyMasterSecret } from "@/flavors/light/env";
 import { initEncrypt } from "@/modules/encrypt";
@@ -46,14 +47,16 @@ export type LightSqliteHarnessOptions = Readonly<{
 }>;
 
 function runSqliteMigrations(params: { cwd: string; env: NodeJS.ProcessEnv }): void {
+    const invocation = resolveServerScriptCommandInvocation("pnpm", ["--silent", "run", "migrate:sqlite:deploy"], params.env);
     const res = spawnSync(
-        "yarn",
-        ["-s", "migrate:sqlite:deploy"],
+        invocation.command,
+        invocation.args,
         {
             cwd: params.cwd,
             env: { ...(params.env as Record<string, string>), RUST_LOG: "info" },
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
+            ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         },
     );
     if (res.status !== 0) {

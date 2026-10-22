@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createTauriSignerFileEnv, ensureTauriSigningKeyFile } from './ensure-signing-key-file.mjs';
 import { resolveTauriSigningPrivateKeyPassword } from './resolve-signing-key-password.mjs';
-import { resolveYarnInvocation } from './resolve-yarn-invocation.mjs';
+import { resolvePnpmInvocation } from '../../workspaces/execPnpmCommand.mjs';
 
 const DEFAULT_NOTARYTOOL_SUBMIT_ATTEMPTS = 2;
 const DEFAULT_NOTARYTOOL_RETRY_DELAY_MS = 10_000;
@@ -363,14 +363,14 @@ function main() {
     fs.renameSync(newTar, artifactPath);
   }
 
-  const yarn = resolveYarnInvocation();
+  const pnpm = resolvePnpmInvocation();
   /** @type {string[]} */
-  const signArgs = [...yarn.prefixArgs, '--silent', 'tauri', 'signer', 'sign'];
+  const signArgs = [...pnpm.args, 'exec', 'tauri', 'signer', 'sign'];
   if (signingKeyPath) signArgs.push('--private-key-path', signingKeyPath);
   if (signingKeyPassword) signArgs.push('--password', signingKeyPassword);
   signArgs.push(path.resolve(absUiDir, artifactPath));
 
-  const sigRaw = run(opts, yarn.cmd, signArgs, {
+  const sigRaw = run(opts, pnpm.command, signArgs, {
     cwd: absUiDir,
     env: signingKeyPath ? createTauriSignerFileEnv(process.env) : undefined,
     stdio: ['ignore', 'pipe', 'inherit'],

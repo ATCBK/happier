@@ -42,7 +42,7 @@ function readJson(path) {
 function findRepoRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
-    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'yarn.lock'))) return dir;
+    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'pnpm-lock.yaml')) && existsSync(resolve(dir, 'pnpm-workspace.yaml'))) return dir;
     const parent = resolve(dir, '..');
     if (parent === dir) break;
     dir = parent;
@@ -154,7 +154,8 @@ test('bundleWorkspaceDeps uses the canonical long shared-lock contention budget'
   const originalNow = Date.now;
   try {
     writeJson(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-    writeFileSync(resolve(repoRoot, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     mkdirSync(relayDir, { recursive: true });
     mkdirSync(resolve(cliCommonDir, 'dist'), { recursive: true });
     writeJson(resolve(relayDir, 'package.json'), {
@@ -218,7 +219,8 @@ test('bundleWorkspaceDeps admits resolved workspace bundles before copying sourc
   const repoRoot = mkdtempSync(join(tmpdir(), 'happy-relay-bundle-workspace-deps-owner-admission-'));
   try {
     writeJson(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-    writeFileSync(resolve(repoRoot, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
     const relayDir = resolve(repoRoot, 'packages', 'relay-server');
     const cliCommonDir = resolve(repoRoot, 'packages', 'cli-common');
@@ -293,7 +295,8 @@ test('bundleWorkspaceDeps artifact mode rebuilds newer stale workspace output fr
   const repoRoot = mkdtempSync(join(tmpdir(), 'happy-relay-bundle-workspace-deps-artifact-admission-'));
   try {
     writeJson(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-    writeFileSync(resolve(repoRoot, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
     const relayDir = resolve(repoRoot, 'packages', 'relay-server');
     const cliCommonDir = resolve(repoRoot, 'packages', 'cli-common');
@@ -382,7 +385,8 @@ test('bundleWorkspaceDeps vendors external runtime dependency trees for bundled 
   const tempRoot = mkdtempSync(join(tmpdir(), 'happy-relay-bundle-workspace-deps-vendor-tree-'));
   try {
     writeJson(resolve(tempRoot, 'package.json'), { name: 'repo', private: true });
-    writeFileSync(resolve(tempRoot, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(resolve(tempRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(resolve(tempRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
     const relayDir = resolve(tempRoot, 'packages', 'relay-server');
     const cliCommonDir = resolve(tempRoot, 'packages', 'cli-common');

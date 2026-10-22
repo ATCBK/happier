@@ -28,13 +28,13 @@ test('server restart preflight delegates runtime validation to the package-manag
       {
         runImpl: async (...args) => directProcessCalls.push(args),
         ensureSourceServerWorkspacePackagesBuiltImpl: async () => {},
-        pmExecBinImpl: async (input) => packageManagerCalls.push(input),
+        pmExecScriptImpl: async (input) => packageManagerCalls.push(input),
       },
     );
     assert.deepEqual(result, { ran: true, reason: 'runtime-typecheck-ok' });
     assert.deepEqual(directProcessCalls, []);
     assert.equal(packageManagerCalls.length, 1);
-    assert.equal(packageManagerCalls[0].bin, 'typecheck:runtime');
+    assert.equal(packageManagerCalls[0].script, 'typecheck:runtime');
   });
 });
 
@@ -51,7 +51,7 @@ test('server restart preflight refreshes provider clients before runtime validat
     const serverEnv = {};
     const boundary = {
       ensureSourceServerWorkspacePackagesBuiltImpl: async (input) => calls.push({ workspace: input }),
-      pmExecBinImpl: async ({ bin }) => calls.push(bin),
+      pmExecScriptImpl: async ({ script }) => calls.push(script),
     };
 
     await preflightDevServerRestart(
@@ -133,7 +133,7 @@ test('server restart preflight stops before generation and validation when sourc
           ensureSourceServerWorkspacePackagesBuiltImpl: async () => {
             throw workspaceFailure;
           },
-          pmExecBinImpl: async (input) => packageManagerCalls.push(input),
+          pmExecScriptImpl: async (input) => packageManagerCalls.push(input),
         },
       ),
       (error) => error === workspaceFailure,
@@ -156,7 +156,7 @@ test('server restart preflight consumes the parent-start marker once before watc
     const packageManagerCalls = [];
     const boundary = {
       ensureSourceServerWorkspacePackagesBuiltImpl: async () => {},
-      pmExecBinImpl: async (input) => packageManagerCalls.push(input),
+      pmExecScriptImpl: async (input) => packageManagerCalls.push(input),
     };
 
     assert.deepEqual(
@@ -183,7 +183,7 @@ test('disabled server restart preflight consumes the parent marker without invok
     assert.deepEqual(
       await preflightDevServerRestart(
         { serverDir, serverEnv, consoleImpl: { log() {} } },
-        { pmExecBinImpl: async () => { packageManagerCalls += 1; } },
+        { pmExecScriptImpl: async () => { packageManagerCalls += 1; } },
       ),
       { ran: false, reason: 'disabled' },
     );
@@ -201,7 +201,7 @@ test('stopped-stack restart consumes parent preflight marker before spawn and pr
     const packageManagerCalls = [];
     const boundary = {
       ensureSourceServerWorkspacePackagesBuiltImpl: async () => {},
-      pmExecBinImpl: async (input) => packageManagerCalls.push(input),
+      pmExecScriptImpl: async (input) => packageManagerCalls.push(input),
     };
     let stopped = false;
     let workspaceAdmissions = 0;

@@ -5,6 +5,10 @@ description: Test tiers, how to run them locally, and how they are gated in CI/r
 
 ## Test tiers (repo-wide model)
 
+These commands target the current 0.3 development checkout. Its root `packageManager`
+pins pnpm; install that version with `node scripts/ci/setup-pnpm.mjs` before running
+the lanes below. Other release branches may use a different package manager.
+
 We use these lanes consistently across scripts and GitHub Actions.
 
 ### 1) Unit
@@ -13,11 +17,11 @@ Fast deterministic tests for pure logic/component behavior.
 
 **Root command:**
 ```bash
-yarn test
+pnpm run test
 ```
 
 This runs the workspace test script of every workspace named by the root `test:unit:local` script.
-That script is the single source of truth for the unit lane: `yarn test:wiring` derives the expected
+That script is the single source of truth for the unit lane: `pnpm run test:wiring` derives the expected
 CI coverage from it and fails when a workspace it runs has no matching CI step, so the list is never
 duplicated here or in the workflow.
 
@@ -27,16 +31,16 @@ Note: the UI workspace package name is `@happier-dev/app` and its directory is `
 
 **Root command:**
 ```bash
-yarn test:plugin-workspaces
+pnpm run test:plugin-workspaces
 ```
 
-This discovers plugin workspaces from the root workspace metadata and runs each package's declared `test` script with at most two Plugin workspaces active at once. It fails if no plugin workspaces are selected or if a plugin workspace lacks an executable `test` or `typecheck` script. Run the same derived package set through typechecking with `yarn typecheck:plugin-workspaces`. CI runs the test and typecheck lanes separately from the ordinary unit lane; it still executes plugin typechecks after a test failure so both results are visible.
+This discovers plugin workspaces from the root workspace metadata and runs each package's declared `test` script with at most two Plugin workspaces active at once. It fails if no plugin workspaces are selected or if a plugin workspace lacks an executable `test` or `typecheck` script. Run the same derived package set through typechecking with `pnpm run typecheck:plugin-workspaces`. CI runs the test and typecheck lanes separately from the ordinary unit lane; it still executes plugin typechecks after a test failure so both results are visible.
 
 ### 1c) Plugin Platform current-source tests
 
 **Root command:**
 ```bash
-yarn test:plugin-platform:source
+pnpm run test:plugin-platform:source
 ```
 
 This runs every `packages/tests/src/plugin-platform/*.test.ts` contract test plus the public-only
@@ -56,14 +60,14 @@ Real process/filesystem/network orchestration tests at app level.
 
 **Root command:**
 ```bash
-yarn test:integration
+pnpm run test:integration
 ```
 
 This runs:
-- `yarn workspace @happier-dev/app test:integration`
-- `yarn workspace @happier-dev/cli test:integration`
-- `yarn --cwd apps/server test:integration`
-- `yarn --cwd apps/stack test:integration`
+- `pnpm --filter @happier-dev/app run test:integration`
+- `pnpm --filter @happier-dev/cli run test:integration`
+- `pnpm --dir apps/server run test:integration`
+- `pnpm --dir apps/stack run test:integration`
 
 ### 3) Server DB contract
 
@@ -71,15 +75,15 @@ Server-only contract suite against explicit DB providers (Postgres/MySQL in Dock
 
 **Root command:**
 ```bash
-yarn test:db-contract:docker
+pnpm run test:db-contract:docker
 ```
 
 **Package-local command:**
 ```bash
-yarn --cwd apps/server test:db-contract
+pnpm --dir apps/server run test:db-contract
 ```
 
-CI runs `yarn --cwd apps/server schema:sync:check` before provider-specific DB contract execution.
+CI runs `pnpm --dir apps/server run schema:sync:check` before provider-specific DB contract execution.
 The check reports generated Postgres, MySQL, and SQLite schema drift; it does not repair or migrate a
 database.
 
@@ -89,10 +93,10 @@ End-to-end suites in `packages/tests` against real server/socket contracts.
 
 **Root commands:**
 ```bash
-yarn test:e2e
-yarn test:e2e:core:fast
-yarn test:e2e:core:slow
-yarn test:e2e:core:embedded
+pnpm run test:e2e
+pnpm run test:e2e:core:fast
+pnpm run test:e2e:core:slow
+pnpm run test:e2e:core:embedded
 ```
 
 Lane intent:
@@ -111,7 +115,7 @@ Browser-driven end-to-end tests against the Expo web UI, using the same server-l
 
 **Root command:**
 ```bash
-yarn test:e2e:ui
+pnpm run test:e2e:ui
 ```
 
 Notes:
@@ -132,14 +136,14 @@ Native desktop end-to-end validation for Tauri-specific surfaces using the packa
 
 **Root command:**
 ```bash
-yarn test:e2e:desktop:native
+pnpm run test:e2e:desktop:native
 ```
 
 Notes:
 - This lane is a first-class root command, but it remains **local/manual by default** rather than a default GitHub-hosted PR check.
 - The root lane delegates to the package-owned owner in `apps/ui`, so the harness logic stays canonical in one place.
 - Use this lane for real desktop-only contracts such as overlay windows, native Tauri bridge flows, and deterministic MCP-backed capture.
-- The current implementation owner is `yarn --cwd apps/ui test:native-e2e:activity-surfaces`.
+- The current implementation owner is `pnpm --dir apps/ui run test:native-e2e:activity-surfaces`.
 
 ### 4d) Native E2E (Maestro) (iOS/Android)
 
@@ -147,9 +151,9 @@ Native end-to-end tests using **Maestro**. These are intended to cover mobile-sp
 
 **Root commands:**
 ```bash
-yarn test:e2e:mobile
-yarn test:e2e:mobile:android
-yarn test:e2e:mobile:ios
+pnpm run test:e2e:mobile
+pnpm run test:e2e:mobile:android
+pnpm run test:e2e:mobile:ios
 ```
 
 Notes:
@@ -169,7 +173,7 @@ workspace synchronization path, including its broker and remote machine carrier.
 
 **Root command:**
 ```bash
-yarn test:workspace-sync:real
+pnpm run test:workspace-sync:real
 ```
 
 The lane requires freshly built Mutagen manager, agent, broker client, and process-custody binaries.
@@ -182,11 +186,11 @@ Agent contract/baseline suites in `packages/tests` (real Agent CLIs; runner name
 
 **Root commands:**
 ```bash
-yarn test:agents
-yarn test:agents:all:smoke
-yarn test:agents:claude:extended
-yarn test:agents:codex:smoke
-yarn test:agents:opencode:extended
+pnpm run test:agents
+pnpm run test:agents:all:smoke
+pnpm run test:agents:claude:extended
+pnpm run test:agents:codex:smoke
+pnpm run test:agents:opencode:extended
 ```
 
 ### 6) Stress
@@ -195,7 +199,7 @@ Repeat/chaos reliability suites in `packages/tests`.
 
 **Root command:**
 ```bash
-yarn test:stress
+pnpm run test:stress
 ```
 
 Target matrix:
@@ -211,15 +215,15 @@ Repo-level governance checks for test file naming/lane placement and feature-tag
 
 **Root commands:**
 ```bash
-yarn test:wiring:self
-yarn test:wiring
-yarn test:policy:self
-yarn test:policy
-yarn test:tooling:self
-yarn test:inventory
-yarn test:migration:inventory
-yarn test:migration:v2-zero:enforce
-yarn test:migration:governance
+pnpm run test:wiring:self
+pnpm run test:wiring
+pnpm run test:policy:self
+pnpm run test:policy
+pnpm run test:tooling:self
+pnpm run test:inventory
+pnpm run test:migration:inventory
+pnpm run test:migration:v2-zero:enforce
+pnpm run test:migration:governance
 ```
 
 Notes:
@@ -235,10 +239,10 @@ Notes:
 ### 7b) Package-local-only lanes
 
 These lanes are intentionally not exposed as canonical root scripts:
-- CLI slow lane: `yarn --cwd apps/cli test:slow`
+- CLI slow lane: `pnpm --dir apps/cli run test:slow`
 - Website tests: package-local only under `apps/website`
-- Release runtime tests: `yarn --cwd packages/release-runtime test`
-- Stack unit/integration/native real-integration lanes: `yarn --cwd apps/stack test:unit`, `yarn --cwd apps/stack test:integration`, and the guarded real-integration files in `apps/stack`
+- Release runtime tests: `pnpm --dir packages/release-runtime run test`
+- Stack unit/integration/native real-integration lanes: `pnpm --dir apps/stack run test:unit`, `pnpm --dir apps/stack run test:integration`, and the guarded real-integration files in `apps/stack`
 
 ### 8) Typecheck
 
@@ -246,11 +250,11 @@ TypeScript typechecking for the main runtime packages (UI/CLI/server).
 
 Happier uses the native TypeScript 7 compiler for first-party typecheck and package-build lanes. The `typescript` package remains on 5.9 for AST-based tools and integrations that still require its programmatic API.
 
-Compiler selection is centralized in `scripts/workspaces/resolveTypeScriptCliInvocation.mjs`. Repository scripts and `yarn tsc ...` delegate to that owner rather than a package-manager bin shim, so dependency hoisting cannot silently select the TypeScript 5 API package. Direct `tsc`, `npx tsc`, and `typescript/bin/tsc` invocations are unsupported.
+Compiler selection is centralized in `scripts/workspaces/resolveTypeScriptCliInvocation.mjs`. Repository scripts and `pnpm run tsc ...` delegate to that owner rather than a package-manager bin shim, so dependency hoisting cannot silently select the TypeScript 5 API package. Direct `tsc`, `npx tsc`, and `typescript/bin/tsc` invocations are unsupported.
 
 **Root command:**
 ```bash
-yarn typecheck
+pnpm run typecheck
 ```
 
 ### 9) Release contracts
@@ -259,7 +263,7 @@ Security/release-pipeline contract checks for workflow/install/signing invariant
 
 **Root command:**
 ```bash
-yarn test:release:contracts
+pnpm run test:release:contracts
 ```
 
 This runs:
@@ -267,7 +271,7 @@ This runs:
 - including installer sync/security/publication invariants
 - and workflow policy guards like the production Tauri signing/notarization fail gate
 
-When documentation or copy touches installer/setup/repair behavior, also verify the public command names against current CLI help/source before handoff. In particular, check release-channel switching (`happier self release-channel use stable|preview|dev`), Relay host bind flags (`happier relay host install --lan|--expose|--host <ip>`), local Relay aliases, and `happier doctor repair` wording. These docs are content-only, so do not add content-policing tests for wording changes; use `yarn docs:types` plus targeted `rg` checks unless executable code changed.
+When documentation or copy touches installer/setup/repair behavior, also verify the public command names against current CLI help/source before handoff. In particular, check release-channel switching (`happier self release-channel use stable|preview|dev`), Relay host bind flags (`happier relay host install --lan|--expose|--host <ip>`), local Relay aliases, and `happier doctor repair` wording. These docs are content-only, so do not add content-policing tests for wording changes; use `pnpm run docs:types` plus targeted `rg` checks unless executable code changed.
 
 ### 10) Extended DB matrix (Postgres/MySQL)
 
@@ -276,38 +280,38 @@ In CI this runs via a dedicated workflow using service containers.
 
 **Local commands:**
 ```bash
-yarn test:e2e:core:docker
-yarn test:db-contract:docker
+pnpm run test:e2e:core:docker
+pnpm run test:db-contract:docker
 ```
 
 ## Package-level lane scripts
 
 ### UI (`apps/ui`, workspace `@happier-dev/app`)
-- Unit: `yarn --cwd apps/ui test:unit`
-- Integration: `yarn --cwd apps/ui test:integration`
-- Native desktop E2E owner: `yarn --cwd apps/ui test:native-e2e:activity-surfaces`
+- Unit: `pnpm --dir apps/ui run test:unit`
+- Integration: `pnpm --dir apps/ui run test:integration`
+- Native desktop E2E owner: `pnpm --dir apps/ui run test:native-e2e:activity-surfaces`
 
 ### CLI (`apps/cli`)
-- Unit: `yarn --cwd apps/cli test:unit`
-- Integration: `yarn --cwd apps/cli test:integration`
-- Slow-only lane: `yarn --cwd apps/cli test:slow`
+- Unit: `pnpm --dir apps/cli run test:unit`
+- Integration: `pnpm --dir apps/cli run test:integration`
+- Slow-only lane: `pnpm --dir apps/cli run test:slow`
 
 ### Server (`apps/server`)
-- Unit: `yarn --cwd apps/server test:unit`
-- Integration: `yarn --cwd apps/server test:integration`
-- DB contract: `yarn --cwd apps/server test:db-contract`
+- Unit: `pnpm --dir apps/server run test:unit`
+- Integration: `pnpm --dir apps/server run test:integration`
+- DB contract: `pnpm --dir apps/server run test:db-contract`
 
 ### Stack (`apps/stack`)
-- Unit: `yarn --cwd apps/stack test:unit`
-- Integration: `yarn --cwd apps/stack test:integration`
+- Unit: `pnpm --dir apps/stack run test:unit`
+- Integration: `pnpm --dir apps/stack run test:integration`
 
 ### E2E workspace (`packages/tests`, workspace `@happier-dev/tests`)
-- Core (full): `yarn workspace @happier-dev/tests test`
-- Core fast: `yarn workspace @happier-dev/tests test:core:fast`
-- Core slow: `yarn workspace @happier-dev/tests test:core:slow`
-- Real workspace sync (source-built Mutagen and Iroh): `yarn test:workspace-sync:real`
-- Providers: `yarn workspace @happier-dev/tests test:agents`
-- Stress: `yarn workspace @happier-dev/tests test:stress`
+- Core (full): `pnpm --filter @happier-dev/tests run test`
+- Core fast: `pnpm --filter @happier-dev/tests run test:core:fast`
+- Core slow: `pnpm --filter @happier-dev/tests run test:core:slow`
+- Real workspace sync (source-built Mutagen and Iroh): `pnpm run test:workspace-sync:real`
+- Providers: `pnpm --filter @happier-dev/tests run test:agents`
+- Stress: `pnpm --filter @happier-dev/tests run test:stress`
 
 ## Env-gated integration suites
 
@@ -319,46 +323,46 @@ CI sets these for relevant jobs. Local runs can set them manually when you need 
 
 ## Prerequisites matrix
 
-### Unit (`yarn test`)
-- Requires: Node + Yarn only.
+### Unit (`pnpm run test`)
+- Requires: Node + the repository-pinned pnpm only.
 - Should not require tmux, Docker, Agent CLIs, or API keys.
 
-### Integration (`yarn test:integration`)
+### Integration (`pnpm run test:integration`)
 - UI integration:
-  - Requires: Node + Yarn.
+  - Requires: Node + the repository-pinned pnpm.
 - CLI integration:
-  - Requires: Node + Yarn.
+  - Requires: Node + the repository-pinned pnpm.
   - Optional gated suites:
     - `HAPPIER_CLI_TMUX_INTEGRATION=1` and `tmux` installed for `*.real.integration.test.ts` tmux coverage.
     - `HAPPIER_CLI_DAEMON_REATTACH_INTEGRATION=1` for real PID/reattach process inspection suites.
 - Server integration:
-  - Requires: Node + Yarn.
+  - Requires: Node + the repository-pinned pnpm.
   - Does not require Docker for regular integration lane.
 - Stack integration:
-  - Requires: Node + Yarn + `git` available in PATH.
+  - Requires: Node + the repository-pinned pnpm + `git` available in PATH.
   - Spawns real child processes and validates process ownership/sweep behavior.
 
-### DB contract (`yarn --cwd apps/server test:db-contract`)
+### DB contract (`pnpm --dir apps/server run test:db-contract`)
 - Requires: DB provider runtime (`postgres`/`mysql`) and matching connection env.
 - Docker-backed helper commands:
-  - `yarn test:db-contract:docker`
+  - `pnpm run test:db-contract:docker`
 
-### Core E2E (`yarn test:e2e`, `yarn test:e2e:core:embedded`)
-- Requires: Node + Yarn.
+### Core E2E (`pnpm run test:e2e`, `pnpm run test:e2e:core:embedded`)
+- Requires: Node + the repository-pinned pnpm.
 - Uses real server/socket/runtime contracts via `packages/tests`.
 - Does not require provider API keys.
 - Recommended local loop:
-  - `yarn test:e2e:core:fast` during iteration.
-  - `yarn test:e2e:core:slow` before handoff for orchestration-heavy changes.
-  - `yarn test:e2e` for the full core gate.
+  - `pnpm run test:e2e:core:fast` during iteration.
+  - `pnpm run test:e2e:core:slow` before handoff for orchestration-heavy changes.
+  - `pnpm run test:e2e` for the full core gate.
 
-### Agent runtime suites (`yarn test:agents`, `yarn test:agents:*`)
+### Agent runtime suites (`pnpm run test:agents`, `pnpm run test:agents:*`)
 
 These runner commands and their `HAPPIER_E2E_PROVIDERS` variables retain the historical `providers` vocabulary for compatibility. They exercise executable Agents such as Claude and Codex; first-class model Providers are covered by their protocol/CLI/UI owner tests and `.feat.providers.` integration/E2E lanes.
 
-- `yarn test:agents` by itself runs Agent contract checks with Agent execution disabled by default (`HAPPIER_E2E_PROVIDERS` unset), so it does not require Agent CLIs or API keys.
-- `yarn test:agents:all:smoke` / `yarn test:agents:claude:extended` (and similar wrappers) enable real Agent execution and then require CLIs/binaries for selected Agents.
-- Direct workspace command (advanced): `yarn workspace @happier-dev/tests providers:run <preset> <lane>`.
+- `pnpm run test:agents` by itself runs Agent contract checks with Agent execution disabled by default (`HAPPIER_E2E_PROVIDERS` unset), so it does not require Agent CLIs or API keys.
+- `pnpm run test:agents:all:smoke` / `pnpm run test:agents:claude:extended` (and similar wrappers) enable real Agent execution and then require CLIs/binaries for selected Agents.
+- Direct workspace command (advanced): `pnpm --filter @happier-dev/tests run providers:run <preset> <lane>`.
 - Auth mode is Agent-spec driven:
   - `host` mode: uses the existing local Agent CLI login/session (can run without API keys).
   - `env` mode: requires keys/secrets declared by the Agent test spec.
@@ -375,17 +379,17 @@ Happier includes a small opt-in probe that runs your locally installed `claude` 
 Run it locally (requires Claude Code installed and already authenticated on the host):
 
 ```bash
-HAPPIER_TEST_REAL_CLAUDE=1 yarn -s workspace @happier-dev/tests test:agents claude.agentTeams.toolNames.realProbe.test.ts
+HAPPIER_TEST_REAL_CLAUDE=1 pnpm --filter @happier-dev/tests run test:agents claude.agentTeams.toolNames.realProbe.test.ts
 ```
 
 Extended signal (spawns teammates and sends messages; may take longer):
 
 ```bash
-HAPPIER_TEST_REAL_CLAUDE=1 HAPPIER_TEST_REAL_CLAUDE_FULL=1 yarn -s workspace @happier-dev/tests test:agents claude.agentTeams.toolNames.realProbe.test.ts
+HAPPIER_TEST_REAL_CLAUDE=1 HAPPIER_TEST_REAL_CLAUDE_FULL=1 pnpm --filter @happier-dev/tests run test:agents claude.agentTeams.toolNames.realProbe.test.ts
 ```
 
-### Stress (`yarn test:stress`)
-- Requires: Node + Yarn.
+### Stress (`pnpm run test:stress`)
+- Requires: Node + the repository-pinned pnpm.
 - Longer-running reliability loops; keep out of PR default local loop.
 
 ## Artifacts

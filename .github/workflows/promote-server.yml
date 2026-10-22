@@ -309,29 +309,23 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: candidate/yarn.lock
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install candidate dependencies
-        working-directory: candidate
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_EMBEDDED_POLICY_ENV: ${{ inputs.environment == 'production' && 'production' || 'preview' }}
-        run: bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+        uses: ./.github/actions/install-pnpm-dependencies
+        with:
+          working-directory: candidate
       - name: Run release contract tests
         working-directory: candidate
-        run: yarn -s test:release:contracts
+        run: pnpm run test:release:contracts
       - name: Verify installer assets are synced
         working-directory: candidate
         run: node scripts/pipeline/run.mjs release-sync-installers --check
       - name: Run server tests
         if: inputs.run_tests
         working-directory: candidate
-        run: yarn --cwd apps/server test
+        run: pnpm --dir apps/server run test
 
   publish_runtime_release:
     if: inputs.publish_runtime_release == true

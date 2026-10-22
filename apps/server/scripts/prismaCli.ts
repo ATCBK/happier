@@ -9,7 +9,7 @@ import { resolveServerScriptCommandInvocation } from "./runCommand";
 
 type PrismaCliEntrypointState = "healthy" | "missing" | "recursive_shell_wrapper";
 
-const PRISMA_CLI_REPAIR_INSTALL_ARGS = ["install", "--force", "--ignore-scripts", "--production=false"] as const;
+const PRISMA_CLI_REPAIR_INSTALL_ARGS = ["install", "--force", "--ignore-scripts", "--prod=false"] as const;
 
 type EnsurePrismaCliReadyParams = Readonly<{
     serverRoot: string;
@@ -107,7 +107,7 @@ export function resolvePrismaCliRepairInstallInvocation(
     env: NodeJS.ProcessEnv,
     options: ResolveCommandOptions = {},
 ): CommandInvocation {
-    return resolveServerScriptCommandInvocation("yarn", PRISMA_CLI_REPAIR_INSTALL_ARGS, env, options);
+    return resolveServerScriptCommandInvocation("pnpm", PRISMA_CLI_REPAIR_INSTALL_ARGS, env, options);
 }
 
 function runInvocation(
@@ -150,7 +150,7 @@ async function defaultInstallFn(params: Readonly<{ repoRoot: string; env: NodeJS
         cwd: params.repoRoot,
         env: params.env,
         quiet: params.quiet,
-        errorCommand: "yarn",
+        errorCommand: "pnpm",
     });
 }
 

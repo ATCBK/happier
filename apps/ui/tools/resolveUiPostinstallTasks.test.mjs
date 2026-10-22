@@ -12,7 +12,8 @@ test('PDF assets are version-vendored and its source bundle is excluded from dep
 
 test('dependency-only preparation leaves source artifact compilation to its independent owner', () => {
     const tasks = resolveUiPostinstallTasks({ env: { HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' } });
-    assert.ok(tasks.includes('patch-package'));
+    assert.ok(!tasks.includes('patch-package'));
+    assert.ok(tasks.includes('verify-patched-dependencies'));
     for (const task of ['vendor-password-kdf-worker', 'vendor-crypto-worker', 'prepare-atmosphere-renderers',
         'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle']) assert.equal(tasks.includes(task), false);
 });
@@ -44,15 +45,14 @@ test('UI postinstall installs enriched-markdown web WASM before verifying the pa
     );
 });
 
-test('UI postinstall verifies the Sentry native replay patch after applying patches', () => {
+test('UI postinstall verifies pnpm-installed patches without a second patch writer', () => {
     const tasks = resolveUiPostinstallTasks({ env: { HAPPIER_UI_VENDOR_WEB_ASSETS: '0' } });
 
-    assert.ok(tasks.includes('patch-package'));
-    assert.ok(tasks.includes('verify-sentry-native-replay-postinit-patch'));
-    assert.ok(
-        tasks.indexOf('patch-package')
-        < tasks.indexOf('verify-sentry-native-replay-postinit-patch'),
-    );
+    assert.ok(!tasks.includes('patch-package'));
+    for (const task of ['verify-patched-dependencies', 'verify-sentry-native-replay-postinit-patch',
+        'verify-native-patch-compilation', 'verify-vendored-legend-patch', 'verify-vendored-reanimated-patch']) {
+        assert.ok(tasks.includes(task));
+    }
 });
 
 test('UI postinstall vendors the TipTap WebView bundle with other web assets', () => {

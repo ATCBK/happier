@@ -1,5 +1,6 @@
 // @ts-check
 
+import { resolvePnpmCommandInvocation } from '../../workspaces/execPnpmCommand.mjs';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -104,9 +105,12 @@ function run(opts, cmd, args, extra) {
     return '';
   }
 
-  return execFileSync(cmd, args, {
+  const env = { ...process.env, ...(extra?.env ?? {}) };
+  const invocation = cmd === 'pnpm' ? resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath }) : { command: cmd, args };
+  return execFileSync(invocation.command, invocation.args, {
     cwd,
-    env: { ...process.env, ...(extra?.env ?? {}) },
+    env,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     encoding: 'utf8',
     stdio: extra?.stdio ?? 'inherit',
     maxBuffer: EAS_CAPTURE_MAX_BUFFER_BYTES,
@@ -420,10 +424,10 @@ function main() {
     }
 
     const candidateEnv = { ...easCommandEnv, EXPO_TOKEN: '' };
-    run(opts, 'yarn', ['tsx', 'sources/scripts/parseChangelog.ts'], { cwd: uiDir, env: candidateEnv });
-    run(opts, 'yarn', ['tsx', 'sources/scripts/parseReleaseNotes.ts'], { cwd: uiDir, env: candidateEnv });
-    run(opts, 'yarn', ['typecheck'], { cwd: uiDir, env: candidateEnv });
-    run(opts, 'yarn', ['expo', 'export', '--platform', platform, '--output-dir', inputDir], {
+    run(opts, 'pnpm', ['exec', 'tsx', 'sources/scripts/parseChangelog.ts'], { cwd: uiDir, env: candidateEnv });
+    run(opts, 'pnpm', ['exec', 'tsx', 'sources/scripts/parseReleaseNotes.ts'], { cwd: uiDir, env: candidateEnv });
+    run(opts, 'pnpm', ['run', 'typecheck'], { cwd: uiDir, env: candidateEnv });
+    run(opts, 'pnpm', ['exec', 'expo', 'export', '--platform', platform, '--output-dir', inputDir], {
       cwd: uiDir,
       env: candidateEnv,
     });

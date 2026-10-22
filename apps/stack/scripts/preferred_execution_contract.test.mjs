@@ -1,29 +1,17 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { collectWorkspacePackageJsonPaths } from './utils/proc/workspace_package_manifests.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 const preferredScriptNames = ['test', 'test:unit', 'typecheck', 'vitest'];
 
 async function resolveWorkspacePackageFiles() {
-  const rootPackage = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
-  const packageFiles = ['package.json'];
-  for (const workspace of rootPackage.workspaces.packages) {
-    if (workspace === 'packages/plugins/[a-z]*') {
-      const pluginEntries = await readdir(join(repoRoot, 'packages/plugins'), { withFileTypes: true });
-      for (const entry of pluginEntries) {
-        if (entry.isDirectory() && entry.name !== 'node_modules' && /^[a-z]/.test(entry.name)) {
-          packageFiles.push(join('packages/plugins', entry.name, 'package.json'));
-        }
-      }
-      continue;
-    }
-    packageFiles.push(join(workspace, 'package.json'));
-  }
-  return packageFiles;
+  return ['package.json', ...(await collectWorkspacePackageJsonPaths(repoRoot))
+    .map((packageFile) => relative(repoRoot, packageFile))];
 }
 
 function preferredExecutionLauncher(packageFile) {

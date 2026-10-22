@@ -17,6 +17,12 @@ import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/reso
 
 const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
 const launcher = join(repoRoot, 'apps', 'stack', 'bin', 'hstack-exec');
+
+// Bootstrap progress is independent of the admitted command's stdout contract.
+function payloadOutput(stdout) {
+  return stdout.replace(/^pnpm \d+\.\d+\.\d+ ready; root archive integrity verified\r?\n/gm, '');
+}
+
 // Measured cksum fixture key for `probe-command  ` (empty build target/components).
 const probeCommandCacheKey = '1086556756';
 const repoToken = repoRoot.split('/').at(-1)
@@ -59,6 +65,39 @@ function nativeFixtureRuntime(stackDir) {
   return resolveDevTargetMutagenRuntime({ stackBaseDir: stackDir, sourceDir: repoRoot,
     env: { HAPPIER_STACK_STORAGE_DIR: dirname(stackDir) } });
 }
+
+test('managed pnpm remains visible during native worker preflight and dispatch', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-managed-pnpm-preflight-' });
+  const bin = fixture.path('bin');
+  const stack = fixture.path('stack');
+  const config = join(stack, 'dev-targets.json');
+  const workerHome = fixture.path('worker');
+  const managedBin = join(workerHome, 'cache', 'pnpm-toolchain', 'bin');
+  await mkdir(bin);
+  await mkdir(stack);
+  await writeFile(config, JSON.stringify({ version: 3,
+    targets: [{ name: 'worker', platform: 'posix', ssh: 'worker', repoDir: '/worker/repo', cliHomeDir: workerHome }],
+    commandExecution: { mode: 'prefer-target', target: 'worker', fallback: 'local' } }));
+  await executable(join(bin, 'node'), `#!/bin/sh\nexec ${process.execPath} "$@"\n`);
+  await executable(join(bin, 'mutagen'), '#!/bin/sh\n[ "$1" != sync ] || printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"\n');
+  // SSH availability and remote execution are the system boundary. A worker
+  // exposes pnpm only in the canonical provisioner's private install prefix.
+  await executable(join(bin, 'ssh'), `#!/bin/sh
+case "$*" in
+  *-MNf*|*-O\\ check*) exit 0 ;;
+  *command\\ -v*) case "$*" in *"'pnpm'"*) case "$*" in *'${managedBin}'*) exit 0 ;; *) exit 1 ;; esac ;; esac; exit 0 ;;
+  *getconf*) printf '48 0 0.9 100000000 10 0 100000000 100000000 0 0 0 0 0 0 0 linux\\n' ;;
+  *) case "$*" in *'${managedBin}'*) printf '12.14.0\\n'; exit 0 ;; *) exit 42 ;; esac ;;
+esac
+`);
+  const result = spawnSync('/bin/sh', [launcher, '--target=worker', '--', 'pnpm', '--version'], {
+    cwd: repoRoot, encoding: 'utf8', env: { ...executionNeutralEnv, HOME: fixture.root,
+      HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
+      PATH: `${bin}:/usr/bin:/bin`, TMPDIR: fixture.root },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /12\.14\.0/);
+});
 
 test('CLI test preflight rejects missing Go before bootstrap and admits the repaired worker', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-cli-go-preflight-' });
@@ -122,7 +161,7 @@ case "$*" in
   *) printf '%s\\n' "$worker" >> '${dispatched}'; printf 'runner-started:%s\\n' "$worker"; exit 23 ;;
 esac
 `);
-  const result = spawnSync('/bin/sh', [launcher, '--', 'corepack', 'yarn', '--cwd', 'apps/stack', '-s', 'test'], {
+  const result = spawnSync('/bin/sh', [launcher, '--', 'pnpm', '--dir', 'apps/stack', 'run', '--silent', 'test'], {
     cwd: repoRoot, encoding: 'utf8', env: { ...executionNeutralEnv, CI: '', HOME: root,
       HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'),
       PATH: `${bin}:/usr/bin:/bin`, TMPDIR: root },
@@ -162,8 +201,8 @@ test('controller explicit local compilation refuses without override and overrid
   await writeFile(compiler, `process.stdout.write('compiler-started\\n'); process.exit(7);\n`);
   await writeFile(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs'),
     `await import(${JSON.stringify(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url).href)});\n`);
-  await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'],
-    packageManager: 'yarn@1.22.22', scripts: {
+  const { packageManager } = JSON.parse(await readFile(join(checkout, 'package.json'), 'utf8'));
+  await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, packageManager, scripts: {
       pretypecheck: 'node scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
       typecheck: `node scripts/workspaces/runTypeScriptCli.mjs ${compilerArgs.map(arg => JSON.stringify(arg)).join(' ')}`,
     } }));
@@ -191,11 +230,11 @@ cp.spawn = (command, args, options) => spawn(command,
 syncBuiltinESMExports();
 `);
   await executable(join(bin, 'node'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
-  await executable(join(bin, 'corepack'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(lifecycle)}\n`);
+  await executable(join(bin, 'pnpm'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(lifecycle)}\n`);
   await executable(join(bin, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
   await executable(join(bin, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "%s %s\\n" "$MEMORY_KIB" "$MEMORY_KIB" ;; */proc/loadavg*|*/proc/pressure/*) printf "0\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
   await executable(join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
-  const invoke = (memory, options = [], extraEnv = {}, payload = ['corepack', 'yarn', '-s', 'typecheck']) => spawnSync('/bin/sh', [native, '--local', ...options, '--', ...payload], {
+  const invoke = (memory, options = [], extraEnv = {}, payload = ['pnpm', 'run', '--silent', 'typecheck']) => spawnSync('/bin/sh', [native, '--local', ...options, '--', ...payload], {
     cwd: checkout, encoding: 'utf8', timeout: 15000,
     env: { ...executionNeutralEnv, HOME: root, PATH: `${bin}:${process.env.PATH}`, CI: '', MEMORY_KIB: String(memory),
       NODE_OPTIONS: `${executionNeutralEnv.NODE_OPTIONS ?? ''} --import=${preload}`.trim(), ...extraEnv },
@@ -394,7 +433,7 @@ test('all-busy runtime placement preserves the real waiting head and backfill ch
   ], { ...fixture.invocation, env: { ...fixture.invocation.env, HAPPIER_DEV_TARGET_EXECUTION: '1', RUNTIME_WORKER_SAMPLE: fixture.workers.starved.sample }, encoding: 'utf8' });
   for (let index = 0; index < 3; index++) { const result = small(); assert.equal(result.status, 0, `backfill ${index}: ${result.stderr}; head=${await readFile(waiterPath, 'utf8')}`); }
   await waitForRuntime(async () => (await readFile(fixture.invocation.env.DISPATCHES, 'utf8').catch(() => '')).includes('roomy'), () => runtime.stderr);
-  assert.equal(runtime.stdout, '');
+  assert.equal(payloadOutput(runtime.stdout), '');
   const retained = (await readFile(waiterPath, 'utf8')).trim().split(' ');
   assert.deepEqual(retained.slice(0, 4), original.slice(0, 4), 'failed alternative replaced or re-aged waiting demand');
   assert.equal(retained[4], '18874368', 'backfill charge was reset');
@@ -554,7 +593,8 @@ test('native runtime admission preserves Node preload arguments and runs the hoo
     assert.equal(runtime.child.exitCode, null, runtime.stderr);
     const preload = runtime.stderr.match(/fixture-preload:(\d+):(\d+:\d+)/);
     assert.ok(preload, runtime.stderr);
-    const ready = JSON.parse(runtime.stdout.trim().slice('HAPPIER_RUNTIME_BUILD_READY='.length));
+    const readyLine = runtime.stdout.split('\n').find(line => line.startsWith('HAPPIER_RUNTIME_BUILD_READY='));
+    const ready = JSON.parse(readyLine.slice('HAPPIER_RUNTIME_BUILD_READY='.length));
     assert.equal(Number(preload[1]), ready.controllerPid, 'preload ran in a different process from the admitted controller');
     runtime.child.stdin.write('{"requestPath":"/tmp/runtime-preload-request"}\n');
     assert.equal((await runtime.completion).code, 0, runtime.stderr);
@@ -576,7 +616,7 @@ exec /bin/rm "$@"
   runtime.child.stdin.end();
   assert.equal((await runtime.completion).code, 130, runtime.stderr);
   assert.deepEqual(await readdir(waiters), []);
-  assert.equal(runtime.stdout, '');
+  assert.equal(payloadOutput(runtime.stdout), '');
 });
 
 test('native launcher hands Mac workspace execution to the configured execution-host bridge', async (t) => {
@@ -955,7 +995,7 @@ test('hosted CI public compiler scripts execute locally on a small host and pres
   await executable(join(binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
   await executable(join(binDir, 'getconf'), '#!/bin/sh\nprintf "8\\n"\n');
   await executable(join(binDir, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) /usr/bin/awk \'{print $7, $8}\' "$STARVED_SAMPLE" ;; */proc/loadavg*|*/proc/pressure/*) printf "0\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
-  await executable(join(binDir, 'corepack'), [
+  await executable(join(binDir, 'pnpm'), [
     '#!/bin/sh',
     'printf "script:%s:routed=%s:ci=%s:argument=%s\\n" "$3" "${HAPPIER_HSTACK_EXECUTION-unset}" "${CI-unset}" "${4-}"',
     'case "$3" in',
@@ -1019,7 +1059,7 @@ test('finite typecheck dispatch is granted by public script owners on remote and
   await writeFile(fixture.configPath, JSON.stringify(fixture.config));
   await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot: checkout }));
   const binDir = invocation.env.PATH.split(':')[0];
-  await executable(join(binDir, 'corepack'), '#!/bin/sh\nprintf "dispatch=%s\\n" "${HAPPIER_TYPECHECK_DISPATCHED-}"\n');
+  await executable(join(binDir, 'pnpm'), '#!/bin/sh\nprintf "dispatch=%s\\n" "${HAPPIER_TYPECHECK_DISPATCHED-}"\n');
   for (const script of ['typecheck:local', 'typecheck:compiler:local', 'check:public-sdk:finite:local']) {
     const local = spawnSync('/bin/sh', [launcher, '--local', `--script=${script}`], invocation);
     assert.equal(local.status, 0, local.stderr);
@@ -1721,7 +1761,7 @@ for (const dispatcher of ['native', 'javascript', 'pinned']) {
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
       if (!recovery && /memory-available=5242880\/28311552|admission busy before dispatch/.test(stderr)) {
-        assert.equal(stdout, '');
+        assert.equal(payloadOutput(stdout), '');
         recovery = writeFile(samplePath, '8 0.1 0.9 22000000 20 0 25480397 28311552 0 0 0 0 0 0 0 linux\n');
       }
     });
@@ -1730,7 +1770,7 @@ for (const dispatcher of ['native', 'javascript', 'pinned']) {
     assert.equal(code, 0, stderr);
     assert.ok(recovery, stderr);
     assert.match(stderr, dispatcher === 'pinned' ? /waiting for heavyweight admission on .*memory-available/ : /admission busy before dispatch.*re-evaluating/);
-    assert.equal(stdout, 'queued-remote-result\n');
+    assert.equal(payloadOutput(stdout), 'queued-remote-result\n');
     assert.doesNotMatch(stderr, /running locally/);
     assert.match(await readFile(invocation.env.FIXTURE_TRACE, 'utf8'), /remote_dependency_bootstrap\.mjs/);
   });
@@ -2498,7 +2538,7 @@ test('remote heavyweight admission starts from the configured repository when SS
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'remote-tsc\n');
+  assert.equal(payloadOutput(result.stdout), 'remote-tsc\n');
 });
 
 test('native launcher reuses one SSH master across sequential and concurrent commands for the same target', async (t) => {
@@ -2924,7 +2964,7 @@ test('native launcher admits another remote heavyweight command while the worker
   try {
     const exitCode = child.exitCode ?? await new Promise((resolveExit) => child.once('exit', resolveExit));
     assert.equal(exitCode, 0, output.stderr);
-    assert.equal(output.stdout, 'remote\n');
+    assert.equal(payloadOutput(output.stdout), 'remote\n');
     await readFile(masterStarted);
   } finally {
     if (child.exitCode == null) child.kill('SIGTERM');
@@ -4519,6 +4559,7 @@ test('native launcher accounts for an in-flight dispatch from another sandboxed 
     env: { ...env, CODEX_SESSION_ID: 'first-sandboxed-session' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const firstExited = new Promise((resolveExit) => first.once('exit', resolveExit));
   const firstOutput = { stdout: '', stderr: '' };
   first.stdout.on('data', (chunk) => { firstOutput.stdout += chunk; });
   first.stderr.on('data', (chunk) => { firstOutput.stderr += chunk; });
@@ -4544,7 +4585,7 @@ test('native launcher accounts for an in-flight dispatch from another sandboxed 
   } finally {
     await writeFile(releaseMarker, '', 'utf8');
   }
-  const firstStatus = await new Promise((resolveExit) => first.once('exit', resolveExit));
+  const firstStatus = await firstExited;
 
   if (dispatchError) throw dispatchError;
 
@@ -4912,11 +4953,11 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   assert.match(search.stdout, /nice -n 10.*rg.*--threads=1/s);
   assert.match(typecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*runTypeScriptCli\.mjs/s);
   assert.doesNotMatch(typecheck.stdout, /--singleThreaded/);
-  assert.match(scriptedVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*corepack.*yarn.*test:local/s);
+  assert.match(scriptedVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*pnpm.*run.*--silent.*test:local/s);
   assert.doesNotMatch(scriptedVitest.stdout, /--maxWorkers|--minWorkers/);
   assert.match(
     scriptedNonVitestTest.stdout,
-    /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*corepack.*yarn.*test:migration:bundled-plugin-projections/s,
+    /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*pnpm.*run.*--silent.*test:migration:bundled-plugin-projections/s,
   );
   assert.doesNotMatch(scriptedNonVitestTest.stdout, /--maxWorkers|--minWorkers/);
   assert.match(
@@ -4924,7 +4965,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
     /nice -n 10.*yarn.*-s.*test:migration:bundled-plugin-projections/s,
   );
   assert.doesNotMatch(directNonVitestTest.stdout, /--maxWorkers|--minWorkers/);
-  assert.match(scriptedTypecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*corepack.*yarn.*typecheck:local/s);
+  assert.match(scriptedTypecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*pnpm.*run.*--silent.*typecheck:local/s);
   assert.match(quietVitest.stdout, /nice -n 10.*vitest/s);
   assert.doesNotMatch(quietVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=|VITEST_MAX_THREADS=|--maxWorkers/);
   assert.match(explicitVitestWorkers.stdout, /vitest.*--maxWorkers=6/s);
@@ -6010,7 +6051,8 @@ test('native launcher flushes an automatically selected mirror and retries anoth
   const sibling = await mkdtemp(join(dirname(repoRoot), 'hstack-sibling-retry-'));
   t.after(() => rm(sibling, { recursive: true, force: true }));
   await writeFile(join(sibling, 'package.json'), '{}');
-  await writeFile(join(sibling, 'yarn.lock'), '');
+  await writeFile(join(sibling, 'pnpm-lock.yaml'), '');
+  await writeFile(join(sibling, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   const configPath = join(stackDir, 'dev-targets.json');
   await writeFile(configPath, JSON.stringify({ version: 3,
     targets: ['linux', 'mac2'].map(name => ({ name, platform: 'posix', ssh: `${name}-host`, repoDir: '/remote/repo', cliHomeDir: '/remote/home' })),

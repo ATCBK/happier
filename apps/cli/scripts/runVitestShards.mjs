@@ -14,7 +14,7 @@ import {
   classifyVitestShardTermination,
   summarizeVitestShardOutcomes,
 } from '../../../scripts/testing/vitestShardOutcomes.mjs';
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveMaxOldSpaceSizeMb, upsertMaxOldSpaceSize } from './withNodeHeapLimit.mjs';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -256,7 +256,7 @@ async function main(argv) {
 export async function runCliUnitChecks() {
   for (const invocation of [
     { command: process.execPath, args: ['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs'] },
-    resolveYarnCommandInvocation(['-s', 'test:import-cycles']),
+    resolvePnpmCommandInvocation(['--silent', 'run', 'test:import-cycles']),
   ]) {
     const { windowsVerbatimArguments, ...command } = invocation;
     const result = await runManagedChildCommand({ ...command, spawnOptions: { stdio: 'inherit', windowsVerbatimArguments } });

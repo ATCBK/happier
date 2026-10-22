@@ -11,7 +11,7 @@ async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
-test('resolveWorkspaceToolBinDirs publishes default shims outside Yarn-owned installed bins', async (t) => {
+test('resolveWorkspaceToolBinDirs publishes default shims outside package-manager-owned installed bins', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-workspace-tool-bins-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -20,6 +20,9 @@ test('resolveWorkspaceToolBinDirs publishes default shims outside Yarn-owned ins
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
+  await writeJson(join(root, 'package.json'), { private: true });
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), {
     name: '@happier-dev/app',
     private: true,
@@ -72,6 +75,9 @@ test('resolveWorkspaceToolBinDirs tolerates concurrent isolated shim refreshes',
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
+  await writeJson(join(root, 'package.json'), { private: true });
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), {
@@ -137,9 +143,9 @@ test('resolveWorkspaceToolBinDirs exposes bins from workspace dependencies whose
   await mkdir(join(toolDir, 'dist'), { recursive: true });
   await writeJson(join(root, 'package.json'), {
     private: true,
-    workspaces: ['packages/*'],
   });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf-8');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app' });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli' });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server' });
@@ -186,9 +192,9 @@ test('resolveWorkspaceToolBinDirs can publish isolated shims without mutating in
   await mkdir(installedBinDir, { recursive: true });
   await writeJson(join(root, 'package.json'), {
     private: true,
-    workspaces: ['packages/*'],
   });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf-8');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app' });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli' });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server' });

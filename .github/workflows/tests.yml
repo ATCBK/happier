@@ -267,11 +267,9 @@ jobs:
       - name: Observe the shared toolchain
         id: toolchain
         run: echo "node_version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
-      - name: Enable Corepack
-        run: corepack enable && corepack prepare yarn@1.22.22 --activate
       - name: Install canonical frozen dependencies with the dependency-only cache
         id: dependencies
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           cache-dependencies: 'true'
       - name: Report the exact dependency cache result
@@ -281,14 +279,14 @@ jobs:
         with:
           toolchain: 1.94.1
       - name: Prepare the canonical Iroh native runtime
-        run: yarn workspace @happier-dev/iroh-native build:native
+        run: pnpm --filter @happier-dev/iroh-native run build:native
       - name: Prepare canonical compiler and unit workspace prerequisites
         run: |
-          yarn -s prepare:typecheck:workspaces
+          pnpm run prepare:typecheck:workspaces
       - name: Prepare the canonical CLI runtime closure
         # The root preparation has already published current plugin runtimes.
         # Reuse the canonical currentness scan and finish physical runtime custody.
-        run: yarn workspace @happier-dev/cli build:shared --source-dev
+        run: pnpm --filter @happier-dev/cli run build:shared --source-dev
       - name: Setup process-custody Go toolchain
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
@@ -302,7 +300,7 @@ jobs:
           "import { prepareNativeCustody } from './apps/cli/src/test-setup.ts'; await prepareNativeCustody(process.argv[1]);"
           "$GITHUB_WORKSPACE/apps/cli"
       - name: Load the prepared Iroh native runtime
-        run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
+        run: pnpm --filter @happier-dev/iroh-native run verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Record the installed dependency tree's admission with the canonical refresh owner
         # Consumers validate locally and refuse unadmitted trees. The frozen
         # install above is the authorized refresh; the marker travels in node_modules.
@@ -401,9 +399,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ needs.gate-prepare.outputs.node_version }}
-      - name: Enable Corepack
-        run: corepack enable && corepack prepare yarn@1.22.22 --activate
-      - uses: ./.github/actions/install-yarn-dependencies
+      - uses: ./.github/actions/install-pnpm-dependencies
         with:
           prepared-artifact: gate-prepared-workspace
       - name: Add swap headroom for the native compiler peak
@@ -440,7 +436,7 @@ jobs:
             echo "Current cgroup memory.events unavailable; kernel evidence remains necessary."
           fi
           mkdir -p "$HAPPIER_TYPECHECK_REPORT_DIR"
-          if yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=ui; then package_status=0; else package_status=$?; fi
+          if pnpm run typecheck:compiler --prepared-workspaces --compiler-partition=ui; then package_status=0; else package_status=$?; fi
           node scripts/ci/reportGateRegressions.mjs --kind=compiler --input="$HAPPIER_TYPECHECK_REPORT_DIR" \
             --baseline=scripts/ci/gate-triage-baseline.json --package-status="$package_status"
       - name: Report host evidence after compiler termination
@@ -493,8 +489,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ needs.gate-prepare.outputs.node_version }}
-      - name: Enable Corepack
-        run: corepack enable && corepack prepare yarn@1.22.22 --activate
       - name: Observe the Gate runner worker budget
         id: gate-workers
         run: |
@@ -504,18 +498,18 @@ jobs:
           echo "Gate unit host memory before preparation:"
           free -h
           cat /proc/self/cgroup
-      - uses: ./.github/actions/install-yarn-dependencies
+      - uses: ./.github/actions/install-pnpm-dependencies
         id: gate-unit-install
         with:
           prepared-artifact: gate-prepared-workspace
       - name: Prepare Chromium for real UI geometry unit tests
         if: ${{ contains(matrix.packages, 'ui') }}
-        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
+        run: ./apps/stack/bin/hstack-exec -- pnpm exec playwright install --with-deps chromium
       - name: Load the prepared Iroh native runtime
         id: cli-native-load
         if: ${{ contains(matrix.packages, 'cli') && steps.gate-unit-install.outcome == 'success' }}
         continue-on-error: true
-        run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
+        run: pnpm --filter @happier-dev/iroh-native run verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Run affected package unit suite
         if: ${{ !cancelled() && steps.gate-unit-install.outcome == 'success' }}
         env:
@@ -528,7 +522,7 @@ jobs:
           gate_status=0
           if [ "$GATE_PACKAGES" = 'ui' ]; then
             # Preserve the UI wrapper's existing file-partition selection.
-            HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/app test:unit \
+            HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" pnpm --filter @happier-dev/app run test:unit \
               --reporter=default --reporter="$GITHUB_WORKSPACE/scripts/ci/reportGateRegressions.mjs" || gate_status=1
           else
             gate_projects=()
@@ -541,7 +535,7 @@ jobs:
               fi
             done
             if [ "${#gate_projects[@]}" -gt 0 ]; then
-              if HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn test:gate-unit "${gate_projects[@]}"; then package_status=0; else package_status=$?; fi
+              if HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" pnpm run test:gate-unit "${gate_projects[@]}"; then package_status=0; else package_status=$?; fi
               node scripts/ci/reportGateRegressions.mjs --kind=unit --input="$HAPPIER_UNIT_JSON_OUTPUT" \
                 --baseline="$HAPPIER_GATE_TRIAGE_BASELINE" --package-status="$package_status" || gate_status=1
             fi
@@ -594,9 +588,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
-      - name: Enable Corepack
-        run: corepack enable && corepack prepare yarn@1.22.22 --activate
-      - uses: ./.github/actions/install-yarn-dependencies
+      - uses: ./.github/actions/install-pnpm-dependencies
         with:
           prepared-artifact: gate-prepared-workspace
       - name: Setup pinned Rust and the browser target
@@ -625,15 +617,15 @@ jobs:
         # Each native project is a separate process; neither job replays the suite.
         run: |
           mkdir -p "$HAPPIER_TYPECHECK_REPORT_DIR"
-          if yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=host; then package_status=0; else package_status=$?; fi
+          if pnpm run typecheck:compiler --prepared-workspaces --compiler-partition=host; then package_status=0; else package_status=$?; fi
           node scripts/ci/reportGateRegressions.mjs --kind=compiler --input="$HAPPIER_TYPECHECK_REPORT_DIR" \
             --baseline=scripts/ci/gate-triage-baseline.json --package-status="$package_status"
       - name: Build the CLI distribution
         # This job has just checked and emitted the current CLI source graph.
         # Consume those declarations without loading that graph a second time.
-        run: yarn workspace @happier-dev/cli build:prepared --prepared-declarations
+        run: pnpm --filter @happier-dev/cli run build:prepared --prepared-declarations
       - name: Load the prepared Iroh native runtime
-        run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
+        run: pnpm --filter @happier-dev/iroh-native run verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Probe the staged CLI runtime through its canonical owner
         run: |
           node --input-type=module <<'NODE'
@@ -642,7 +634,7 @@ jobs:
           await probeCliDistRuntimeImport(resolve('apps/cli/dist/index.mjs'));
           NODE
       - name: Build the server runtime
-        run: yarn --cwd apps/server build:runtime
+        run: pnpm --dir apps/server run build:runtime
       - name: Build and smoke the HStack binary
         run: ./apps/stack/bin/hstack-exec -- node --test apps/stack/scripts/self_host_binary_smoke.integration.test.mjs
       - name: Install the pinned browser boundary generator
@@ -745,12 +737,10 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
+      - name: Setup integrity-checked pnpm
         shell: bash
         run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
+          node scripts/ci/setup-pnpm.mjs
 
       - name: Setup pinned Go toolchain and module cache
         uses: actions/setup-go@v6
@@ -784,7 +774,7 @@ jobs:
         run: |
           set -euo pipefail
           node -e 'const fs=require("fs");const path=require("path");fs.appendFileSync(process.env.GITHUB_ENV,`WRAPPER_PATH=${path.join(process.env.RUNNER_TEMP,process.env.WRAPPER_NAME)}\n`)'
-          yarn workspace @happier-dev/plugins-cliproxyapi managed-runtime:build \
+          pnpm --filter @happier-dev/plugins-cliproxyapi run managed-runtime:build \
             --target "${{ matrix.go_target }}" \
             --output "${RUNNER_TEMP}/${WRAPPER_NAME}"
           node -e 'const fs=require("fs");if(!fs.statSync(process.argv[1]).isFile())process.exit(1)' "${RUNNER_TEMP}/${WRAPPER_NAME}"
@@ -828,7 +818,8 @@ jobs:
               - 'packages/sdk/**'
               - 'scripts/ci/select-ui-e2e-shard.mjs'
               - 'package.json'
-              - 'yarn.lock'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
 
       - name: Skip UI E2E (no relevant changes)
         if: ${{ !inputs.select_jobs_explicitly && steps.changes.outputs.ui_e2e != 'true' }}
@@ -840,8 +831,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: (inputs.select_jobs_explicitly || steps.changes.outputs.ui_e2e == 'true') && env.ACT == 'true'
@@ -849,18 +838,12 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        if: inputs.select_jobs_explicitly || steps.changes.outputs.ui_e2e == 'true'
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         if: inputs.select_jobs_explicitly || steps.changes.outputs.ui_e2e == 'true'
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           args: --frozen-lockfile
 
@@ -913,11 +896,11 @@ jobs:
             echo "::error::ui_e2e_specs did not contain any spec paths" >&2
             exit 1
           fi
-          yarn -s test:e2e:ui -- "${specs[@]}"
+          pnpm run test:e2e:ui -- "${specs[@]}"
 
       - name: Run dedicated Voice UI E2E
         if: (inputs.select_jobs_explicitly || steps.changes.outputs.ui_e2e == 'true') && matrix.shard == 1 && env.UI_E2E_SPECS == ''
-        run: yarn -s test:e2e:ui:voice
+        run: pnpm run test:e2e:ui:voice
 
       - name: Upload UI E2E artifacts (Playwright)
         if: (inputs.select_jobs_explicitly || steps.changes.outputs.ui_e2e == 'true') && failure()
@@ -1031,7 +1014,7 @@ jobs:
               - 'apps/cli/native/processcustody/**'
               - 'apps/cli/scripts/runWorkspaceSyncRealIntegration.mjs'
               - 'apps/cli/scripts/runWorkspaceSyncRealIntegration.test.mjs'
-              - 'scripts/workspaces/execYarnCommand.mjs'
+              - 'scripts/workspaces/execPnpmCommand.mjs'
               - 'apps/cli/vitest.integration.config.ts'
               - 'apps/cli/package.json'
               - 'packages/cli-common/mutagen-engine.json'
@@ -1109,7 +1092,8 @@ jobs:
               - '.github/workflows/tests.yml'
               - '.github/workflows/tests-dispatch.yml'
               - 'package.json'
-              - 'yarn.lock'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
 
       - name: Skip workspace sync (no relevant changes)
         if: ${{ !inputs.select_jobs_explicitly && steps.changes.outputs.workspace_sync_real != 'true' }}
@@ -1121,8 +1105,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Resolve Mutagen source policy
         id: mutagen_policy
@@ -1182,20 +1164,14 @@ jobs:
         with:
           toolchain: 1.94.1
 
-      - name: Enable Corepack
-        if: inputs.select_jobs_explicitly || steps.changes.outputs.workspace_sync_real == 'true'
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         if: inputs.select_jobs_explicitly || steps.changes.outputs.workspace_sync_real == 'true'
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       # The source-built binaries below prove the broker/carrier integration; this step
       # proves the separate production boundary users actually reach — the pinned signed
@@ -1208,7 +1184,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          yarn workspace @happier-dev/cli-common test:mutagen-engine:live
+          pnpm --filter @happier-dev/cli-common run test:mutagen-engine:live
 
       - name: Build source Mutagen prerequisites
         if: inputs.select_jobs_explicitly || steps.changes.outputs.workspace_sync_real == 'true'
@@ -1296,7 +1272,7 @@ jobs:
         env:
           HAPPIER_RUN_WORKSPACE_SYNC_PERFORMANCE: ${{ inputs.run_workspace_sync_performance && '1' || '0' }}
           HAPPIER_WORKSPACE_SYNC_PERFORMANCE_FILE_BYTES: '1073741824'
-        run: yarn test:workspace-sync:real
+        run: pnpm run test:workspace-sync:real
 
   mobile-e2e-android:
     # Native E2E is intentionally opt-in for now (not a PR check).
@@ -1312,22 +1288,15 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           # Keep this lane mobile-focused (avoid downloading heavy web-only assets).
           HAPPIER_INSTALL_SCOPE: "ui,protocol,session-core,agents,tests"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           args: --frozen-lockfile
 
@@ -1336,7 +1305,7 @@ jobs:
           bash scripts/ci/install_maestro.sh
 
       - name: Run Mobile E2E (android)
-        run: yarn -s test:e2e:mobile
+        run: pnpm run test:e2e:mobile
 
       - name: Upload Mobile E2E artifacts (Maestro)
         if: failure()
@@ -1361,21 +1330,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_INSTALL_SCOPE: "ui,protocol,session-core,agents,tests"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           args: --frozen-lockfile
 
@@ -1384,7 +1346,7 @@ jobs:
           bash scripts/ci/install_maestro.sh
 
       - name: Run Mobile E2E (ios)
-        run: yarn -s test:e2e:mobile:ios
+        run: pnpm run test:e2e:mobile:ios
 
       - name: Upload Mobile E2E artifacts (Maestro)
         if: failure()
@@ -1417,8 +1379,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1426,16 +1386,11 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           args: --frozen-lockfile
 
@@ -1443,15 +1398,15 @@ jobs:
         id: protocol-tests
         if: matrix.part == 1
         continue-on-error: true
-        run: yarn workspace @happier-dev/protocol test
+        run: pnpm --filter @happier-dev/protocol run test
 
       - name: Prepare Chromium for real UI geometry unit tests
-        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
+        run: ./apps/stack/bin/hstack-exec -- pnpm exec playwright install --with-deps chromium
 
       - name: Run unit tests
         id: unit-tests
         continue-on-error: true
-        run: yarn workspace @happier-dev/app test:unit
+        run: pnpm --filter @happier-dev/app run test:unit
 
       - name: Require all UI unit test lanes
         if: always()
@@ -1480,8 +1435,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1489,21 +1442,16 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
           args: --frozen-lockfile
 
       - name: Run integration tests
-        run: yarn workspace @happier-dev/app test:integration
+        run: pnpm --filter @happier-dev/app run test:integration
 
   ui:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (always() && (!inputs.select_jobs_explicitly || inputs.run_ui)) }}
@@ -1545,31 +1493,25 @@ jobs:
               - 'turbo.json'
               - '.github/workflows/tests.yml'
               - 'package.json'
-              - 'yarn.lock'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
 
       - name: Setup Node
         if: inputs.select_jobs_explicitly || steps.changes.outputs.action_dtos == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        if: inputs.select_jobs_explicitly || steps.changes.outputs.action_dtos == 'true'
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         if: inputs.select_jobs_explicitly || steps.changes.outputs.action_dtos == 'true'
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Check generated public Action contract
         if: inputs.select_jobs_explicitly || steps.changes.outputs.action_dtos == 'true'
-        run: yarn turbo run generated:finite --filter=@happier-dev/plugin-sdk
+        run: pnpm exec turbo run generated:finite --filter=@happier-dev/plugin-sdk
 
   shared-packages-unit:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_shared_packages) }}
@@ -1600,8 +1542,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1609,10 +1549,6 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Setup Bun (pinned)
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -1621,11 +1557,10 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Restore public SDK Turbo cache
         if: env.ACT != 'true'
@@ -1643,17 +1578,17 @@ jobs:
             turbo-public-sdk-${{ runner.os }}-
 
       - name: Build, govern, typecheck, and test public SDK packages
-        run: yarn -s check:public-sdk:finite
+        run: pnpm run check:public-sdk:finite
 
       - name: Run shared package unit tests
         if: ${{ !cancelled() }}
         env:
           HAPPIER_SHIPPED_TREE: ${{ github.workspace }}/.ci/released-cli-stable
-        run: yarn -s test:shared-packages --mode ci
+        run: pnpm run test:shared-packages --mode ci
 
       - name: Run current-source Plugin Platform author and runtime contracts
         if: ${{ !cancelled() }}
-        run: yarn workspace @happier-dev/tests test:plugin-platform:source
+        run: pnpm --filter @happier-dev/tests run test:plugin-platform:source
 
   plugin-workspaces-unit:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_plugin_workspaces) }}
@@ -1669,8 +1604,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1678,25 +1611,20 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run every plugin workspace test
-        run: yarn test:plugin-workspaces
+        run: pnpm run test:plugin-workspaces
 
       - name: Run every plugin workspace typecheck
         if: ${{ !cancelled() }}
-        run: yarn typecheck:plugin-workspaces
+        run: pnpm run typecheck:plugin-workspaces
 
   server:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_server) }}
@@ -1713,8 +1641,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1722,25 +1648,20 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unit tests
-        run: yarn --cwd apps/server test:unit
+        run: pnpm --dir apps/server run test:unit
 
       - name: Run integration tests
         if: ${{ !cancelled() }}
-        run: yarn --cwd apps/server test:integration
+        run: pnpm --dir apps/server run test:integration
 
   home-iroh-real:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_home_iroh_real) }}
@@ -1756,8 +1677,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
@@ -1765,40 +1684,35 @@ jobs:
           toolchain: 1.94.1
           targets: wasm32-unknown-unknown
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Build native fixture and run real Home and machine transports
-        run: yarn workspace @happier-dev/iroh-native test:home-iroh:real
+        run: pnpm --filter @happier-dev/iroh-native run test:home-iroh:real
 
       - name: Run Iroh package owner tests against the built addon
         env:
           HAPPIER_IROH_REQUIRE_NODE_ADDON: "1"
-        run: yarn workspace @happier-dev/iroh-native test
+        run: pnpm --filter @happier-dev/iroh-native run test
 
       - name: Install the browser Iroh build boundary and Chromium
         run: |
           cargo install wasm-bindgen-cli --version 0.2.127 --locked
-          yarn playwright install --with-deps chromium
+          pnpm exec playwright install --with-deps chromium
 
       - name: Run the canonical pinned Rust suite
-        run: yarn workspace @happier-dev/iroh-native test:rust
+        run: pnpm --filter @happier-dev/iroh-native run test:rust
 
       - name: Run real Chromium Home and Machine completion verticals
-        run: yarn --cwd apps/ui -s proof:browser-iroh-real-verticals
+        run: pnpm --dir apps/ui run proof:browser-iroh-real-verticals
 
       - name: Run Docker Iroh relay transfer and composed Home checks
-        run: yarn workspace @happier-dev/iroh-native test:home-iroh:docker
+        run: pnpm --filter @happier-dev/iroh-native run test:home-iroh:docker
 
   server-db-contract:
     if: ${{ !cancelled() && ((needs.trusted_ref_guard.result == 'success' && (!inputs.select_jobs_explicitly || inputs.run_server_db_contract)) || (needs.gate-prepare.result == 'success' && needs.gate-prepare.outputs.server_db_contract == 'true')) }}
@@ -1831,8 +1745,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1840,37 +1752,32 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Check provider schema synchronization
-        run: yarn --cwd apps/server schema:sync:check
+        run: pnpm --dir apps/server run schema:sync:check
 
       - name: Run SQLite migration lineage contract
-        run: yarn --cwd apps/server test:integration -- scripts/migrations/sessionAttentionLineage.sqlite.integration.spec.ts
+        run: pnpm --dir apps/server run test:integration -- scripts/migrations/sessionAttentionLineage.sqlite.integration.spec.ts
 
       - name: Migrate (Postgres)
         env:
           HAPPIER_DB_PROVIDER: postgres
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/happier?sslmode=disable
-        run: yarn --cwd apps/server -s migrate:full:deploy
+        run: pnpm --dir apps/server run migrate:full:deploy
 
       - name: Run db contract suite (Postgres)
         env:
           HAPPIER_DB_PROVIDER: postgres
           DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/happier?sslmode=disable
           HAPPIER_TEST_POSTGRES_DATABASE_URL: postgresql://happier:happier@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/happier?sslmode=disable
-        run: yarn --cwd apps/server test:server:db-contract
+        run: pnpm --dir apps/server run test:server:db-contract
 
   cli:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_cli) }}
@@ -1904,8 +1811,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -1913,10 +1818,6 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install system dependencies
         run: |
@@ -1947,11 +1848,10 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Disable remote logging for CI (avoid hanging test process)
         run: |
@@ -1964,18 +1864,18 @@ jobs:
       - name: Run unit tests
         run: |
           if [ "${{ matrix.part }}" = "1" ]; then
-            yarn workspace @happier-dev/cli test:unit
+            pnpm --filter @happier-dev/cli run test:unit
           else
-            yarn workspace @happier-dev/cli test:unit:vitest
+            pnpm --filter @happier-dev/cli run test:unit:vitest
           fi
 
       - name: Run integration tests
         if: ${{ !cancelled() }}
-        run: yarn workspace @happier-dev/cli test:integration
+        run: pnpm --filter @happier-dev/cli run test:integration
 
       - name: Run slow tests
         if: ${{ !cancelled() && matrix.part == 1 }}
-        run: yarn workspace @happier-dev/cli test:slow
+        run: pnpm --filter @happier-dev/cli run test:slow
 
   stack:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_stack) }}
@@ -1993,28 +1893,21 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unit tests
-        run: yarn --cwd apps/stack test:unit
+        run: pnpm --dir apps/stack run test:unit
 
       - name: Run integration tests
         if: ${{ !cancelled() }}
-        run: yarn --cwd apps/stack test:integration
+        run: pnpm --dir apps/stack run test:integration
 
   release-contracts:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_release_contracts) }}
@@ -2029,26 +1922,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run release contract tests
         run: |
           set -euo pipefail
-          yarn -s test:release:contracts
+          pnpm run test:release:contracts
           node scripts/pipeline/run.mjs release-sync-installers --check
 
   installers-smoke-linux:
@@ -2075,18 +1961,13 @@ jobs:
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Prepare release validation workspaces
         run: node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/cli-common @happier-dev/release-runtime
@@ -2127,18 +2008,13 @@ jobs:
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Prepare release validation workspaces
         run: node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/cli-common @happier-dev/release-runtime
@@ -2179,19 +2055,13 @@ jobs:
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        shell: pwsh
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Verify Windows installer security contracts
         shell: pwsh
@@ -2246,26 +2116,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Build candidate CLI archive
         env:
@@ -2312,26 +2175,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run isolated binary smoke tests
         env:
@@ -2374,26 +2230,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Build and run the HStack release binary
         run: node --test apps/stack/scripts/self_host_binary_smoke.integration.test.mjs
@@ -2407,11 +2256,11 @@ jobs:
 
       - name: Build the public website
         if: ${{ !cancelled() }}
-        run: yarn workspace @happier-dev/website build
+        run: pnpm --filter @happier-dev/website run build
 
       - name: Build the documentation site
         if: ${{ !cancelled() }}
-        run: yarn workspace docs build
+        run: pnpm --filter docs run build
 
   cli-update-continuity:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (inputs.run_cli_update_continuity) }}
@@ -2445,21 +2294,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unified CLI update continuity validation
         env:
@@ -2513,21 +2355,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unified daemon continuity validation
         env:
@@ -2574,21 +2409,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unified session continuity validation
         env:
@@ -2633,26 +2461,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run unified Docker release-assets validation
         env:
@@ -2684,26 +2505,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run real systemd self-host E2E
         run: |
@@ -2725,26 +2539,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run real launchd self-host E2E
         run: |
@@ -2766,26 +2573,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run real schtasks self-host E2E
         run: node --test apps/stack/scripts/self_host_schtasks.real.integration.test.mjs
@@ -2809,26 +2609,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run real self-host + daemon E2E
         run: node --test apps/stack/scripts/self_host_daemon.real.integration.test.mjs
@@ -2847,21 +2640,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Restore typecheck Turbo cache
         if: env.ACT != 'true'
@@ -2881,22 +2667,22 @@ jobs:
             turbo-typecheck-${{ runner.os }}-
 
       - name: Run lint
-        run: yarn lint && yarn test:lint-format
+        run: pnpm run lint && pnpm run test:lint-format
 
       - name: Run governance self-tests
-        run: yarn test:wiring:self && yarn test:policy:self && yarn test:tooling:self
+        run: pnpm run test:wiring:self && pnpm run test:policy:self && pnpm run test:tooling:self
 
       - name: Run governance validators
         if: ${{ !cancelled() }}
-        run: yarn test:wiring && yarn test:policy
+        run: pnpm run test:wiring && pnpm run test:policy
 
       - name: Run governance inventory reports
         if: ${{ !cancelled() }}
-        run: yarn test:inventory && yarn test:migration:inventory && yarn test:migration:governance
+        run: pnpm run test:inventory && pnpm run test:migration:inventory && pnpm run test:migration:governance
 
       - name: Run typecheck
         if: ${{ !cancelled() }}
-        run: yarn typecheck
+        run: pnpm run typecheck
 
   cli-daemon-e2e:
     if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_cli_daemon_e2e) }}
@@ -2925,8 +2711,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -2934,10 +2718,6 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install system dependencies
         run: |
@@ -2968,19 +2748,18 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Prepare light DB (SQLite) + apply migrations
         run: |
           set -euo pipefail
-          yarn --cwd apps/server -s migrate:sqlite:deploy
+          pnpm --dir apps/server run migrate:sqlite:deploy
 
       - name: Build CLI
-        run: yarn workspace @happier-dev/cli build
+        run: pnpm --filter @happier-dev/cli run build
 
       - name: Install provider CLI stubs (CI only)
         run: |
@@ -3042,7 +2821,7 @@ jobs:
 
           mkdir -p "${HAPPIER_SERVER_LIGHT_DATA_DIR}"
 
-          nohup yarn --cwd apps/server start:light > "/tmp/happier-server-light.log" 2>&1 &
+          nohup pnpm --dir apps/server run start:light > "/tmp/happier-server-light.log" 2>&1 &
           SERVER_PID="$(jobs -p | tail -n 1 || true)"
           if [ -z "${SERVER_PID}" ]; then
             echo "Failed to start server process"
@@ -3079,8 +2858,8 @@ jobs:
           # then write the credentials file expected by `.env.integration-test`.
           node scripts/pipeline/run.mjs testing-create-auth-credentials
 
-          yarn --cwd apps/cli -s vitest run --config vitest.integration.config.ts src/daemon/daemon.integration.test.ts
-          yarn --cwd apps/cli -s vitest run --config vitest.slow.config.ts src/daemon/daemon.spawnStop.stress.slow.test.ts
+          pnpm --dir apps/cli exec vitest run --config vitest.integration.config.ts src/daemon/daemon.integration.test.ts
+          pnpm --dir apps/cli exec vitest run --config vitest.slow.config.ts src/daemon/daemon.spawnStop.stress.slow.test.ts
 
       - name: Dump server logs (on failure)
         if: failure()
@@ -3155,8 +2934,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -3164,10 +2941,6 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install Sapling
         run: |
@@ -3178,18 +2951,17 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Run core e2e suite
         env:
           CI: "1"
           HAPPIER_E2E_SAVE_ARTIFACTS: "0"
           HAPPIER_E2E_DB_PROVIDER: sqlite
-        run: yarn test:e2e:core:fast
+        run: pnpm run test:e2e:core:fast
 
       - name: Upload e2e artifacts (on failure)
         if: failure()
@@ -3213,8 +2985,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Setup Node (act)
         if: env.ACT == 'true'
@@ -3222,10 +2992,6 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install Sapling
         run: |
@@ -3236,11 +3002,10 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Install exact-compatibility Playwright browser
         run: npx playwright install --with-deps chromium
@@ -3248,14 +3013,14 @@ jobs:
       - name: Run exact server-v0.2.1 compatibility gate
         env:
           HAPPIER_E2E_RELEASED_SERVER_V0_2_1_DIR: ${{ runner.temp }}/happier-server-v0.2.1
-        run: yarn workspace @happier-dev/tests test:compat:released-server-v0.2.1
+        run: pnpm --filter @happier-dev/tests run test:compat:released-server-v0.2.1
 
       - name: Run core e2e suite (slow)
         env:
           CI: "1"
           HAPPIER_E2E_SAVE_ARTIFACTS: "0"
           HAPPIER_E2E_DB_PROVIDER: sqlite
-        run: yarn test:e2e:core:slow
+        run: pnpm run test:e2e:core:slow
 
       - name: Upload e2e artifacts (on failure)
         if: failure()
@@ -3355,21 +3120,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Install provider CLIs
         env:
@@ -3480,7 +3238,7 @@ jobs:
           if [ "${{ fromJSON(inputs.providers_flags).flake_retry }}" != "true" ]; then flags+=("--no-flake-retry"); fi
           if [ "${{ fromJSON(inputs.providers_flags).update_baselines }}" = "true" ]; then flags+=("--update-baselines"); fi
 
-          yarn workspace @happier-dev/tests providers:run "${{ inputs.providers_preset }}" "${{ inputs.providers_tier }}" "${flags[@]}"
+          pnpm --filter @happier-dev/tests run providers:run "${{ inputs.providers_preset }}" "${{ inputs.providers_tier }}" "${flags[@]}"
 
       - name: Upload provider artifacts (on failure)
         if: failure()
@@ -3502,21 +3260,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Validate stress config
         env:
@@ -3559,7 +3310,7 @@ jobs:
           HAPPIER_STRESS_KEEP_TOPOLOGY_ON_FAILURE: ${{ fromJSON(inputs.stress_config).keep_topology_on_failure }}
           HAPPIER_STRESS_SOCKET_TRANSPORT: ${{ fromJSON(inputs.stress_config).socket_transport }}
           HAPPIER_E2E_SAVE_ARTIFACTS: ${{ fromJSON(inputs.stress_config).save_artifacts_on_success }}
-        run: yarn test:stress
+        run: pnpm run test:stress
 
       - name: Upload stress artifacts
         if: always()

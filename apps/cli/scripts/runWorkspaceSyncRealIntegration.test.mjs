@@ -48,7 +48,7 @@ test('plans the relay-fixture build plus local and remote source-built workspace
   });
 
   assert.deepEqual(plan.build, {
-    args: ['-s', 'build:native:test-relay'],
+    args: ['--silent', 'run', 'build:native:test-relay'],
     cwd: 'C:\\repo\\packages\\iroh-native',
   });
   assert.equal(
@@ -70,14 +70,16 @@ test('plans the relay-fixture build plus local and remote source-built workspace
     ],
   );
   assert.deepEqual(plan.tests[0].args, [
-    '-s',
+    '--silent',
+    'run',
     'test:local',
     'src/actions/actionExecutor.workspaceSyncConflict.test.ts',
     'src/actions/actionExecutor.sessionHandoff.test.ts',
   ]);
   assert.match(plan.tests[0].cwd, /packages[/\\]protocol$/u);
   assert.deepEqual(plan.tests[1].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '-c',
@@ -85,7 +87,8 @@ test('plans the relay-fixture build plus local and remote source-built workspace
     'src/workspaces/sync/workspaceSyncLegacySurface.architecture.test.ts',
   ]);
   assert.deepEqual(plan.tests[2].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -96,7 +99,8 @@ test('plans the relay-fixture build plus local and remote source-built workspace
     'enters session.handoff through the loaded daemon and reaches relationship and target authorities',
   ]);
   assert.deepEqual(plan.tests[3].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -107,7 +111,8 @@ test('plans the relay-fixture build plus local and remote source-built workspace
     'returns approval_stale without mutation when the approved root object was replaced|rolls back durable replacement custody when restart finds no final READY|treats exact READY plus receipt as committed cleanup pending on restart|does not trust mismatched READY to commit a retained rollback receipt',
   ]);
   assert.deepEqual(plan.tests[4].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -136,7 +141,7 @@ test('builds once and runs all real specs with source binaries and one stable re
   runWorkspaceSyncRealIntegration({
     env: { ...binaries, EXISTING_VALUE: 'preserved' },
     accessSyncImpl: (path) => accessed.push(path),
-    execYarnImpl: (args, options) => calls.push({ args, options }),
+    execPnpmImpl: (args, options) => calls.push({ args, options }),
     makeTempDirImpl: (prefix) => {
       assert.equal(prefix, join(temporaryRoot, 'happier-workspace-sync-real-'));
       return '/tmp/happier-workspace-sync-real-stable';
@@ -146,15 +151,17 @@ test('builds once and runs all real specs with source binaries and one stable re
   });
 
   assert.equal(calls.length, 10);
-  assert.deepEqual(calls[0].args, ['-s', 'build:native:test-relay']);
+  assert.deepEqual(calls[0].args, ['--silent', 'run', 'build:native:test-relay']);
   assert.deepEqual(calls[1].args, [
-    '-s',
+    '--silent',
+    'run',
     'test:local',
     'src/actions/actionExecutor.workspaceSyncConflict.test.ts',
     'src/actions/actionExecutor.sessionHandoff.test.ts',
   ]);
   assert.deepEqual(calls[2].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '-c',
@@ -162,7 +169,8 @@ test('builds once and runs all real specs with source binaries and one stable re
     'src/workspaces/sync/workspaceSyncLegacySurface.architecture.test.ts',
   ]);
   assert.deepEqual(calls[3].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -173,7 +181,8 @@ test('builds once and runs all real specs with source binaries and one stable re
     'enters session.handoff through the loaded daemon and reaches relationship and target authorities',
   ]);
   assert.deepEqual(calls[4].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -184,7 +193,8 @@ test('builds once and runs all real specs with source binaries and one stable re
     'returns approval_stale without mutation when the approved root object was replaced|rolls back durable replacement custody when restart finds no final READY|treats exact READY plus receipt as committed cleanup pending on restart|does not trust mismatched READY to commit a retained rollback receipt',
   ]);
   assert.deepEqual(calls[5].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',
@@ -195,7 +205,8 @@ test('builds once and runs all real specs with source binaries and one stable re
     'uses the staged native helper for read, abort preservation, and committed deletion',
   ]);
   assert.deepEqual(calls[6].args, [
-    '-s',
+    '--silent',
+    'run',
     'vitest:local',
     'run',
     '--isolate',

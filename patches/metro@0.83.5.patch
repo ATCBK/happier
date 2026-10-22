@@ -1,0 +1,67 @@
+diff --git a/src/DeltaBundler.js b/src/DeltaBundler.js
+index da1cdb8946a3f6c46682e5a6603aee2cfb52b910..fbd7048aacc178f47ebcf77fc68ee9713fc6685b 100644
+--- a/src/DeltaBundler.js
++++ b/src/DeltaBundler.js
+@@ -25,13 +25,15 @@ class DeltaBundler {
+       this._changeEventSource,
+       options,
+     );
+-    await deltaCalculator.getDelta({
+-      reset: true,
+-      shallow: options.shallow,
+-    });
+-    const graph = deltaCalculator.getGraph();
+-    deltaCalculator.end();
+-    return graph.dependencies;
++    try {
++      await deltaCalculator.getDelta({
++        reset: true,
++        shallow: options.shallow,
++      });
++      return deltaCalculator.getGraph().dependencies;
++    } finally {
++      deltaCalculator.end();
++    }
+   }
+   async buildGraph(entryPoints, options) {
+     const deltaCalculator = new _DeltaCalculator.default(
+@@ -39,10 +41,16 @@ class DeltaBundler {
+       this._changeEventSource,
+       options,
+     );
+-    await deltaCalculator.getDelta({
+-      reset: true,
+-      shallow: options.shallow,
+-    });
++    try {
++      await deltaCalculator.getDelta({
++        reset: true,
++        shallow: options.shallow,
++      });
++    } catch (error) {
++      // Happier: rejected initial graphs never enter the lifecycle registry.
++      deltaCalculator.end();
++      throw error;
++    }
+     const graph = deltaCalculator.getGraph();
+     this._deltaCalculators.set(graph, deltaCalculator);
+     return graph;
+diff --git a/src/node-haste/DependencyGraph.js b/src/node-haste/DependencyGraph.js
+index 342bbce6374a9cfdf338ba72ca3d2afad4b50dd4..4b16f01c3469fd40bbabd531f1d1a6ef00bde4d7 100644
+--- a/src/node-haste/DependencyGraph.js
++++ b/src/node-haste/DependencyGraph.js
+@@ -186,6 +186,14 @@ class DependencyGraph extends _events.default {
+     return (0, _nullthrows.default)(this._fileSystem).getAllFiles();
+   }
+   async getOrComputeSha1(mixedPath) {
++    if (mixedPath.includes("react-native-worklets/.worklets/")) {
++      const createHash = require("crypto").createHash;
++      return {
++        sha1: createHash("sha1")
++          .update(performance.now().toString())
++          .digest("hex"),
++      };
++    }
+     const result = await this._fileSystem.getOrComputeSha1(mixedPath);
+     if (!result || !result.sha1) {
+       throw new Error(`Failed to get the SHA-1 for: ${mixedPath}.

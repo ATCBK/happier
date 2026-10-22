@@ -13,16 +13,16 @@ for (const [lane, expectedCommands] of Object.entries({
   unit: [
     ...selectSharedPackageTestCommands('local').map(({ args }) => args),
     ...['@happier-dev/plugin-sdk', '@happier-dev/plugin-ui', '@happier-dev/sdk', '@happier-dev/app']
-      .map((name) => ['workspace', name, 'test']),
-    ['workspace', '@happier-dev/cli', 'test:unit'],
-    ['--cwd', 'apps/server', 'test:unit'],
-    ['--cwd', 'apps/stack', 'test:unit'],
+      .map((name) => ['--filter', name, '--silent', 'run', 'test']),
+    ['--filter', '@happier-dev/cli', '--silent', 'run', 'test:unit'],
+    ['--dir', 'apps/server', '--silent', 'run', 'test:unit'],
+    ['--dir', 'apps/stack', '--silent', 'run', 'test:unit'],
   ],
   integration: [
-    ['workspace', '@happier-dev/app', 'test:integration'],
-    ['workspace', '@happier-dev/cli', 'test:integration'],
-    ['--cwd', 'apps/server', 'test:integration'],
-    ['--cwd', 'apps/stack', 'test:integration'],
+    ['--filter', '@happier-dev/app', '--silent', 'run', 'test:integration'],
+    ['--filter', '@happier-dev/cli', '--silent', 'run', 'test:integration'],
+    ['--dir', 'apps/server', '--silent', 'run', 'test:integration'],
+    ['--dir', 'apps/stack', '--silent', 'run', 'test:integration'],
   ],
   'shared-packages': selectSharedPackageTestCommands('ci').map(({ args }) => args),
 })) {
@@ -31,9 +31,9 @@ for (const [lane, expectedCommands] of Object.entries({
     const scriptBody = rootPackage.scripts[`test:${lane}:local`] + (lane === 'shared-packages' ? ' --mode ci' : '');
     assert.deepEqual(
       resolveRootScriptWorkspaceTargets({ ...rootPackage.scripts, [`test:${lane}:local`]: scriptBody }, `test:${lane}`),
-      expectedCommands.map(([selector, workspace, scriptName]) => ({
-        packageName: selector === 'workspace' ? workspace : null,
-        workspaceDirectory: selector === '--cwd' ? workspace : null,
+      expectedCommands.map(([selector, workspace, , , scriptName]) => ({
+        packageName: selector === '--filter' ? workspace : null,
+        workspaceDirectory: selector === '--dir' ? workspace : null,
         scriptName,
       })),
       'inventory and workflow parity must see every actually executed workspace',
@@ -41,18 +41,18 @@ for (const [lane, expectedCommands] of Object.entries({
     const fixture = mkdtempSync(join(tmpdir(), 'happier-root-tests-'));
     try {
       const log = join(fixture, 'calls.jsonl');
-      const yarn = join(fixture, 'yarn.cjs');
+      const pnpm = join(fixture, 'pnpm.cjs');
       // Only the package-manager process is stubbed; exercise the actual dispatched script.
-      writeFileSync(yarn, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.ROOT_TEST_CALLS, JSON.stringify(args) + '\\n');\nprocess.exit(args.includes('apps/stack') ? 0 : 1);\n`, { mode: 0o755 });
+      writeFileSync(pnpm, `#!/usr/bin/env node\nconst fs = require('node:fs');\nconst args = process.argv.slice(2);\nfs.appendFileSync(process.env.ROOT_TEST_CALLS, JSON.stringify(args) + '\\n');\nprocess.exit(args.includes('apps/stack') ? 0 : 1);\n`, { mode: 0o755 });
       if (process.platform === 'win32') {
-        writeFileSync(join(fixture, 'yarn.cmd'), `@"${process.execPath}" "${yarn}" %*\r\n`);
+        writeFileSync(join(fixture, 'pnpm.cmd'), `@"${process.execPath}" "${pnpm}" %*\r\n`);
       } else {
-        writeFileSync(join(fixture, 'yarn'), readFileSync(yarn), { mode: 0o755 });
+        writeFileSync(join(fixture, 'pnpm'), readFileSync(pnpm), { mode: 0o755 });
       }
       const result = spawnSync(scriptBody, {
         shell: true,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, npm_execpath: yarn, ROOT_TEST_CALLS: log },
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, npm_execpath: pnpm, ROOT_TEST_CALLS: log },
       });
       assert.equal(result.error, undefined);
       assert.notEqual(result.status, 0, result.stdout + result.stderr);
@@ -76,6 +76,6 @@ test('the shared package entry dispatches through hstack to the canonical runner
   assert.deepEqual(
     resolveRootScriptWorkspaceTargets(rootPackage.scripts, 'test:shared-packages'),
     selectSharedPackageTestCommands('local').flatMap(({ args }) =>
-      resolveRootScriptWorkspaceTargets({ test: `yarn ${args.join(' ')}` }, 'test')),
+      resolveRootScriptWorkspaceTargets({ test: `pnpm ${args.join(' ')}` }, 'test')),
   );
 });

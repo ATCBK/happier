@@ -6,13 +6,13 @@ import { join } from 'node:path';
 
 import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './package_scripts.mjs';
 
-test('detectPackageManagerCmd prefers yarn when run from a Happy monorepo package dir (packages/ layout)', async (t) => {
+test('detectPackageManagerCmd prefers pnpm when run from a Happy monorepo package dir (packages/ layout)', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-package-scripts-happy-monorepo-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  // Minimal monorepo markers + yarn.lock at the monorepo root.
+  // Minimal monorepo markers + pnpm-lock.yaml at the monorepo root.
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
@@ -20,14 +20,15 @@ test('detectPackageManagerCmd prefers yarn when run from a Happy monorepo packag
   await writeFile(join(root, 'apps', 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n");
 
   const pm = await detectPackageManagerCmd(join(root, 'apps', 'server'));
-  assert.equal(pm.name, 'yarn');
-  assert.deepEqual(pm.argsForScript('test'), ['-s', 'test']);
+  assert.equal(pm.name, 'pnpm');
+  assert.deepEqual(pm.argsForScript('test'), ['run', '--silent', 'test']);
 });
 
-test('detectPackageManagerCmd defaults to yarn when no lockfile/monorepo markers are present', async (t) => {
+test('detectPackageManagerCmd defaults to pnpm when no lockfile/monorepo markers are present', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-package-scripts-default-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -35,8 +36,8 @@ test('detectPackageManagerCmd defaults to yarn when no lockfile/monorepo markers
   await writeFile(join(root, 'package.json'), '{ "name": "single-package" }\n', 'utf-8');
 
   const pm = await detectPackageManagerCmd(root);
-  assert.equal(pm.name, 'yarn');
-  assert.deepEqual(pm.argsForScript('lint'), ['-s', 'lint']);
+  assert.equal(pm.name, 'pnpm');
+  assert.deepEqual(pm.argsForScript('lint'), ['run', '--silent', 'lint']);
 });
 
 test('readPackageJsonScripts returns scripts object or null for missing package.json', async (t) => {

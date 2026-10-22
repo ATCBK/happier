@@ -173,7 +173,7 @@ async function assertTargetOptionalPackages(params: Readonly<{
   });
   if (missing.length > 0) {
     throw new Error(
-      `[component-artifacts] missing target optional runtime package(s) for ${params.target.os}-${params.target.arch}: ${missing.map((name) => `${params.scope}/${name}`).join(', ')}; install dependencies with --ignore-platform before building cross-target artifacts`,
+      `[component-artifacts] missing target optional runtime package(s) for ${params.target.os}-${params.target.arch}: ${missing.map((name) => `${params.scope}/${name}`).join(', ')}; enable cross-target-optionals in the shared CI dependency install before building release artifacts`,
     );
   }
 }

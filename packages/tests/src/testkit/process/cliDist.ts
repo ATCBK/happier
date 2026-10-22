@@ -26,7 +26,7 @@ import {
 import { repoRootDir } from '../paths';
 import { sleep } from '../timing';
 import { ensureCliDistSnapshotNodeModules } from './cliDistSnapshotNodeModules';
-import { yarnCommand } from './commands';
+import { pnpmCommand } from './commands';
 import { runLoggedCommand } from './spawnProcess';
 import {
   resolvePackageBuildOutputTargetMatches,
@@ -833,9 +833,9 @@ export function resolveCliDistBuildInvocation(params: { repoRoot?: string } = {}
   const rootDir = params.repoRoot ?? repoRootDir();
   const cwd = resolve(rootDir, 'apps', 'cli');
   // Shared dependencies are prepared before this invocation. Call the same canonical CLI build
-  // script without re-running Yarn's `prebuild` lifecycle: that lifecycle calls build:shared and
+  // script without re-running pnpm's `prebuild` lifecycle: that lifecycle calls build:shared and
   // would otherwise acquire the shared-deps lock after this helper owns the CLI dist lock.
-  return { command: yarnCommand(), args: ['-s', 'workspace', '@happier-dev/cli', 'build:prepared'], cwd: rootDir };
+  return { command: pnpmCommand(), args: ['--filter', '@happier-dev/cli', 'run', '--silent', 'build:prepared'], cwd: rootDir };
 }
 
 export async function ensureCliSharedDepsBuilt(
@@ -873,8 +873,8 @@ export async function ensureCliSharedDepsBuilt(
     for (let attempt = 1; attempt <= maxBuildAttempts; attempt += 1) {
       const sourceFreshnessBeforeBuild = readCliSharedDepsSourceFreshnessSignature(rootDir);
       await runCommand({
-        command: yarnCommand(),
-        args: ['-s', 'workspace', '@happier-dev/cli', 'build:shared'],
+        command: pnpmCommand(),
+        args: ['--filter', '@happier-dev/cli', 'run', '--silent', 'build:shared'],
         cwd: rootDir,
         env: { ...process.env, ...params.env, CI: '1' },
         stdoutPath: resolve(params.testDir, 'cli.buildShared.stdout.log'),

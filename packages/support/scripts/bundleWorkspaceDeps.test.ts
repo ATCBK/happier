@@ -45,7 +45,8 @@ describe('bundleWorkspaceDeps', () => {
     const sandbox = mkdtempSync(resolve(tmpdir(), 'happier-support-bundle-'));
     try {
       writeJson(resolve(sandbox, 'package.json'), { private: true });
-      writeFileSync(resolve(sandbox, 'yarn.lock'), '', 'utf8');
+      writeFileSync(resolve(sandbox, 'pnpm-lock.yaml'), '', 'utf8');
+      writeFileSync(resolve(sandbox, 'pnpm-workspace.yaml'), 'packages: []\n');
       writeJson(resolve(sandbox, 'packages', 'support', 'package.json'), {
         name: '@happier-dev/support',
         version: '0.0.0',

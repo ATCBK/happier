@@ -1,5 +1,5 @@
 import { runCapture } from '../proc/proc.mjs';
-import { ensureDepsInstalled, ensureWorkspacePackagesBuiltForComponent, pmExecBin } from '../proc/pm.mjs';
+import { ensureDepsInstalled, ensureWorkspacePackagesBuiltForComponent } from '../proc/pm.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

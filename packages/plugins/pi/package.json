@@ -65,7 +65,7 @@
   "scripts": {
     "tsc": "node ../../../scripts/workspaces/runTypeScriptCli.mjs",
     "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
-    "build:finite": "yarn -s build",
+    "build:finite": "pnpm --silent run build",
     "project:finite": "node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs",
     "test": "../../../apps/stack/bin/hstack-exec --script=test:local",
     "test:local": "vitest run && vitest run --config vitest.mcpApproval.config.ts",
@@ -82,6 +82,7 @@
     "@happier-dev/agents": "0.0.0",
     "@happier-dev/protocol": "0.0.0",
     "@happier-dev/tests": "0.0.0",
+    "ajv": "^8.17.1",
     "pi-ai-0810": "npm:@earendil-works/pi-ai@0.81.0",
     "pi-ai-0811": "npm:@earendil-works/pi-ai@0.81.1",
     "pi-ai-0820": "npm:@earendil-works/pi-ai@0.82.0",

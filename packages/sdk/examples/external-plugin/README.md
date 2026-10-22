@@ -45,7 +45,7 @@ HAPPIER_MACHINE_ID='machine-id' \
 HAPPIER_SESSION_ID='session-id' \
 HAPPIER_DISCUSSION_ID='discussion-id' \
 HAPPIER_RUN_SELECTION='{"backendTarget":{…},"permissionMode":"…"}' \
-yarn tsx packages/sdk/examples/external-plugin/index.ts
+pnpm exec tsx packages/sdk/examples/external-plugin/index.ts
 ```
 
 `HAPPIER_RUN_SELECTION` carries the integration's own Agent target and

@@ -9,7 +9,7 @@ DAEMON_PORT="$(happier daemon status --json | jq -er '.daemon.httpPort')"
 HAPPIER_API_ENDPOINT="http://127.0.0.1:$DAEMON_PORT" \
 HAPPIER_TOKEN='hap_v1_…' \
 HAPPIER_AGENT_ID='codex' \
-yarn tsx packages/sdk/examples/basic/index.ts
+pnpm exec tsx packages/sdk/examples/basic/index.ts
 ```
 
 The example connects to the daemon, spawns a Session with the installed Agent

@@ -71,8 +71,9 @@ export async function findMonorepoRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 12; i++) {
     const pkg = join(dir, 'package.json');
-    const lock = join(dir, 'yarn.lock');
-    if ((await pathExists(pkg)) && (await pathExists(lock))) return dir;
+    const lock = join(dir, 'pnpm-lock.yaml');
+    const workspace = join(dir, 'pnpm-workspace.yaml');
+    if ((await pathExists(pkg)) && (await pathExists(lock)) && (await pathExists(workspace))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -904,12 +905,13 @@ export async function createPackSandbox({
       throw new Error(`[pack] sandbox root must be a real isolated directory: ${sandboxRoot}`);
     }
     // Minimal monorepo layout needed for pack steps that reference workspace deps:
-    // - root package.json + yarn.lock (for repo root detection)
+    // - root package.json + pnpm workspace/lock inputs (for repo root detection)
     // - target package dir (e.g. apps/cli)
     // - bundled deps sources (packages/*)
     const filesToCopy = [
       'package.json',
-      'yarn.lock',
+      'pnpm-lock.yaml',
+      'pnpm-workspace.yaml',
     ];
     for (const f of filesToCopy) {
       await copyRequiredRegularFile(join(monorepoRoot, f), join(sandboxRoot, f));
@@ -1844,7 +1846,7 @@ async function main() {
 
   const monorepoRoot = await findMonorepoRoot(packDir);
   if (!monorepoRoot) {
-    throw new Error(`[pack] could not locate monorepo root (package.json + yarn.lock) from: ${packDir}`);
+    throw new Error(`[pack] could not locate monorepo root (package.json + pnpm-workspace.yaml + pnpm-lock.yaml) from: ${packDir}`);
   }
   const packageRelDir = relative(monorepoRoot, packDir).split(sep).join('/');
   if (!(packageRelDir.startsWith('apps/') || packageRelDir.startsWith('packages/'))) {

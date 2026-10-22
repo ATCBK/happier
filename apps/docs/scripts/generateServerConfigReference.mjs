@@ -14,7 +14,7 @@
  * The composed registry lives in server TypeScript, so it is read by running the server's
  * `printServerConfigRegistry.ts` through the server's own tsx runner.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';

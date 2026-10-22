@@ -1,0 +1,97 @@
+name: Install pnpm Dependencies
+description: Set up pinned pnpm, install frozen dependencies with a store cache, or restore this run's prepared workspace
+
+inputs:
+  args:
+    description: Arguments forwarded to pnpm install
+    required: false
+    default: --frozen-lockfile
+  cache-dependencies:
+    description: Cache the pnpm store; the frozen install still runs on cache hits
+    required: false
+    default: 'true'
+  cross-target-optionals:
+    description: Install native release optional packages for Linux glibc/musl, macOS and Windows on x64/arm64
+    required: false
+    default: 'false'
+  working-directory:
+    description: Repository directory relative to the checkout
+    required: false
+    default: '.'
+  prepared-artifact:
+    description: Current-run prepared workspace artifact to restore instead of installing
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: Whether the exact third-party dependency cache key was restored
+    value: ${{ steps.dependency-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install integrity-checked pinned pnpm
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: node scripts/ci/setup-pnpm.mjs
+    - name: Locate the pnpm store
+      if: ${{ inputs.prepared-artifact == '' && inputs.cache-dependencies == 'true' }}
+      id: pnpm-store
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - name: Restore pnpm store
+      if: ${{ inputs.prepared-artifact == '' && inputs.cache-dependencies == 'true' }}
+      id: dependency-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', inputs.working-directory), format('{0}/pnpm-workspace.yaml', inputs.working-directory), format('{0}/package.json', inputs.working-directory), format('{0}/patches/**', inputs.working-directory)) }}
+    - name: Install frozen dependencies
+      if: ${{ inputs.prepared-artifact == '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+        REDISMS_DISABLE_POSTINSTALL: '1'
+        HAPPIER_INSTALL_CROSS_TARGET_OPTIONALS: ${{ inputs.cross-target-optionals }}
+      run: |
+        set -euo pipefail
+        platform_args=()
+        if [ "$HAPPIER_INSTALL_CROSS_TARGET_OPTIONALS" = 'true' ]; then
+          # pnpm 12's platform filters extend supportedArchitectures for this
+          # install only. Linux release payloads retain both libc variants.
+          platform_args=(--os=linux,darwin,win32 --cpu=x64,arm64 --libc=glibc,musl)
+        fi
+        pnpm install ${{ inputs.args }} --prod=false --prefer-offline "${platform_args[@]}"
+    - name: Save pnpm store
+      if: ${{ inputs.prepared-artifact == '' && inputs.cache-dependencies == 'true' && steps.dependency-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ steps.dependency-cache.outputs.cache-primary-key }}
+    - name: Start prepared workspace restore measurement
+      if: ${{ inputs.prepared-artifact != '' }}
+      id: prepared-start
+      shell: bash
+      run: echo "seconds=$(date +%s)" >> "$GITHUB_OUTPUT"
+    - name: Download this run's prepared workspace
+      if: ${{ inputs.prepared-artifact != '' }}
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: ${{ inputs.prepared-artifact }}
+        path: ${{ runner.temp }}/gate-prepared
+    - name: Restore this run's prepared workspace
+      if: ${{ inputs.prepared-artifact != '' }}
+      shell: bash
+      env:
+        RESTORE_STARTED_SECONDS: ${{ steps.prepared-start.outputs.seconds }}
+      run: |
+        set -euo pipefail
+        tar --extract --same-permissions --file "$RUNNER_TEMP/gate-prepared/gate-prepared-workspace.tar" --directory "$GITHUB_WORKSPACE"
+        test -d node_modules
+        test -f .project/tmp/cli-source-dev-shared-deps-sync.json
+        echo "Current-run prepared workspace download/extract: $(( $(date +%s) - RESTORE_STARTED_SECONDS )) seconds. No dependency installation was run in this consumer."

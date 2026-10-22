@@ -12,21 +12,20 @@ import { parseSharedPackageTestMode, selectSharedPackageTestCommands } from '../
 import { ROOT_TEST_COMMANDS } from '../runRootTests.ts';
 
 export interface WorkspaceScriptTarget {
-  /** Yarn workspace package name for `yarn workspace <name> <script>` invocations. */
+  /** Workspace package name for `pnpm --filter <name> run <script>` invocations. */
   packageName: string | null;
-  /** Repo-relative directory for `yarn --cwd <dir> <script>` invocations. */
+  /** Repo-relative directory for `pnpm --dir <dir> run <script>` invocations. */
   workspaceDirectory: string | null;
   scriptName: string;
 }
 
-export interface YarnInvocationScan {
+export interface PnpmInvocationScan {
   workspaceTargets: readonly WorkspaceScriptTarget[];
-  /** Root script names this command delegates to (`yarn <script>` / `hstack-exec --script=<name>`). */
+  /** Root script names this command delegates to (`pnpm run <script>` / `hstack-exec --script=<name>`). */
   rootScriptRefs: readonly string[];
 }
 
 const HSTACK_SCRIPT_FLAG_RE = /--script=([A-Za-z0-9:._-]+)/g;
-const PACKAGE_MANAGER_RUNNER_TOKENS = new Set(['$npm_execpath', '${npm_execpath}', 'npm', 'pnpm']);
 const TEST_FILE_ARGUMENT_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 function isFlag(token: string): boolean {
@@ -40,7 +39,7 @@ function tokenize(commandText: string): string[] {
     .filter((token) => token !== '');
 }
 
-export function scanYarnInvocations(commandText: string): YarnInvocationScan {
+export function scanPnpmInvocations(commandText: string): PnpmInvocationScan {
   const workspaceTargets: WorkspaceScriptTarget[] = [];
   const rootScriptRefs: string[] = [];
 
@@ -55,7 +54,7 @@ export function scanYarnInvocations(commandText: string): YarnInvocationScan {
         ? ['--mode', tokens[index + 2] ?? '']
         : []);
       for (const command of selectSharedPackageTestCommands(mode)) {
-        const scan = scanYarnInvocations(['yarn', ...command.args].join(' '));
+        const scan = scanPnpmInvocations(['pnpm', ...command.args].join(' '));
         workspaceTargets.push(...scan.workspaceTargets);
         rootScriptRefs.push(...scan.rootScriptRefs);
       }
@@ -67,25 +66,13 @@ export function scanYarnInvocations(commandText: string): YarnInvocationScan {
         throw new Error(`Unsupported root test lane: ${lane ?? '<missing>'}`);
       }
       for (const command of ROOT_TEST_COMMANDS[lane]) {
-        const scan = scanYarnInvocations(['yarn', ...command.args].join(' '));
+        const scan = scanPnpmInvocations(['pnpm', ...command.args].join(' '));
         workspaceTargets.push(...scan.workspaceTargets);
         rootScriptRefs.push(...scan.rootScriptRefs);
       }
       continue;
     }
-    // `$npm_execpath run <script>` is the package-manager-agnostic delegation form several
-    // workspaces use in place of `yarn <script>` (`apps/cli`'s `test:local` is exactly this).
-    // Skipping it makes the whole lane behind the wrapper invisible.
-    if (PACKAGE_MANAGER_RUNNER_TOKENS.has(tokens[index]!) && tokens[index + 1] === 'run') {
-      const scriptName = tokens[index + 2];
-      if (scriptName !== undefined && !isFlag(scriptName)) {
-        rootScriptRefs.push(scriptName);
-        index += 2;
-      }
-      continue;
-    }
-
-    if (tokens[index] !== 'yarn') continue;
+    if (tokens[index] !== 'pnpm') continue;
 
     let cursor = index + 1;
     let workspaceDirectory: string | null = null;
@@ -93,12 +80,12 @@ export function scanYarnInvocations(commandText: string): YarnInvocationScan {
 
     while (cursor < tokens.length) {
       const token = tokens[cursor]!;
-      if (token === '--cwd') {
+      if (token === '--dir') {
         workspaceDirectory = tokens[cursor + 1] ?? null;
         cursor += 2;
         continue;
       }
-      if (token === 'workspace') {
+      if (token === '--filter') {
         packageName = tokens[cursor + 1] ?? null;
         cursor += 2;
         continue;
@@ -110,6 +97,9 @@ export function scanYarnInvocations(commandText: string): YarnInvocationScan {
       break;
     }
 
+    if (tokens[cursor] !== 'run') continue;
+    cursor += 1;
+    while (cursor < tokens.length && isFlag(tokens[cursor]!)) cursor += 1;
     const scriptName = tokens[cursor];
     if (scriptName === undefined) continue;
 
@@ -164,7 +154,7 @@ export function scanNodeTestFileArguments(commandText: string): readonly string[
 
 /**
  * Bodies of every script reachable from `entryScriptName`, following delegation through other
- * scripts in the same manifest (`yarn -s <script>`) and through the Stack executor
+ * scripts in the same manifest (`pnpm --silent run <script>`) and through the Stack executor
  * (`hstack-exec --script=<script>:local`).
  */
 function collectReachableScriptBodies(
@@ -184,7 +174,7 @@ function collectReachableScriptBodies(
     if (typeof body !== 'string' || body.trim() === '') continue;
 
     bodies.push(body);
-    for (const ref of scanYarnInvocations(body).rootScriptRefs) {
+    for (const ref of scanPnpmInvocations(body).rootScriptRefs) {
       if (!seen.has(ref) && typeof scripts[ref] === 'string') {
         queue.push(ref);
       }
@@ -196,14 +186,14 @@ function collectReachableScriptBodies(
 
 /**
  * Resolve every workspace a root script executes, following delegation through other root scripts
- * (`yarn -s <script>`) and through the Stack executor (`hstack-exec --script=<script>:local`).
+ * (`pnpm --silent run <script>`) and through the Stack executor (`hstack-exec --script=<script>:local`).
  */
 export function resolveRootScriptWorkspaceTargets(
   scripts: Readonly<Record<string, string>>,
   rootScriptName: string,
 ): readonly WorkspaceScriptTarget[] {
   return collectReachableScriptBodies(scripts, rootScriptName)
-    .flatMap((body) => scanYarnInvocations(body).workspaceTargets);
+    .flatMap((body) => scanPnpmInvocations(body).workspaceTargets);
 }
 
 /**

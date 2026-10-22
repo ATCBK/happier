@@ -6,7 +6,7 @@ import { getComponentDir, getDefaultAutostartPaths, getRepoDir, getRootDir } fro
 import { killPortListeners, observeTcpPortAvailability } from './utils/net/ports.mjs';
 import { fetchHappierHealth, getServerComponentName, isHappierServerRunning, waitForServerReady } from './utils/server/server.mjs';
 import { resolveServerShutdownGraceMs } from './utils/server/shutdown_grace.mjs';
-import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/proc/pm.mjs';
+import { ensureDepsInstalled, requireDir } from './utils/proc/pm.mjs';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
 import { mkdir, mkdtemp } from 'node:fs/promises';

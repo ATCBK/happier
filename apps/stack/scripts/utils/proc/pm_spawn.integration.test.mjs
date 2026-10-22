@@ -16,37 +16,36 @@ async function waitExit(child) {
   });
 }
 
-async function writeStubYarn({ binDir }) {
+async function writeStubPnpm({ binDir, expectedCommand }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       'const args = process.argv.slice(2);',
-      // ensureYarnReady calls: yarn --version
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
-      // pmSpawn* calls: yarn run <script/bin> ...
-      'if (args[0] === "run") process.exit(0);',
-      'process.exit(0);',
+      // ensurePnpmReady calls: pnpm --version
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
+      // Scripts use pnpm run; binaries use pnpm exec.
+      `process.exit(args[0] === ${JSON.stringify(expectedCommand)} ? 0 : 79);`,
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
-async function writeStubYarnCaptureKind({ binDir }) {
+async function writeStubPnpmCaptureKind({ binDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       'const fs = require("fs");',
       'const args = process.argv.slice(2);',
-      // ensureYarnReady calls: yarn --version
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
-      // pmSpawn* calls: yarn run <script/bin> ...
+      // ensurePnpmReady calls: pnpm --version
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
+      // Scripts use pnpm run; binaries use pnpm exec.
       'if (args[0] === "run") {',
       '  const out = process.env.TEST_OUT_FILE || "";',
       '  if (out) fs.writeFileSync(out, String(process.env.HAPPIER_STACK_PROCESS_KIND || ""), "utf-8");',
@@ -56,19 +55,19 @@ async function writeStubYarnCaptureKind({ binDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
-async function writeStubYarnCaptureEnv({ binDir }) {
+async function writeStubPnpmCaptureEnv({ binDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       'const fs = require("fs");',
       'const args = process.argv.slice(2);',
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
       'if (args[0] === "run") {',
       '  const out = process.env.TEST_OUT_FILE || "";',
       '  if (out) {',
@@ -80,19 +79,19 @@ async function writeStubYarnCaptureEnv({ binDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
-async function writeStubYarnUsesTsx({ binDir }) {
+async function writeStubPnpmUsesTsx({ binDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       'const { spawnSync } = require("node:child_process");',
       'const args = process.argv.slice(2);',
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
       'if (args[0] === "run") {',
       '  const result = spawnSync("tsx", ["./scripts/dev.light.ts"], { cwd: process.cwd(), env: process.env, stdio: "inherit" });',
       '  if (result.error) throw result.error;',
@@ -102,19 +101,19 @@ async function writeStubYarnUsesTsx({ binDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
-async function writeStubYarnUsesShellTool({ binDir }) {
+async function writeStubPnpmUsesShellTool({ binDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       'const { spawnSync } = require("node:child_process");',
       'const args = process.argv.slice(2);',
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
       'if (args[0] === "run") {',
       '  const result = spawnSync("shell-tool", ["--ping"], { cwd: process.cwd(), env: process.env, stdio: "inherit" });',
       '  if (result.error) throw result.error;',
@@ -124,10 +123,10 @@ async function writeStubYarnUsesShellTool({ binDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
-test('pmSpawnScript does not reference effectiveEnv before initialization', async (t) => {
+test('pmSpawnScript launches package scripts through pnpm run', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-spawn-script-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -136,10 +135,11 @@ test('pmSpawnScript does not reference effectiveEnv before initialization', asyn
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeJson(join(componentDir, 'package.json'), { name: 'component', version: '0.0.0' });
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   const binDir = join(root, 'bin');
-  await writeStubYarn({ binDir });
+  await writeStubPnpm({ binDir, expectedCommand: 'run' });
 
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
   const child = await pmSpawnScript({ dir: componentDir, label: 'spawn-test', script: 'noop', env, quiet: true, options: { silent: true } });
@@ -147,7 +147,7 @@ test('pmSpawnScript does not reference effectiveEnv before initialization', asyn
   assert.equal(res.code, 0);
 });
 
-test('pmSpawnBin does not reference effectiveEnv before initialization', async (t) => {
+test('pmSpawnBin launches installed binaries through pnpm exec', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-spawn-bin-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -156,10 +156,11 @@ test('pmSpawnBin does not reference effectiveEnv before initialization', async (
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeJson(join(componentDir, 'package.json'), { name: 'component', version: '0.0.0' });
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   const binDir = join(root, 'bin');
-  await writeStubYarn({ binDir });
+  await writeStubPnpm({ binDir, expectedCommand: 'exec' });
 
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
   const child = await pmSpawnBin({ dir: componentDir, label: 'spawn-test', bin: 'prisma', args: ['generate'], env, quiet: true, options: { silent: true } });
@@ -176,12 +177,13 @@ test('pmSpawnScript marks stack-owned infra processes with HAPPIER_STACK_PROCESS
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeJson(join(componentDir, 'package.json'), { name: 'component', version: '0.0.0' });
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   const outFile = join(root, 'kind.txt');
 
   const binDir = join(root, 'bin');
-  await writeStubYarnCaptureKind({ binDir });
+  await writeStubPnpmCaptureKind({ binDir });
 
   const env = {
     ...process.env,
@@ -207,12 +209,13 @@ test('pmSpawnScript treats stack-owned package-manager children as infra even wh
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeJson(join(componentDir, 'package.json'), { name: 'component', version: '0.0.0' });
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   const outFile = join(root, 'kind.txt');
 
   const binDir = join(root, 'bin');
-  await writeStubYarnCaptureKind({ binDir });
+  await writeStubPnpmCaptureKind({ binDir });
 
   const env = {
     ...process.env,
@@ -239,12 +242,13 @@ test('pmSpawnScript scopes TSX_TSCONFIG_PATH to the component tsconfig', async (
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeJson(join(componentDir, 'package.json'), { name: 'component', version: '0.0.0' });
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
   await writeFile(join(componentDir, 'tsconfig.json'), '{ "compilerOptions": {} }\n', 'utf-8');
 
   const outFile = join(root, 'tsx-env.json');
   const binDir = join(root, 'bin');
-  await writeStubYarnCaptureEnv({ binDir });
+  await writeStubPnpmCaptureEnv({ binDir });
 
   const env = {
     ...process.env,
@@ -269,7 +273,8 @@ test('pmSpawnScript resolves tsx package bins when repo root node_modules/.bin i
   const componentDir = join(root, 'apps', 'server');
   await mkdir(join(componentDir, 'scripts'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n");
   await writeJson(join(componentDir, 'package.json'), { name: '@happier-dev/server', version: '0.0.0' });
   await writeFile(join(componentDir, 'scripts', 'dev.light.ts'), 'export {};\n', 'utf-8');
 
@@ -293,7 +298,7 @@ test('pmSpawnScript resolves tsx package bins when repo root node_modules/.bin i
   await chmod(join(tsxDir, 'dist', 'cli.mjs'), 0o755);
 
   const binDir = join(root, 'bin');
-  await writeStubYarnUsesTsx({ binDir });
+  await writeStubPnpmUsesTsx({ binDir });
 
   const env = {
     ...process.env,
@@ -314,7 +319,8 @@ test('pmSpawnScript resolves shell-script package bins without forcing them thro
   const componentDir = join(root, 'apps', 'server');
   await mkdir(join(componentDir, 'scripts'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n");
   await writeJson(join(componentDir, 'package.json'), {
     name: '@happier-dev/server',
     version: '0.0.0',
@@ -344,7 +350,7 @@ test('pmSpawnScript resolves shell-script package bins without forcing them thro
   await chmod(join(shellToolDir, 'dist', 'cli.sh'), 0o755);
 
   const binDir = join(root, 'bin');
-  await writeStubYarnUsesShellTool({ binDir });
+  await writeStubPnpmUsesShellTool({ binDir });
 
   const env = {
     ...process.env,

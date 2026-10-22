@@ -12,7 +12,7 @@ import {
   parseArgs,
   readVersionFromPackageJson,
   resolveRepoRoot,
-  resolveYarnCommand,
+  resolvePnpmCommand,
 } from './lib/binary-release.mjs';
 import { createUiWebReleaseArtifacts } from './lib/ui-web-bundle.mjs';
 import {
@@ -60,10 +60,10 @@ async function main() {
         },
       });
 
-      const yarn = resolveYarnCommand({});
+      const pnpm = resolvePnpmCommand({});
       await execOrThrow(
-        yarn.cmd,
-        [...yarn.args, '--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', distDir],
+        pnpm.cmd,
+        [...pnpm.args, '--dir', 'apps/ui', 'exec', 'expo', 'export', '--platform', 'web', '--output-dir', distDir],
         {
           cwd: repoRoot,
           env: {

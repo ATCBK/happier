@@ -221,12 +221,12 @@ export function buildTauriOnboardingWizardQaPlan({ env = process.env } = {}) {
       cliInteractTimeoutMs,
     },
     commandRunner: {
-      command: 'yarn',
-      baseArgs: ['-s', 'tauri:mcp:cli'],
+      command: 'pnpm',
+      baseArgs: ['--silent', 'run', 'tauri:mcp:cli'],
     },
     driverSession: {
-      command: 'yarn',
-      baseArgs: ['-s', 'tauri:mcp:cli'],
+      command: 'pnpm',
+      baseArgs: ['--silent', 'run', 'tauri:mcp:cli'],
       args: ['driver-session', 'start', '--port', String(driverSessionPort)],
     },
     steps: stepPlan,
@@ -665,7 +665,7 @@ export async function main(
       '  --json   Print the deterministic capture plan without driving the app',
       '',
       'Run mode (default):',
-      '  - assumes `yarn --cwd apps/ui tauri:qa` is already running',
+      '  - assumes `pnpm --dir apps/ui run tauri:qa` is already running',
       '  - opens an MCP driver session',
       '  - captures screenshots + DOM snapshots for the onboarding wizard surfaces',
       '  - appends evidence paths to the bootstrap QA tracker',
@@ -708,11 +708,11 @@ export async function main(
     resolvedAppTarget,
   } = targetedDriverSession;
 
-  const driverSessionCommand = ['yarn', ...plan.driverSession.baseArgs, 'driver-session', 'start', '--port', String(usedDriverSessionPort)].join(' ');
+  const driverSessionCommand = ['pnpm', ...plan.driverSession.baseArgs, 'driver-session', 'start', '--port', String(usedDriverSessionPort)].join(' ');
   const driverSessionResponseFile = join(plan.artifactRoot, '00-driver-session.json');
   await writeTextArtifact(driverSessionResponseFile, `${JSON.stringify(driverSessionResponse, null, 2)}\n`);
 
-  const driverSessionStatusCommand = ['yarn', ...plan.driverSession.baseArgs, 'driver-session', 'status', '--port', String(usedDriverSessionPort)].join(' ');
+  const driverSessionStatusCommand = ['pnpm', ...plan.driverSession.baseArgs, 'driver-session', 'status', '--port', String(usedDriverSessionPort)].join(' ');
   const driverSessionStatusResponseFile = join(plan.artifactRoot, '00-driver-session-status.json');
   await writeTextArtifact(driverSessionStatusResponseFile, `${JSON.stringify(driverSessionStatusResponse, null, 2)}\n`);
 

@@ -19,7 +19,7 @@ describe('apps/cli package scripts', () => {
     expect(String(packageJson.scripts?.typecheck ?? '')).toContain(
       '--script=typecheck:local',
     );
-    expect(packageJson.scripts?.['typecheck:local']).toBe('yarn -s typecheck:source:finite');
+    expect(packageJson.scripts?.['typecheck:local']).toBe('pnpm --silent run typecheck:source:finite');
     expect(String(packageJson.scripts?.['typecheck:source:finite'] ?? '')).toMatch(
       /scripts\/workspaces\/runTypeScriptCli\.mjs --verifyProjectCoverage tsconfig\.json\b/,
     );

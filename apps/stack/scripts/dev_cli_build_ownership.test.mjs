@@ -162,7 +162,8 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   }));
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# yarn\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n');
   await writeFile(join(root, 'node_modules', 'tweetnacl', 'package.json'), JSON.stringify({
     name: 'tweetnacl',

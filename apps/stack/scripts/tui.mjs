@@ -246,80 +246,6 @@ function resolveStacklessSummaryEnv({ rootDir }) {
 
 const readEnvObject = readEnvObjectFromFile;
 
-async function preflightCorepackYarnForStack({ envPath }) {
-  // Corepack caches (and therefore "download yarn?" prompts) are tied to XDG/HOME.
-  // In stack mode we isolate HOME/XDG caches per stack, which can cause Corepack to prompt
-  // the first time a stack runs Yarn.
-  //
-  // In `hstack tui`, the child runs under a pseudo-TTY (via `script`) and the TUI consumes
-  // all keyboard input, so Corepack's interactive prompt deadlocks.
-  //
-  // Fix: pre-download Yarn in a *non-tty* subprocess using the stack's isolated HOME/XDG,
-  // so later pty runs don't prompt.
-  if (!envPath) return;
-  const baseDir = resolve(join(envPath, '..'));
-  const stackHome = join(baseDir, 'home');
-  const cacheBase = join(baseDir, 'cache');
-  const env = {
-    ...process.env,
-    HOME: stackHome,
-    USERPROFILE: stackHome,
-    XDG_CACHE_HOME: join(cacheBase, 'xdg'),
-    YARN_CACHE_FOLDER: join(cacheBase, 'yarn'),
-    npm_config_cache: join(cacheBase, 'npm'),
-    // Avoid Corepack mutating package.json automatically.
-    COREPACK_ENABLE_AUTO_PIN: '0',
-    // Best-effort: disable download prompts (may not be honored by all Corepack versions).
-    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
-    // Treat this as non-interactive (helps some tooling).
-    CI: process.env.CI ?? '1',
-  };
-
-  await mkdir(stackHome, { recursive: true }).catch(() => {});
-  await mkdir(env.XDG_CACHE_HOME, { recursive: true }).catch(() => {});
-  await mkdir(env.YARN_CACHE_FOLDER, { recursive: true }).catch(() => {});
-  await mkdir(env.npm_config_cache, { recursive: true }).catch(() => {});
-  await mkdir(env.COREPACK_HOME, { recursive: true }).catch(() => {});
-
-  await new Promise((resolvePromise) => {
-    const invocation = resolveCommandInvocation({ command: 'yarn', args: ['--version'], env });
-    const proc = spawn(invocation.command, invocation.args, {
-      env,
-      cwd: baseDir,
-      // Non-tty stdio: Corepack typically won't prompt; if it does, we still provide "y\n".
-      stdio: ['pipe', 'ignore', 'ignore'],
-      shell: false,
-      ...(process.platform === 'win32'
-        ? { windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments }
-        : null),
-    });
-    try {
-      proc.stdin?.write('y\n');
-      proc.stdin?.end();
-    } catch {
-      // ignore
-    }
-
-    const t = setTimeout(() => {
-      try {
-        proc.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
-      resolvePromise();
-    }, 60_000);
-
-    proc.on('exit', () => {
-      clearTimeout(t);
-      resolvePromise();
-    });
-    proc.on('error', () => {
-      clearTimeout(t);
-      resolvePromise();
-    });
-  });
-}
-
 function getEnvVal(env, key) {
   return getEnvValueAny(env, [key]) || '';
 }
@@ -760,10 +686,6 @@ async function main() {
     },
   });
 
-  // Preflight Yarn/Corepack for this stack before spawning the pty child.
-  // This prevents Corepack "download yarn? [Y/n]" prompts from deadlocking the TUI.
-  await preflightCorepackYarnForStack({ envPath: stackEnvPath });
-
   let layout = 'columns'; // single | split | columns
   let focused = paneIndexById.get('local'); // default focus
   let paused = false;
@@ -782,7 +704,7 @@ async function main() {
   const wantsPty = process.platform !== 'win32' && (await commandExists('script', { cwd: rootDir }));
   // In TUI mode, we intentionally do not forward keyboard input to the child process (stdin is ignored),
   // so any interactive prompts inside the child would deadlock.
-  // Mark the child env so dependency installers can auto-approve safe prompts (Corepack yarn downloads).
+  // Mark child processes as unattended so dependency work cannot request TUI input.
   const stackEnvFromFile = stackEnvPath ? await readEnvObject(stackEnvPath) : {};
   const childEnv = resolveTuiChildEnv({
     stackEnvFromFile,

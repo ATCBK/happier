@@ -19,8 +19,9 @@ import {
 test('root workspace preparation forwards its environment and reuses current shared outputs across components', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-preparation-cli-environment-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true }));
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   const packageDir = join(repoRoot, 'packages/example');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
   writeFileSync(join(packageDir, 'src/index.ts'), 'export const value = "source";\n');
@@ -107,8 +108,9 @@ for (const { compiledAlready, buildMode, changeAfterManifest } of [
       writeFileSync(toolchainPath, JSON.stringify({ dependencies: { react } }));
       vendor(toolchainPath, sdkOwnerPath);
     }
-    writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] }));
-    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+    writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true }));
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n  - packages/plugins/*\n');
     mkdirSync(join(repoRoot, 'apps/ui'), { recursive: true });
     writeFileSync(join(repoRoot, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui' }));
     const packageName = '@happier-dev/plugins-selected';
@@ -281,7 +283,7 @@ for (const { compiledAlready, buildMode, changeAfterManifest } of [
       assert.equal(statSync(publishedRuntimePath, { bigint: true }).mtimeNs, publishedRuntimeModifiedAt,
         'CLI closure preparation must reuse the already published plugin runtime');
       const workflow = yaml.load(readFileSync(join(sourceRoot, '.github/workflows/tests.yml'), 'utf8'));
-      const action = yaml.load(readFileSync(join(sourceRoot, '.github/actions/install-yarn-dependencies/action.yml'), 'utf8'));
+      const action = yaml.load(readFileSync(join(sourceRoot, '.github/actions/install-pnpm-dependencies/action.yml'), 'utf8'));
       const runnerTemp = join(repoRoot, 'runner-temp');
       mkdirSync(runnerTemp);
       const archive = workflow.jobs['gate-prepare'].steps.find((step) => step.name === "Archive the current run's coherent preparation");
@@ -319,11 +321,10 @@ test('the root package-build adapter delegates one package set to the canonical 
     publishBundledPluginArtifactsAfterWorkspaceBuildImpl: async () => false,
   });
 
-  assert.equal(typeof calls[0].options.onPackageBuildResult, 'function');
-  assert.deepEqual(calls.map(({ options: { onPackageBuildResult, ...options }, ...call }) => ({ ...call, options })), [{
+  assert.deepEqual(calls, [{
     repoRoot: '/repo',
     packageNames: ['alpha', 'beta'],
-    options: { publicationMode: 'live', env: process.env },
+    options: { publicationMode: 'live' },
   }]);
   assert.deepEqual(result, { ok: true, built: ['beta'], skipped: [] });
 });
@@ -349,10 +350,9 @@ test('the root package-build adapter prepares component dependency closures thro
     publishBundledPluginArtifactsAfterWorkspaceBuildImpl: async () => false,
   });
 
-  assert.ok(calls.every(({ options }) => typeof options.onPackageBuildResult === 'function'));
-  assert.deepEqual(calls.map(({ options: { onPackageBuildResult, ...options }, ...call }) => ({ ...call, options })), [
-    { componentDir: '/repo/apps/cli', options: { publicationMode: 'live', env: process.env, deferBundledWorkspaceSync: true } },
-    { componentDir: '/repo/apps/server', options: { publicationMode: 'live', env: process.env, deferBundledWorkspaceSync: true } },
+  assert.deepEqual(calls, [
+    { componentDir: '/repo/apps/cli', options: { publicationMode: 'live', deferBundledWorkspaceSync: true } },
+    { componentDir: '/repo/apps/server', options: { publicationMode: 'live', deferBundledWorkspaceSync: true } },
   ]);
   assert.deepEqual(result, { ok: true, built: ['cli', 'server'], skipped: [] });
 });

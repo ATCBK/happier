@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import {
   derivePublicToolchainCompatibilityV1,
@@ -12,6 +13,20 @@ import {
 } from './generatePublicToolchainCompatibility.mjs';
 
 const GENERATOR_PATH = fileURLToPath(new URL('./generatePublicToolchainCompatibility.mjs', import.meta.url));
+
+// pnpm 12.14.0's produced lock begins with a separate tool document. Its '.'
+// importer owns packageManagerDependencies, not the repository's dependencies.
+const PACKAGE_MANAGER_LOCK_DOCUMENT = stringifyYaml({
+  lockfileVersion: '9.0',
+  importers: {
+    '.': {
+      configDependencies: {},
+      packageManagerDependencies: { pnpm: { specifier: '12.14.0', version: '12.14.0' } },
+    },
+  },
+  packages: {},
+  snapshots: {},
+});
 
 test('consumes executable Protocol facts instead of parsing TypeScript source', async () => {
   const source = await readFile(GENERATOR_PATH, 'utf8');
@@ -155,37 +170,21 @@ async function createFixtureRoot() {
     ].join('\n'),
     'utf8',
   );
-  await writeFile(join(root, 'yarn.lock'), [
-    'react-native@0.83.5:',
-    '  version "0.83.5"',
-    'react-native-web@^0.21.0, react-native-web@0.21.2:',
-    '  version "0.21.2"',
-    'expo@^55.0.0:',
-    '  version "55.0.11"',
-    'vite@7.3.1:',
-    '  version "7.3.1"',
-    '"@callstack/repack@5.2.5":',
-    '  version "5.2.5"',
-    '"@react-native-community/cli@20.1.2":',
-    '  version "20.1.2"',
-    '"@rspack/core@2.1.3":',
-    '  version "2.1.3"',
-    '"@types/react@19.2.0":',
-    '  version "19.2.0"',
-    '"@types/node@>=20":',
-    '  version "25.0.10"',
-    '"@typescript/native@npm:typescript@7.0.2":',
-    '  version "7.0.2"',
-    'typescript@5.9.3:',
-    '  version "5.9.3"',
-    '"@vitejs/plugin-react@4.7.0":',
-    '  version "4.7.0"',
-    'react@19.2.0:',
-    '  version "19.2.0"',
-    'react-dom@19.2.0:',
-    '  version "19.2.0"',
-    '',
-  ].join('\n'), 'utf8');
+  const versions = {
+    react: '19.2.0', 'react-dom': '19.2.0', 'react-native': '0.83.5(react@19.2.0)',
+    'react-native-web': '0.21.2', expo: '55.0.11', vite: '7.3.1',
+    '@callstack/repack': '5.2.5', '@react-native-community/cli': '20.1.2',
+    '@rspack/core': '2.1.3', '@types/react': '19.2.0', '@types/node': '25.0.10',
+    '@typescript/native': 'typescript@7.0.2', typescript: '5.9.3', '@vitejs/plugin-react': '4.7.0',
+  };
+  const importers = {};
+  for (const importer of ['.', 'apps/ui', 'packages/plugin-sdk', 'packages/plugin-ui']) {
+    const manifest = JSON.parse(await readFile(join(root, importer, 'package.json'), 'utf8'));
+    importers[importer] = Object.fromEntries(['dependencies', 'devDependencies'].map(group => [group,
+      Object.fromEntries(Object.entries(manifest[group] ?? {}).filter(([name]) => versions[name])
+        .map(([name, specifier]) => [name, { specifier, version: versions[name] }]))]));
+  }
+  await writeFile(join(root, 'pnpm-lock.yaml'), stringifyYaml({ lockfileVersion: '9.0', importers }), 'utf8');
   await Promise.all([
     writeSource(
       join(root, 'apps', 'cli', 'src', 'plugins', 'scaffold', 'scaffold.ts'),
@@ -295,6 +294,37 @@ test('derives the one public packet from manifests, lock facts, Protocol facts, 
   assert.doesNotMatch(rendered, /@happier-dev\/protocol/u);
 });
 
+test('reads repository resolutions after the pnpm 12 package-manager lock document', async () => {
+  const root = await createFixtureRoot();
+  const lockPath = join(root, 'pnpm-lock.yaml');
+  const repositoryLock = await readFile(lockPath, 'utf8');
+  await writeFile(lockPath, `---\n${PACKAGE_MANAGER_LOCK_DOCUMENT}---\n${repositoryLock}`, 'utf8');
+
+  const packet = await derivePublicToolchainCompatibilityV1({ repoRoot: root });
+
+  assert.equal(packet.framework.react, '19.2.0');
+  assert.equal(packet.authoringDependencies.typescript.resolvedVersion, '5.9.3');
+});
+
+test('rejects ambiguous repository documents in a pnpm lock stream', async () => {
+  const root = await createFixtureRoot();
+  const lockPath = join(root, 'pnpm-lock.yaml');
+  const repositoryLock = await readFile(lockPath, 'utf8');
+  await writeFile(lockPath, `---\n${PACKAGE_MANAGER_LOCK_DOCUMENT}---\n${repositoryLock}---\n${repositoryLock}`, 'utf8');
+
+  await assert.rejects(derivePublicToolchainCompatibilityV1({ repoRoot: root }));
+});
+
+test('rejects a missing resolved version in the repository document of a pnpm lock stream', async () => {
+  const root = await createFixtureRoot();
+  const lockPath = join(root, 'pnpm-lock.yaml');
+  const repositoryLock = parseYaml(await readFile(lockPath, 'utf8'));
+  delete repositoryLock.importers['.'].devDependencies.typescript.version;
+  await writeFile(lockPath, `---\n${PACKAGE_MANAGER_LOCK_DOCUMENT}---\n${stringifyYaml(repositoryLock)}`, 'utf8');
+
+  await assert.rejects(derivePublicToolchainCompatibilityV1({ repoRoot: root }), /resolved typescript/);
+});
+
 test('projects the current action authority keys into the generated minimal cold manifest', async () => {
   const root = await createFixtureRoot();
   const manifestDocumentation = await readFile(
@@ -313,8 +343,10 @@ test('fails closed when a package manifest and the candidate host disagree about
   const sdk = JSON.parse(await readFile(sdkPackagePath, 'utf8'));
   sdk.devDependencies['react-native'] = '0.83.4';
   await writeJson(sdkPackagePath, sdk);
-  const lockPath = join(root, 'yarn.lock');
-  await writeFile(lockPath, `${await readFile(lockPath, 'utf8')}\nreact-native@0.83.4:\n  version "0.83.4"\n`, 'utf8');
+  const lockPath = join(root, 'pnpm-lock.yaml');
+  const lock = parseYaml(await readFile(lockPath, 'utf8'));
+  lock.importers['packages/plugin-sdk'].devDependencies['react-native'] = { specifier: '0.83.4', version: '0.83.4' };
+  await writeFile(lockPath, stringifyYaml(lock), 'utf8');
 
   await assert.rejects(
     derivePublicToolchainCompatibilityV1({ repoRoot: root }),
@@ -328,8 +360,10 @@ test('fails closed when Plugin UI local React Native development runtime disagre
   const pluginUi = JSON.parse(await readFile(uiPackagePath, 'utf8'));
   pluginUi.devDependencies['react-native'] = '0.83.4';
   await writeJson(uiPackagePath, pluginUi);
-  const lockPath = join(root, 'yarn.lock');
-  await writeFile(lockPath, `${await readFile(lockPath, 'utf8')}\nreact-native@0.83.4:\n  version \"0.83.4\"\n`, 'utf8');
+  const lockPath = join(root, 'pnpm-lock.yaml');
+  const lock = parseYaml(await readFile(lockPath, 'utf8'));
+  lock.importers['packages/plugin-ui'].devDependencies['react-native'] = { specifier: '0.83.4', version: '0.83.4' };
+  await writeFile(lockPath, stringifyYaml(lock), 'utf8');
 
   await assert.rejects(
     derivePublicToolchainCompatibilityV1({ repoRoot: root }),
@@ -798,12 +832,12 @@ test('validates the generated packet for an isolated SDK prepack without sibling
   ));
   assert.match(
     sdkPackage.scripts?.['prepack:prepared'] ?? '',
-    /yarn -s check:public-toolchain:generated/u,
+    /pnpm --silent run check:public-toolchain:generated/u,
     'the isolated SDK prepack must validate its emitted packet',
   );
   assert.doesNotMatch(
     sdkPackage.scripts?.['prepack:prepared'] ?? '',
-    /yarn -s check:public-toolchain:prepared/u,
+    /pnpm --silent run check:public-toolchain:prepared/u,
     'the isolated SDK prepack must not re-read unavailable source-only sibling inputs',
   );
 
@@ -832,7 +866,7 @@ test('validates the generated packet for an isolated SDK prepack without sibling
     encoding: 'utf8',
   });
   assert.notEqual(unknownField.status, 0);
-  assert.match(unknownField.stderr, /unrecognized key/i);
+  assert.match(unknownField.stderr, /unrecognized_keys/);
 
   await writeFile(outputPath, renderPublicToolchainCompatibilityModule({
     ...packet,

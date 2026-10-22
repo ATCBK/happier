@@ -455,13 +455,13 @@ test('release admission requires the external signed Mutagen engine release gate
   assert.equal(checkouts[0].with.repository, '${{ github.repository }}');
   assert.equal(checkouts[0].with['persist-credentials'], false);
 
-  const install = gate.steps.find((step) => String(step.uses ?? '').startsWith('./.github/actions/install-yarn-dependencies'));
+  const install = gate.steps.find((step) => String(step.uses ?? '').startsWith('./.github/actions/install-pnpm-dependencies'));
   assert.ok(install, 'the gate must install workspace dependencies through the existing shared action');
   const liveRuns = gate.steps.filter((step) => step.env?.HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION === '1');
   assert.equal(liveRuns.length, 1, 'the gate must run only the existing live acquisition test without duplicating its assertions');
   assert.match(
     liveRuns[0].run,
-    /yarn workspace @happier-dev\/cli-common test:mutagen-engine:live:local/u,
+    /pnpm --filter @happier-dev\/cli-common run test:mutagen-engine:live:local/u,
   );
   assert.equal(liveRuns[0].env?.HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION, '1');
   assert.equal(liveRuns[0].env?.GITHUB_TOKEN, '${{ github.token }}', 'the live acquisition needs a token suitable for public release API access');
@@ -523,7 +523,7 @@ test('release admission requires the external signed Mutagen engine release gate
     step.env?.HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION === '1',
   );
   assert.equal(ciRuns.length, 1);
-  assert.match(ciRuns[0].run, /yarn workspace @happier-dev\/cli-common test:mutagen-engine:live/u);
+  assert.match(ciRuns[0].run, /pnpm --filter @happier-dev\/cli-common run test:mutagen-engine:live/u);
   const cliCommonPackage = JSON.parse(await readFile(join(repoRoot, 'packages/cli-common/package.json'), 'utf8'));
   assert.equal(cliCommonPackage.scripts['test:mutagen-engine:live:local'], 'node scripts/runMutagenEngineLiveTest.mjs');
   assert.equal(ciRuns[0].env?.HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION, '1');

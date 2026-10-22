@@ -17,7 +17,7 @@
  *     Imported from the same built package the client re-exports; missing
  *     metadata fails here rather than silently publishing a short list.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

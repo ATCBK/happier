@@ -1,46 +1,45 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import {
+  REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
+  REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
+} from './verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 
-for (const stage of ['root', 'ui']) {
-  test(`UI postinstall propagates a ${stage} patch failure before further preparation`, async t => {
-    const root = await mkdtemp(join(tmpdir(), 'happier-ui-patch-failure-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
-    const ui = join(root, 'apps/ui');
-    await mkdir(ui, { recursive: true });
-    await cp(new URL('../', import.meta.url), join(ui, 'tools'), { recursive: true });
-    await writeFile(join(root, 'package.json'), '{"private":true,"type":"module"}\n');
-    await writeFile(join(root, 'yarn.lock'), '# fixture\n');
-    await writeFile(join(ui, 'package.json'), '{"name":"@happier-dev/app"}\n');
-    await mkdir(join(ui, 'patches'), { recursive: true });
-    await writeFile(join(ui, 'patches/expo-router+55.0.10.patch'), 'boundary patch\n');
-    for (const directory of [root, ui]) await mkdir(join(directory, 'node_modules/expo-router'), { recursive: true });
-    const patchCli = join(root, 'node_modules/patch-package/dist/index.js');
-    await mkdir(join(root, 'node_modules/patch-package/dist'), { recursive: true });
-    const require = createRequire(import.meta.url);
-    // Real postinstall prepares this third-party package before applying all patches.
-    // Copy its installed bytes so fixture preparation cannot mutate shared dependencies.
-    await cp(join(require.resolve('react-native-enriched-markdown/package.json'), '..'),
-      join(ui, 'node_modules/react-native-enriched-markdown'), { recursive: true });
-    await symlink(join(require.resolve('esbuild/package.json'), '..'), join(root, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
-    // Genuine third-party process boundary: patch-package reports errors but
-    // defaults to success outside CI unless --error-on-fail is requested.
-    await writeFile(patchCli, `import { writeFileSync } from 'node:fs';
-if (process.cwd() === ${JSON.stringify(stage === 'root' ? root : ui)}) {
-  console.error('**ERROR** Failed to apply patch for package expo-router');
-  process.exit(process.argv.includes('--error-on-fail') ? 23 : 0);
-}
-if (process.cwd() === ${JSON.stringify(ui)}) writeFileSync(${JSON.stringify(join(root, 'next-stage'))}, 'started');
-`);
-    const result = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
-      cwd: ui, encoding: 'utf8', env: { ...process.env, CI: '', HAPPIER_UI_VENDOR_WEB_ASSETS: '0', HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
-    });
-    assert.equal(result.status, 23, result.stderr);
-    assert.match(result.stderr, /Failed to apply patch/);
-    await assert.rejects(readFile(join(root, 'next-stage')), { code: 'ENOENT' });
+test('UI postinstall verifies installed artifacts without patch-package and finds the pnpm root', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-ui-installed-patch-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ui = join(root, 'apps/ui');
+  await mkdir(ui, { recursive: true });
+  await cp(new URL('../', import.meta.url), join(ui, 'tools'), { recursive: true });
+  await writeFile(join(root, 'package.json'), '{"private":true,"type":"module"}\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'patchedDependencies: {}\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+  await writeFile(join(ui, 'package.json'), '{"name":"@happier-dev/app"}\n');
+  await writeFile(join(ui, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+  const require = createRequire(import.meta.url);
+  for (const name of ['esbuild', 'diff', 'yaml']) {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(dirname(require.resolve(`${name}/package.json`)), join(root, 'node_modules', name),
+      process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  const packageDir = join(root, 'node_modules/react-native-enriched-markdown');
+  for (const file of REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES) {
+    await mkdir(dirname(join(packageDir, file)), { recursive: true });
+    const markers = REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS
+      .filter(([name]) => name === file)
+      .flatMap(([, marker, count = 1]) => Array(count).fill(marker));
+    await writeFile(join(packageDir, file), markers.join('\n'));
+  }
+  const result = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
+    cwd: ui, encoding: 'utf8', env: { ...process.env, HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
+      HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
   });
-}
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(result.stderr.includes(join(root, 'node_modules/@sentry/react-native')), result.stderr);
+  assert.doesNotMatch(result.stderr, /patch-package CLI/);
+});

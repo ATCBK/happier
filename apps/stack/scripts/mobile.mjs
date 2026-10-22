@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getComponentRepoDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
-import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';
+import { ensureDepsInstalled, requireDir } from './utils/proc/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, resolveExpoTmpDir } from './utils/expo/expo.mjs';
 import { resolveServerUrls } from './utils/server/urls.mjs';

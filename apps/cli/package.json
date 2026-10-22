@@ -200,13 +200,13 @@
   "scripts": {
     "tsc": "node ../../scripts/workspaces/runTypeScriptCli.mjs",
     "typecheck": "../stack/bin/hstack-exec --script=typecheck:local",
-    "typecheck:local": "yarn -s typecheck:source:finite",
+    "typecheck:local": "pnpm --silent run typecheck:source:finite",
     "typecheck:source:finite": "node ../../scripts/workspaces/runTypeScriptCli.mjs --verifyProjectCoverage tsconfig.json --singleThreaded --project tsconfig.foundation.json --project tsconfig.services.json --project tsconfig.core.json --project tsconfig.source.json --project tsconfig.test.json --project tsconfig.test-ui.json",
     "build": "node scripts/build.mjs",
     "plugins:aggregate:finite": "node scripts/withNodeHeapLimit.mjs node --conditions=happier-source --experimental-strip-types scripts/build-owned/generateBundledPluginEntries.ts --root ../.. --mode check --scope projections --aggregate",
     "build:prepared": "node scripts/build.mjs",
     "test": "../stack/bin/hstack-exec --script=test:local",
-    "test:local": "$npm_execpath run test:unit:local",
+    "test:local": "pnpm run test:unit:local",
     "vitest": "../stack/bin/hstack-exec --script=vitest:local",
     "vitest:local": "vitest",
     "test:unit": "../stack/bin/hstack-exec --script=test:unit:local",
@@ -221,15 +221,15 @@
     "test:workspace-sync:real:local": "node scripts/runWorkspaceSyncRealIntegration.mjs",
     "test:slow": "../stack/bin/hstack-exec --script=test:slow:local",
     "test:slow:local": "vitest run --config vitest.slow.config.ts",
-    "start": "$npm_execpath run build && node ./bin/happier.mjs",
+    "start": "pnpm run build && node ./bin/happier.mjs",
     "dev": "node scripts/syncSharedDepsForDev.mjs && tsx --tsconfig tsconfig.json src/index.ts",
-    "dev:local-server": "$npm_execpath run build && tsx --env-file .env.dev-local-server src/index.ts",
-    "dev:integration-test-env": "$npm_execpath run build && tsx --env-file .env.integration-test src/index.ts",
-    "prepublishOnly": "$npm_execpath run build && $npm_execpath test",
-    "release": "$npm_execpath install && release-it",
+    "dev:local-server": "pnpm run build && tsx --env-file .env.dev-local-server src/index.ts",
+    "dev:integration-test-env": "pnpm run build && tsx --env-file .env.integration-test src/index.ts",
+    "prepublishOnly": "pnpm run build && pnpm run test",
+    "release": "pnpm install && release-it",
     "build:shared": "node scripts/buildSharedDeps.mjs",
     "prepare:declarations": "node scripts/buildSharedDeps.mjs --declarations",
-    "prebuild": "yarn -s build:shared",
+    "prebuild": "pnpm --silent run build:shared",
     "postinstall": "node -e \"const fs=require('fs');const cp=require('child_process');try{const gate=require('../../scripts/postinstall/shouldRunPostinstall.cjs');if(!gate.shouldRunPostinstall({workspace:'cli',scope:process.env.HAPPIER_INSTALL_SCOPE||''}))process.exit(0);}catch{}if(!fs.existsSync('scripts/unpack-tools.cjs'))process.exit(0);const r=cp.spawnSync(process.execPath,['scripts/unpack-tools.cjs'],{stdio:'inherit'});if((r.status??1)!==0)process.exit(r.status??1);if(fs.existsSync('scripts/postinstall/fix-node-pty-spawn-helper-permissions.cjs')){cp.spawnSync(process.execPath,['scripts/postinstall/fix-node-pty-spawn-helper-permissions.cjs'],{stdio:'inherit'});}process.exit(0);\"",
     "tool:trace:extract": "tsx scripts/tool-trace-extract.ts",
     "tool:trace:fixtures:v1": "tsx scripts/tool-trace-fixtures-v1.ts",
@@ -407,13 +407,7 @@
     "tsx": "^4.20.6",
     "vitest": "^3.2.4"
   },
-  "resolutions": {
-    "whatwg-url": "14.2.0",
-    "parse-path": "7.0.3",
-    "@types/parse-path": "7.0.3"
-  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
-  },
-  "packageManager": "yarn@1.22.22"
+  }
 }

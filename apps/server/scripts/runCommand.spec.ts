@@ -35,6 +35,11 @@ describe('runCommand.ts', () => {
         const sourcePath = join(getServerDir(), 'scripts', 'runCommand.ts');
         const copiedPath = join(copiedScriptsDir, 'runCommand.ts');
         await writeFile(copiedPath, await readFile(sourcePath, 'utf8'), 'utf8');
+        for (const path of ['scripts/workspaces/execPnpmCommand.mjs', 'packages/cli-common/windowsCommandInvocation.mjs']) {
+            const target = join(tmpDir, 'repo', path);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, await readFile(resolve(getServerDir(), '../..', path), 'utf8'), 'utf8');
+        }
 
         const importScript = [
             `const mod = await import(${JSON.stringify(pathToFileURL(copiedPath).href)});`,
@@ -55,7 +60,7 @@ describe('runCommand.ts', () => {
         expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
     });
 
-    it('ignores npm CLI paths when resolving Windows Yarn commands', async () => {
+    it('ignores npm CLI paths when resolving Windows pnpm commands', async () => {
         const mod = await import('./runCommand');
         const resolver = (
             mod as {
@@ -72,8 +77,8 @@ describe('runCommand.ts', () => {
         if (typeof resolver !== 'function') return;
 
         const invocation = resolver(
-            'yarn',
-            ['-s', 'schema:sync', '--quiet'],
+            'pnpm',
+            ['--silent', 'run', 'schema:sync', '--quiet'],
             {
                 npm_execpath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js',
                 COMSPEC: 'C:\\Windows\\System32\\cmd.exe',
@@ -87,11 +92,11 @@ describe('runCommand.ts', () => {
 
         expect(invocation.command).toBe('C:\\Windows\\System32\\cmd.exe');
         expect(invocation.windowsVerbatimArguments).toBe(true);
-        expect(invocation.args.join(' ')).toContain('yarn.cmd');
+        expect(invocation.args.join(' ')).toContain('pnpm.cmd');
         expect(invocation.args.join(' ')).not.toContain('npm-cli.js');
     });
 
-    it('uses Yarn npm_execpath entries when resolving nested Yarn commands', async () => {
+    it('executes a native pnpm npm_execpath directly for nested commands', async () => {
         const mod = await import('./runCommand');
         const resolver = (
             mod as {
@@ -108,10 +113,10 @@ describe('runCommand.ts', () => {
         if (typeof resolver !== 'function') return;
 
         const invocation = resolver(
-            'yarn',
-            ['-s', 'schema:sync', '--quiet'],
+            'pnpm',
+            ['--silent', 'run', 'schema:sync', '--quiet'],
             {
-                npm_execpath: '/opt/yarn-v1.22.22/lib/cli.js',
+                npm_execpath: '/opt/pnpm/pnpm',
             },
             {
                 platform: 'linux',
@@ -120,8 +125,8 @@ describe('runCommand.ts', () => {
         );
 
         expect(invocation).toEqual({
-            command: '/usr/local/bin/node',
-            args: ['/opt/yarn-v1.22.22/lib/cli.js', '-s', 'schema:sync', '--quiet'],
+            command: '/opt/pnpm/pnpm',
+            args: ['--silent', 'run', 'schema:sync', '--quiet'],
         });
     });
 });

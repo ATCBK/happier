@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 import dotenv from 'dotenv'
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
@@ -16,6 +17,7 @@ import { createWorkspaceHostSourceAlias } from '../../scripts/testing/vitestWork
 import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 
 const packageRoot = fileURLToPath(new URL('.', import.meta.url))
+const requireUiDependency = createRequire(new URL('../ui/package.json', import.meta.url))
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths)
 
 const testEnv = dotenv.config({
@@ -115,12 +117,12 @@ export default defineConfig({
         alias: [
             ...uiPlatformAliases,
             packageSourceAlias,
-            { find: /^react$/u, replacement: resolve('../ui/node_modules/react/index.js') },
-            { find: /^react\/jsx-runtime$/u, replacement: resolve('../ui/node_modules/react/jsx-runtime.js') },
-            { find: /^react\/jsx-dev-runtime$/u, replacement: resolve('../ui/node_modules/react/jsx-dev-runtime.js') },
-            { find: /^react-dom\/client$/u, replacement: resolve('../ui/node_modules/react-dom/client.js') },
-            { find: /^react-dom$/u, replacement: resolve('../ui/node_modules/react-dom/index.js') },
-            { find: /^react-native$/u, replacement: resolve('../ui/node_modules/react-native-web/dist/index.js') },
+            { find: /^react$/u, replacement: requireUiDependency.resolve('react') },
+            { find: /^react\/jsx-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-runtime') },
+            { find: /^react\/jsx-dev-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-dev-runtime') },
+            { find: /^react-dom\/client$/u, replacement: requireUiDependency.resolve('react-dom/client') },
+            { find: /^react-dom$/u, replacement: requireUiDependency.resolve('react-dom') },
+            { find: /^react-native$/u, replacement: requireUiDependency.resolve('react-native-web/dist/index.js') },
         ],
         dedupe: ['react', 'react-dom'],
     },

@@ -36,7 +36,7 @@ test('expo ota fingerprint generation captures large EAS JSON output without ENO
   );
 
   writeExecutable(
-    path.join(binDir, 'yarn'),
+    path.join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
@@ -114,7 +114,7 @@ test('expo ota fingerprint generation tolerates noisy pretty-printed EAS JSON ou
   );
 
   writeExecutable(
-    path.join(binDir, 'yarn'),
+    path.join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',

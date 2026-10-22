@@ -27,7 +27,8 @@ function createMinimalRepoRoot(): string {
   writeFileSync(join(repoRoot, '.github/feature-policy/production.json'), '{"features":{}}\n', 'utf8');
   writeFileSync(join(repoRoot, 'Dockerfile'), 'FROM node:22\n', 'utf8');
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: [] }), 'utf8');
-  writeFileSync(join(repoRoot, 'yarn.lock'), '', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(join(repoRoot, 'apps/server/package.json'), JSON.stringify({ name: 'server' }), 'utf8');
   writeFileSync(join(repoRoot, 'apps/server/index.ts'), 'export const server = true;\n', 'utf8');
   writeFileSync(join(repoRoot, 'apps/stack/scripts/utils/owner.mjs'), 'export const owner = true;\n', 'utf8');

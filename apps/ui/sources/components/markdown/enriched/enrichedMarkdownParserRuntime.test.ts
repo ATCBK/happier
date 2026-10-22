@@ -37,7 +37,7 @@ const wasmBoundary = vi.hoisted(() => {
 });
 
 // The generated WASM module is the real parser's external runtime boundary.
-vi.mock('../../../../node_modules/react-native-enriched-markdown/src/web/wasm/md4c.js', () => ({
+vi.mock('react-native-enriched-markdown/src/web/wasm/md4c.js', () => ({
     default: wasmBoundary.factory,
 }));
 
@@ -45,7 +45,7 @@ import {
     parseMarkdown,
     parseMarkdownSyncIfReady,
     preloadMarkdownRuntime,
-} from '../../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown';
+} from 'react-native-enriched-markdown/src/web/parseMarkdown';
 
 describe('enriched Markdown parser runtime recovery', () => {
     it('retries initialization and recovers a warm document after a parse failure', async () => {
@@ -57,7 +57,7 @@ describe('enriched Markdown parser runtime recovery', () => {
 
         expect(parseMarkdownSyncIfReady('next-document')).toMatchObject({ type: 'Document' });
         expect(wasmBoundary.factory).toHaveBeenCalledTimes(2);
-        const { EnrichedMarkdownText } = await import('../../../../node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText');
+        const { EnrichedMarkdownText } = await import('react-native-enriched-markdown/src/web/EnrichedMarkdownText');
         Object.assign(globalThis, { React });
         let renderer!: TestRenderer.ReactTestRenderer;
         try {

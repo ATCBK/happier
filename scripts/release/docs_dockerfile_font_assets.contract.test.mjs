@@ -21,7 +21,7 @@ test('docs docker build copies the UI font assets required by next/font/local', 
   );
   assert.match(
     dockerfile,
-    /RUN yarn workspace docs postinstall:real && yarn workspace docs build/,
+    /RUN pnpm --filter docs run postinstall:real && pnpm --filter docs run build/,
     'docs-builder stage should still build docs after copying the shared font assets'
   );
 });

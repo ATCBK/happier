@@ -2,7 +2,7 @@
  * Flattens the English translation tree to `{ "a.b.c": "text" }` (functions become `null`) so the
  * settings-surface codemods can judge label length and resolve copy without importing app code.
  *
- *   yarn tsx scripts/settingsSurfaces/dumpEnglish.ts <out.json>
+ *   pnpm exec tsx scripts/settingsSurfaces/dumpEnglish.ts <out.json>
  */
 import { writeFileSync } from 'node:fs';
 

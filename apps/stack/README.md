@@ -465,7 +465,7 @@ Notes:
 - No compatibility/migration for previous installs: uninstall old setups and run `hstack setup-from-source` again.
 - Env prefix is now `HAPPIER_STACK_*` (no legacy aliases like `HAPPY_STACKS_*` / `HAPPY_LOCAL_*`).
 - Workspace/worktrees are monorepo-first (default workspace: `~/.happier-stack/workspace`, with `main/`, `dev/`, `pr/`, `local/`, `tmp/`).
-- Yarn-only (no pnpm support).
+- Repository commands use the exact root pnpm pin and the hoisted workspace layout.
 
 ### Sandbox / test installs (fully isolated)
 

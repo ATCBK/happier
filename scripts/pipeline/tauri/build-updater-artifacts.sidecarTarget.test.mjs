@@ -13,12 +13,12 @@ test('the candidate builder compiles hsetup for the requested bundle target befo
   fs.mkdirSync(uiDir);
   fs.mkdirSync(binDir);
   const capture = path.join(root, 'target.json');
-  // Yarn and rustup are external process boundaries. Run the real pipeline and
+  // Pnpm and rustup are external process boundaries. Run the real pipeline and
   // sidecar target resolver without compiling a frontend or downloading a toolchain.
   fs.writeFileSync(path.join(binDir, 'rustup'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(binDir, 'yarn'), `#!${process.execPath}
+  fs.writeFileSync(path.join(binDir, 'pnpm'), `#!${process.execPath}
 import fs from 'node:fs';
-if (process.argv.includes('--version')) { console.log('1.22.22'); }
+if (process.argv.includes('--version')) { console.log('12.14.0'); }
 else if (process.argv.includes('tauri:prepare:build')) {
   const { resolveBunTargetForTauriBuildEnv } = await import(process.env.SIDECAR_RESOLVER);
   fs.writeFileSync(process.env.TARGET_CAPTURE, JSON.stringify({

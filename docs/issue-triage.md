@@ -6,7 +6,7 @@ Happier separates issue evidence transport, triage routing, deep diagnosis, GitH
 
 | Concern | Canonical owner |
 | --- | --- |
-| Public issue reads, first-order relationship discovery, and explicitly authorized GitHub writes | `.agents/skills/happier-github-ops` through `yarn ghops` |
+| Public issue reads, first-order relationship discovery, and explicitly authorized GitHub writes | `.agents/skills/happier-github-ops` through `pnpm run ghops` |
 | Private issue/report context, diagnostic artifacts, and reproduction-stack mechanics | private `hmaint` and maintainer MCP |
 | Bug-report submission and candidate similar-issue retrieval | bug-report service and `packages/protocol/src/bugReports/*` |
 | Issue normalization, relationship analysis, clustering, and diagnosis topology | `.agents/skills/happier-issue-triage` |
@@ -39,7 +39,7 @@ plist's executable, arguments or environment take effect at the next GUI login.
 The broker runs in the Mac user's GUI login session, independently of foreground
 Stack commands, SSH connections and VM restarts. It reads the `happier/ghops`
 Keychain entry for `happier-bot` on each request. Tokens are not stored in the plist,
-environment or logs. Guest `yarn ghops` uses the configured `mac-host` SSH target to
+environment or logs. Guest `pnpm run ghops` uses the configured `mac-host` SSH target to
 reach user-only sockets under `/tmp/happier-ghops-brokers-<uid>`. Broker startup
 connect-tests same-user socket files and removes only refused or missing endpoints;
 live sockets, symlinks and ordinary files are preserved. Normal signal shutdown
@@ -52,8 +52,8 @@ available, run the recovery command above on the Mac while that user is logged
 in. From the VM's 0.3 checkout, use
 `./apps/stack/bin/hstack-exec --target=mac-host -- node apps/stack/bin/hstack.mjs dev-vm recovery enable --json`.
 A successful socket probe establishes transport availability; verify Keychain
-access and bot identity separately with `yarn ghops auth status` and
-`yarn ghops api user --jq .login` in the guest.
+access and bot identity separately with `pnpm run ghops auth status` and
+`pnpm run ghops api user --jq .login` in the guest.
 
 ## Interactive workflow
 
@@ -197,7 +197,7 @@ Use the `v0.3` milestone for issues intentionally targeted to the 0.3 release/ro
 
 Respond as a grateful project collaborator, not a status bot. If the thread does not already contain a project thank-you, thank the author naturally for taking the time to report the issue. When a report or comment contributed a useful reproduction detail, diagnostic insight, or fix direction, name that contribution and how it helped. Do not repeat a ceremonial thank-you in every update, and do not let appreciation imply that an unverified diagnosis has been accepted.
 
-Every agent-authored public issue comment ends with the standalone line `_Posted on behalf of @<local-gh-login>._` Resolve that login with the machine's ordinary authenticated `gh` account (`gh api user --jq .login`), never with bot-authenticated `yarn ghops`. Under exact authorization, resolve it before the mutation preview; under standing authorization, resolve it immediately before posting. `ghops` remains the transport for issue reads and authorized writes; it is not the human identity the attribution names. Do not hardcode a username or substitute the repository owner, operating-system user, Git author, or transport account. If the local login cannot be resolved, ask the user to authenticate or explicitly supply the attribution target before posting.
+Every agent-authored public issue comment ends with the standalone line `_Posted on behalf of @<local-gh-login>._` Resolve that login with the machine's ordinary authenticated `gh` account (`gh api user --jq .login`), never with bot-authenticated `pnpm run ghops`. Under exact authorization, resolve it before the mutation preview; under standing authorization, resolve it immediately before posting. `ghops` remains the transport for issue reads and authorized writes; it is not the human identity the attribution names. Do not hardcode a username or substitute the repository owner, operating-system user, Git author, or transport account. If the local login cannot be resolved, ask the user to authenticate or explicitly supply the attribution target before posting.
 
 The attribution makes the human authorization behind the transported comment explicit, while its direct mention keeps the local maintainer participating in the conversation. Under exact authorization it must be part of the complete previewed comment; under standing authorization it remains required in the generated comment without a per-comment preview. Do not infer that an earlier mention or subscription makes the line optional. This does not apply to issue bodies or the release workflows' label-only reconciliation.
 

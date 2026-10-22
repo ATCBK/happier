@@ -45,7 +45,8 @@ async function writeMinimalMonorepoFixture(t) {
       build: 'node -e "process.stderr.write(\'cli build must not run\\\\n\'); process.exit(42)"',
     },
   });
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
 
   return { ...fixture, repoDir };

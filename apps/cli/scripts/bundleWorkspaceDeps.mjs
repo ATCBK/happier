@@ -24,7 +24,7 @@ const SCRIPT_REPO_ROOT = findRepoRoot(__dirname);
 function findRepoRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
-    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'yarn.lock'))) {
+    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'pnpm-lock.yaml')) && existsSync(resolve(dir, 'pnpm-workspace.yaml'))) {
       return dir;
     }
     const parent = resolve(dir, '..');

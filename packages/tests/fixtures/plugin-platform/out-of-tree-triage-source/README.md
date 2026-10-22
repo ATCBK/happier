@@ -176,7 +176,7 @@ After editing `src/**`, regenerate the committed projection with `npm run manife
 ```bash
 npm --prefix packages/tests/fixtures/plugin-platform/out-of-tree-triage-source test
 # or, from the repository root
-corepack yarn --cwd packages/tests -s test:plugin-platform:out-of-tree-triage-source
+pnpm --dir packages/tests run test:plugin-platform:out-of-tree-triage-source
 ```
 
 That chain is the source-level evidence: import boundary, packaging shape, ownership census,
@@ -194,7 +194,7 @@ suite is therefore no longer chained into the default command, and is kept as an
 
 ```bash
 npm --prefix packages/tests/fixtures/plugin-platform/out-of-tree-triage-source run test:release-package
-corepack yarn --cwd packages/tests -s test:plugin-platform:out-of-tree-triage-source:release-package
+pnpm --dir packages/tests run test:plugin-platform:out-of-tree-triage-source:release-package
 ```
 
 ## What it deliberately does not do

@@ -66,7 +66,7 @@ describe("ensurePrismaCliReady", () => {
 });
 
 describe("resolvePrismaCliRepairInstallInvocation", () => {
-    it("wraps Windows Yarn repair installs through cmd.exe", () => {
+    it("wraps Windows pnpm repair installs through cmd.exe", () => {
         const invocation = resolvePrismaCliRepairInstallInvocation(
             {
                 npm_execpath: "C:\\npm\\node_modules\\npm\\bin\\npm-cli.js",
@@ -81,8 +81,10 @@ describe("resolvePrismaCliRepairInstallInvocation", () => {
 
         expect(invocation.command).toBe("C:\\Windows\\System32\\cmd.exe");
         expect(invocation.windowsVerbatimArguments).toBe(true);
-        expect(invocation.args.join(" ")).toContain("yarn.cmd");
+        expect(invocation.args.join(" ")).toContain("pnpm.cmd");
         expect(invocation.args.join(" ")).toContain("install");
+        expect(invocation.args.join(" ")).toContain("--prod=false");
+        expect(invocation.args.join(" ")).not.toContain("--production=false");
         expect(invocation.args.join(" ")).not.toContain("npm-cli.js");
     });
 });

@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 function resolveCliDistBuildManifestModulePath() {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
   const sourcePath = resolve(repoRoot, 'packages', 'cli-common', 'cliDistBuildManifest.cjs');
-  const isRepoSource = existsSync(resolve(repoRoot, 'package.json')) && existsSync(resolve(repoRoot, 'yarn.lock'));
+  const isRepoSource = existsSync(resolve(repoRoot, 'package.json')) && existsSync(resolve(repoRoot, 'pnpm-lock.yaml')) && existsSync(resolve(repoRoot, 'pnpm-workspace.yaml'));
   return isRepoSource && existsSync(sourcePath)
     ? sourcePath
     : '@happier-dev/cli-common/cliDistBuildManifest';

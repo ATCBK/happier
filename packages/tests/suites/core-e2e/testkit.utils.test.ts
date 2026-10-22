@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { parsePositiveInt } from '../../src/testkit/numbers';
 import * as processCommands from '../../src/testkit/process/commands';
-import { yarnCommand, which } from '../../src/testkit/process/commands';
+import { pnpmCommand, which } from '../../src/testkit/process/commands';
 import { hasStringSubstring } from '../../src/testkit/providers/assertions';
 import { countNewMessageUpdatesWithLocalId, hasNewMessageUpdateWithLocalId } from '../../src/testkit/updates';
 
-type YarnInvocationResolver = (
+type PnpmInvocationResolver = (
   args: readonly string[],
   options?: Readonly<{ platform?: NodeJS.Platform; npmExecPath?: string; comspec?: string }>,
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
@@ -24,19 +24,19 @@ describe('testkit utilities', () => {
     expect(parsePositiveInt('42', 7)).toBe(42);
   });
 
-  it('yarnCommand returns a yarn executable name', () => {
-    expect(yarnCommand()).toContain('yarn');
+  it('pnpmCommand returns a pnpm executable name', () => {
+    expect(pnpmCommand()).toContain('pnpm');
   });
 
-  it('wraps the Windows Yarn shim through cmd.exe', () => {
-    const resolveYarnCommandInvocation = (processCommands as {
-      resolveYarnCommandInvocation?: YarnInvocationResolver;
-    }).resolveYarnCommandInvocation;
+  it('wraps the Windows Pnpm shim through cmd.exe', () => {
+    const resolvePnpmCommandInvocation = (processCommands as {
+      resolvePnpmCommandInvocation?: PnpmInvocationResolver;
+    }).resolvePnpmCommandInvocation;
 
-    expect(resolveYarnCommandInvocation).toBeTypeOf('function');
-    if (!resolveYarnCommandInvocation) throw new Error('missing testkit Yarn invocation resolver');
+    expect(resolvePnpmCommandInvocation).toBeTypeOf('function');
+    if (!resolvePnpmCommandInvocation) throw new Error('missing testkit Pnpm invocation resolver');
 
-    const invocation = resolveYarnCommandInvocation(['-s', 'workspace', '@happier-dev/cli', 'build'], {
+    const invocation = resolvePnpmCommandInvocation(['-s', '--filter', '@happier-dev/cli', 'run', 'build'], {
       platform: 'win32',
       npmExecPath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js',
       comspec: 'C:\\Windows\\System32\\cmd.exe',
@@ -44,7 +44,7 @@ describe('testkit utilities', () => {
 
     expect(invocation.command).toBe('C:\\Windows\\System32\\cmd.exe');
     expect(invocation.windowsVerbatimArguments).toBe(true);
-    expect(invocation.args.join(' ')).toContain('yarn.cmd');
+    expect(invocation.args.join(' ')).toContain('pnpm.cmd');
     expect(invocation.args.join(' ')).not.toContain('npm-cli.js');
   });
 

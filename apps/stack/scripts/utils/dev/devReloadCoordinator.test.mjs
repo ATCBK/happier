@@ -30,7 +30,8 @@ import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 test('development input changes refresh installed dependencies before source builds through the reload owner', async t => {
   const fixture = await createMinimalMonorepoFixture(t, { prefix: 'hstack-dev-auto-deps-' });
   await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await fs.writeFile(fixture.path('yarn.lock'), '# initial\n');
+  await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# initial\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   await fs.mkdir(fixture.path('node_modules'));
   await fs.mkdir(fixture.path('patches'));
   const yarn = fixture.path('yarn.cjs');
@@ -43,11 +44,12 @@ test('development input changes refresh installed dependencies before source bui
   const env = { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
     npm_execpath: yarn, HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
   await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
-  await fs.writeFile(fixture.path('yarn.lock'), '# stale at startup\n');
+  await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# stale at startup\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   let watcher;
   let sourceBuilds = 0;
   const failures = [];
-  const paths = [fixture.path('yarn.lock'), fixture.path('package.json'),
+  const paths = [fixture.path('pnpm-lock.yaml'), fixture.path('package.json'),
     join(fixture.serverDir, 'package.json'), fixture.path('patches')];
   const dependencyReload = await createDevDependencyReload({ repoDir: fixture.root, env });
   const coordinator = startDevReloadCoordinator({
@@ -66,7 +68,7 @@ test('development input changes refresh installed dependencies before source bui
   await Promise.all(requestInitialDevRefreshes({ reloadWatcher: coordinator,
     dependencyReloadEnabled: true, serverReloadEnabled: true }));
   for (const [path, bytes] of [
-    [fixture.path('yarn.lock'), '# changed\n'],
+    [fixture.path('pnpm-lock.yaml'), '# changed\n'],
     [fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], dependencies: { fresh: '1' } })],
     [join(fixture.serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server', dependencies: { fresh: '2' } })],
     [fixture.path('patches/new.patch'), 'new patch'],
@@ -82,7 +84,8 @@ test('development input changes refresh installed dependencies before source bui
   await coordinator.close();
 
   // UI-only/no-watch startup must also perform real dependency admission.
-  await fs.writeFile(fixture.path('yarn.lock'), '# UI-only startup\n');
+  await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# UI-only startup\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   const uiReload = await createDevDependencyReload({ repoDir: fixture.root, env });
   const uiCoordinator = startDevReloadCoordinator({ observeChanges: false,
     descriptors: [uiReload.descriptor], executors: [uiReload.executor],
@@ -238,6 +241,8 @@ test('server startup recovery observes transitive workspace inputs, not unrelate
 test('Metro losing a source file mid-bundle is startup source drift, unlike configuration failures', () => {
   const sha = 'Error: Failed to get the SHA-1 for: /repo/packages/protocol/src/usage/usageCostFacts.ts.';
   assert.equal(isDevStartupSourceDrift({ code: 1, message: sha }, 'expo'), true);
+  assert.equal(isDevStartupSourceDrift({ code: 1, message: sha, sourceDrift: false }, 'expo'), false,
+    'an owner that compared input bytes can reject heuristic source-drift classification');
   assert.equal(isDevStartupSourceDrift({ code: 1, message: 'Error: listen EADDRINUSE' }, 'expo'), false);
   const exhausted = Object.assign(new Error('[workspace-build] inputs changed while building @happier-dev/plugin-sdk; retained the last coherent output; rerun the phase'), { code: 'BUILD_INPUTS_CHANGED', trailingPassExhausted: true });
   assert.equal(isDevStartupSourceDrift(exhausted, 'server'), true);

@@ -1,13 +1,14 @@
-import { cp, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import { pathExists } from '../utils/fs/fs.mjs';
+import { mountInstalledNodeModules } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 
 export async function findWorkspaceMonorepoRoot(startDir) {
   let dir = resolve(startDir);
   for (let i = 0; i < 12; i += 1) {
-    if ((await pathExists(join(dir, 'package.json'))) && (await pathExists(join(dir, 'yarn.lock')))) {
+    if ((await pathExists(join(dir, 'package.json'))) && (await pathExists(join(dir, 'pnpm-workspace.yaml'))) && (await pathExists(join(dir, 'pnpm-lock.yaml')))) {
       return dir;
     }
     const parent = dirname(dir);
@@ -29,13 +30,15 @@ export async function createWorkspaceBuildSandbox({ packageDir, extraRelativePat
   const sandboxRoot = await mkdtemp(join(tmpdir(), 'hstack-build-sandbox-'));
 
   await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: 'package.json' });
-  await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: 'yarn.lock' });
+  await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: 'pnpm-lock.yaml' });
+  await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: 'pnpm-workspace.yaml' });
   await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: packageRelativeDir });
   for (const extraRelativePath of extraRelativePaths) {
     await copyIntoSandbox({ sourceRoot: monorepoRoot, sandboxRoot, relativePath: extraRelativePath });
   }
   if (await pathExists(join(monorepoRoot, 'node_modules'))) {
-    await symlink(join(monorepoRoot, 'node_modules'), join(sandboxRoot, 'node_modules'), 'junction');
+    await mountInstalledNodeModules({ sourceModules: join(monorepoRoot, 'node_modules'),
+      targetModules: join(sandboxRoot, 'node_modules') });
   }
 
   return {

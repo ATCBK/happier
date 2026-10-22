@@ -16,10 +16,10 @@ The CLI owns local runtime, daemon control, provider execution, authentication, 
 
 ## Commands and validation
 
-Use yarn. TypeScript changes require:
+Use pnpm and the package scripts. TypeScript changes require:
 
 ```bash
-yarn workspace @happier-dev/cli typecheck
+pnpm --filter @happier-dev/cli run typecheck
 ```
 
 Use the smallest relevant test slice while iterating and broaden before handoff. CLI unit tests must not force a full CLI `dist` build.
@@ -64,7 +64,7 @@ The normalized CLI manifest projections in `assets/bundled-plugin-manifests/*.js
   ```
 
 - The semantic drift gate already exists — do not add a second one. It runs the same publisher in `--mode check` and CI reaches it through `test:migration:governance`:
-  - `yarn test:migration:bundled-plugin-projections` (`--scope projections`) compares the generated projections against the bundled plugin sources and the bundle bytes **as installed**. Every input is owned by `packages/plugins/*`, so a failure names a plugin-source or projection defect.
+  - `pnpm run test:migration:bundled-plugin-projections` (`--scope projections`) compares the generated projections against the bundled plugin sources and the bundle bytes **as installed**. Every input is owned by `packages/plugins/*`, so a failure names a plugin-source or projection defect.
   - Byte equality across a shared-dependency rebuild is not a plugin-projection contract; only the semantic projection drift check is wired.
   - `--scope projections` is check-only; `--mode write` always publishes the full scope.
 - **The producer and its tracked projections are one publication closure; land them in one commit.** The closure is the build-owned generator plus its helpers and test in `scripts/build-owned/` and **every tracked projection** it emits (not only the ones listed above). The ignored installed `packages/plugins/*/.happier-plugin/**` bytes are materialized from those sources at publication. Pack-time publication compares the current source package tree directly with the prepared package tree before replacement; there is no committed byte ledger or compatibility generator entrypoint. Establish tracked membership from `git ls-tree -r --name-only HEAD <path>` at the moment you commit — never from a filename or from an earlier note in this file.

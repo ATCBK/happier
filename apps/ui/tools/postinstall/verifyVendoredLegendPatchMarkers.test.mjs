@@ -88,7 +88,7 @@ test('DISCRIMINATES: a single dropped hunk fails, and names the build and the de
     assert.match(message, /ready-to-render-liveness/);
     // The message must carry enough for a cold reader to act, not just a marker name.
     assert.match(message, /INVISIBLE/);
-    assert.match(message, /patch-package @legendapp\/list/);
+    assert.match(message, /pnpm patch @legendapp\/list/);
     assert.doesNotMatch(message, /hand-edit the \.patch file\.$/);
 });
 

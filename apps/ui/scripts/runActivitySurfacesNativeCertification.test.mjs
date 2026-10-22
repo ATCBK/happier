@@ -7,9 +7,10 @@ test('runActivitySurfacesNativeCertification runs the rollout certification, iOS
     const recordedCalls = [];
 
     const report = await runActivitySurfacesNativeCertification({
+        env: { npm_execpath: '/native/pnpm' },
         cwd: '/tmp/happier-ui',
         runRolloutCertification({ cwd, env, spawnSyncImpl }) {
-            spawnSyncImpl(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'certify:activity-surfaces'], {
+            spawnSyncImpl('/native/pnpm', ['--silent', 'run', 'certify:activity-surfaces'], {
                 cwd,
                 env,
                 stdio: 'inherit',
@@ -34,23 +35,23 @@ test('runActivitySurfacesNativeCertification runs the rollout certification, iOS
         })),
         [
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'certify:activity-surfaces'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'certify:activity-surfaces'],
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'validate:ios:widgets:native-sync'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'validate:ios:widgets:native-sync'],
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'validate:ios:widgets:generated-project'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'validate:ios:widgets:generated-project'],
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'validate:ios:widgets:simulator-build-smoke'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'validate:ios:widgets:simulator-build-smoke'],
                 cwd: '/tmp/happier-ui',
             },
             {
@@ -64,8 +65,8 @@ test('runActivitySurfacesNativeCertification runs the rollout certification, iOS
                 cwd: '/tmp/happier-ui',
             },
             {
-                command: process.platform === 'win32' ? 'yarn.cmd' : 'yarn',
-                args: ['-s', 'test:native-e2e:activity-surfaces'],
+                command: '/native/pnpm',
+                args: ['--silent', 'run', 'test:native-e2e:activity-surfaces'],
                 cwd: '/tmp/happier-ui',
             },
         ],
@@ -95,9 +96,10 @@ test('runActivitySurfacesNativeCertification skips generated-project and simulat
     const recordedLogs = [];
 
     const report = await runActivitySurfacesNativeCertification({
+        env: { npm_execpath: '/native/pnpm' },
         cwd: '/tmp/happier-ui',
         runRolloutCertification({ cwd, env, spawnSyncImpl }) {
-            spawnSyncImpl(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['-s', 'certify:activity-surfaces'], {
+            spawnSyncImpl('/native/pnpm', ['--silent', 'run', 'certify:activity-surfaces'], {
                 cwd,
                 env,
                 stdio: 'inherit',
@@ -119,9 +121,9 @@ test('runActivitySurfacesNativeCertification skips generated-project and simulat
     assert.equal(
         recordedCalls.some(
             ({ command, args }) =>
-                command === (process.platform === 'win32' ? 'yarn.cmd' : 'yarn') &&
-                args[0] === '-s' &&
-                ['validate:ios:widgets:generated-project', 'validate:ios:widgets:simulator-build-smoke'].includes(args[1]),
+                command === ('/native/pnpm') &&
+                args[0] === '--silent' &&
+                ['validate:ios:widgets:generated-project', 'validate:ios:widgets:simulator-build-smoke'].includes(args[2]),
         ),
         false,
     );

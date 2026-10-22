@@ -1,0 +1,28 @@
+diff --git a/dist/chunks/vi.bdSIJ99Y.js b/dist/chunks/vi.bdSIJ99Y.js
+index a021d20886e85c332f6ca76259fbbafeabd72982..6dc25d8653cc22d600bd9a706ad497efdf811b8c 100644
+--- a/dist/chunks/vi.bdSIJ99Y.js
++++ b/dist/chunks/vi.bdSIJ99Y.js
+@@ -3901,7 +3901,10 @@ function createVitest() {
+ 		mock(path, factory) {
+ 			if (typeof path !== "string") throw new TypeError(`vi.mock() expects a string path, but received a ${typeof path}`);
+ 			const importer = getImporter("mock");
+-			_mocker().queueMock(path, importer, typeof factory === "function" ? () => factory(() => _mocker().importActual(path, importer, _mocker().getMockContext().callstack)) : factory);
++			_mocker().queueMock(path, importer, typeof factory === "function" ? () => {
++				const callstack = _mocker().getMockContext().callstack;
++				return factory(() => _mocker().importActual(path, importer, callstack));
++			} : factory);
+ 		},
+ 		unmock(path) {
+ 			if (typeof path !== "string") throw new TypeError(`vi.unmock() expects a string path, but received a ${typeof path}`);
+@@ -3910,7 +3913,10 @@ function createVitest() {
+ 		doMock(path, factory) {
+ 			if (typeof path !== "string") throw new TypeError(`vi.doMock() expects a string path, but received a ${typeof path}`);
+ 			const importer = getImporter("doMock");
+-			_mocker().queueMock(path, importer, typeof factory === "function" ? () => factory(() => _mocker().importActual(path, importer, _mocker().getMockContext().callstack)) : factory);
++			_mocker().queueMock(path, importer, typeof factory === "function" ? () => {
++				const callstack = _mocker().getMockContext().callstack;
++				return factory(() => _mocker().importActual(path, importer, callstack));
++			} : factory);
+ 		},
+ 		doUnmock(path) {
+ 			if (typeof path !== "string") throw new TypeError(`vi.doUnmock() expects a string path, but received a ${typeof path}`);

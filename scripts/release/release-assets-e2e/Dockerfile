@@ -13,7 +13,8 @@ RUN apt-get update \
     g++ \
   && rm -rf /var/lib/apt/lists/*
 
-# Monorepo uses Yarn classic.
+# Released Stack installers under test still bootstrap Yarn-based checkouts.
+# Current source checkouts provision their pinned pnpm through setup-pnpm.mjs.
 RUN corepack enable && corepack prepare yarn@1.22.22 --activate
 
 WORKDIR /work

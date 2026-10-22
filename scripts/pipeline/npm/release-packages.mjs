@@ -1,5 +1,6 @@
 // @ts-check
 
+import { resolvePnpmCommandInvocation } from '../../workspaces/execPnpmCommand.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -123,7 +124,7 @@ function run(opts, cmd, args, extra) {
   }
 
   const env = { ...process.env, ...(extra?.env ?? {}) };
-  const invocation = resolveWindowsCommandInvocation({
+  const invocation = cmd === 'pnpm' ? resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath }) : resolveWindowsCommandInvocation({
     command: cmd,
     args,
     env,
@@ -519,7 +520,7 @@ async function main() {
           run(opts, step.command, step.args, { cwd: step.cwd, env: step.env });
         }
         if (runTests) {
-          run(opts, 'yarn', ['prepublishOnly'], { cwd: withinRepo(repoRoot, 'apps/cli') });
+          run(opts, 'pnpm', ['run', 'prepublishOnly'], { cwd: withinRepo(repoRoot, 'apps/cli') });
         }
         run(opts, process.execPath, ['scripts/bundleWorkspaceDeps.mjs', '--artifact'], { cwd: withinRepo(repoRoot, 'apps/cli') });
       },

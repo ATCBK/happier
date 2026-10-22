@@ -1,6 +1,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseAllDocuments } from 'yaml';
 
 import { assertCoherentPublicToolchainCompatibilityV1 } from '../../protocol/dist/plugins/publicToolchainCompatibilityV1.js';
 
@@ -115,33 +116,38 @@ function readDependency(manifest, packageName, label) {
 }
 
 function readLockEntries(lockSource) {
-  const entries = [];
-  const lines = lockSource.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const header = lines[index];
-    if (!header || /^\s/u.test(header) || !header.endsWith(':')) continue;
-    let version = null;
-    for (let nested = index + 1; nested < lines.length; nested += 1) {
-      const line = lines[nested];
-      if (line && !/^\s/u.test(line)) break;
-      const match = line?.match(/^  version "([^"]+)"$/u);
-      if (match) {
-        version = match[1];
-        break;
-      }
-    }
-    if (version) entries.push(Object.freeze({ header: header.slice(0, -1), version }));
+  const importerSets = parseAllDocuments(lockSource).map(document => {
+    if (document.errors.length > 0) throw document.errors[0];
+    const lock = asRecord(document.toJS(), 'pnpm lock');
+    return asRecord(lock.importers, 'pnpm lock importers');
+  });
+  // pnpm 12 puts its package-manager dependencies in a separate document with
+  // its own '.' importer. Select the repository by this generator's consumers.
+  const repositories = importerSets.filter(importers => (
+    ['.', 'apps/ui', 'packages/plugin-sdk', 'packages/plugin-ui']
+      .every(path => Object.hasOwn(importers, path))
+  ));
+  if (repositories.length !== 1) {
+    throw new Error('pnpm lock must contain exactly one repository importer document.');
   }
-  return entries;
+  return repositories[0];
 }
 
-function readResolvedVersion(lockEntries, packageName, dependencySpec, label) {
-  const needle = `${packageName}@${dependencySpec}`;
-  const entry = lockEntries.find((candidate) => candidate.header.includes(needle));
+function readResolvedVersion(lockEntries, importerPath, packageName, dependencySpec, label) {
+  const importer = asRecord(lockEntries[importerPath], `pnpm lock importer ${importerPath}`);
+  const entry = ['dependencies', 'devDependencies', 'optionalDependencies']
+    .map(group => importer[group]?.[packageName])
+    .find(candidate => candidate?.specifier === dependencySpec);
   if (!entry) {
-    throw new Error(`${label} has no Yarn lock resolution for ${needle}.`);
+    throw new Error(`${label} has no pnpm lock resolution for ${packageName}@${dependencySpec} in ${importerPath}.`);
   }
-  return entry.version;
+  // pnpm importer versions can carry peer contexts and npm-alias package names.
+  const reference = requiredString(entry.version, `${label} resolved ${packageName}`).split('(')[0];
+  const version = reference.slice(reference.lastIndexOf('@') + 1);
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$/u.test(version)) {
+    throw new Error(`${label} has no concrete pnpm lock version for ${packageName}.`);
+  }
+  return version;
 }
 
 function expectSame(left, right, label) {
@@ -540,7 +546,7 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
     readJson(resolve(root, 'apps/ui/package.json'), 'host UI package manifest'),
     readJson(resolve(root, 'packages/plugin-sdk/package.json'), 'Plugin SDK package manifest'),
     readJson(resolve(root, 'packages/plugin-ui/package.json'), 'Plugin UI package manifest'),
-    readSource(resolve(root, 'yarn.lock'), 'Yarn lock'),
+    readSource(resolve(root, 'pnpm-lock.yaml'), 'pnpm lock'),
     readProtocolPublicToolchainFacts(root),
   ]);
   const lockEntries = readLockEntries(lockSource);
@@ -554,9 +560,10 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
   expectSame(readDependency(uiPackage, sdkName, 'Plugin UI package manifest'), sdkVersion, 'Plugin UI and SDK package relationship');
 
   const reactSpec = readDependency(appPackage, 'react', 'host UI package manifest');
-  const reactVersion = readResolvedVersion(lockEntries, 'react', reactSpec, 'host UI package manifest');
+  const reactVersion = readResolvedVersion(lockEntries, 'apps/ui', 'react', reactSpec, 'host UI package manifest');
   const sdkReactVersion = readResolvedVersion(
     lockEntries,
+    'packages/plugin-sdk',
     'react',
     readDependency(sdkPackage, 'react', 'Plugin SDK package manifest'),
     'Plugin SDK package manifest',
@@ -564,9 +571,10 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
   expectSame(reactVersion, sdkReactVersion, 'Host and Plugin SDK React facts');
 
   const reactNativeSpec = readDependency(appPackage, 'react-native', 'host UI package manifest');
-  const reactNativeVersion = readResolvedVersion(lockEntries, 'react-native', reactNativeSpec, 'host UI package manifest');
+  const reactNativeVersion = readResolvedVersion(lockEntries, 'apps/ui', 'react-native', reactNativeSpec, 'host UI package manifest');
   const sdkReactNativeVersion = readResolvedVersion(
     lockEntries,
+    'packages/plugin-sdk',
     'react-native',
     readDependency(sdkPackage, 'react-native', 'Plugin SDK package manifest'),
     'Plugin SDK package manifest',
@@ -580,6 +588,7 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
   expectSame(reactNativeSpec, pluginUiReactNativeSpec, 'Host and Plugin UI React Native declarations');
   const pluginUiReactNativeVersion = readResolvedVersion(
     lockEntries,
+    'packages/plugin-ui',
     'react-native',
     pluginUiReactNativeSpec,
     'Plugin UI package manifest',
@@ -587,9 +596,10 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
   expectSame(reactNativeVersion, pluginUiReactNativeVersion, 'Host and Plugin UI React Native facts');
 
   const reactNativeWebSpec = readDependency(appPackage, 'react-native-web', 'host UI package manifest');
-  const reactNativeWebVersion = readResolvedVersion(lockEntries, 'react-native-web', reactNativeWebSpec, 'host UI package manifest');
+  const reactNativeWebVersion = readResolvedVersion(lockEntries, 'apps/ui', 'react-native-web', reactNativeWebSpec, 'host UI package manifest');
   const sdkReactNativeWebVersion = readResolvedVersion(
     lockEntries,
+    'packages/plugin-sdk',
     'react-native-web',
     readDependency(sdkPackage, 'react-native-web', 'Plugin SDK package manifest'),
     'Plugin SDK package manifest',
@@ -597,18 +607,18 @@ export async function derivePublicToolchainCompatibilityV1({ repoRoot = DEFAULT_
   expectSame(reactNativeWebVersion, sdkReactNativeWebVersion, 'Host and Plugin SDK React Native Web facts');
 
   const expoSpec = readDependency(appPackage, 'expo', 'host UI package manifest');
-  const expoVersion = readResolvedVersion(lockEntries, 'expo', expoSpec, 'host UI package manifest');
+  const expoVersion = readResolvedVersion(lockEntries, 'apps/ui', 'expo', expoSpec, 'host UI package manifest');
 
   const reactDomSpec = readDependency(appPackage, 'react-dom', 'host UI package manifest');
-  const reactDomVersion = readResolvedVersion(lockEntries, 'react-dom', reactDomSpec, 'host UI package manifest');
+  const reactDomVersion = readResolvedVersion(lockEntries, 'apps/ui', 'react-dom', reactDomSpec, 'host UI package manifest');
   const nodeTypesSpec = readDependency(sdkPackage, '@types/node', 'Plugin SDK package manifest');
-  const nodeTypesVersion = readResolvedVersion(lockEntries, '@types/node', nodeTypesSpec, 'Plugin SDK package manifest');
+  const nodeTypesVersion = readResolvedVersion(lockEntries, 'packages/plugin-sdk', '@types/node', nodeTypesSpec, 'Plugin SDK package manifest');
   const reactTypesSpec = readDependency(sdkPackage, '@types/react', 'Plugin SDK package manifest');
-  const reactTypesVersion = readResolvedVersion(lockEntries, '@types/react', reactTypesSpec, 'Plugin SDK package manifest');
+  const reactTypesVersion = readResolvedVersion(lockEntries, 'packages/plugin-sdk', '@types/react', reactTypesSpec, 'Plugin SDK package manifest');
   const typescriptSpec = readDependency(rootPackage, 'typescript', 'root package manifest');
-  const typescriptVersion = readResolvedVersion(lockEntries, 'typescript', typescriptSpec, 'root package manifest');
+  const typescriptVersion = readResolvedVersion(lockEntries, '.', 'typescript', typescriptSpec, 'root package manifest');
   const typescriptNativeSpec = readDependency(rootPackage, '@typescript/native', 'root package manifest');
-  const typescriptNativeVersion = readResolvedVersion(lockEntries, '@typescript/native', typescriptNativeSpec, 'root package manifest');
+  const typescriptNativeVersion = readResolvedVersion(lockEntries, '.', '@typescript/native', typescriptNativeSpec, 'root package manifest');
 
   const runtimeVersion = String(protocolFacts.runtimeApiVersion);
   const hostApiVersion = protocolFacts.ui.hostApiVersion;

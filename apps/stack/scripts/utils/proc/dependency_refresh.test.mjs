@@ -8,6 +8,50 @@ import test from 'node:test';
 import { inspectDependencyRefresh, isDependencyRefreshLockActive, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock, resolveDependencyRefreshLockPath } from './dependency_refresh.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { withWorkspaceBuildResources } from './workspace_build_admission.mjs';
+import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
+
+test('dependency refresh installs new verifier dependencies before probing UI outputs', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-verifier-prerequisite-' });
+  const uiDir = fixture.path('apps', 'ui');
+  const verifierDir = join(uiDir, 'tools', 'postinstall');
+  const dependencyDir = fixture.path('node_modules', 'verifier-prerequisite');
+  await mkdir(verifierDir, { recursive: true });
+  await mkdir(dependencyDir, { recursive: true });
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# current dependency inputs\n');
+  await writeFile(join(uiDir, 'package.json'), JSON.stringify({
+    name: '@happier-dev/app', scripts: { 'postinstall:real': 'node postinstall.mjs' },
+  }));
+  await writeFile(join(dependencyDir, 'package.json'), '{"type":"module","exports":"./index.mjs"}');
+  await writeFile(join(dependencyDir, 'index.mjs'), 'export const oldApi = true;\n');
+  await writeFile(join(verifierDir, 'verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs'),
+    "import { ready } from 'verifier-prerequisite';\nexport function verifyUiPatchedDependencies() { if (!ready) throw new Error('dependency not installed'); }\n");
+  const result = await withDependencyRefresh({ installDir: fixture.root, componentDir: uiDir,
+    env: { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root },
+    onDependenciesReady: async () => assert.deepEqual(await inspectUiPostinstallOutputs(uiDir, fixture.root), []),
+  }, async () => {
+    await writeFile(join(dependencyDir, 'index.mjs'), 'export const ready = true;\n');
+  });
+  assert.equal(result.refreshed, true);
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, componentDir: uiDir })).required, false);
+});
+
+test('pnpm lockfile, workspace configuration and patch bytes invalidate installed dependency freshness', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-pnpm-freshness-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root };
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(fixture.path('patches'));
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  for (const input of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/dependency.patch']) {
+    await writeFile(fixture.path(input), 'initial');
+  }
+  for (const input of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/dependency.patch']) {
+    await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false);
+    await writeFile(fixture.path(input), 'changed');
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true, input);
+  }
+});
 
 test('readiness without installation shares a long consumer even when source inputs are stale', { timeout: 10000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-readonly-dependency-readiness-' });
@@ -15,9 +59,9 @@ test('readiness without installation shares a long consumer even when source inp
   delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
   await mkdir(fixture.path('node_modules'));
   await writeFile(fixture.path('package.json'), '{"private":true}');
-  await writeFile(fixture.path('yarn.lock'), '# admitted\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# admitted\n');
   await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
-  await writeFile(fixture.path('yarn.lock'), '# source advanced, installed tree remains coherent\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# source advanced, installed tree remains coherent\n');
   let enter, release, notifyWriter;
   const entered = new Promise(resolve => { enter = resolve; });
   const held = new Promise(resolve => { release = resolve; });
@@ -46,7 +90,7 @@ test('readiness queued during installation remains a reader and waits for comple
   delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
   await mkdir(fixture.path('node_modules'));
   await writeFile(fixture.path('package.json'), '{"private":true}');
-  await writeFile(fixture.path('yarn.lock'), '# fixture\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# fixture\n');
   let enter, release, notifyWait;
   const entered = new Promise(resolve => { enter = resolve; });
   const held = new Promise(resolve => { release = resolve; });
@@ -208,7 +252,7 @@ for (const writerPriority of [true, false]) test(`dependency refresh waits for i
     assert.equal(payloadStarts, 0, 'a waiting contender must not start authoritative installation');
     assert.match(notices, new RegExp(`dependency refresh lock.*pid=${process.pid}.*heldMs=.*heartbeatAgeMs=`),
       'dependency consumers must see the existing owner diagnostic while waiting');
-    // Synchronous Yarn can delay an exclusive holder's JavaScript heartbeat;
+    // Synchronous Pnpm can delay an exclusive holder's JavaScript heartbeat;
     // shared-reader timestamps change only on membership changes. Neither
     // timestamp becoming old proves that the real owner has departed.
     clock += 240_001;
@@ -231,7 +275,8 @@ test('dependency readiness is published only after postinstall completion and re
   t.after(async () => await rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await writeFile(join(root, 'package.json'), '{"name":"fixture","private":true}\n');
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   const patchedPath = join(root, 'node_modules', 'streamingReveal.js');
   let failPostinstall = true;
   const refresh = () => withDependencyRefresh({
@@ -270,7 +315,8 @@ test('dependency readiness is published only after postinstall completion and re
   assert.deepEqual(JSON.parse(await readFile(admittedPath, 'utf8')), admittedState,
     'warm scriptless completion must retain the full admission identity when no extraction occurred');
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
-  await writeFile(join(root, 'yarn.lock'), '# changed source, prior installed tree remains coherent\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# changed source, prior installed tree remains coherent\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   await withDependencyRefresh({ installDir: root, refreshExisting: false,
     onDependenciesReady: async () => await writeFile(patchedPath, 'export const patched = true;\n') },
   async () => assert.fail('last-green repair must not install changed source inputs'));
@@ -294,7 +340,8 @@ test('source edits during and after installation preserve dependency readiness',
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'fixture', private: true, workspaces: ['apps/*', 'packages/*'],
   }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   // Real package metadata is the production boundary: the freshness owner must
   // observe this asset dependency, not a test-only declaration of its inputs.
   await cp(new URL('../../../../../packages/protocol/package.json', import.meta.url), join(protocolDir, 'package.json'));
@@ -313,7 +360,8 @@ test('source edits during and after installation preserve dependency readiness',
   await writeFile(workerPath, 'export const sourceRevision = 3;\n');
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false,
     'source asset compilation owns its last-green output, not installed dependency identity');
-  await writeFile(join(root, 'yarn.lock'), '# dependency change\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# dependency change\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, true,
     'lockfile changes still require an explicit dependency refresh');
 });
@@ -328,7 +376,8 @@ for (const scope of ['workspace', 'root']) test(`${scope} dependency freshness i
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await mkdir(join(root, 'packages', 'fixture'), { recursive: true });
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*', 'packages/*'] }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   const manifestPath = scope === 'root' ? join(root, 'package.json') : join(root, 'packages', 'fixture', 'package.json');
   const manifest = { name: 'workspace-fixture', version: '1.0.0', dependencies: { a: '1', b: '2' },
     ...(scope === 'root' ? { private: true, workspaces: ['apps/*', 'packages/*'] } : {}),
@@ -352,7 +401,7 @@ for (const scope of ['workspace', 'root']) test(`${scope} dependency freshness i
     { devDependencies: { c: '1' } }, { optionalDependencies: { c: '1' } }, { peerDependencies: { c: '1' } },
     { peerDependenciesMeta: { c: { optional: true } } }, { bin: './cli.js' }, { directories: { bin: './bin' } },
     { workspaces: ['nested/*'] }, { resolutions: { c: '1' } }, { overrides: { c: '1' } },
-    { packageManager: 'yarn@1.22.22' }, { engines: { node: '>=24' } }, { os: ['linux'] }, { cpu: ['x64'] },
+    { packageManager: 'pnpm@12.14.0' }, { engines: { node: '>=24' } }, { os: ['linux'] }, { cpu: ['x64'] },
     { flat: true }, { bundledDependencies: ['a'] }, { bundleDependencies: ['b'] },
     ...['preinstall', 'install', 'postinstall', ...(scope === 'root' ? ['prepare', 'prepublish'] : [])]
       .map(stage => ({ scripts: { ...changed.scripts, [stage]: 'changed-install' } })),
@@ -373,7 +422,8 @@ test('workspace projection re-evaluates admitted raw v6 inputs without invalidat
   }
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', private: true, workspaces: ['apps/*'] }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   await withDependencyRefresh({ installDir: root }, async () => {});
   const before = await inspectDependencyRefresh({ installDir: root });
   const marker = JSON.parse(await readFile(before.markerPath, 'utf8'));
@@ -404,7 +454,8 @@ test('dependency refresh reclaims a lock whose owner exited', async (t) => {
   await mkdir(join(fixtureRoot, 'node_modules'), { recursive: true });
   await Promise.all([
     writeFile(join(fixtureRoot, 'package.json'), '{"name":"fixture","private":true}\n', 'utf8'),
-    writeFile(join(fixtureRoot, 'yarn.lock'), '# fixture\n', 'utf8'),
+    writeFile(join(fixtureRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8'),
+    writeFile(join(fixtureRoot, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n'),
   ]);
 
   const lockPath = join(fixtureRoot, '.project', 'tmp', 'dependency-install.lock');
@@ -470,7 +521,8 @@ test('dependency refresh lock follows the explicit Stack home environment', asyn
   await mkdir(join(installDir, 'node_modules'), { recursive: true });
   await Promise.all([
     writeFile(join(installDir, 'package.json'), '{"name":"fixture","private":true}\n', 'utf8'),
-    writeFile(join(installDir, 'yarn.lock'), '# fixture\n', 'utf8'),
+    writeFile(join(installDir, 'pnpm-lock.yaml'), '# fixture\n', 'utf8'),
+    writeFile(join(installDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n'),
   ]);
 
   await withDependencyRefresh({
@@ -495,8 +547,9 @@ test('dependency readiness survives relocation of a byte-identical installed tre
   await writeFile(join(sourceRoot, 'install-input.txt'), 'fixture input\n', 'utf8');
   await symlink(join(sourceRoot, 'install-input.txt'), join(sourceRoot, 'install-input-link'));
   await Promise.all([
-    writeFile(join(sourceRoot, 'package.json'), '{"name":"fixture","private":true,"packageManager":"yarn@1.22.22","happier":{"installFreshnessInputs":["install-input-link"]}}\n', 'utf8'),
-    writeFile(join(sourceRoot, 'yarn.lock'), '# fixture\n', 'utf8'),
+    writeFile(join(sourceRoot, 'package.json'), '{"name":"fixture","private":true,"packageManager":"pnpm@12.14.0","happier":{"installFreshnessInputs":["install-input-link"]}}\n', 'utf8'),
+    writeFile(join(sourceRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8'),
+    writeFile(join(sourceRoot, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n'),
   ]);
 
   let refreshCount = 0;
@@ -531,11 +584,12 @@ test('dependency readiness rejects legacy markers and a different toolchain iden
   });
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await Promise.all([
-    writeFile(join(root, 'package.json'), '{"name":"fixture","private":true,"packageManager":"yarn@1.22.22"}\n', 'utf8'),
-    writeFile(join(root, 'yarn.lock'), '# fixture\n', 'utf8'),
+    writeFile(join(root, 'package.json'), '{"name":"fixture","private":true,"packageManager":"pnpm@12.14.0"}\n', 'utf8'),
+    writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n', 'utf8'),
+    writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n'),
   ]);
   const armIdentity = {
-    packageManager: 'yarn@1.22.22',
+    packageManager: 'pnpm@12.14.0',
     nodeVersion: '24.0.0',
     nodeAbi: '137',
     platform: 'linux',
@@ -582,7 +636,8 @@ test('dependency admission repairs an exact node_modules self-link without reins
   await Promise.all([
     mkdir(nodeModules, { recursive: true }),
     writeFile(join(root, 'package.json'), '{"name":"fixture","private":true}\n', 'utf8'),
-    writeFile(join(root, 'yarn.lock'), '# fixture\n', 'utf8'),
+    writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n', 'utf8'),
+    writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n'),
   ]);
 
   let refreshCount = 0;

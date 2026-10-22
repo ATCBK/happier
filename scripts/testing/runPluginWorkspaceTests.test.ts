@@ -30,17 +30,20 @@ async function createProjectFixture() {
   const eventsPath = join(root, 'events.jsonl');
   await symlink(join(repositoryRoot, 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/plugins/*', 'apps/*'] }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/plugins/*\n  - apps/*\nverifyDepsBeforeRun: false\n');
   await writeFile(join(root, 'vitest.config.ts'), 'export default { test: { environment: "node" } };');
   await writeFile(join(root, 'hook.mjs'), `import { appendFileSync } from 'node:fs';
 appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({kind:process.argv[2],project:process.argv[3],poolEnv:Object.fromEntries(${JSON.stringify(nativeWorkerEnvKeys)}.map(key=>[key,process.env[key]]))})+'\\n');
 if(process.argv[2]==='checks' && process.env.FAIL_ADJUNCT===process.argv[3]) process.exitCode=7;`);
+  // The real runner adds its cwd setup from outside the temporary workspace.
+  const sharedCwdSetup = join(repositoryRoot, 'scripts/testing/vitestProjectCwd.mjs');
   for (const name of ['alpha', 'beta']) {
     const packageRoot = join(root, 'packages/plugins', name);
     await mkdir(packageRoot, { recursive: true });
     const vitestPath = join(repositoryRoot, 'node_modules/vitest/vitest.mjs');
     await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
       name: `@fixture/${name}`, version: '0.0.0', type: 'module', scripts: {
-        test: `yarn -s test:unit:prepare && node ${JSON.stringify(vitestPath)} run && yarn -s test:unit:checks`,
+        test: `pnpm --silent run test:unit:prepare && node ${JSON.stringify(vitestPath)} run && pnpm --silent run test:unit:checks`,
         typecheck: 'node -e ""',
         'test:unit:prepare': `node ../../../hook.mjs prepare ${name}`,
         'test:unit:checks': `node ../../../hook.mjs checks ${name}`,
@@ -50,6 +53,7 @@ if(process.argv[2]==='checks' && process.env.FAIL_ADJUNCT===process.argv[3]) pro
     await writeFile(join(packageRoot, 'vitest.config.ts'), `import { fileURLToPath } from 'node:url';
 if(process.env.FAIL_CONFIG) throw new Error('fixture configuration startup failed');
 export default {resolve:{alias:{'fixture-value':fileURLToPath(new URL('./value.ts',import.meta.url))}},
+server:{fs:{allow:[${JSON.stringify(root)},${JSON.stringify(sharedCwdSetup)}]}},
 test:{name:${JSON.stringify(name)},include:['selected.test.ts'],exclude:['excluded.test.ts'],env:{FIXTURE_CONFIG:${JSON.stringify(name)}},setupFiles:['./setup.ts'],globalSetup:['./global.ts']}};`);
     await writeFile(join(packageRoot, 'global.ts'), `import {appendFileSync} from 'node:fs';
 export default function(project){const config=project.vitest.config;appendFileSync(process.env.FIXTURE_EVENTS,JSON.stringify({kind:'global',project:${JSON.stringify(name)},pid:process.pid,maxWorkers:config.maxWorkers,maxForks:config.poolOptions?.forks?.maxForks,maxThreads:config.poolOptions?.threads?.maxThreads,minForks:config.poolOptions?.forks?.minForks,minThreads:config.poolOptions?.threads?.minThreads})+'\\n');return()=>{if(process.env.FAIL_CLOSE===${JSON.stringify(name)}){appendFileSync(process.env.FIXTURE_EVENTS,JSON.stringify({kind:'close',project:${JSON.stringify(name)}})+'\\n');throw new Error('fixture global teardown failed');}};}`);
@@ -176,7 +180,7 @@ test('runs every workspace-derived plugin typecheck invocation', async () => {
 
   assert.deepEqual(executed, ['@happier-dev/plugins-alpha']);
   assert.deepEqual(invocations.map((invocation) => invocation.args), [
-    ['workspace', '@happier-dev/plugins-alpha', 'typecheck'],
+    ['--filter', '@happier-dev/plugins-alpha', '--silent', 'run', 'typecheck'],
   ]);
 });
 

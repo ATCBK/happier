@@ -21,15 +21,15 @@ function readScrollViewComponentView(sourceRoot: string): string {
 }
 
 describe('React Native Fabric MVCP stale-state patch', () => {
-  it('keeps a patch-package artifact for the installed React Native version', () => {
+  it('keeps a pnpm patch artifact for the installed React Native version', () => {
     const reactNativeRoot = resolveReactNativeRoot();
     const pkg = JSON.parse(readFileSync(join(reactNativeRoot, 'package.json'), 'utf8')) as {
       version: string;
     };
     const patchPath = resolve(
       __dirname,
-      '../../../../../patches',
-      `react-native+${pkg.version}.patch`,
+      '../../../../../../../patches',
+      `react-native@${pkg.version}.patch`,
     );
 
     expect(existsSync(patchPath), `expected patch file at ${patchPath}`).toBe(true);

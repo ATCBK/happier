@@ -215,12 +215,7 @@ test('Docker publishing installs and builds its release-runtime dependency', asy
   const publishDocker = await loadWorkflow('publish-docker.yml');
   assert.match(
     publishDocker,
-    /Enable Corepack \(Yarn\)[\s\S]*?corepack prepare yarn@1\.22\.22 --activate/,
-    'publish-docker should pin the repository Yarn runtime before installing dependencies',
-  );
-  assert.match(
-    publishDocker,
-    /Install trusted publisher dependencies[\s\S]*?HAPPIER_INSTALL_SCOPE:\s*["']release-runtime["'][\s\S]*?uses:\s*\.\/\.github\/actions\/install-yarn-dependencies/,
+    /Install trusted publisher dependencies[\s\S]*?HAPPIER_INSTALL_SCOPE:\s*["']release-runtime["'][\s\S]*?uses:\s*\.\/\.github\/actions\/install-pnpm-dependencies/,
     'publish-docker should install the trusted release-runtime workspace imported by its publisher',
   );
   assert.match(
@@ -309,7 +304,7 @@ test('Docker registry publisher executes trusted control only and consumes the e
   assert.match(serialized, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/);
   assert.match(serialized, /needs\.prepare_candidate\.outputs\.source_sha/);
   assert.doesNotMatch(serialized, /"uses":"\.\/\.candidate-source/);
-  assert.doesNotMatch(serialized, /node \.candidate-source|yarn --cwd \.candidate-source/);
+  assert.doesNotMatch(serialized, /node \.candidate-source|pnpm --dir \.candidate-source/);
 
   const publisher = publish.steps.find((step) => step.name === 'Build & push images (trusted pipeline)');
   assert.equal(publisher?.['working-directory'], '.candidate-source');

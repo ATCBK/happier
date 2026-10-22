@@ -70,7 +70,8 @@ async function writeMinimalRepo({ root }) {
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });

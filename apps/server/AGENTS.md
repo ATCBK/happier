@@ -4,14 +4,14 @@ Package-specific instructions for `apps/server`. These supplement the root const
 
 ## Commands
 
-Use yarn.
+Use pnpm and the package scripts.
 
-- `yarn build` — build/type-enforcing lane.
-- `yarn start` — start the server.
-- `yarn test` — run server tests.
-- `yarn migrate` — run existing Prisma migrations when intentionally requested; an authorized schema/migration edit itself triggers the required repo-local deploy and reconciliation below.
-- `yarn generate` — generate Prisma client/types when needed.
-- `yarn db` — start local PostgreSQL in Docker.
+- `pnpm run build` — build/type-enforcing lane.
+- `pnpm run start` — start the server.
+- `pnpm run test` — run server tests.
+- `pnpm run migrate` — run existing Prisma migrations when intentionally requested; an authorized schema/migration edit itself triggers the required repo-local deploy and reconciliation below.
+- `pnpm run generate` — generate Prisma client/types when needed.
+- `pnpm run db` — start local PostgreSQL in Docker.
 
 ## Core stack
 
@@ -20,7 +20,7 @@ Use yarn.
 - Prisma/PostgreSQL for storage.
 - Zod for request/response validation.
 - Socket.IO/Redis for realtime/event infrastructure.
-- Yarn for package management.
+- pnpm for package management.
 
 ## Source layout
 

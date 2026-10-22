@@ -11,15 +11,14 @@ set -euo pipefail
 #     && /tmp/linux-ubuntu-provision.sh --profile=happier
 #
 # Profiles:
-# - happier   : build tools + Node + Corepack/Yarn (default)
+# - happier   : build tools + Node + npm (default)
 # - installer : minimal base tooling (curl/ca-certs) to test the official installer on a mostly-empty box
 # - bare      : do nothing (useful if you explicitly want an unprovisioned VM)
 # - qa        : browser runtime only; no user Codex configuration or build-tool setup
-# - toolchain : Node + Corepack/Yarn + Go + ripgrep + native build tools; ready hosts require no changes
+# - toolchain : Node + npm + Go + ripgrep + native build tools; pinned pnpm follows source sync
 #
 # Env overrides:
 # - HAPPIER_PROVISION_NODE_MAJOR (default: 24)
-# - HAPPIER_PROVISION_YARN_VERSION (default: 1.22.22)
 # - HAPPIER_PROVISION_MUTAGEN_VERSION (default: 0.18.1)
 # - HAPPIER_PROVISION_AGENT_BROWSER_VERSION (default: 0.34.0)
 # - HAPPIER_PROVISION_PLAYWRIGHT_VERSION (default: 1.58.2; Linux ARM64 browser payload)
@@ -76,9 +75,9 @@ as_root() {
           shift
         done
       fi
-      if [[ "$1" == "corepack" ]]; then
-        # Corepack's env-node shebang cannot rely on sudo's secure_path.
-        sudo -n "${environment_prefix[@]}" "$(node -p 'process.execPath')" "$(command -v corepack)" "${@:2}"
+      if [[ "$1" == "npm" ]]; then
+        # npm's env-node shebang cannot rely on sudo's secure_path.
+        sudo -n "${environment_prefix[@]}" "$(node -p 'process.execPath')" "$(command -v npm)" "${@:2}"
       else
         sudo -n "${environment_prefix[@]}" "$(command -v "$1")" "${@:2}"
       fi
@@ -97,7 +96,6 @@ say() {
 }
 
 NODE_MAJOR="${HAPPIER_PROVISION_NODE_MAJOR:-24}"
-YARN_VERSION="${HAPPIER_PROVISION_YARN_VERSION:-1.22.22}"
 MUTAGEN_VERSION="${HAPPIER_PROVISION_MUTAGEN_VERSION:-0.18.1}"
 AGENT_BROWSER_VERSION="${HAPPIER_PROVISION_AGENT_BROWSER_VERSION:-0.34.0}"
 PLAYWRIGHT_VERSION="${HAPPIER_PROVISION_PLAYWRIGHT_VERSION:-1.58.2}"
@@ -120,13 +118,12 @@ if [[ "${PROFILE}" == "bare" ]]; then
 fi
 
 provision_node_toolchain() {
-  if [[ ! "${NODE_MAJOR}" =~ ^[0-9]+$ ]] || [[ ! "${YARN_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "[provision] invalid Node major or Yarn version" >&2
+  if [[ ! "${NODE_MAJOR}" =~ ^[0-9]+$ ]]; then
+    echo "[provision] invalid Node major" >&2
     exit 2
   fi
 
-  local node_version node_major yarn_version corepack_installed=0
-  local corepack_environment=(COREPACK_HOME=/usr/local/share/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_ENABLE_PROJECT_SPEC=0)
+  local node_version node_major
   node_version="$(node --version 2>/dev/null || true)"
   node_major="${node_version#v}"
   node_major="${node_major%%.*}"
@@ -147,32 +144,11 @@ provision_node_toolchain() {
   fi
   say "node: ${node_version}"
 
-  # NodeSource packages do not necessarily ship Corepack, even on Node 24.
-  # Bootstrap it with the npm supplied by Node before using Corepack itself.
-  if ! corepack --version >/dev/null 2>&1; then
-    say "installing Corepack"
-    as_root npm install --global --no-audit --no-fund corepack
-    hash -r
-    corepack --version >/dev/null
-    corepack_installed=1
-  fi
-
-  # Preparation and both probes share the system cache. Never prompt or fetch
-  # during readiness checks, including when the caller has an empty user cache.
-  yarn_version="$(env "${corepack_environment[@]}" COREPACK_ENABLE_NETWORK=0 yarn --version 2>/dev/null || true)"
-  if [[ "${PROFILE}" == "happier" || "${yarn_version}" != "${YARN_VERSION}" || "${corepack_installed}" == "1" ]]; then
-    say "enabling Corepack shims (root)"
-    as_root corepack enable
-    say "preparing Yarn ${YARN_VERSION} (root; system cache)"
-    as_root mkdir -p /usr/local/share/corepack
-    as_root env "${corepack_environment[@]}" corepack prepare "yarn@${YARN_VERSION}" --activate
-  fi
-  yarn_version="$(env "${corepack_environment[@]}" COREPACK_ENABLE_NETWORK=0 yarn --version)"
-  if [[ "${yarn_version}" != "${YARN_VERSION}" ]]; then
-    echo "[provision] Yarn ${YARN_VERSION} is not active on PATH after preparation" >&2
+  if ! npm --version >/dev/null 2>&1; then
+    echo "[provision] npm supplied by Node.js is required" >&2
     exit 1
   fi
-  say "yarn: ${yarn_version}"
+  say "npm: $(npm --version)"
 }
 
 if [[ "${PROFILE}" == "toolchain" ]]; then
@@ -380,7 +356,7 @@ fi
 CURRENT_AGENT_BROWSER_VERSION="$(agent-browser --version 2>/dev/null | awk '{print $NF}' || true)"
 if [[ "${CURRENT_AGENT_BROWSER_VERSION}" != "${AGENT_BROWSER_VERSION}" ]]; then
   say "installing agent-browser ${AGENT_BROWSER_VERSION}"
-  as_root env COREPACK_ENABLE_PROJECT_SPEC=0 corepack npm install --global --no-audit --no-fund \
+  as_root env npm install --global --no-audit --no-fund \
     --allow-scripts=agent-browser \
     "agent-browser@${AGENT_BROWSER_VERSION}"
 fi
@@ -397,7 +373,7 @@ case "$(uname -m)" in
     fi
     PLAYWRIGHT_BROWSERS_PATH="${HOME}/.cache/happier/agent-browser-browsers"
     export PLAYWRIGHT_BROWSERS_PATH
-    COREPACK_ENABLE_PROJECT_SPEC=0 corepack npm exec --yes \
+    npm exec --yes \
       --package="playwright@${PLAYWRIGHT_VERSION}" -- \
       playwright install --with-deps chromium-headless-shell
     AGENT_BROWSER_EXECUTABLE="$(find "${PLAYWRIGHT_BROWSERS_PATH}" \

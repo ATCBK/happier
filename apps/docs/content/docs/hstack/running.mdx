@@ -190,7 +190,7 @@ Important:
 - Artifact and full-snapshot builds use the repository build authority. Concurrent consumers wait for and reuse the newest compatible published result; explicit snapshot ids remain exact pins.
 - `hstack stack runtime <name> select` validates the build authority's newest complete snapshot for the consumer's target and writes only `<name>`'s selection. It never builds, publishes, activates, changes the producer's current pointer, or changes the consumer's launch mode.
 - `--tauri` still belongs to the legacy local `hstack build` flow and is not part of named-stack artifact/runtime builds in v1.
-- Runtime snapshots are currently a **named stack** feature. Repo-local `yarn tui`, `hstack dev`, and repo-local `hstack start` are still source-backed flows.
+- Runtime snapshots are currently a **named stack** feature. Repo-local `pnpm run tui`, `hstack dev`, and repo-local `hstack start` are still source-backed flows.
 - `hstack stack dev <name>` remains source-only. It is rejected when the stack persists `HAPPIER_STACK_RUNTIME_MODE=require` so a controlled stack cannot silently acquire watchers.
 - Selecting a snapshot never restarts a running stack. `hstack stack info <name> --json` distinguishes `selectedSnapshotId` from `loadedSnapshotId` and sets `pendingManualRestart` while they differ.
 - Web-only activation becomes visible after the running stack loads the selection; then a browser reload is enough.

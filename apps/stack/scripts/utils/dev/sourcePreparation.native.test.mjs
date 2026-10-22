@@ -19,7 +19,8 @@ test('source daemon preparation retries after a native Go input is corrected', {
   for (const name of ['prepareSourcePluginUiArtifacts.mjs', 'generateBundledPluginUiArtifacts.mjs']) {
     await fs.writeFile(join(repoDir, 'apps/ui/scripts', name), '');
   }
-  await fs.writeFile(join(repoDir, 'yarn.lock'), '');
+  await fs.writeFile(join(repoDir, 'pnpm-lock.yaml'), '');
+  await fs.writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await fs.writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
   // Exercise source diagnostics with the installed compiler, without asking Go
   // to download an unrelated toolchain before it can read the broken input.

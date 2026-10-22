@@ -75,7 +75,7 @@ test('expo native-build can delegate local Android builds to Dagger runtime', ()
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'if [ "${1:-}" != "ls-files" ]; then echo "unexpected git args: $*" >&2; exit 1; fi',
-      'printf "package.json\\0yarn.lock\\0apps/ui/package.json\\0scripts/pipeline/expo/native-build.mjs\\0dagger/src/index.ts\\0"',
+      'printf "package.json\\0pnpm.lock\\0apps/ui/package.json\\0scripts/pipeline/expo/native-build.mjs\\0dagger/src/index.ts\\0"',
       '',
     ].join('\n'),
   );

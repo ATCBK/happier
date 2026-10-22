@@ -49,6 +49,21 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
+test('managed pnpm remains visible to remote commands without dependency bootstrap', {
+  skip: process.platform === 'win32' ? 'Exercises the POSIX worker executable boundary' : false,
+}, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-managed-pnpm-path-' });
+  const binDir = fixture.path('worker', 'cache', 'pnpm-toolchain', 'bin');
+  await mkdir(binDir, { recursive: true });
+  await writeFile(join(binDir, 'pnpm'), '#!/bin/sh\nprintf "12.14.0\\n"\n', { mode: 0o755 });
+  const target = { platform: 'posix', cliHomeDir: fixture.path('worker'), remotePath: [] };
+  const result = spawnSync('/bin/sh', ['-c', commandPolicy.prependRemotePath(target, 'pnpm --version')], {
+    encoding: 'utf8', env: { PATH: fixture.path('empty-path') },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '12.14.0');
+});
+
 test('plugin source-resolving Vitest uses source preparation in both dispatchers', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const args = ['corepack', 'yarn', '-s', 'vitest', 'run', 'src/source.test.ts'];
@@ -189,7 +204,7 @@ test('Stack public test coordination requires Bun and leaves admission to prepar
   assert.equal(lookalike.requiredTools, '');
 });
 
-test('placed script dispatch preserves publisher admission with inherited Yarn executables', { skip: process.platform !== 'linux' }, async t => {
+test('placed script dispatch preserves publisher admission with inherited pnpm executables', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-script-publisher-' });
   const { launcher } = await installNativeAdmissionFixture({ root });
   const packageDir = join(root, 'native-owner', 'apps', 'stack');
@@ -198,9 +213,9 @@ test('placed script dispatch preserves publisher admission with inherited Yarn e
     'test:unit:local': 'node ./scripts/test_ci.mjs',
     'test:ordinary:local': 'node ./scripts/ordinary.mjs',
   } }));
-  // Yarn is the process boundary. The real launcher and manifest policy must
+  // Pnpm is the process boundary. The real launcher and manifest policy must
   // recognize the coordinator before selecting its inherited executable.
-  const manager = join(root, 'yarn.cjs');
+  const manager = join(root, 'pnpm.cjs');
   await writeFile(manager, 'process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23;\n');
   writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "1048576 1048576\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
   writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
@@ -214,7 +229,7 @@ test('placed script dispatch preserves publisher admission with inherited Yarn e
   });
   const publisher = invoke('test:unit:local');
   assert.equal(publisher.status, 23, publisher.stderr);
-  assert.deepEqual(JSON.parse(publisher.stdout), ['-s', 'test:unit:local', 'literal argument']);
+  assert.deepEqual(JSON.parse(publisher.stdout), ['run', '--silent', 'test:unit:local', 'literal argument']);
   const ordinary = invoke('test:ordinary:local');
   assert.equal(ordinary.status, 1, ordinary.stderr);
   assert.equal(ordinary.stdout, '');
@@ -361,6 +376,7 @@ test('manifest publisher delegation resolves repository package references and r
   await mkdir(join(root, 'packages/consumer'), { recursive: true });
   await mkdir(join(root, 'packages/producer'), { recursive: true });
   await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
   await writeFile(join(root, 'packages/producer/package.json'), JSON.stringify({ name: '@fixture/producer', scripts: {
     check: 'node ../../apps/stack/scripts/test_ci.mjs && yarn -s publish',
     publish: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
@@ -428,11 +444,14 @@ test('workspace aliases derive preparation from the selected manifest rather tha
   const packageDir = join(root, 'packages', 'nested', "viewer's tools");
   await mkdir(packageDir, { recursive: true });
   await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/nested/*'] }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/nested/*\n');
   await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@fixture/unrelated-name', scripts: {
     build: 'node compile.mjs',
   } }));
   for (const args of [
     ['yarn', 'workspace', '@fixture/unrelated-name', 'build'],
+    ['pnpm', '--filter', '@fixture/unrelated-name', 'run', 'build'],
+    ['pnpm', '--dir', "packages\\nested\\viewer's tools", 'run', 'build'],
     ['corepack', 'yarn', '--cwd', root, 'workspace', '@fixture/unrelated-name', 'build'],
     ['yarn', '--cwd', "packages\\nested\\viewer's tools", 'build'],
   ]) {
@@ -508,6 +527,7 @@ test('public self-dispatching package scripts reach placement without a controll
   const fixture = await createTempFixture(t, { prefix: 'host-admission-public-dispatch-' });
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
   const checkout = fixture.path('native-owner');
+  await writeFile(`${checkout}/pnpm-workspace.yaml`, 'packages:\n  - packages/*\n');
   await mkdir(`${checkout}/packages/probe`, { recursive: true });
   await writeFile(`${checkout}/package.json`, JSON.stringify({ workspaces: ['packages/*'], scripts: {
     typecheck: 'apps/stack/bin/hstack-exec --script=typecheck:local',
@@ -691,6 +711,7 @@ test('source-test native requirements belong to the selected package declaration
   const cliDir = join(root, 'apps/cli');
   mkdirSync(cliDir, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   const manifest = { name: '@happier-dev/cli', scripts: {
     vitest: 'vitest',
     'test:unit': 'yarn -s test:unit:vitest && yarn -s test:import-cycles',
@@ -701,6 +722,7 @@ test('source-test native requirements belong to the selected package declaration
   const requests = [
     { cwd: cliDir, args: ['vitest', 'run', 'src/example.test.ts'] },
     { cwd: root, args: ['yarn', '--cwd', 'apps/cli', 'vitest', 'run', 'src/example.test.ts'] },
+    { cwd: root, args: ['pnpm', '--dir', 'apps/cli', 'exec', 'vitest', 'run', 'src/example.test.ts'] },
     { cwd: cliDir, args: ['hstack-exec', '--heavyweight-admission', '--class=compilation', '--', 'vitest', 'run', 'src/example.test.ts'] },
     { cwd: root, args: ['yarn', 'workspace', '@happier-dev/cli', 'test:unit'] },
     { cwd: cliDir, args: ['yarn', 'test:unit'] },
@@ -1668,9 +1690,9 @@ test('remote doctor checks prerequisites without changing the target', () => {
   });
   assert.match(posixCommand, /export PATH=.*nvm.*homebrew.*PATH/);
   assert.match(posixCommand, /command -v node/);
-  assert.match(posixCommand, /command -v corepack/);
+  assert.match(posixCommand, /command -v npm/);
   assert.match(posixCommand, /command -v rg/);
-  assert.doesNotMatch(posixCommand, /yarn install/);
+  assert.doesNotMatch(posixCommand, /pnpm install/);
 
   const windowsCommand = buildRemoteDoctorCommand({
     ...windows,
@@ -1679,9 +1701,9 @@ test('remote doctor checks prerequisites without changing the target', () => {
   const decodedPowerShell = Buffer.from(windowsCommand.split(' ').at(-1), 'base64').toString('utf16le');
   assert.match(decodedPowerShell, /\$env:PATH = .*node.*ripgrep.*PathSeparator.*\$env:PATH/);
   assert.match(decodedPowerShell, /Get-Command node/);
-  assert.match(decodedPowerShell, /Get-Command corepack/);
+  assert.match(decodedPowerShell, /Get-Command npm/);
   assert.match(decodedPowerShell, /Get-Command rg/);
-  assert.doesNotMatch(decodedPowerShell, /yarn install/);
+  assert.doesNotMatch(decodedPowerShell, /pnpm install/);
 });
 
 test('remote daemon readiness probe requires a live pid from the server-scoped state', async () => {
@@ -1982,7 +2004,7 @@ test('remote daemon command reuses the Stack dev owner and adopts a last-green d
   });
   assert.match(
     command,
-    new RegExp(`corepack yarn workspace @happier-dev/stack stack dev .*${posixRemoteStack}.* --no-server --no-ui --no-browser --no-dev-targets --watch`),
+    new RegExp(`pnpm --filter @happier-dev/stack run stack dev .*${posixRemoteStack}.* --no-server --no-ui --no-browser --no-dev-targets --watch`),
   );
   assert.doesNotMatch(command, /--restart/);
   assert.match(command, new RegExp(`stack new .*${posixRemoteStack}.*--if-missing`));
@@ -1997,7 +2019,7 @@ test('remote daemon command reuses the Stack dev owner and adopts a last-green d
   assert.match(command, /HAPPIER_ACTIVE_SERVER_ID/);
   assert.match(command, /http:\/\/127\.0\.0\.1:43005/);
   assert.doesNotMatch(command, /stack stop/);
-  assert.doesNotMatch(command, /corepack yarn dev /);
+  assert.doesNotMatch(command, /pnpm run dev /);
 
   const windowsRemoteStack = resolveRemoteStackStatePaths(windows, { stackName: 'repo-local-dev' }).stackName;
   const windowsCommand = buildRemoteDaemonCommand(windows, {
@@ -2015,7 +2037,7 @@ test('remote daemon command reuses the Stack dev owner and adopts a last-green d
   assert.match(decodedPowerShell, new RegExp(`\\$env:HAPPIER_STACK_STACK = '${windowsRemoteStack}'`));
   assert.match(
     decodedPowerShell,
-    new RegExp(`corepack yarn workspace @happier-dev/stack stack dev '${windowsRemoteStack}' --no-server --no-ui --no-browser --no-dev-targets --watch`),
+    new RegExp(`pnpm --filter @happier-dev/stack run stack dev '${windowsRemoteStack}' --no-server --no-ui --no-browser --no-dev-targets --watch`),
   );
   assert.doesNotMatch(decodedPowerShell, /stack stop/);
   assert.doesNotMatch(decodedPowerShell, /--restart/);
@@ -2283,6 +2305,7 @@ test('remote Stack server receives the non-secret auth mail, email/password and 
 
 test('remote Stack server projects feature configuration without secrets on POSIX and Windows', () => {
   const environment = {
+    HAPPIER_PUBLIC_PROFILE_REPORT_URL: 'mailto:qa-reports@happier.invalid',
     HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: 'true',
     HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
     HAPPIER_FEATURE_TEAMS__ENABLED: 'false',

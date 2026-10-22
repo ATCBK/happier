@@ -13,7 +13,7 @@
  * and documentation share one authority without requiring packed artifacts.
  * Metadata and locator ids are cross-checked before rendering.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

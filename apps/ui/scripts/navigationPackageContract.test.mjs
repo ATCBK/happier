@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import semver from 'semver';
+import { parsePatch } from 'diff';
+import { readPnpmPatches } from '../tools/postinstall/pnpmPatches.mjs';
 
 const require = createRequire(import.meta.url);
-const { parsePatchFile } = require('patch-package/dist/patch/parse');
+function installedPath(name, ...segments) {
+  return join(dirname(require.resolve(`${name}/package.json`)), ...segments);
+}
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf-8'));
@@ -20,18 +24,14 @@ function readPodVersion(podfileLockContents, podName) {
   return match?.[1] ?? null;
 }
 
-test('apps/ui vendor patches are syntactically valid patch-package inputs', async () => {
-  const scriptsDir = dirname(fileURLToPath(import.meta.url));
-  const patchDir = join(dirname(scriptsDir), 'patches');
-  const patchFileNames = (await readdir(patchDir)).filter((fileName) => fileName.endsWith('.patch'));
-
-  assert.ok(patchFileNames.length > 0, 'expected at least one UI vendor patch');
-  for (const patchFileName of patchFileNames) {
-    const patchContents = await readFile(join(patchDir, patchFileName), 'utf-8');
-    assert.doesNotThrow(
-      () => parsePatchFile(patchContents),
-      `${patchFileName} must be parseable by the patch-package version used by postinstall`,
-    );
+test('workspace vendor patches are syntactically valid native pnpm inputs', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const patches = readPnpmPatches(root);
+  assert.ok(patches.length > 0);
+  for (const { patchFile } of patches) {
+    const effects = parsePatch(await readFile(patchFile, 'utf8'));
+    assert.ok(effects.length > 0, patchFile);
+    for (const effect of effects) assert.equal(typeof effect.newFileName, 'string', patchFile);
   }
 });
 
@@ -52,7 +52,7 @@ test('apps/ui direct @react-navigation/native range satisfies navigator peer req
 
   for (const packageName of navigatorPackages) {
     const navigatorPackageJson = await readJson(
-      join(packageRoot, 'node_modules', ...packageName.split('/'), 'package.json'),
+      require.resolve(`${packageName}/package.json`),
     );
     const requiredNativeRange = navigatorPackageJson?.peerDependencies?.['@react-navigation/native'];
 
@@ -119,9 +119,9 @@ test('apps/ui source validation does not prepare workspace runtime packages', as
     assert.doesNotMatch(command, /ensure:workspace:built|ensureWorkspacePackagesBuilt|syncSharedDepsForSourceDev|buildSharedDeps/);
   }
 
-  assert.match(scripts.start, /ensure:workspace:built/);
-  assert.match(scripts['tauri:dev'], /ensure:workspace:built/);
-  assert.match(scripts['test:native-e2e:activity-surfaces'], /ensure:workspace:built/);
+  assert.match(scripts.start, /ensure:workspace:built|ensureWorkspacePackagesBuilt\.mjs/);
+  assert.match(scripts['tauri:dev'], /ensure:workspace:built|ensureWorkspacePackagesBuilt\.mjs/);
+  assert.match(scripts['test:native-e2e:activity-surfaces'], /ensure:workspace:built|ensureWorkspacePackagesBuilt\.mjs/);
 });
 
 test('apps/ui declares patch and vendor sources as install freshness inputs', async () => {
@@ -131,7 +131,6 @@ test('apps/ui declares patch and vendor sources as install freshness inputs', as
   const freshnessInputs = packageJson?.happier?.installFreshnessInputs;
 
   assert.ok(Array.isArray(freshnessInputs));
-  assert.ok(freshnessInputs.includes('patches'));
   assert.ok(freshnessInputs.includes('tools/postinstall.mjs'));
   assert.ok(freshnessInputs.includes('tools/resolveUiPostinstallTasks.mjs'));
   assert.ok(freshnessInputs.includes('tools/react-native-enriched-markdown'));
@@ -151,10 +150,7 @@ test('apps/ui patched expo-router web modal layout enables the experimental moda
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
 
-  const webModalLayoutPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const webModalLayoutPath = installedPath('expo-router',
     'build',
     'layouts',
     '_web-modal.js',
@@ -177,10 +173,7 @@ test('apps/ui patched expo-router web modal stack guards missing preloadedRoutes
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
 
-  const modalStackPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const modalStackPath = installedPath('expo-router',
     'build',
     'modal',
     'web',
@@ -197,7 +190,7 @@ test('apps/ui patched expo-router web modal stack guards missing preloadedRoutes
 
 test('apps/ui patched expo-router web modal stack preserves navigator layout guards', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
-  const modalStackPath = join(dirname(scriptsDir), 'node_modules', 'expo-router', 'build', 'modal', 'web', 'ModalStack.js');
+  const modalStackPath = installedPath('expo-router', 'build', 'modal', 'web', 'ModalStack.js');
   const contents = await readFile(modalStackPath, 'utf-8');
   // This installed dependency API is the real web Stack path. Its layout owns
   // the app's authentication guard; checking only NativeStackNavigator misses it.
@@ -212,10 +205,7 @@ test('apps/ui patched expo-router web modal keeps critical layout when Metro omi
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
 
-  const modalRouteDrawerPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const modalRouteDrawerPath = installedPath('expo-router',
     'build',
     'modal',
     'web',
@@ -258,7 +248,7 @@ test('apps/ui patched expo-router web modal keeps critical layout when Metro omi
 test('apps/ui patched expo-router web modal mounts its screen in the first commit', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
-  const modalWebDir = join(packageRoot, 'node_modules', 'expo-router', 'build', 'modal', 'web');
+  const modalWebDir = installedPath('expo-router', 'build', 'modal', 'web');
 
   // A route modal whose screen mounts a commit late emits navigation state without the nested
   // navigator's routes, and linking then rewrites a cold-loaded `/settings/<page>` URL to `/settings`.
@@ -282,10 +272,7 @@ test('apps/ui patched expo-router web modal mounts its screen in the first commi
 test('apps/ui patched expo-router linking rolls browser history back when route removal is prevented', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
-  const useLinkingPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const useLinkingPath = installedPath('expo-router',
     'build',
     'fork',
     'useLinking.js',
@@ -357,10 +344,7 @@ test('apps/ui patched expo-router linking rolls browser history back when route 
 test('apps/ui patched expo-router memory history settles rollback against the resolved entry', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
-  const memoryHistoryPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const memoryHistoryPath = installedPath('expo-router',
     'build',
     'fork',
     'createMemoryHistory.js',
@@ -506,10 +490,7 @@ test('apps/ui patched expo-router native stack treats unavailable liquid glass a
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
 
-  const nativeStackPath = join(
-    packageRoot,
-    'node_modules',
-    'expo-router',
+  const nativeStackPath = installedPath('expo-router',
     'build',
     'fork',
     'native-stack',
@@ -545,7 +526,7 @@ test('apps/ui patched expo-crypto root import avoids eager AES native module loa
   const repoRoot = dirname(dirname(packageRoot));
 
   const cryptoPathCandidates = [
-    join(packageRoot, 'node_modules', 'expo-crypto', 'build', 'Crypto.js'),
+    installedPath('expo-crypto', 'build', 'Crypto.js'),
     join(repoRoot, 'node_modules', 'expo-crypto', 'build', 'Crypto.js'),
   ];
   let cryptoContents = '';
@@ -578,7 +559,7 @@ test('apps/ui uses a React Native 0.83 compatible react-native-unistyles release
   const packageJson = await readJson(join(packageRoot, 'package.json'));
   const directUnistylesRange = packageJson?.dependencies?.['react-native-unistyles'];
   const installedUnistylesPackageJson = await readJson(
-    join(packageRoot, 'node_modules', 'react-native-unistyles', 'package.json'),
+    installedPath('react-native-unistyles', 'package.json'),
   );
 
   assert.equal(typeof directUnistylesRange, 'string');
@@ -602,7 +583,7 @@ test('apps/ui keeps Nitro Modules native and JS versions compatible with React N
   const packageJson = await readJson(join(packageRoot, 'package.json'));
   const directNitroRange = packageJson?.dependencies?.['react-native-nitro-modules'];
   const installedNitroPackageJson = await readJson(
-    join(packageRoot, 'node_modules', 'react-native-nitro-modules', 'package.json'),
+    installedPath('react-native-nitro-modules', 'package.json'),
   );
   const podfileLockContents = await readFile(join(packageRoot, 'ios', 'Podfile.lock'), 'utf-8');
   const lockedNitroPodVersion = readPodVersion(podfileLockContents, 'NitroModules');

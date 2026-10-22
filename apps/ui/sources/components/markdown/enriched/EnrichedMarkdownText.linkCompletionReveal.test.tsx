@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
+import { enrichedMarkdownPackageFileUrl } from '@/dev/testkit/harness/enrichedMarkdownPackage';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 
-import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { sanitizeEnrichedMarkdownLinkTargets } from './enrichedMarkdownLinkHandling';
 import { preprocessStreamingMarkdown } from '../streaming/preprocessStreamingMarkdown';
 
@@ -16,12 +16,6 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const REVEAL_SELECTOR = '[data-happier-enriched-markdown-reveal="text"]';
 const LINK_LABEL = 'zlink-006';
-const { resolve } = getVitestNodeBuiltin<{
-    resolve: (...paths: string[]) => string;
-}>('node:path');
-const { pathToFileURL } = getVitestNodeBuiltin<{
-    pathToFileURL: (path: string) => URL;
-}>('node:url');
 
 type WebEnrichedMarkdownTextModule = Readonly<{
     EnrichedMarkdownText: React.ComponentType<{
@@ -34,13 +28,9 @@ type WebParseMarkdownModule = Readonly<{
     preloadMarkdownRuntime: () => Promise<void>;
 }>;
 
-// This suite runs under jsdom (a real DOM is the whole point), where `import.meta.url`
-// is an http: document URL the ESM loader refuses. Resolve the patched package from the
-// Vitest project root instead, exactly as `vitest.config.ts` resolves its own aliases.
+// Resolve through the installed package in both the hoisted and UI-local layouts.
 function patchedPackageModuleUrl(relativePath: string): string {
-    return pathToFileURL(
-        resolve(process.cwd(), 'node_modules/react-native-enriched-markdown', relativePath),
-    ).href;
+    return enrichedMarkdownPackageFileUrl(relativePath);
 }
 
 async function loadPatchedWebEnrichedMarkdownText(): Promise<WebEnrichedMarkdownTextModule> {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdown } from '../../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown';
-import type { Md4cFlags } from '../../../../node_modules/react-native-enriched-markdown/src/types/MarkdownStyle';
-import type { ASTNode } from '../../../../node_modules/react-native-enriched-markdown/src/web/types';
-import { extractNodeText } from '../../../../node_modules/react-native-enriched-markdown/src/web/utils';
+import { parseMarkdown } from 'react-native-enriched-markdown/src/web/parseMarkdown';
+import type { Md4cFlags } from 'react-native-enriched-markdown/src/types/MarkdownStyle';
+import type { ASTNode } from 'react-native-enriched-markdown/src/web/types';
+import { extractNodeText } from 'react-native-enriched-markdown/src/web/utils';
 
 type BackslashTexMathFlags = Md4cFlags & Readonly<{ texMathBackslashDelimiters: boolean }>;
 

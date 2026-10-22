@@ -13,10 +13,10 @@ function getServerDir(): string {
 }
 
 async function writeFakeYarn(params: Readonly<{ dir: string; logPath: string }>): Promise<void> {
-    const yarnPath = join(params.dir, 'yarn');
+    const yarnPath = join(params.dir, 'pnpm');
     const content = `#!/bin/sh
 set -e
-echo "YARN $@" >> "${params.logPath}"
+echo "PNPM $@" >> "${params.logPath}"
 exit 0
 `;
     await writeFile(yarnPath, content, { mode: 0o755 });
@@ -92,7 +92,7 @@ describe('dev.light.ts', () => {
         expect(result.stdout).toContain('{"happierStackTransition":"migration_started"}');
         expect(result.stdout).toContain('{"happierStackTransition":"migration_completed"}');
         const lines = await readLogLines(logPath);
-        expect(lines).toEqual(['YARN -s migrate:deploy', 'YARN -s start:light']);
+        expect(lines).toEqual(['PNPM --silent run migrate:deploy', 'PNPM --silent run start:light']);
     }, 60_000);
 
     it('does not let a previous local run authorize skipping migrations', async () => {
@@ -106,7 +106,7 @@ describe('dev.light.ts', () => {
         expect(second.status).toBe(0);
 
         const lines = await readLogLines(logPath);
-        expect(lines).toEqual(['YARN -s migrate:deploy', 'YARN -s start:light']);
+        expect(lines).toEqual(['PNPM --silent run migrate:deploy', 'PNPM --silent run start:light']);
     }, 60_000);
 
     it('skips light migrate only when the Stack planner explicitly admits skip', async () => {
@@ -115,7 +115,7 @@ describe('dev.light.ts', () => {
 
         expect(result.status).toBe(0);
         const lines = await readLogLines(logPath);
-        expect(lines).toEqual(['YARN -s start:light']);
+        expect(lines).toEqual(['PNPM --silent run start:light']);
     }, 60_000);
 
     it('uses provider migrations independently of the light behavior preset', async () => {
@@ -124,6 +124,6 @@ describe('dev.light.ts', () => {
 
         expect(result.status).toBe(0);
         const lines = await readLogLines(logPath);
-        expect(lines).toEqual(['YARN -s migrate:deploy', 'YARN -s start:light']);
+        expect(lines).toEqual(['PNPM --silent run migrate:deploy', 'PNPM --silent run start:light']);
     }, 60_000);
 });

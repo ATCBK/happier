@@ -47,7 +47,7 @@ import {
   ensureFileExists,
   execOrThrow,
   resolveBunCommand,
-  resolveYarnCommand,
+  resolvePnpmCommand,
   type RunCommand,
 } from './commands.js';
 import {
@@ -901,7 +901,7 @@ async function stageCliBinaryArtifactSupportPayload({
     }
   }
 
-  const yarn = resolveYarnCommand({ commandProbe });
+  const pnpm = resolvePnpmCommand({ commandProbe });
   await mkdir(payloadDir, { recursive: true });
   const runtimeSupportDirectories = preserveCompilePayloadAssets
     ? ['.project']
@@ -984,7 +984,7 @@ async function stageCliBinaryArtifactSupportPayload({
     repoRoot,
     payloadDir,
     target,
-    yarn,
+    pnpm,
     runCommand,
     prebuiltExecutablePath: cliProxyApiManagedRuntimeExecutablePath,
     publicationFailures,

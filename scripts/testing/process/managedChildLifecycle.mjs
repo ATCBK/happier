@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 
-import { buildWindowsCmdShimInvocation } from '../../workspaces/execYarnCommand.mjs';
+import { buildWindowsCmdShimInvocation } from '../../workspaces/execPnpmCommand.mjs';
 import { terminateProcessTreeByPid } from './processTree.mjs';
 
 /**

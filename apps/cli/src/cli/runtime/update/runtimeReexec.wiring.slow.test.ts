@@ -5,10 +5,10 @@ import { spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 
-import { resolveYarnCommandInvocation } from '../../../../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../../../../scripts/workspaces/execPnpmCommand.mjs';
 
 function runBuildStep(args: string[], label: string): void {
-  const invocation = resolveYarnCommandInvocation(args);
+  const invocation = resolvePnpmCommandInvocation(args);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: process.cwd(),
     env: { ...process.env },
@@ -26,8 +26,8 @@ function runBuildStep(args: string[], label: string): void {
 
 function ensureDistBuilt(): void {
   if (existsSync(join(process.cwd(), 'dist', 'index.mjs'))) return;
-  runBuildStep(['-s', 'build:shared'], 'build:shared');
-  runBuildStep(['-s', 'pkgroll'], 'pkgroll');
+  runBuildStep(['--silent', 'run', 'build:shared'], 'build:shared');
+  runBuildStep(['--silent', 'exec', 'pkgroll'], 'pkgroll');
 }
 
 function createRuntimePackage(homeDir: string, packageName: string, marker: string): void {

@@ -270,21 +270,16 @@ jobs:
         with:
           node-version: 22.x
 
-      - name: Enable Corepack (Yarn)
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install trusted publisher dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_INSTALL_SCOPE: "release-runtime"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
           npm_config_registry: https://registry.npmjs.org
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Download exact candidate source
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093

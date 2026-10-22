@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-// Keep this module dependency-free so it can run in GitHub Actions before `yarn install`.
+// Keep this module dependency-free so it can run in GitHub Actions before `pnpm install`.
 // We load the canonical release ring catalog from the checked-in CJS entrypoint.
 const here = path.dirname(fileURLToPath(import.meta.url));
 const releaseRings = require(path.resolve(here, '..', '..', '..', 'packages', 'release-runtime', 'releaseRings.cjs'));

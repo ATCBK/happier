@@ -3,7 +3,7 @@
 One JSON file per release, named `<releaseId>.json` (e.g. `v0.2.7.json`).
 
 The schema is enforced by `apps/ui/sources/scripts/parseReleaseNotes.ts`; running
-`yarn ota` will regenerate the bundled manifest and fail the build on any
+`pnpm run ota` will regenerate the bundled manifest and fail the build on any
 authoring error (missing translation key, missing asset, malformed JSON).
 
 The release's public Markdown and bounded channel projection source live in the

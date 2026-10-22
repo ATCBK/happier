@@ -47,7 +47,7 @@ type ResolvedPackageValidator = (resolved: Readonly<{
 export function findRepoRoot(startDir: string): string {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
-    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'yarn.lock'))) {
+    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'pnpm-lock.yaml')) && existsSync(resolve(dir, 'pnpm-workspace.yaml'))) {
       return dir;
     }
     const parent = resolve(dir, '..');
@@ -298,8 +298,10 @@ export function atomicReplaceDirSync(params: Readonly<{
   }>;
 }>): void {
   const fsOps = params.fsOps ?? {};
-  const exists = fsOps.existsSync ?? existsSync;
   const lstat = fsOps.lstatSync ?? lstatSync;
+  // Publication replaces directory entries, including workspace links whose
+  // captured producer has already disappeared. existsSync follows those links.
+  const exists = fsOps.existsSync ?? ((path: Parameters<typeof existsSync>[0]) => lstat(path, { throwIfNoEntry: false }) !== undefined);
   const mkdir = fsOps.mkdirSync ?? mkdirSync;
   const readDir = fsOps.readdirSync ?? ((path: string) => readdirSync(path, { withFileTypes: true }));
   const rename = fsOps.renameSync ?? renameSync;

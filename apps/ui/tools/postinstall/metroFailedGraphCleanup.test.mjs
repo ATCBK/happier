@@ -6,10 +6,11 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { applyPatch, parsePatch, reversePatch } from 'diff';
 
 const uiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const requireFromUi = createRequire(path.join(uiDir, 'package.json'));
-const patchPath = path.join(uiDir, 'patches/metro+0.83.5.patch');
+const patchPath = path.resolve(uiDir, '../../patches/metro@0.83.5.patch');
 
 function createMetroFixture() {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'happier-metro-failure-cleanup-')));
@@ -29,25 +30,16 @@ function createMetroFixture() {
             fs.mkdirSync(path.dirname(destination), { recursive: true });
             fs.symlinkSync(path.dirname(installedRequire.resolve(`${name}/package.json`)), destination, 'junction');
         }
-        const { parsePatchFile } = requireFromUi('patch-package/dist/patch/parse.js');
-        const { reversePatch } = requireFromUi('patch-package/dist/patch/reverse.js');
-        const { executeEffects } = requireFromUi('patch-package/dist/patch/apply.js');
-        const effects = parsePatchFile(fs.readFileSync(patchPath, 'utf8'));
-        // Normalize an already-patched installed boundary to its upstream preimage
-        // using patch-package itself, then apply the complete current authored patch.
-        // This tests fresh installation and remains valid before/after host refresh.
-        for (const effect of effects) {
-            const reversed = reversePatch([effect]);
-            try {
-                executeEffects(reversed, { dryRun: true, bestEffort: false, cwd: root });
-            } catch {
-                executeEffects([effect], { dryRun: true, bestEffort: false, cwd: root });
-                continue;
-            }
-            executeEffects(reversed, { dryRun: false, bestEffort: false, cwd: root });
+        // Normalize the private copy to the upstream preimage, then apply the
+        // native pnpm patch; never mutate dependencies serving another Stack.
+        for (const effect of parsePatch(fs.readFileSync(patchPath, 'utf8'))) {
+            const file = path.join(packageDir, effect.newFileName.replace(/^b\//, ''));
+            const installed = fs.readFileSync(file, 'utf8');
+            const upstream = applyPatch(installed, reversePatch(effect));
+            const patched = applyPatch(upstream === false ? installed : upstream, effect);
+            assert.notEqual(patched, false, file);
+            fs.writeFileSync(file, patched);
         }
-        executeEffects(effects, { dryRun: true, bestEffort: false, cwd: root });
-        executeEffects(effects, { dryRun: false, bestEffort: false, cwd: root });
         const projectRoot = path.join(root, 'project');
         fs.mkdirSync(projectRoot);
         fs.writeFileSync(path.join(projectRoot, 'entry.js'), "require('./good'); require('./missing');\n");

@@ -34,7 +34,8 @@ function createSandbox(): Sandbox {
   const destDir = resolve(repoRoot, 'pack-destination');
 
   writeFile(resolve(repoRoot, 'package.json'), '{"private":true}\n');
-  writeFile(resolve(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFile(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFile(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFile(resolve(repoRoot, 'packages', 'protocol', 'dist', 'index.js'), 'export {};\n');
   writeFile(resolve(happyCliDir, 'package.json'), `${JSON.stringify({
     name: '@happier-dev/cli',

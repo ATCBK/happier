@@ -1,0 +1,12 @@
+diff --git a/build/Crypto.js b/build/Crypto.js
+index 21cdd20f2eef39cf3ac11102c9aa2a6cde23732a..54970ee3cf0ca779b2386cf2bcf88f9d58fbed15 100644
+--- a/build/Crypto.js
++++ b/build/Crypto.js
+@@ -2,7 +2,6 @@ import { UnavailabilityError } from 'expo-modules-core';
+ import { CryptoDigestAlgorithm, CryptoEncoding } from './Crypto.types';
+ import ExpoCrypto from './ExpoCrypto';
+ export * from './Crypto.types';
+-export * from './aes';
+ class CryptoError extends TypeError {
+     code = 'ERR_CRYPTO';
+     constructor(message) {

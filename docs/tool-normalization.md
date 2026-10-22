@@ -205,7 +205,7 @@ Run (from repo root):
 
 ```bash
 cd apps/cli
-yarn tool:trace:fixtures:v1 --stack <stack> --write
+pnpm run tool:trace:fixtures:v1 --stack <stack> --write
 ```
 
 ### Tests
@@ -229,7 +229,7 @@ Fixtures are not a brittle “exact output snapshot” of every field; they are 
 Run:
 
 ```bash
-yarn workspace @happier-dev/cli test
+pnpm --filter @happier-dev/cli run test
 ```
 
 ### Provider contract baselines (optional, e2e-style)
@@ -386,8 +386,8 @@ When a provider changes tool shapes, the recommended workflow is:
 4) Update CLI normalization (`families/*` + canonical name mapping) and add/adjust tests.
 5) Ensure the app still renders legacy + Claude local-control sessions (fallback normalization should remain conservative).
 6) Run stack-scoped tests:
-   - `yarn workspace @happier-dev/cli test`
-   - `yarn workspace @happier-dev/app test` (app test suite)
+   - `pnpm --filter @happier-dev/cli run test`
+   - `pnpm --filter @happier-dev/app run test` (app test suite)
 
 The canonical rule:
 

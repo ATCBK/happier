@@ -131,7 +131,7 @@ test('DISCRIMINATES: the exact defect — remove called before report — fails 
     assert.match(message, /removeUpdatesOlderThanTimestamp is called BEFORE getUpdatesOlderThanTimestamp/);
     // A cold reader must get the consequence and the recovery command, not just a symbol name.
     assert.match(message, /permanent/);
-    assert.match(message, /patch-package react-native-reanimated/);
+    assert.match(message, /pnpm patch react-native-reanimated/);
 });
 
 test('DISCRIMINATES: the ordering hunk disappearing entirely fails', () => {

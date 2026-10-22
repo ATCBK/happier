@@ -8,7 +8,8 @@ test('resolveBootstrapRepoRoot walks upward until it finds the monorepo root mar
     startDir: '/repo/apps/bootstrap/scripts',
     existsSync: (path) => (
       path === '/repo/package.json'
-      || path === '/repo/yarn.lock'
+      || path === '/repo/pnpm-lock.yaml'
+      || path === '/repo/pnpm-workspace.yaml'
     ),
   });
 

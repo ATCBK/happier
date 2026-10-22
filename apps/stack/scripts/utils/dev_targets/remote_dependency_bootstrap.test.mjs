@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -19,9 +20,8 @@ import {
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
   verifyUiPatchedDependencies,
 } from '../../../../ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
-import { listApplicablePatchFiles } from '../../../../ui/tools/postinstall/filteredPatchDirectory.mjs';
 import { ensureDepsInstalled } from '../proc/pm.mjs';
-import { withYarnInstallGuard } from '../worktrees/yarn_install_guard.mjs';
+import { withPnpmInstallGuard } from '../worktrees/pnpm_install_guard.mjs';
 
 import {
   REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS,
@@ -34,15 +34,16 @@ test('remote dev startup refreshes a stale installed tree before publishing read
   await mkdir(fixture.path('apps', 'stack'), { recursive: true });
   await writeFile(fixture.path('package.json'), '{"private":true}');
   await writeFile(fixture.path('apps', 'stack', 'package.json'), '{"name":"fixture-stack"}');
-  await writeFile(fixture.path('yarn.lock'), '# stale fixture\n');
-  const installer = fixture.path('yarn.cjs');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# stale fixture\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
+  const installer = fixture.path('pnpm.cjs');
   const installed = fixture.path('install-attempt');
   await writeFile(installer, `require('node:fs').writeFileSync(${JSON.stringify(installed)}, 'called'); process.exit(43);`);
   const binDir = fixture.path('bin');
   await mkdir(binDir);
-  await writeFile(join(binDir, 'corepack'), `#!${process.execPath}\nrequire(${JSON.stringify(installer)});\n`);
-  await chmod(join(binDir, 'corepack'), 0o755);
-  await writeFile(join(binDir, 'corepack.cmd'), `@"${process.execPath}" "${installer}" %*\r\n`);
+  await writeFile(join(binDir, 'pnpm'), `#!${process.execPath}\nrequire(${JSON.stringify(installer)});\n`);
+  await chmod(join(binDir, 'pnpm'), 0o755);
+  await writeFile(join(binDir, 'pnpm.cmd'), `@"${process.execPath}" "${installer}" %*\r\n`);
   await assert.rejects(bootstrapDependencies({ repoDir: fixture.root, executionPlacement: 'remote', toolsOnly: true,
     env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`, npm_execpath: installer,
       HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_ENV_FILE: '' } }), error => error.status === 43);
@@ -59,7 +60,8 @@ test('warm worker bootstrap waits for a live refresh instead of refusing the adm
   const lockPath = fixture.path('.project', 'tmp', 'dependency-install.lock');
   const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
   await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await writeFile(fixture.path('yarn.lock'), '# warm fixture\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# warm fixture\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n");
   for (const name of ['stack', 'cli', 'ui', 'server']) {
     await mkdir(fixture.path('apps', name), { recursive: true });
     await writeFile(fixture.path('apps', name, 'package.json'), JSON.stringify({ name: `fixture-${name}` }));
@@ -73,8 +75,8 @@ test('warm worker bootstrap waits for a live refresh instead of refusing the adm
   await mkdir(binDir);
   // Only the package-manager executable is substituted. Any installation or
   // lifecycle mutation of this healthy tree is a failure at that OS boundary.
-  const packageManager = `#!${process.execPath}\nconst args=process.argv.slice(2); if(args[0]==='yarn')args.shift(); if(args[0]==='--version') console.log('1.22.22'); else throw new Error('Unexpected package mutation: '+args.join(' '));\n`;
-  for (const name of ['corepack', 'yarn']) {
+  const packageManager = `#!${process.execPath}\nconst args=process.argv.slice(2); if(args[0]==='--version') console.log('12.14.0'); else throw new Error('Unexpected package mutation: '+args.join(' '));\n`;
+  for (const name of ['pnpm']) {
     await writeFile(join(binDir, name), packageManager);
     await chmod(join(binDir, name), 0o755);
     await writeFile(join(binDir, `${name}.cmd`), `@"${process.execPath}" "${join(binDir, name)}" %*\r\n`);
@@ -136,21 +138,20 @@ test('warm worker bootstrap waits for a live refresh instead of refusing the adm
 
 const runDependencyRefreshImmediately = async (_options, refresh) => await refresh({});
 
-test('scriptless CLI bootstrap restores every real UI patch before admission and repairs warm patch loss without reinstalling', {
+test('scriptless CLI bootstrap admits native pnpm patches and repairs warm patch loss through reinstallation', {
   skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
 }, async t => {
   const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-scriptless-all-ui-patches-' });
   const sourceRepoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
   const uiDir = join(repoDir, 'apps/ui');
   const sourceUiDir = join(sourceRepoDir, 'apps/ui');
-  const pristineDir = join(repoDir, 'pristine');
+  const patchedDir = join(repoDir, 'patched-install');
   const require = createRequire(import.meta.url);
-  const { parsePatchFile } = require('patch-package/dist/patch/parse.js');
-  const { reversePatch } = require('patch-package/dist/patch/reverse.js');
-  const { executeEffects } = require('patch-package/dist/patch/apply.js');
+  const { parsePatch, reversePatch, applyPatch } = require('diff');
+  const { parse, stringify } = require('yaml');
+  const workspace = parse(await readFile(join(sourceRepoDir, 'pnpm-workspace.yaml'), 'utf8'));
   await mkdir(uiDir, { recursive: true });
   await cp(join(sourceUiDir, 'tools'), join(uiDir, 'tools'), { recursive: true });
-  await cp(join(sourceUiDir, 'patches'), join(uiDir, 'patches'), { recursive: true });
   await cp(join(sourceUiDir, 'app.config.js'), join(uiDir, 'app.config.js'));
   const uiManifest = JSON.parse(await readFile(join(sourceUiDir, 'package.json'), 'utf8'));
   await writeFile(join(uiDir, 'package.json'), JSON.stringify({ ...uiManifest, scripts: { 'postinstall:real': 'node tools/postinstall.mjs' } }));
@@ -158,45 +159,55 @@ test('scriptless CLI bootstrap restores every real UI patch before admission and
     await mkdir(join(repoDir, 'apps', component), { recursive: true });
     await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
   }
-  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'yarn@1.22.22' }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), stringify({
+    packages: ['apps/*'], patchedDependencies: workspace.patchedDependencies,
+  }));
+  await cp(join(sourceRepoDir, 'patches'), join(repoDir, 'patches'), { recursive: true });
   await cp(join(sourceRepoDir, 'packages/brand'), join(repoDir, 'packages/brand'), {
     recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist'),
   });
   await mkdir(join(repoDir, 'node_modules'), { recursive: true });
-  await cp(join(sourceRepoDir, 'node_modules/patch-package'), join(repoDir, 'node_modules/patch-package'), { recursive: true, dereference: true });
-  const patchPackageDependencies = Object.keys(JSON.parse(await readFile(join(sourceRepoDir, 'node_modules/patch-package/package.json'), 'utf8')).dependencies);
-  for (const name of ['esbuild', '@esbuild', ...patchPackageDependencies]) {
-    await mkdir(join(repoDir, 'node_modules', name, '..'), { recursive: true });
+  for (const name of ['esbuild', '@esbuild', 'diff', 'yaml']) {
     await symlink(join(sourceRepoDir, 'node_modules', name), join(repoDir, 'node_modules', name));
   }
   const patches = [];
-  for (const relativeRoot of ['.', 'apps/ui']) {
-    const sourceRoot = join(sourceRepoDir, relativeRoot);
-    const cwd = join(pristineDir, relativeRoot);
-    for (const patchFile of listApplicablePatchFiles({ patchDir: join(sourceUiDir, 'patches'), nodeModulesDir: join(sourceRoot, 'node_modules') })) {
-      const effects = parsePatchFile(await readFile(join(sourceUiDir, 'patches', patchFile), 'utf8'));
-      patches.push({ cwd: join(repoDir, relativeRoot), patchFile, effects });
-      const packageName = patchFile.startsWith('@') ? patchFile.split('+').slice(0, 2).join('/') : patchFile.split('+')[0];
-      await cp(join(sourceRoot, 'node_modules', packageName), join(cwd, 'node_modules', packageName), { recursive: true, dereference: true });
-      // Produce pristine install bytes in this fixture only. Using the real
-      // patch-package engine also handles a moving checkout with mixed hunks.
-      for (const effect of reversePatch(effects)) {
-        const pieces = effect.type === 'patch' ? [...effect.hunks].reverse().map(hunk => ({ ...effect, hunks: [hunk] })) : [effect];
-        for (const piece of pieces) {
-          try {
-            executeEffects([piece], { cwd, dryRun: true, bestEffort: false });
-          } catch {
-            executeEffects(reversePatch([piece]), { cwd, dryRun: true, bestEffort: false });
-            continue;
-          }
-          executeEffects([piece], { cwd, dryRun: false, bestEffort: false });
-        }
-      }
+  for (const [selector, patchFile] of Object.entries(workspace.patchedDependencies)) {
+    const packageName = selector.slice(0, selector.lastIndexOf('@'));
+    const packageDir = join(patchedDir, 'node_modules', packageName);
+    await cp(join(sourceRepoDir, 'node_modules', packageName), packageDir, { recursive: true, dereference: true });
+    const effects = parsePatch(await readFile(join(sourceRepoDir, patchFile), 'utf8'));
+    patches.push({ packageName, effects });
+    // The loaded pnpm install supplies these bytes. Reversibility against each
+    // authored patch independently proves this fixture did not start pristine.
+    for (const effect of effects) {
+      const file = effect.newFileName === '/dev/null' ? effect.oldFileName : effect.newFileName;
+      const input = await readFile(join(packageDir, file.replace(/^[ab]\//u, '')), 'utf8').catch(error => {
+        if (error.code === 'ENOENT' && effect.newFileName === '/dev/null') return '';
+        throw error;
+      });
+      assert.notEqual(applyPatch(input, reversePatch(effect)), false, `Installed native patch is missing: ${selector} ${file}`);
     }
   }
-  assert.ok(patches.some(({ patchFile }) => patchFile.startsWith('react-native-enriched-markdown+')));
-  assert.ok(patches.some(({ patchFile }) => patchFile.startsWith('@elevenlabs+client+')));
+  const removePatch = async ({ packageName, effects }) => {
+    const packageDir = join(repoDir, 'node_modules', packageName);
+    for (const original of effects) {
+      const effect = reversePatch(original);
+      const file = effect.oldFileName === '/dev/null' ? effect.newFileName : effect.oldFileName;
+      const path = join(packageDir, file.replace(/^[ab]\//u, ''));
+      const input = await readFile(path, 'utf8').catch(error => {
+        if (error.code === 'ENOENT' && effect.oldFileName === '/dev/null') return '';
+        throw error;
+      });
+      const output = applyPatch(input, effect);
+      assert.notEqual(output, false, `Cannot remove fixture patch: ${packageName} ${file}`);
+      if (effect.newFileName === '/dev/null') await rm(path);
+      else { await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, output); }
+    }
+  };
+  assert.ok(patches.some(({ packageName }) => packageName === 'react-native-enriched-markdown'));
+  assert.ok(patches.some(({ packageName }) => packageName === '@elevenlabs/client'));
   const binDir = join(repoDir, 'bin');
   const trace = join(repoDir, 'pm-trace.jsonl');
   await mkdir(binDir);
@@ -205,24 +216,21 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const args = process.argv.slice(2);
-if (args[0] === 'yarn') args.shift();
-if (args[0] === '--version') { console.log('1.22.22'); process.exit(0); }
+if (args[0] === '--version') { console.log('12.14.0'); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + '\\n');
 if (!fs.existsSync(${JSON.stringify(join(repoDir, '.project/tmp/dependency-install.lock'))})) throw new Error('Dependency mutation escaped its lock');
 if (fs.existsSync(${JSON.stringify(join(repoDir, 'node_modules/.happier-stack-dependencies-ready'))})) throw new Error('Readiness published before patches completed');
 if (args[0] === 'install') {
-  if (!args.includes('--ignore-scripts')) throw new Error('Expected scriptless installation');
-  for (const { cwd, patchFile } of ${JSON.stringify(patches.map(({ cwd, patchFile }) => ({ cwd, patchFile })))}) {
-    const packageName = patchFile.startsWith('@') ? patchFile.split('+').slice(0, 2).join('/') : patchFile.split('+')[0];
-    fs.rmSync(path.join(cwd, 'node_modules', packageName), { recursive: true, force: true });
+  for (const packageName of ${JSON.stringify(patches.map(({ packageName }) => packageName))}) {
+    fs.rmSync(path.join(${JSON.stringify(repoDir)}, 'node_modules', packageName), { recursive: true, force: true });
   }
-  fs.cpSync(${JSON.stringify(pristineDir)}, ${JSON.stringify(repoDir)}, { recursive: true });
-} else if (args.join(' ') === '-s workspace @happier-dev/app postinstall:real') {
+  fs.cpSync(${JSON.stringify(patchedDir)}, ${JSON.stringify(repoDir)}, { recursive: true });
+} else if (args.join(' ') === '--filter @happier-dev/app run --silent postinstall:real') {
   const result = spawnSync(process.execPath, [${JSON.stringify(join(uiDir, 'tools/postinstall.mjs'))}], { env: process.env, stdio: 'inherit' });
   process.exit(result.status ?? 1);
 } else throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
 `;
-  for (const name of ['corepack', 'yarn']) {
+  for (const name of ['pnpm']) {
     await writeFile(join(binDir, name), packageManager);
     await chmod(join(binDir, name), 0o755);
   }
@@ -232,8 +240,7 @@ if (args[0] === 'install') {
   } };
   await bootstrapRemoteDependencies(options);
   verifyUiPatchedDependencies({ uiPackageDir: uiDir });
-  for (const { cwd, effects } of patches) executeEffects(reversePatch(effects.filter(effect => effect.type !== 'mode change')), { cwd, dryRun: true, bestEffort: false });
-  const output = join(uiDir, 'node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
+  const output = join(repoDir, 'node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
   const outputStat = await stat(output);
   const warmTrace = await readFile(trace, 'utf8');
   await bootstrapRemoteDependencies(options);
@@ -245,16 +252,16 @@ if (args[0] === 'install') {
   await withDependencyRefresh({ installDir: repoDir, env: options.env }, async () => {});
   const atmosphere = join(uiDir, 'sources/components/atmosphere/backdropWorkletCore.generated.js');
   await assert.rejects(stat(atmosphere), { code: 'ENOENT' }, 'dependency bootstrap must not compile moving application source');
-  const elevenLabs = patches.find(({ patchFile }) => patchFile.startsWith('@elevenlabs+client+'));
+  const elevenLabs = patches.find(({ packageName }) => packageName === '@elevenlabs/client');
   for (const prepare of [
     () => bootstrapRemoteDependencies(options),
     () => ensureDepsInstalled(join(repoDir, 'apps/cli'), 'fixture CLI', { env: options.env, prepareComponentOutputs: false }),
-    () => withYarnInstallGuard({ installDir: repoDir, env: options.env }, async () => {}),
+    () => withPnpmInstallGuard({ installDir: repoDir, env: options.env }, async () => {}),
   ]) {
-    executeEffects(reversePatch(elevenLabs.effects), { cwd: elevenLabs.cwd, dryRun: false, bestEffort: false });
+    await removePatch(elevenLabs);
     await prepare();
     assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, false,
-      'warm scriptless repair must preserve existing full-install admission');
+      'canonical pnpm repair must preserve existing full-install admission');
     verifyUiPatchedDependencies({ uiPackageDir: uiDir });
     await assert.rejects(stat(atmosphere), { code: 'ENOENT' }, 'source artifact compilation must not participate in dependency repair');
   }
@@ -262,24 +269,25 @@ if (args[0] === 'install') {
   await bootstrapRemoteDependencies(options);
   verifyUiPatchedDependencies({ uiPackageDir: uiDir });
   const commands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(commands.filter(args => args[0] === 'install').length, 1, 'warm patch repair must reuse the canonical postinstall without reinstalling');
+  assert.equal(commands.filter(args => args[0] === 'install').length, 5, 'each corrupted native patch tree requires canonical pnpm reinstallation');
   // Local non-UI source tools must also inspect the shared UI patches.
-  const otherPatch = patches.find(({ patchFile }) => patchFile.startsWith('expo-crypto+'));
+  const otherPatch = patches.find(({ packageName }) => packageName === 'expo-crypto');
   assert.ok(otherPatch);
-  executeEffects(reversePatch(otherPatch.effects), { cwd: otherPatch.cwd, dryRun: false, bestEffort: false });
+  await removePatch(otherPatch);
   await assert.rejects(bootstrapRemoteDependencies({ ...options, executionPlacement: 'local' }),
     { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
-  executeEffects(otherPatch.effects, { cwd: otherPatch.cwd, dryRun: false, bestEffort: false });
+  await cp(join(patchedDir, 'node_modules', otherPatch.packageName), join(repoDir, 'node_modules', otherPatch.packageName), { recursive: true });
   verifyUiPatchedDependencies({ uiPackageDir: uiDir });
-  assert.equal((await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'install').length, 1);
+  assert.equal((await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'install').length, 5);
 });
 
 for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local validation never mutates stale dependencies under ${policy} policy`, {
   skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
 }, async t => {
   const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-local-bootstrap-policy-' });
-  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'yarn@1.22.22' }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# original inputs\n');
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'pnpm@12.14.0' }));
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# original inputs\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n");
   for (const component of ['stack', 'ui', 'cli', 'server']) {
     await mkdir(join(repoDir, 'apps', component), { recursive: true });
     await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
@@ -288,7 +296,7 @@ for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local val
   await withDependencyRefresh({ installDir: repoDir }, async () => {});
   const markerPath = join(repoDir, 'node_modules/.happier-stack-dependencies-ready');
   const admittedBytes = await readFile(markerPath, 'utf8');
-  await writeFile(join(repoDir, 'yarn.lock'), '# changed inputs\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# changed inputs\n');
   const binDir = join(repoDir, 'bin');
   await mkdir(binDir);
   const installTrace = join(repoDir, 'installs.json');
@@ -297,12 +305,11 @@ for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local val
   const packageManager = `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args[0] === 'yarn') args.shift();
-if (args[0] === '--version') console.log('1.22.22');
+if (args[0] === '--version') console.log('12.14.0');
 else if (args[0] === 'install') fs.writeFileSync(${JSON.stringify(installTrace)}, JSON.stringify(args));
 else throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
 `;
-  for (const command of ['corepack', 'yarn']) {
+  for (const command of ['pnpm']) {
     await writeFile(join(binDir, command), packageManager);
     await chmod(join(binDir, command), 0o755);
   }
@@ -329,7 +336,7 @@ else throw new Error('Unexpected package-manager command: ' + JSON.stringify(arg
   await assert.rejects(stat(installTrace), { code: 'ENOENT' }, 'validation must not invoke installation');
   assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'validation must not rewrite admission');
   assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, true);
-  await writeFile(join(repoDir, 'yarn.lock'), '# original inputs\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# original inputs\n');
   await bootstrapRemoteDependencies({ repoDir, validationKind: 'source-test',
     componentRelativeDir: 'apps/server', executionPlacement: 'local', env });
   assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'warm validation must be read-only too');
@@ -339,7 +346,8 @@ else throw new Error('Unexpected package-manager command: ' + JSON.stringify(arg
 for (const scenario of ['cold', 'self-link', 'active-writer']) test(`local validation refuses ${scenario} without repairing dependencies`, async t => {
   const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-local-read-only-' });
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   for (const component of ['stack', 'ui', 'cli', 'server']) {
     await mkdir(join(repoDir, 'apps', component), { recursive: true });
     await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
@@ -383,7 +391,8 @@ test('runtime worker bootstrap emits package prerequisites by default while expl
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-runtime-bootstrap-default-'));
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   for (const name of ['cli', 'ui', 'server', 'stack']) {
     await mkdir(join(repoDir, 'apps', name), { recursive: true });
     await writeFile(join(repoDir, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}`,
@@ -450,6 +459,7 @@ test('runtime worker bootstrap retains coherent last-green output in explicit QA
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
   const native = await installWorkspaceAdmissionProcessFixture(t, repoDir);
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   for (const name of ['cli', 'ui', 'server', 'stack']) {
     await mkdir(join(repoDir, 'apps', name), { recursive: true });
     await writeFile(join(repoDir, 'apps', name, 'package.json'), JSON.stringify({
@@ -522,7 +532,8 @@ test('scriptless source-test refresh cannot admit changed UI patch inputs as pos
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({
     private: true, workspaces: ['apps/*'],
   }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   const patchPath = join(repoDir, 'apps/ui/patches/markdown.patch');
   const installedOutput = join(repoDir, 'node_modules/patched-markdown.js');
   await writeFile(patchPath, 'original patch\n');
@@ -611,16 +622,17 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
     }));
   }
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({
-    private: true, workspaces: ['apps/*', 'packages/*'], packageManager: 'yarn@1.22.22',
+    private: true, workspaces: ['apps/*', 'packages/*'], packageManager: 'pnpm@12.14.0',
   }));
-  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   const uiDir = join(repoDir, 'apps', 'ui');
   const sourceRepoDir = await copyColdPreparationSourceGraph(repoDir);
   for (const relativePath of [
     'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
     'apps/ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs',
-    'apps/ui/tools/postinstall/filteredPatchDirectory.mjs',
+    'apps/ui/tools/postinstall/pnpmPatches.mjs',
   ]) {
     const destination = join(repoDir, relativePath);
     await mkdir(join(destination, '..'), { recursive: true });
@@ -641,7 +653,7 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
   await writeFile(join(protocolDir, 'compile.mjs'), "throw new Error('UI source tests do not consume Protocol dist; publication must not gate postinstall readiness');\n");
   await mkdir(join(repoDir, 'node_modules', '@happier-dev'), { recursive: true });
   for (const entry of await readdir(join(sourceRepoDir, 'node_modules'))) {
-    if (entry === '@happier-dev' || entry === '.bin') continue;
+    if (entry === '@happier-dev' || entry === '.bin' || entry === 'react-native-enriched-markdown') continue;
     await symlink(join(sourceRepoDir, 'node_modules', entry), join(repoDir, 'node_modules', entry));
   }
   await symlink(protocolDir, join(repoDir, 'node_modules', '@happier-dev', 'protocol'));
@@ -671,7 +683,7 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
   const requiredOutputPath = join(uiDir, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js');
   const binDir = join(repoDir, 'bin');
   await mkdir(binDir);
-  // Corepack/Yarn is the OS boundary. A scriptless install creates only the
+  // Pnpm is the OS boundary. A scriptless install creates only the
   // dependency tree; the UI package-manager task produces its patched module,
   // and rejects unnecessary publication. Bootstrap, source import resolution
   // and postinstall readiness stay real.
@@ -679,27 +691,26 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
-if (args[0] === 'yarn') args.shift();
 if (args[0] === '--version') {
-  console.log('1.22.22');
+  console.log('12.14.0');
 } else if (args[0] === 'install') {
   fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
 } else if (args.join(' ') === '-s build' && process.cwd() === ${JSON.stringify(protocolDir)}) {
   throw new Error('UI source tests do not consume Protocol dist; publication must not gate postinstall readiness');
-} else if (args.join(' ') === '-s workspace @happier-dev/app postinstall:real'
-  || (args.join(' ') === '-s postinstall:real' && process.cwd() === ${JSON.stringify(uiDir)})) {
+} else if (args.join(' ') === '--filter @happier-dev/app run --silent postinstall:real'
+  || (args.join(' ') === 'run --silent postinstall:real' && process.cwd() === ${JSON.stringify(uiDir)})) {
   fs.cpSync(process.env.HAPPIER_TEST_UI_PATCH_INPUT, path.dirname(path.dirname(path.dirname(path.dirname(process.env.HAPPIER_TEST_UI_PATCH_OUTPUT)))), { recursive: true });
 } else {
   throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
 }
 `;
-  for (const command of ['corepack', 'yarn']) {
+  for (const command of ['pnpm']) {
     const executablePath = join(binDir, command);
     await writeFile(executablePath, packageManagerFixture);
     await chmod(executablePath, 0o755);
   }
   const uiUnitPolicy = resolveRemoteCommandPolicy(['hstack-exec', '--heavyweight-admission',
-    '--class=targeted-validation', '--', 'corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'test:unit']);
+    '--class=targeted-validation', '--', 'pnpm', '--dir', 'apps/ui', 'run', '--silent', 'test:unit']);
   const bootstrapOptions = {
     repoDir,
     validationKind: uiUnitPolicy.kind,
@@ -759,6 +770,19 @@ test('source-test bootstrap admits installed tools without requiring a compiled 
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-source-test-bootstrap-'));
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
   const native = await installWorkspaceAdmissionProcessFixture(t, repoDir);
+  const { binDir } = writeFakeBin({ root: repoDir, name: 'pnpm', content: `#!${process.execPath}
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+if (args[0] === '--version') console.log('12.14.0');
+else if (args[0] === 'install') fs.mkdirSync('node_modules', { recursive: true });
+else if (args.join(' ') === 'run --silent build') {
+  const result = spawnSync(process.execPath, ['compile.mjs'], { env: process.env, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
+} else throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
+` });
+  const env = { ...native.env, PATH: `${binDir}${delimiter}${native.env.PATH ?? ''}`, npm_execpath: '' };
   await mkdir(join(repoDir, 'apps/stack'), { recursive: true });
   for (const name of ['ui', 'cli', 'server']) {
     await mkdir(join(repoDir, 'apps', name), { recursive: true });
@@ -769,15 +793,16 @@ test('source-test bootstrap admits installed tools without requiring a compiled 
   await mkdir(join(repoDir, 'packages/emitted/src'), { recursive: true });
   await writeFile(join(repoDir, 'packages/emitted/package.json'), JSON.stringify({ name: '@fixture/emitted', version: '1.0.0', main: './dist/index.js', scripts: { build: 'node compile.mjs' } }));
   await writeFile(join(repoDir, 'packages/emitted/compile.mjs'), 'import { mkdirSync, writeFileSync } from "node:fs"; const out = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR; mkdirSync(out, { recursive: true }); writeFileSync(out + "/index.js", "export {};\\n");');
-  await writeFile(join(repoDir, 'yarn.lock'), '# first\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# first\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   let installs = 0;
   const options = {
-    repoDir, validationKind: 'source-test', env: native.env,
+    repoDir, validationKind: 'source-test', env,
     // Package installation is the OS boundary; freshness/locking remains real.
     installInitialDependencies: async () => {
       installs += 1;
       await mkdir(join(repoDir, 'node_modules'), { recursive: true });
-      await writeFile(join(repoDir, 'node_modules/.yarn-integrity'), '{}');
+      await writeFile(join(repoDir, 'node_modules/.modules.yaml'), '{}');
     },
   };
   await bootstrapRemoteDependencies(options);
@@ -788,7 +813,7 @@ test('source-test bootstrap admits installed tools without requiring a compiled 
   assert.equal(installs, 1, 'sibling typechecks reuse their own dependency freshness without a compiled Stack');
   assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, true,
     'tools-only bootstrap must not attest the sibling runtime lifecycle as a full install');
-  await writeFile(join(repoDir, 'yarn.lock'), '# second\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# second\n');
   await bootstrapRemoteDependencies(options);
   assert.equal(installs, 2);
   await assert.rejects(stat(join(repoDir, 'packages/cli-common/dist')), { code: 'ENOENT' });
@@ -811,16 +836,17 @@ test('a provisioner-installed tree is adopted once and then admitted for local v
   await mkdir(join(repoDir, 'apps/stack'), { recursive: true });
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
   await writeFile(join(repoDir, 'apps/stack/package.json'), '{"name":"@fixture/stack","version":"1.0.0"}');
-  await writeFile(join(repoDir, 'yarn.lock'), '# installed by CI\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# installed by CI\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n");
   // CI ran a plain frozen install: node_modules exists, no admission record.
   await mkdir(join(repoDir, 'node_modules'), { recursive: true });
-  await writeFile(join(repoDir, 'node_modules/.yarn-integrity'), '{}');
+  await writeFile(join(repoDir, 'node_modules/.modules.yaml'), '{}');
   const local = { repoDir, validationKind: 'runtime', executionPlacement: 'local', componentRelativeDir: 'apps/ui', env: native.env };
   await assert.rejects(bootstrapDependencies(local), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
   await adoptInstalledDependencies({ repoDir, env: native.env });
   await bootstrapDependencies(local);
   await bootstrapDependencies({ ...local, validationKind: 'source-test', toolsOnly: true });
-  await writeFile(join(repoDir, 'yarn.lock'), '# changed after adoption\n');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# changed after adoption\n');
   await assert.rejects(bootstrapDependencies(local), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' },
     'adoption records the installed inputs; later input changes still require an authorized refresh');
 });
@@ -828,10 +854,9 @@ test('a provisioner-installed tree is adopted once and then admitted for local v
 test('remote stage-zero dependency install materializes dependencies without workspace lifecycle scripts', () => {
   assert.deepEqual(REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS, [
     'install',
-    '--production=false',
-    '--ignore-engines',
+    '--prod=false',
     '--ignore-scripts',
-    '--pure-lockfile',
+    '--frozen-lockfile',
   ]);
 });
 
@@ -853,7 +878,8 @@ test('remote dependency bootstrap joins nine same-input waiters through the cano
       private: true,
       workspaces: ['apps/*', 'packages/*'],
     }) + '\n', 'utf-8'),
-    writeFile(join(repoDir, 'yarn.lock'), '# fixture\n', 'utf-8'),
+    writeFile(join(repoDir, 'pnpm-lock.yaml'), '# fixture\n', 'utf-8'),
+    writeFile(join(repoDir, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n"),
     writeFile(join(repoDir, 'apps', 'stack', 'package.json'), '{"name":"@happier-dev/stack"}\n', 'utf-8'),
     writeFile(join(repoDir, 'apps', 'ui', 'package.json'), '{"name":"@happier-dev/app"}\n', 'utf-8'),
     writeFile(join(repoDir, 'apps', 'cli', 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf-8'),
@@ -885,7 +911,7 @@ test('remote dependency bootstrap joins nine same-input waiters through the cano
       await firstInstallRelease;
     }
     await mkdir(join(repoDir, 'node_modules'), { recursive: true });
-    await writeFile(join(repoDir, 'node_modules', '.yarn-integrity'), 'fixture\n', 'utf-8');
+    await writeFile(join(repoDir, 'node_modules', '.modules.yaml'), 'fixture\n', 'utf-8');
   };
   const options = {
     repoDir,
@@ -928,7 +954,7 @@ test('remote dependency bootstrap builds the dependency-owner closure before loa
           }]);
         },
         ensureWorkspacePackagesBuiltForComponent: async (componentDir, options) => {
-          calls.push(['workspace', componentDir, options]);
+          calls.push(['--filter', componentDir, 'run', options]);
         },
       };
     },
@@ -948,7 +974,7 @@ test('remote dependency bootstrap builds the dependency-owner closure before loa
       env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
       hasDependencyReadyAction: false,
     }],
-    ['workspace', '/remote/happier/apps/stack', {
+    ['--filter', '/remote/happier/apps/stack', 'run', {
       env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
   ]);
@@ -973,7 +999,7 @@ test('remote dependency bootstrap leaves unrelated workspace publication to comp
         calls.push(['ensure:end']);
       },
       ensureWorkspacePackagesBuiltForComponent: async (componentDir, options) => {
-        calls.push(['workspace', componentDir, options]);
+        calls.push(['--filter', componentDir, 'run', options]);
       },
     }),
   });
@@ -1029,7 +1055,7 @@ test('remote dependency bootstrap skips stage zero when the canonical dependency
   await bootstrapRemoteDependencies({
     repoDir: '/remote/happier',
     packageExists: (path) => new Set([
-      '/remote/happier/node_modules/.yarn-integrity',
+      '/remote/happier/node_modules/.modules.yaml',
       '/remote/happier/packages/cli-common/dist/workspaces/index.js',
       '/remote/happier/packages/cli-common/dist/process/index.js',
     ]).has(path),
@@ -1072,14 +1098,14 @@ test('remote dependency bootstrap refreshes the Stack component workspace closur
     loadDependencyOwner: async () => ({
       ensureDepsInstalled: async () => calls.push('dependencies'),
       ensureWorkspacePackagesBuiltForComponent: async (componentDir, options) => {
-        calls.push(['workspace', componentDir, options]);
+        calls.push(['--filter', componentDir, 'run', options]);
       },
     }),
   });
 
   assert.deepEqual(calls, [
     'dependencies',
-    ['workspace', '/remote/happier/apps/stack', {
+    ['--filter', '/remote/happier/apps/stack', 'run', {
       env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
   ]);
@@ -1091,7 +1117,7 @@ test('remote dependency bootstrap repairs a scriptless install whose dependency 
   await bootstrapRemoteDependencies({
     repoDir: '/remote/happier',
     env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
-    packageExists: (path) => path === '/remote/happier/node_modules/.yarn-integrity',
+    packageExists: (path) => path === '/remote/happier/node_modules/.modules.yaml',
     installInitialDependencies: async () => calls.push(['initial']),
     withDependencyRefresh: async () => ({ refreshed: false, reason: 'up-to-date' }),
     loadWorkspaceBuildOwner: async () => ({
@@ -1102,7 +1128,7 @@ test('remote dependency bootstrap repairs a scriptless install whose dependency 
         calls.push(['ensure']);
       },
       ensureWorkspacePackagesBuiltForComponent: async (componentDir, options) => {
-        calls.push(['workspace', componentDir, options]);
+        calls.push(['--filter', componentDir, 'run', options]);
       },
     }),
   });
@@ -1114,4 +1140,51 @@ test('remote dependency bootstrap repairs a scriptless install whose dependency 
     }],
     ['ensure'],
   ]);
+});
+
+test('local Yarn predecessor validation uses its own freshness owner without rewriting admission', async t => {
+  const predecessorOwner = new URL('../../../../../../0.2/apps/stack/scripts/utils/proc/dependency_refresh.mjs', import.meta.url);
+  try { await stat(predecessorOwner); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    t.skip('the supported 0.2 predecessor checkout is unavailable');
+    return;
+  }
+  const { withDependencyRefresh: admitPredecessor } = await import(predecessorOwner.href);
+  const fixture = await createTempFixture(t, { prefix: 'happier-yarn-predecessor-' });
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(fixture.path('apps/stack/scripts/utils/proc'), { recursive: true });
+  await symlink(fileURLToPath(predecessorOwner), fixture.path('apps/stack/scripts/utils/proc/dependency_refresh.mjs'));
+  await writeFile(fixture.path('package.json'), JSON.stringify({ packageManager: 'yarn@1.22.22', workspaces: [] }));
+  await writeFile(fixture.path('yarn.lock'), '# predecessor inputs\n');
+  await admitPredecessor({ installDir: fixture.root, componentDir: fixture.path('apps/stack') }, async () => {});
+  const marker = fixture.path('node_modules/.happier-stack-dependencies-ready');
+  const before = await readFile(marker, 'utf8');
+
+  await bootstrapDependencies({ repoDir: fixture.root, validationKind: 'source-test', executionPlacement: 'local' });
+  assert.equal(await readFile(marker, 'utf8'), before);
+  await writeFile(fixture.path('yarn.lock'), '# changed predecessor inputs\n');
+  await assert.rejects(bootstrapDependencies({ repoDir: fixture.root,
+    validationKind: 'source-test', executionPlacement: 'local' }), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  assert.equal(await readFile(marker, 'utf8'), before);
+});
+
+test('remote Yarn predecessor bootstrap executes the source-owned bootstrap entrypoint', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-yarn-bootstrap-owner-' });
+  const sourceBootstrap = fixture.path('apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs');
+  await mkdir(fixture.path('apps/stack/scripts/utils/dev_targets'), { recursive: true });
+  await writeFile(fixture.path('package.json'), JSON.stringify({ packageManager: 'yarn@1.22.22' }));
+  // This executable is the other checkout's process boundary. Its sentinel
+  // proves which owner ran; the executor's real dispatch logic stays intact.
+  await writeFile(sourceBootstrap, 'console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)})); process.exit(17);\n');
+  assert.throws(() => execFileSync(process.execPath, [
+    fileURLToPath(new URL('./remote_dependency_bootstrap.mjs', import.meta.url)),
+    `--repo-dir=${fixture.root}`, '--execution-placement=remote', '--validation-kind=source-test',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), error => {
+    assert.equal(error.status, 17);
+    const output = JSON.parse(error.stdout);
+    assert.equal(output.cwd, fixture.root);
+    assert.ok(output.args.includes('--execution-placement=remote'));
+    assert.ok(output.args.includes('--validation-kind=source-test'));
+    return true;
+  });
 });

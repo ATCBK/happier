@@ -1,0 +1,181 @@
+diff --git a/build/Widgets.d.ts b/build/Widgets.d.ts
+index e19ee2677b05beae67b8e1711d562d47c2246500..e1a2817773c6000c1f2fd5a2ae1315780e9ece70 100644
+--- a/build/Widgets.d.ts
++++ b/build/Widgets.d.ts
+@@ -37,7 +37,7 @@ export declare class LiveActivity<T extends object = object> {
+      * Updates the Live Activity's content. The UI reflects the new properties immediately.
+      * @param props The updated content properties.
+      */
+-    update(props: T): Promise<void>;
++    update(props: T, staleDate?: Date): Promise<void>;
+     /**
+      * Ends the Live Activity.
+      * @param dismissalPolicy Controls when the Live Activity is removed from the Lock Screen after ending.
+@@ -72,7 +72,7 @@ export declare class LiveActivityFactory<T extends object = object> {
+      * @param url An optional URL to associate with the Live Activity, used for deep linking.
+      * @returns The new Live Activity instance.
+      */
+-    start(props: T, url?: string): LiveActivity<T>;
++    start(props: T, url?: string, staleDate?: Date): LiveActivity<T>;
+     /**
+      * Returns all currently active instances of this Live Activity type.
+      */
+diff --git a/build/Widgets.js b/build/Widgets.js
+index cf74d11c593ccd8b8ffc8c9a019d30143442c7c0..0e12298d2c0b67207d5c09ba2f26a36b574d0273 100644
+--- a/build/Widgets.js
++++ b/build/Widgets.js
+@@ -51,8 +51,8 @@ export class LiveActivity {
+      * Updates the Live Activity's content. The UI reflects the new properties immediately.
+      * @param props The updated content properties.
+      */
+-    update(props) {
+-        return this.nativeLiveActivity.update(JSON.stringify(props));
++    update(props, staleDate) {
++        return this.nativeLiveActivity.update(JSON.stringify(props), staleDate?.getTime());
+     }
+     /**
+      * Ends the Live Activity.
+@@ -102,8 +102,8 @@ export class LiveActivityFactory {
+      * @param url An optional URL to associate with the Live Activity, used for deep linking.
+      * @returns The new Live Activity instance.
+      */
+-    start(props, url) {
+-        return new LiveActivity(this.nativeLiveActivityFactory.start(JSON.stringify(props), url));
++    start(props, url, staleDate) {
++        return new LiveActivity(this.nativeLiveActivityFactory.start(JSON.stringify(props), url, staleDate?.getTime()));
+     }
+     /**
+      * Returns all currently active instances of this Live Activity type.
+diff --git a/build/Widgets.types.d.ts b/build/Widgets.types.d.ts
+index 0c8b0c03b8751f9910e088cc8ca16ed0d4deb194..c407af465a8263b75524b9ae0a601e9dccf048e2 100644
+--- a/build/Widgets.types.d.ts
++++ b/build/Widgets.types.d.ts
+@@ -247,11 +247,11 @@ export declare class NativeWidgetObject extends SharedObject {
+ }
+ export declare class NativeLiveActivityFactory extends SharedObject {
+     constructor(name: string, layout: string);
+-    start(props: string, url?: string): NativeLiveActivity;
++    start(props: string, url?: string, staleDate?: number): NativeLiveActivity;
+     getInstances(): NativeLiveActivity[];
+ }
+ export declare class NativeLiveActivity extends SharedObject<LiveActivityEvents> {
+-    update(props: string): Promise<void>;
++    update(props: string, staleDate?: number): Promise<void>;
+     end(dismissalPolicy?: string, afterDate?: number, state?: string, contentDate?: number): Promise<void>;
+     getPushToken(): Promise<string | null>;
+ }
+diff --git a/ios/LiveActivity.swift b/ios/LiveActivity.swift
+index a603765f9cc1ac1a1eeebb86f497e2c9b4d858ed..4156c364265477ed2ee4e6fc22b2f4b9ddbce326 100644
+--- a/ios/LiveActivity.swift
++++ b/ios/LiveActivity.swift
+@@ -12,7 +12,7 @@ final class LiveActivity: SharedObject {
+     super.init()
+   }
+ 
+-  func update(props: String) async throws {
++  func update(props: String, staleDate: Date?) async throws {
+     guard #available(iOS 16.2, *) else { throw LiveActivitiesNotSupportedException() }
+ 
+     guard let activity = Activity<LiveActivityAttributes>.activities.first(where: { $0.id == id }) else {
+@@ -20,7 +20,7 @@ final class LiveActivity: SharedObject {
+     }
+ 
+     let newState = LiveActivityAttributes.ContentState(name: name, props: props)
+-    await activity.update(ActivityContent(state: newState, staleDate: nil))
++    await activity.update(ActivityContent(state: newState, staleDate: staleDate))
+   }
+ 
+   func end(dismissalPolicy: LiveActivityDismissalPolicy?, afterDate: Date?, props: String?, contentDate: Date?) async throws {
+diff --git a/ios/LiveActivityFactory.swift b/ios/LiveActivityFactory.swift
+index caf1e050224d595d8c57c0a832de182fd35ad897..45264d3a628ae189586b8f22b1bc24e06d062d23 100644
+--- a/ios/LiveActivityFactory.swift
++++ b/ios/LiveActivityFactory.swift
+@@ -13,7 +13,7 @@ final class LiveActivityFactory: SharedObject {
+     WidgetsStorage.set(layout, forKey: "__expo_widgets_live_activity_\(name)_layout")
+   }
+ 
+-  func start(props: String, url: URL?) throws -> LiveActivity {
++  func start(props: String, url: URL?, staleDate: Date?) throws -> LiveActivity {
+     guard #available(iOS 16.2, *) else { throw LiveActivitiesNotSupportedException() }
+     guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+       throw LiveActivitiesNotSupportedException()
+@@ -27,7 +27,7 @@ final class LiveActivityFactory: SharedObject {
+       let initialState = LiveActivityAttributes.ContentState(name: name, props: props)
+       let activity = try Activity.request(
+         attributes: LiveActivityAttributes(),
+-        content: .init(state: initialState, staleDate: nil),
++        content: .init(state: initialState, staleDate: staleDate),
+         pushType: LiveActivityFactory.pushNotificationsEnabled ? .token : nil
+       )
+ 
+diff --git a/ios/WidgetsModule.swift b/ios/WidgetsModule.swift
+index 9620b9a097d90eb6ae27e28cc467c49d703734ff..a4ac1dbbcc06a929b8725e820ed760f73c0dbeed 100644
+--- a/ios/WidgetsModule.swift
++++ b/ios/WidgetsModule.swift
+@@ -72,8 +72,8 @@ public final class WidgetsModule: Module {
+         LiveActivityFactory(name: name, layout: layout)
+       }
+ 
+-      Function("start") { (liveActivity: LiveActivityFactory, props: String, url: URL?) in
+-        try liveActivity.start(props: props, url: url)
++      Function("start") { (liveActivity: LiveActivityFactory, props: String, url: URL?, staleDate: Date?) in
++        try liveActivity.start(props: props, url: url, staleDate: staleDate)
+       }
+ 
+       Function("getInstances") { (liveActivity: LiveActivityFactory) in
+@@ -82,8 +82,8 @@ public final class WidgetsModule: Module {
+     }
+ 
+     Class("LiveActivity", LiveActivity.self) {
+-      AsyncFunction("update") { (instance: LiveActivity, props: String) in
+-        try await instance.update(props: props)
++      AsyncFunction("update") { (instance: LiveActivity, props: String, staleDate: Date?) in
++        try await instance.update(props: props, staleDate: staleDate)
+       }
+ 
+       AsyncFunction("end") { (instance: LiveActivity, dismissalPolicy: LiveActivityDismissalPolicy?, afterDate: Date?, props: String?, contentDate: Date?) in
+diff --git a/src/Widgets.ts b/src/Widgets.ts
+index dc1d8521ce7be7db185091b4c075121dad9cdbf4..53fde6d13f27097a72c60a07954cf9dc26f875a9 100644
+--- a/src/Widgets.ts
++++ b/src/Widgets.ts
+@@ -76,8 +76,8 @@ export class LiveActivity<T extends object = object> {
+    * Updates the Live Activity's content. The UI reflects the new properties immediately.
+    * @param props The updated content properties.
+    */
+-  update(props: T): Promise<void> {
+-    return this.nativeLiveActivity.update(JSON.stringify(props));
++  update(props: T, staleDate?: Date): Promise<void> {
++    return this.nativeLiveActivity.update(JSON.stringify(props), staleDate?.getTime());
+   }
+ 
+   /**
+@@ -147,8 +147,8 @@ export class LiveActivityFactory<T extends object = object> {
+    * @param url An optional URL to associate with the Live Activity, used for deep linking.
+    * @returns The new Live Activity instance.
+    */
+-  start(props: T, url?: string) {
+-    return new LiveActivity<T>(this.nativeLiveActivityFactory.start(JSON.stringify(props), url));
++  start(props: T, url?: string, staleDate?: Date) {
++    return new LiveActivity<T>(this.nativeLiveActivityFactory.start(JSON.stringify(props), url, staleDate?.getTime()));
+   }
+ 
+   /**
+diff --git a/src/Widgets.types.ts b/src/Widgets.types.ts
+index e576432dda50809488a234918943fbb84ac7d98a..204730a3c999bc58a0b50a89415b39a098c58f40 100644
+--- a/src/Widgets.types.ts
++++ b/src/Widgets.types.ts
+@@ -276,12 +276,12 @@ export declare class NativeWidgetObject extends SharedObject {
+ 
+ export declare class NativeLiveActivityFactory extends SharedObject {
+   constructor(name: string, layout: string);
+-  start(props: string, url?: string): NativeLiveActivity;
++  start(props: string, url?: string, staleDate?: number): NativeLiveActivity;
+   getInstances(): NativeLiveActivity[];
+ }
+ 
+ export declare class NativeLiveActivity extends SharedObject<LiveActivityEvents> {
+-  update(props: string): Promise<void>;
++  update(props: string, staleDate?: number): Promise<void>;
+   end(
+     dismissalPolicy?: string,
+     afterDate?: number,

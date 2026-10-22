@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { listApplicablePatchFiles } from './filteredPatchDirectory.mjs';
+import { applyPatch, parsePatch, reversePatch } from 'diff';
+import { readPnpmPatches } from './pnpmPatches.mjs';
 
 export function verifyUiPatchedDependencies({
     uiPackageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
@@ -14,43 +14,33 @@ export function verifyUiPatchedDependencies({
     if (packageDirs.length === 0) {
         throw new Error(
             '[ui] react-native-enriched-markdown is not installed. Run the canonical UI dependency preparation: '
-            + 'yarn --cwd apps/ui postinstall:real',
+            + 'pnpm --dir apps/ui run postinstall:real',
         );
     }
     const failures = packageDirs.flatMap(packageDir => {
         const result = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
         return result.status === 'ok' ? [] : [`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`];
     });
-    const patchDir = path.join(uiPackageDir, 'patches');
-    const require = createRequire(import.meta.url);
+    const patches = readPnpmPatches(path.resolve(uiPackageDir, '../..'));
     for (const cwd of [path.resolve(uiPackageDir, '../..'), uiPackageDir]) {
-        for (const patchFile of listApplicablePatchFiles({ patchDir, nodeModulesDir: path.join(cwd, 'node_modules') })) {
+        for (const { packageName, patchFile } of patches) {
+            const packageDir = path.join(cwd, 'node_modules', packageName);
+            if (!fs.existsSync(packageDir)) continue;
             try {
-                // Reuse patch-package's own installed-patch test without applying
-                // or reversing any bytes. The postinstall remains the sole writer.
-                const { parsePatchFile } = require('patch-package/dist/patch/parse.js');
-                const { reversePatch } = require('patch-package/dist/patch/reverse.js');
-                const { executeEffects } = require('patch-package/dist/patch/apply.js');
-                const patch = parsePatchFile(fs.readFileSync(path.join(patchDir, patchFile), 'utf8'));
-                for (const effect of patch) {
-                    // Reverse dry-run checks only existence for created files.
-                    // Verify their complete patch-owned content as well.
-                    if (effect.type === 'file creation') {
-                        const contents = effect.hunk ? effect.hunk.parts[0].lines.join('\n')
-                            + (effect.hunk.parts[0].noNewlineAtEndOfFile ? '' : '\n') : '';
-                        if (fs.readFileSync(path.join(cwd, effect.path), 'utf8') !== contents) {
-                            throw new Error(`Incorrect patched contents for ${effect.path}`);
-                        }
+                for (const effect of parsePatch(fs.readFileSync(patchFile, 'utf8'))) {
+                    const name = effect.newFileName === '/dev/null' ? effect.oldFileName : effect.newFileName;
+                    if (!name) throw new Error('Patch has no file target');
+                    const file = path.join(packageDir, name.replace(/^[ab]\//, ''));
+                    if (effect.newFileName === '/dev/null') {
+                        if (fs.existsSync(file)) throw new Error(`Patched deletion is absent: ${file}`);
+                        continue;
                     }
-                    if (effect.type !== 'mode change') continue;
-                    if (process.platform !== 'win32' && (fs.statSync(path.join(cwd, effect.path)).mode & 0o111) !== (effect.newMode & 0o111)) {
-                        throw new Error(`Incorrect patched mode for ${effect.path}`);
+                    // Reverse entirely in memory, leaving installed files untouched.
+                    const original = applyPatch(fs.readFileSync(file, 'utf8'), reversePatch(effect));
+                    if (original === false || (effect.oldFileName === '/dev/null' && original !== '')) {
+                        throw new Error(`Incorrect patched contents for ${file}`);
                     }
                 }
-                // patch-package 8's mode-change effect calls chmod even in dryRun.
-                executeEffects(reversePatch(patch.filter(effect => effect.type !== 'mode change')), {
-                    dryRun: true, bestEffort: false, cwd,
-                });
             } catch (error) {
                 failures.push(`${cwd}: ${patchFile}\n${error instanceof Error ? error.message : String(error)}`);
             }
@@ -227,6 +217,6 @@ export function formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result
     }
     for (const [relativePath, marker] of result.forbiddenMarkers) lines.push(`  - ${relativePath} still contains forbidden ${JSON.stringify(marker)}`);
     for (const relativePath of result.binaryFiles) lines.push(`  - ${relativePath} contains a NUL byte instead of the vendored JavaScript module`);
-    lines.push('Run the canonical UI dependency preparation: yarn --cwd apps/ui postinstall:real');
+    lines.push('Run the canonical UI dependency preparation: pnpm --dir apps/ui run postinstall:real');
     return lines.join('\n');
 }

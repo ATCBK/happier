@@ -2,8 +2,8 @@
 
 ## Prerequisites
 
-- Node.js >= 20.0.0
-- Yarn (`npm install -g yarn`)
+- Node.js >= 22.13.0 and npm for development setup
+- The exact root pnpm pin (installed with `node scripts/ci/setup-pnpm.mjs`)
 - Git
 - Claude CLI installed and logged in (`claude` command available in PATH)
 
@@ -11,9 +11,11 @@
 
 ```bash
 git clone https://github.com/happier-dev/happier.git
+cd happier
+node scripts/ci/setup-pnpm.mjs
+pnpm install --frozen-lockfile
 cd apps/cli
-yarn install
-yarn build
+pnpm run build
 ```
 
 ## Development Commands
@@ -23,8 +25,8 @@ yarn build
 Create a global `happier-dev` command that runs your local development build:
 
 ```bash
-yarn link:dev      # Create happier-dev symlink
-yarn unlink:dev    # Remove happier-dev symlink
+pnpm run link:dev      # Create happier-dev symlink
+pnpm run unlink:dev    # Remove happier-dev symlink
 ```
 
 This creates a `happier-dev` command in your PATH pointing to your local build, while leaving any npm-installed `happier` command untouched.
@@ -36,15 +38,15 @@ This creates a `happier-dev` command in your PATH pointing to your local build, 
 | `happier-dev` | Local development version (from this repo) |
 | `happy-dev` | Local development version (legacy alias) |
 
-**Note:** Run `yarn build` before `yarn link:dev` to ensure the binary exists.
+**Note:** Run `pnpm run build` before `pnpm run link:dev` to ensure the binary exists.
 
 ### Build Commands
 
 ```bash
-yarn build         # Build the project
-yarn typecheck     # TypeScript type checking
-yarn test          # Run tests
-yarn dev           # Run without building (uses tsx)
+pnpm run build         # Build the project
+pnpm run typecheck     # TypeScript type checking
+pnpm run test          # Run tests
+pnpm run dev           # Run without building (uses tsx)
 ```
 
 ## Stable vs Dev Data Isolation
@@ -54,7 +56,7 @@ The CLI supports running stable and development versions side-by-side with compl
 ### Initial Setup (Once)
 
 ```bash
-npm run setup:dev
+pnpm run setup:dev
 ```
 
 This creates:
@@ -65,12 +67,12 @@ This creates:
 
 **Stable (production-ready):**
 ```bash
-npm run stable:daemon:start
+pnpm run stable:daemon:start
 ```
 
 **Development (testing changes):**
 ```bash
-npm run dev:daemon:start
+pnpm run dev:daemon:start
 ```
 
 ## Visual Indicators
@@ -85,43 +87,43 @@ You'll always see which version you're using:
 
 ```bash
 # Authenticate stable version
-npm run stable auth login
+pnpm run stable auth login
 
 # Authenticate dev version (can use same or different account)
-npm run dev auth login
+pnpm run dev auth login
 
 # Logout
-npm run stable auth logout
-npm run dev auth logout
+pnpm run stable auth logout
+pnpm run dev auth logout
 ```
 
 ### Daemon Management
 
 ```bash
 # Check status of both
-npm run stable:daemon:status
-npm run dev:daemon:status
+pnpm run stable:daemon:status
+pnpm run dev:daemon:status
 
 # Stop both
-npm run stable:daemon:stop
-npm run dev:daemon:stop
+pnpm run stable:daemon:stop
+pnpm run dev:daemon:stop
 
 # Start both simultaneously
-npm run stable:daemon:start && npm run dev:daemon:start
+pnpm run stable:daemon:start && pnpm run dev:daemon:start
 ```
 
 ### Running Any Command
 
 ```bash
 # Stable version
-npm run stable <command> [args...]
-npm run stable notify "Test message"
-npm run stable doctor
+pnpm run stable <command> [args...]
+pnpm run stable notify "Test message"
+pnpm run stable doctor
 
 # Dev version
-npm run dev:variant <command> [args...]
-npm run dev:variant notify "Test message"
-npm run dev:variant doctor
+pnpm run dev:variant <command> [args...]
+pnpm run dev:variant notify "Test message"
+pnpm run dev:variant doctor
 ```
 
 ## Data Isolation
@@ -178,7 +180,7 @@ chmod +x scripts/*.cjs
 
 ### Data directories not created?
 ```bash
-npm run setup:dev
+pnpm run setup:dev
 ```
 
 ### Both daemons won't start?
@@ -191,13 +193,13 @@ Look for the visual indicator:
 
 Or check the daemon status:
 ```bash
-npm run stable:daemon:status   # Shows ~/.happy/ data location
-npm run dev:daemon:status       # Shows ~/.happy-dev/ data location
+pnpm run stable:daemon:status   # Shows ~/.happy/ data location
+pnpm run dev:daemon:status       # Shows ~/.happy-dev/ data location
 ```
 
-### `yarn link:dev` fails with permission denied?
+### `pnpm run link:dev` fails with permission denied?
 ```bash
-sudo yarn link:dev
+sudo pnpm run link:dev
 ```
 
 ### `happier-dev` command not found after linking?
@@ -217,26 +219,26 @@ sudo yarn link:dev
 
 ```bash
 # Initial setup (once)
-yarn install
-yarn build
-yarn link:dev
-npm run setup:dev
+pnpm install
+pnpm run build
+pnpm run link:dev
+pnpm run setup:dev
 
 # Authenticate both
-npm run stable auth login
-npm run dev:variant auth login
+pnpm run stable auth login
+pnpm run dev:variant auth login
 
 # Start both daemons
-npm run stable:daemon:start
-npm run dev:daemon:start
+pnpm run stable:daemon:start
+pnpm run dev:daemon:start
 
 # Do your development work...
 # Edit code, build, test with dev version
 
 # When ready, update stable version
-npm run stable:daemon:stop
+pnpm run stable:daemon:stop
 git pull  # or your deployment process
-npm run stable:daemon:start
+pnpm run stable:daemon:start
 
 # Dev continues running unaffected!
 ```
@@ -328,7 +330,7 @@ When modifying profile schemas:
 Maintainers can publish new versions:
 
 ```bash
-yarn release       # Interactive version bump, changelog, publish
+pnpm run release       # Interactive version bump, changelog, publish
 ```
 
 This runs tests, builds, and publishes to npm. The published package includes:

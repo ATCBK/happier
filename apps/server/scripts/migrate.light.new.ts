@@ -30,7 +30,7 @@ function parseNameArg(argv: string[]): { name: string | null; passthrough: strin
 async function main() {
     const { name, passthrough } = parseNameArg(process.argv.slice(2));
     if (!name || !name.trim()) {
-        throw new Error('Missing --name. Example: yarn migrate:light:new -- --name add_my_table');
+        throw new Error('Missing --name. Example: pnpm run migrate:light:new --name add_my_table');
     }
 
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -39,11 +39,12 @@ async function main() {
     const dbFile = tmp.fileSync({ prefix: 'happy-server-light-migrate-', postfix: '.sqlite' }).name;
     env.DATABASE_URL = renderPrismaCompatibleSqliteDatabaseUrl({ dbPath: dbFile, platform: process.platform });
 
-    await runCommand('yarn', ['-s', 'schema:sync', '--quiet'], env);
+    await runCommand('pnpm', ['--silent', 'run', 'schema:sync', '--quiet'], env);
     await runCommand(
-        'yarn',
+        'pnpm',
         [
-            '-s',
+            '--silent',
+            'exec',
             'prisma',
             'migrate',
             'dev',

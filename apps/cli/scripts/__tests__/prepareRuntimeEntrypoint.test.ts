@@ -42,7 +42,8 @@ describe('maybeRefreshLocalBundledWorkspacePackages', () => {
       mkdirSync(scriptsDir, { recursive: true });
       mkdirSync(workspacesDir, { recursive: true });
       writeFileSync(resolve(repoRoot, 'package.json'), '{ "private": true }\n', 'utf8');
-      writeFileSync(resolve(repoRoot, 'yarn.lock'), '# yarn\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# yarn\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       writeFileSync(resolve(projectRoot, 'package.json'), '{ "name": "@happier-dev/cli", "bundledDependencies": [] }\n', 'utf8');
       writeFileSync(resolve(workspacesDir, 'syncBundledWorkspacePackages.mjs'), 'export function syncBundledWorkspacePackages() {}\n', 'utf8');
       writeFileSync(

@@ -1058,7 +1058,7 @@ async function main(argv = process.argv.slice(2)) {
       throw new Error(
         [
           `[tauri-qa] Expo dev server was not reachable on port ${expoRuntime.expoPort}.`,
-          'Start the UI dev server first (`yarn ui`, `yarn --cwd apps/ui start`, or `yarn tui:with-tauri`) and retry.',
+          'Start the UI dev server first (`pnpm run ui`, `pnpm --dir apps/ui run start`, or `pnpm run tui:with-tauri`) and retry.',
         ].join(' ')
       );
     }

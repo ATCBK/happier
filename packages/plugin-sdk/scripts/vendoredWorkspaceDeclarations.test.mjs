@@ -19,7 +19,8 @@ async function createRepoFixture({ vendoredDeclarations }) {
   const workspaceRoot = resolve(repoRoot, 'packages', 'protocol');
 
   await writeFile(resolve(repoRoot, 'package.json'), `${JSON.stringify({ private: true }, null, 2)}\n`);
-  await writeFile(resolve(repoRoot, 'yarn.lock'), '# fixture\n');
+  await writeFile(resolve(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   await mkdir(resolve(workspaceRoot, 'dist', 'plugins'), { recursive: true });
   await writeFile(
@@ -176,7 +177,7 @@ test('vendored declaration freshness has nothing to assert outside a monorepo ch
       'dist/plugins/manifest.d.ts': 'export type PluginDeclarativeNodeV2 = never;\n',
     },
   });
-  await rm(resolve(fixture.repoRoot, 'yarn.lock'), { force: true });
+  await rm(resolve(fixture.repoRoot, 'pnpm-lock.yaml'), { force: true });
   try {
     await assertVendoredWorkspaceDeclarationsAreCurrent({ packageRoot: fixture.packageRoot });
   } finally {

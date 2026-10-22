@@ -1,5 +1,6 @@
 // @ts-check
 
+import { resolvePnpmCommandInvocation } from '../../../workspaces/execPnpmCommand.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -76,9 +77,12 @@ function run(opts, cmd, args, extra) {
     return '';
   }
 
-  return execFileSync(cmd, args, {
+  const env = { ...process.env, ...(extra?.env ?? {}) };
+  const invocation = cmd === 'pnpm' ? resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath }) : { command: cmd, args };
+  return execFileSync(invocation.command, invocation.args, {
     cwd,
-    env: { ...process.env, ...(extra?.env ?? {}) },
+    env,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     encoding: 'utf8',
     stdio: extra?.stdio ?? 'inherit',
     timeout: 30 * 60_000,
@@ -320,7 +324,7 @@ export async function publishBinaryReleaseMain(options = {}) {
   }
 
   if (runContracts) {
-    run(opts, 'yarn', ['-s', 'test:release:contracts'], {
+    run(opts, 'pnpm', ['--silent', 'run', 'test:release:contracts'], {
       cwd: repoRoot,
       env: { ...process.env, HAPPIER_EMBEDDED_POLICY_ENV: embeddedPolicy },
     });

@@ -1,0 +1,15 @@
+diff --git a/package.json b/package.json
+index e9b6a0427c7c7dca7da0580215474b81cc11df26..5aa31140705795e05b2f3e85c839a399b740a166 100644
+--- a/package.json
++++ b/package.json
+@@ -11,6 +11,10 @@
+       "browser": "./dist/platform/web/index.js",
+       "default": "./dist/index.js"
+     },
++    "./web": {
++      "types": "./dist/platform/web/index.d.ts",
++      "default": "./dist/platform/web/index.js"
++    },
+     "./internal": "./dist/internal.js",
+     "./internal/unity": "./dist/internal/unity.js",
+     "./worklets/*": "./worklets/*"

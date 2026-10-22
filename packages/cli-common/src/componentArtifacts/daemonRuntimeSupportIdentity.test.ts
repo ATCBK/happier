@@ -59,7 +59,8 @@ async function createSupportIdentityFixture(root: string): Promise<void> {
     join(root, 'package.json'),
     JSON.stringify({ name: 'fixture-root', private: true }),
   );
-  await writeFixtureFile(join(root, 'yarn.lock'), '');
+  await writeFixtureFile(join(root, 'pnpm-lock.yaml'), '');
+  await writeFixtureFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFixtureFile(
     join(root, 'apps', 'cli', 'src', 'index.ts'),
     'export const daemonCode = true;\n',
@@ -911,7 +912,7 @@ export const readLazy = () => import('./lazy');
       ...identityInput,
       payloadDir,
       supportArtifactFingerprint: identity.fingerprint,
-      commandProbe: (command) => command === 'yarn',
+      commandProbe: (command) => command === 'pnpm',
     });
 
     expect(built.entrypoint).toBe('.happier-daemon-support.json');
@@ -979,7 +980,7 @@ export const readLazy = () => import('./lazy');
       ...identityInput,
       payloadDir,
       supportArtifactFingerprint: identity.fingerprint,
-      commandProbe: (command) => command === 'yarn',
+      commandProbe: (command) => command === 'pnpm',
       runCommand: async (command, args) => {
         commandObservedWhileCliDistLocked ||= existsSync(cliDistLockPath);
         commandObservedWhileSharedDepsLocked ||= existsSync(
@@ -1034,7 +1035,7 @@ export const readLazy = () => import('./lazy');
         repoRoot: root,
         payloadDir,
         target,
-        commandProbe: (command) => command === 'bun' || command === 'yarn',
+        commandProbe: (command) => command === 'bun' || command === 'pnpm',
         compileBinary: async ({ outfile, bunTarget }) => {
           expect(bunTarget).toBe(target.bunTarget);
           await writeFixtureFile(outfile, 'compiled daemon binary\n');
@@ -1109,7 +1110,7 @@ export const readLazy = () => import('./lazy');
       target,
       cliProxyApiManagedRuntimeExecutablePath: prebuiltRuntimePath,
       processCustodyRuntimeExecutablePath: prebuiltCustodyPath,
-      commandProbe: (command) => command === 'bun' || command === 'yarn',
+      commandProbe: (command) => command === 'bun' || command === 'pnpm',
       compileBinary: async ({ outfile }) => {
         await writeFixtureFile(outfile, 'compiled release daemon binary\n');
       },

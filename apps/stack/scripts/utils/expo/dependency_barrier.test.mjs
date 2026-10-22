@@ -28,7 +28,8 @@ for (const invocation of ['spawn', 'exec']) test(`development Metro automaticall
     "if (process.argv[2] === '--version') console.log('1.22.22');",
     `else fs.appendFileSync(${JSON.stringify(callsPath)}, process.argv.slice(2).join(' ') + '\\n');`,
   ].join('\n'));
-  await writeFile(fixture.path('yarn.lock'), '# new dependencies\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# new dependencies\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   const expoPath = fixture.path('node_modules', '.bin', 'expo');
   await writeFile(expoPath, `#!${process.execPath}\nconsole.log('served');\n`);
   await chmod(expoPath, 0o755);
@@ -60,7 +61,8 @@ async function fixtureFor(t, { baseEnv = process.env } = {}) {
     name: '@happier-dev/app', scripts: { 'postinstall:real': 'node tools/postinstall.mjs' },
   }));
   await writeFile(fixture.path('package.json'), '{"private":true,"workspaces":["apps/*"]}\n');
-  await writeFile(fixture.path('yarn.lock'), '# fixture\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(fixture.path('node_modules', '.bin'), { recursive: true });
   const patchOutput = fixture.path('node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js');
   await mkdir(join(patchOutput, '..'), { recursive: true });
@@ -245,7 +247,8 @@ test('bootstrap cache context discovers target-owned legacy Metro before changin
     installDir: fixture.root, env: bootstrapEnv, onDependenciesReady: async () => {},
   }, async () => assert.fail('warm readiness must not install'));
   assert.equal(child.exitCode, null, 'read-only warm admission must preserve even a legacy serving consumer');
-  await writeFile(fixture.path('yarn.lock'), '# changed\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# changed\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   await withDependencyRefresh({
     installDir: fixture.root, env: bootstrapEnv, refreshExisting: false,
     onDependenciesReady: async () => {},
@@ -286,7 +289,8 @@ test(`dependency mutation cannot borrow another stack identity to stop its servi
   }
   const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
   const priorMarker = await readFile(markerPath, 'utf8');
-  await writeFile(fixture.path('yarn.lock'), '# changed\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# changed\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   let mutated = false;
   await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env: fixture.env }, async () => {
     mutated = true;
@@ -380,7 +384,8 @@ for (const gracefulExit of [false, true]) test(`managed Metro stops during depen
   // barrier too; only the package-manager process is a fixture boundary.
   await writeFile(fixture.env.npm_execpath,
     "if (process.argv[2] === '--version') console.log('1.22.22');\n");
-  await writeFile(fixture.path('yarn.lock'), '# automatic owning refresh\n');
+  await writeFile(fixture.path('pnpm-lock.yaml'), '# automatic owning refresh\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
   await ensureDepsInstalled(fixture.uiDir, 'development stack', { quiet: true,
     env: { ...fixture.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '0', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' } });
   assert.notEqual(second.exitCode ?? second.signalCode, null, 'automatic refresh must stop its owned consumer');

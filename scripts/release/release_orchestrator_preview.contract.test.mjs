@@ -303,7 +303,7 @@ test('release-npm installs Sapling before cli integration tests', async () => {
     /- name: Install Sapling[\s\S]*?if:\s*inputs\.publish_cli && inputs\.run_tests[\s\S]*?bash scripts\/ci\/install_sapling_ubuntu22\.sh/,
     'release-npm should install Sapling in the cli test lane before running sapling integration tests',
   );
-  assert.match(raw, /- name: Run cli tests[\s\S]*?yarn --cwd apps\/cli test:integration/);
+  assert.match(raw, /- name: Run cli tests[\s\S]*?pnpm --dir apps\/cli run test:integration/);
 });
 
 test('release-npm derives unique preview prerelease versions from base versions', async () => {
@@ -322,7 +322,7 @@ test('release-npm derives unique preview prerelease versions from base versions'
   assert.doesNotMatch(raw, /packages\/server\//, 'release-npm must not reference removed packages/server');
   assert.match(raw, /dir="packages\/relay-server"/);
   assert.match(raw, /SERVER_RUNNER_DIR:\s*\$\{\{ steps\.server_runner\.outputs\.dir \}\}/);
-  assert.match(raw, /SERVER_RUNNER_DIR:\s*\$\{\{ steps\.server_runner\.outputs\.dir \}\}[\s\S]*?yarn --cwd "\$\{SERVER_RUNNER_DIR\}" test/);
+  assert.match(raw, /SERVER_RUNNER_DIR:\s*\$\{\{ steps\.server_runner\.outputs\.dir \}\}[\s\S]*?pnpm --dir "\$\{SERVER_RUNNER_DIR\}" run test/);
   assert.match(raw, /node scripts\/pipeline\/run\.mjs npm-release[\s\S]*?--server-runner-dir "\$\{SERVER_RUNNER_DIR\}"/);
 
   const script = await loadFile('scripts/pipeline/npm/resolve-release-metadata.mjs');

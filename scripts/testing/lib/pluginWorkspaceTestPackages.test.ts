@@ -22,15 +22,15 @@ test('derives every tested plugin workspace from workspace metadata rather than 
     workspacePackageManifests: [
       workspaceManifest('packages/plugins/alpha', {
         name: '@happier-dev/plugins-alpha',
-        scripts: { test: 'yarn test:local', typecheck: 'yarn typecheck:local' },
+        scripts: { test: 'pnpm run test:local', typecheck: 'pnpm run typecheck:local' },
       }),
       workspaceManifest('packages/plugins/beta', {
         name: '@happier-dev/plugins-beta',
-        scripts: { test: 'yarn test:local', typecheck: 'yarn typecheck:local' },
+        scripts: { test: 'pnpm run test:local', typecheck: 'pnpm run typecheck:local' },
       }),
       workspaceManifest('packages/plugin-sdk', {
         name: '@happier-dev/plugin-sdk',
-        scripts: { test: 'yarn test:local', typecheck: 'yarn typecheck:local' },
+        scripts: { test: 'pnpm run test:local', typecheck: 'pnpm run typecheck:local' },
       }),
     ],
   });
@@ -48,11 +48,11 @@ test('derives every tested plugin workspace from workspace metadata rather than 
   assert.deepEqual(report.issues, []);
   assert.deepEqual(buildPluginWorkspaceTestInvocations(report.packages), [
     {
-      args: ['workspace', '@happier-dev/plugins-alpha', 'test'],
+      args: ['--filter', '@happier-dev/plugins-alpha', '--silent', 'run', 'test'],
       packageName: '@happier-dev/plugins-alpha',
     },
     {
-      args: ['workspace', '@happier-dev/plugins-beta', 'test'],
+      args: ['--filter', '@happier-dev/plugins-beta', '--silent', 'run', 'test'],
       packageName: '@happier-dev/plugins-beta',
     },
   ]);
@@ -64,7 +64,7 @@ test('fails wiring when a plugin workspace has no executable test script', () =>
     workspacePackageManifests: [
       workspaceManifest('packages/plugins/alpha', {
         name: '@happier-dev/plugins-alpha',
-        scripts: { test: 'yarn test:local', typecheck: 'yarn typecheck:local' },
+        scripts: { test: 'pnpm run test:local', typecheck: 'pnpm run typecheck:local' },
       }),
       workspaceManifest('packages/plugins/missing-test', {
         name: '@happier-dev/plugins-missing-test',
@@ -90,7 +90,7 @@ test('fails wiring when a plugin workspace has no executable typecheck script', 
     workspacePackageManifests: [
       workspaceManifest('packages/plugins/missing-typecheck', {
         name: '@happier-dev/plugins-missing-typecheck',
-        scripts: { test: 'yarn test:local' },
+        scripts: { test: 'pnpm run test:local' },
       }),
     ],
   });
@@ -107,7 +107,7 @@ test('does not allow an empty plugin workspace selection to pass', () => {
     workspacePackageManifests: [
       workspaceManifest('packages/plugin-sdk', {
         name: '@happier-dev/plugin-sdk',
-        scripts: { test: 'yarn test:local', typecheck: 'yarn typecheck:local' },
+        scripts: { test: 'pnpm run test:local', typecheck: 'pnpm run typecheck:local' },
       }),
     ],
   });

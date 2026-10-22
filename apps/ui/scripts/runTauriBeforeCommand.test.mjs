@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { runTauriBeforeCommand } from './runTauriBeforeCommand.mjs';
 
-test('runTauriBeforeCommand runs yarn prepare:build via cmd on Windows', () => {
+test('runTauriBeforeCommand runs pnpm prepare:build through the canonical Windows shim', () => {
   /** @type {any} */
   let call = null;
   runTauriBeforeCommand({
@@ -17,28 +17,30 @@ test('runTauriBeforeCommand runs yarn prepare:build via cmd on Windows', () => {
     },
   });
 
-  assert.equal(call.cmd, 'cmd');
-  assert.deepEqual(call.args.slice(0, 3), ['/D', '/S', '/C']);
-  assert.equal(call.args[3], 'yarn -s tauri:prepare:build');
+  assert.equal(call.cmd, 'cmd.exe');
+  assert.deepEqual(call.args.slice(0, 3), ['/d', '/s', '/c']);
+  assert.match(call.args[3], /pnpm\.cmd/);
+  assert.match(call.args[3], /tauri:prepare:build/);
+  assert.equal(call.opts.windowsVerbatimArguments, true);
   assert.equal(call.opts.cwd, 'C:\\repo\\apps\\ui');
 });
 
-test('runTauriBeforeCommand runs yarn prepare:dev via bash on macOS/Linux', () => {
+test('runTauriBeforeCommand executes native pnpm directly on macOS/Linux', () => {
   /** @type {any} */
   let call = null;
   runTauriBeforeCommand({
     mode: 'dev',
     platform: 'darwin',
     cwd: '/repo/apps/ui',
-    env: { PATH: 'x' },
+    env: { PATH: 'x', npm_execpath: '/native/pnpm' },
     execFileSync: (cmd, args, opts) => {
       call = { cmd, args, opts };
       return Buffer.from('');
     },
   });
 
-  assert.equal(call.cmd, 'bash');
-  assert.deepEqual(call.args, ['-lc', 'yarn -s tauri:prepare:dev']);
+  assert.equal(call.cmd, '/native/pnpm');
+  assert.deepEqual(call.args, ['--silent', 'run', 'tauri:prepare:dev']);
   assert.equal(call.opts.cwd, '/repo/apps/ui');
 });
 

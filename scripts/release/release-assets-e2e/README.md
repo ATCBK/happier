@@ -7,7 +7,7 @@ Repeatable manual end-to-end smoke for validating:
 
 This is meant for release validation and can run against:
 - real NPM dist-tags/versions (default)
-- locally packed tarballs (`yarn pack`) before publishing
+- locally packed tarballs (`pnpm pack`) before publishing
 
 ## Quick start (NPM `next`)
 

@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
-    "build:finite": "yarn -s build",
+    "build:finite": "pnpm --silent run build",
     "project:finite": "node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs",
     "typecheck": "../../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json",

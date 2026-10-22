@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { startVitest } from 'vitest/node';
 import type { Plugin, TestProjectConfiguration } from 'vitest/config';
 
-import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { runPnpmCommand } from './lib/runPnpmCommand.ts';
 import type { WorkspaceManifest } from './lib/workspaceManifests.ts';
 import { resolveVitestPoolEnv, resolveVitestWorkers } from './vitestWorkers.ts';
 
@@ -58,9 +58,9 @@ export async function runWorkspaceUnitProjects(options: {
   const runHook = async (workspace: WorkspaceManifest, hook: string): Promise<boolean> => {
     if (workspace.scripts[hook] === undefined) return true;
     try {
-      await runYarnCommand({
+      await runPnpmCommand({
         id: workspace.packageName ?? workspace.workspaceDirectory,
-        args: ['--cwd', resolve(options.rootDir, workspace.workspaceDirectory), '-s', hook],
+        args: ['--dir', resolve(options.rootDir, workspace.workspaceDirectory), 'run', '--silent', hook],
       }, options.rootDir);
       return true;
     } catch (error) {

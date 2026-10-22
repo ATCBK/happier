@@ -5,7 +5,7 @@ import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { runCommandSuite, type CommandSuiteEntry } from './lib/runCommandSuite.ts';
-import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { runPnpmCommand } from './lib/runPnpmCommand.ts';
 import { assertCompilerBaselineDoesNotIncrease, compareCompilerBaseline, compilerReportPackage, diagnosticsFromCompilerReport, mapUnchangedLine, parseCompilerBaseline } from './lib/compilerBaseline.mjs';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 
@@ -53,7 +53,7 @@ async function runBaselineCompilerSuite(rootDir: string, commands: readonly Comm
   }
   const diagnostics: ReturnType<typeof diagnosticsFromCompilerReport> = [];
   const packages = new Set<string>();
-  const runCommand = options.runCommand ?? ((command, env) => runYarnCommand(command, rootDir, env));
+  const runCommand = options.runCommand ?? ((command, env) => runPnpmCommand(command, rootDir, env));
   const checked = await runCommandSuite({ commands, maxConcurrent: 1, suiteName: 'Root compiler baseline suite', runCommand: async command => {
     const reportDir = await mkdtemp(resolve(tmpdir(), 'happier-compiler-diagnostics-'));
     let failure: unknown;
@@ -98,14 +98,14 @@ async function runBaselineCompilerSuite(rootDir: string, commands: readonly Comm
 const ROOT_TYPE_TEST_COMMAND = {
   id: 'type-tests',
   args: [
-    'tsc', '--noEmit',
+    'run', 'tsc', '--noEmit',
     '-p', 'packages/protocol/tsconfig.json',
     '-p', 'packages/plugins/triage/tsconfig.json',
   ],
 } as const satisfies CommandSuiteEntry;
 
 const ROOT_TYPECHECK_PREPARATION_COMMANDS = [
-  { id: 'prepare-workspaces', args: ['-s', 'prepare:typecheck:workspaces'] },
+  { id: 'prepare-workspaces', args: ['run', '--silent', 'prepare:typecheck:workspaces'] },
 ] as const satisfies readonly CommandSuiteEntry[];
 
 export const ROOT_TYPECHECK_COMMANDS = [
@@ -113,7 +113,7 @@ export const ROOT_TYPECHECK_COMMANDS = [
   {
     id: 'public-sdk',
     args: [
-      'turbo',
+      'exec', 'turbo',
       'run',
       'typecheck:finite',
       '--continue=always',
@@ -124,7 +124,7 @@ export const ROOT_TYPECHECK_COMMANDS = [
   {
     id: 'source-workspaces',
     args: [
-      'turbo',
+      'exec', 'turbo',
       'run',
       'typecheck:source:finite',
       '--continue=always',
@@ -155,14 +155,14 @@ const ROOT_COMPILER_TYPECHECK_COMMANDS: readonly CommandSuiteEntry[] = [
     id: project,
     // Host packages own their declaration-producing project order and dispatch.
     args: project === 'apps/ui/tsconfig.json'
-      ? ['--cwd', 'apps/ui', '-s', 'typecheck']
+      ? ['--dir', 'apps/ui', 'run', '--silent', 'typecheck']
       : project === 'apps/cli/tsconfig.json'
-        ? ['--cwd', 'apps/cli', '-s', 'typecheck']
+        ? ['--dir', 'apps/cli', 'run', '--silent', 'typecheck']
       : project === 'apps/server/tsconfig.json'
-        ? ['--cwd', 'apps/server', '-s', 'typecheck']
+        ? ['--dir', 'apps/server', 'run', '--silent', 'typecheck']
       : project === 'packages/tests/tsconfig.json'
-        ? ['--cwd', 'packages/tests', '-s', 'typecheck']
-      : ['tsc', '-p', project, '--noEmit'],
+        ? ['--dir', 'packages/tests', 'run', '--silent', 'typecheck']
+      : ['run', 'tsc', '-p', project, '--noEmit'],
   })),
 ];
 
@@ -195,7 +195,7 @@ export async function runRootTypecheck(
   const commands = options.compilerPartition
     ? selectedCommands.filter(({ id }) => (id === 'apps/ui/tsconfig.json') === (options.compilerPartition === 'ui'))
     : selectedCommands;
-  const runCommand = options.runCommand ?? ((command) => runYarnCommand(command, rootDir));
+  const runCommand = options.runCommand ?? ((command) => runPnpmCommand(command, rootDir));
   const prepared = options.compilerOnly && !options.commands && !options.preparedWorkspaces
     ? await runCommandSuite({
       commands: ROOT_TYPECHECK_PREPARATION_COMMANDS,

@@ -4,7 +4,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 
 import { createTerminalNativeSourceState } from './deviceEvidenceRunBundle';
 
-const INCLUDED_ROOTS = ['app.json', 'package.json', 'yarn.lock', 'apps/ui', 'packages', 'scripts'] as const;
+const INCLUDED_ROOTS = ['app.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/ui', 'packages', 'scripts'] as const;
 const EXCLUDED_SEGMENTS = new Set(['.cxx', '.expo', '.git', '.gradle', '.project', 'Pods', 'Vendor', 'DerivedData', 'build', 'node_modules']);
 const EXCLUDED_FILES = new Set(['happier-terminal-native-build-identity.json']);
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { bundleWorkspacePackageWithRuntimeDependencies } from '../../../packages/cli-common/dist/workspaces/index.js';
 import { publicSdkExampleDependencyVersions } from '../../../scripts/pipeline/npm/public-sdk-example-dependency-publication.mjs';
 
@@ -109,7 +109,7 @@ function referencedPackageScripts(command) {
   if (typeof command !== 'string') return [];
   return [
     ...command.matchAll(/--run-script=([a-z][a-z0-9:-]*)\b/gu),
-    ...command.matchAll(/(?:^|&&)\s*yarn\s+-s\s+([a-z][a-z0-9:-]*)\b/gu),
+    ...command.matchAll(/(?:^|&&)\s*pnpm\s+-s\s+([a-z][a-z0-9:-]*)\b/gu),
   ].map((match) => match[1]);
 }
 

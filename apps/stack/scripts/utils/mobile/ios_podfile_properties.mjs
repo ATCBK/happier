@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 // `ios.buildReactNativeFromSource` and `ios.deploymentTarget` are owned by the Expo
 // config (`apps/ui/app.config.js`, expo-build-properties), so that EVERY prebuild path
-// produces them — `yarn prebuild`, `expo run:ios`, this command, and EAS. This step used
+// produces them — `pnpm run prebuild`, `expo run:ios`, this command, and EAS. This step used
 // to write them as well, which made the hstack path look healthy while a plain
 // `expo prebuild` produced a project that linked prebuilt React Native core and silently
 // dropped the native patches under `apps/ui/patches/`. Verify here instead of competing.

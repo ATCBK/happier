@@ -24,7 +24,7 @@ Use `hstack` for stack-managed workflows:
 - `hstack tailscale ...` / `hstack service ...`
 - `hstack tools ...` for maintained stack tools
 
-Do not run stack-scoped commands directly inside monorepo checkouts when a stack command exists (`yarn dev`, `yarn start`, raw `expo`, raw `tsc`/`eslint`, raw `docker compose`, raw `git worktree`). If a low-level command is needed repeatedly, prefer adding or using a stack command.
+Do not run stack-scoped commands directly inside monorepo checkouts when a stack command exists (`pnpm run dev`, `pnpm run start`, raw `expo`, raw `tsc`/`eslint`, raw `docker compose`, raw `git worktree`). If a low-level command is needed repeatedly, prefer adding or using a stack command.
 
 ## Worktrees
 
@@ -99,11 +99,11 @@ Preserve these unless the task explicitly redesigns stack behavior:
 Validation lanes:
 
 ```bash
-yarn --cwd apps/stack test:unit
-yarn --cwd apps/stack test:integration
+pnpm --dir apps/stack run test:unit
+pnpm --dir apps/stack run test:integration
 ```
 
-If `yarn` is not on PATH, use `corepack yarn ...`.
+Install the exact root pnpm pin with `node scripts/ci/setup-pnpm.mjs` from the repository root if pnpm is not available. Corepack is not required.
 
 ## Commit messages
 

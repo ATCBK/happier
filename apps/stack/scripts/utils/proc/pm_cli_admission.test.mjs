@@ -18,9 +18,10 @@ test('Stack CLI readiness jointly admits its complete locked publication transac
   const cliDir = join(root, 'apps/cli');
   const lockPath = join(root, '.project/tmp/cli-dist-build.lock');
   await Promise.all(['apps/cli', 'apps/ui', 'apps/server', 'node_modules', '.project/tmp'].map(path => mkdir(join(root, path), { recursive: true })));
-  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, packageManager: 'yarn@1.22.22' }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
-  for (const name of ['cli', 'ui', 'server']) await writeFile(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@happier-dev/${name}`, packageManager: 'yarn@1.22.22' }));
+  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  for (const name of ['cli', 'ui', 'server']) await writeFile(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@happier-dev/${name}`, packageManager: 'pnpm@12.14.0' }));
   const { admissionRoot } = await installNativeAdmissionFixture({ root });
   await Promise.all(['owners', 'waiters'].map(path => mkdir(join(admissionRoot, path), { recursive: true })));
   const memoryPath = join(root, 'memory');
@@ -31,9 +32,9 @@ test('Stack CLI readiness jointly admits its complete locked publication transac
   writeFakeBin({ root, name: 'sleep', content: '#!/bin/sh\nexec /bin/sleep 0.02\n' });
   // The package manager is the genuine external build boundary. Its failure
   // must retain the public readiness error while releasing the joint lease.
-  writeFakeBin({ root, name: 'yarn', content: `#!${process.execPath}
+  writeFakeBin({ root, name: 'pnpm', content: `#!${process.execPath}
 import { writeFileSync } from 'node:fs';
-if (process.argv.includes('--version')) console.log('1.22.22');
+if (process.argv.includes('--version')) console.log('12.14.0');
 else if (process.argv.includes('build:prepared')) {
   writeFileSync(process.env.FIXTURE_OBSERVED, JSON.stringify({ token: process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN,
     leases: JSON.parse(process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'), held: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD }));

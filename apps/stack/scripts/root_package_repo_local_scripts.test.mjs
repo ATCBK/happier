@@ -25,10 +25,10 @@ test('repo root package.json exposes repo-local hstack scripts', async () => {
   assert.equal(scripts['tui:with-tauri'], 'node ./apps/stack/scripts/repo_local.mjs tui --tauri');
   assert.equal(scripts['tui:with-mobile-tauri'], 'node ./apps/stack/scripts/repo_local.mjs tui --tauri --mobile');
   assert.equal(scripts['tui:with-mobile'], 'node ./apps/stack/scripts/repo_local.mjs tui dev --mobile');
-  assert.equal(scripts['tauri:qa'], 'yarn --cwd apps/ui tauri:qa');
-  assert.equal(scripts['tauri:mcp:server'], 'yarn --cwd apps/ui tauri:mcp:server');
-  assert.equal(scripts['tauri:mcp:cli'], 'yarn --cwd apps/ui tauri:mcp:cli');
-  assert.equal(scripts['tauri:mcp:session:start'], 'yarn --cwd apps/ui tauri:mcp:session:start');
+  assert.equal(scripts['tauri:qa'], 'pnpm --dir apps/ui run tauri:qa');
+  assert.equal(scripts['tauri:mcp:server'], 'pnpm --dir apps/ui run tauri:mcp:server');
+  assert.equal(scripts['tauri:mcp:cli'], 'pnpm --dir apps/ui run tauri:mcp:cli');
+  assert.equal(scripts['tauri:mcp:session:start'], 'pnpm --dir apps/ui run tauri:mcp:session:start');
   assert.equal(scripts['cli:activate'], 'node ./apps/stack/scripts/repo_cli_activate.mjs');
   assert.equal(scripts['cli:activate:path'], 'node ./apps/stack/scripts/repo_cli_activate.mjs --install-path');
   assert.equal(scripts.auth, 'node ./apps/stack/scripts/repo_local.mjs auth');

@@ -17,10 +17,10 @@ vi.mock('react-native', async () => {
 });
 // Only the two native view carriers are replaced. Exercise the installed JS
 // wrapper and app adapter, not the default whole-package Markdown boundary stub.
-vi.mock('../../../../node_modules/react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts', () => ({ default: 'NativeMarkdownText' }));
-vi.mock('../../../../node_modules/react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts', () => ({ default: 'NativeGithubMarkdown' }));
+vi.mock('react-native-enriched-markdown/src/EnrichedMarkdownTextNativeComponent.ts', () => ({ default: 'NativeMarkdownText' }));
+vi.mock('react-native-enriched-markdown/src/EnrichedMarkdownNativeComponent.ts', () => ({ default: 'NativeGithubMarkdown' }));
 vi.mock('react-native-enriched-markdown', async () => await vi.importActual<typeof import('react-native-enriched-markdown')>(
-    '../../../../node_modules/react-native-enriched-markdown/src/native/EnrichedMarkdownText',
+    'react-native-enriched-markdown/src/native/EnrichedMarkdownText',
 ));
 vi.unmock('@/components/ui/icons/Icon');
 

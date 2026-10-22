@@ -7,18 +7,18 @@ import {
   resolveTauriCliInvocation,
 } from '../pipeline/tauri/build-updater-artifacts.mjs';
 
-test('Windows Tauri updater build uses npm run for tauri:prepare:build and tauri.cmd for tauri build', () => {
+test('Windows Tauri updater build invokes native pnpm directly for preparation and tauri.cmd for builds', () => {
   const absUiDir = path.join('D:\\', 'a', 'happier', 'happier', 'apps', 'ui');
 
   const prepare = resolveTauriPrepareBuildInvocation({
     platform: 'win32',
     nodeExecPath: 'C:\\node.exe',
-    npmExecPath: 'C:\\npm\\bin\\npm-cli.js',
+    npmExecPath: 'C:\\Program Files\\pnpm\\pnpm.exe',
   });
 
   assert.deepEqual(prepare, {
-    cmd: 'C:\\node.exe',
-    args: ['C:\\npm\\bin\\npm-cli.js', 'run', '-s', 'tauri:prepare:build'],
+    cmd: 'C:\\Program Files\\pnpm\\pnpm.exe',
+    args: ['run', '--silent', 'tauri:prepare:build'],
   });
 
   const tauri = resolveTauriCliInvocation({ platform: 'win32', absUiDir });

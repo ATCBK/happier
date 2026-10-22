@@ -68,7 +68,7 @@ node scripts/pipeline/release/release-notes/project-release-notes.mjs \
    needs different artwork or video per surface. Base media remains the fallback;
    tablet and desktop widths use the `desktop` override, phone-width sheets use
    `mobile`.
-7. Run `yarn tsx sources/scripts/parseReleaseNotes.ts` to validate and regenerate
+7. Run `pnpm exec tsx sources/scripts/parseReleaseNotes.ts` to validate and regenerate
    `sources/changelog/releaseNotes/manifest.generated.json`.
 
 ## Card kinds

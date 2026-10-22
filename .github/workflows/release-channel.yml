@@ -455,8 +455,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Admit irreversible server migrations
         env:
@@ -677,20 +675,14 @@ jobs:
             --publish-channels-protocol false \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Enable Corepack for public SDK API generation
-        if: ${{ steps.bump_plan.outputs.publish_plugin_sdk == 'true' || steps.bump_plan.outputs.publish_sdk == 'true' }}
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies for public SDK API generation
         if: ${{ steps.bump_plan.outputs.publish_plugin_sdk == 'true' || steps.bump_plan.outputs.publish_sdk == 'true' }}
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       # The API inventory and declaration records are generated on demand, not
       # committed, so the comparison needs the prepared package declarations.
@@ -702,11 +694,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$PUBLISH_PLUGIN_SDK" = "true" ]; then
-            yarn workspace @happier-dev/plugin-sdk -s prepare:api-governance
-            yarn workspace @happier-dev/plugin-ui -s prepare:api-governance
+            pnpm --filter @happier-dev/plugin-sdk run prepare:api-governance
+            pnpm --filter @happier-dev/plugin-ui run prepare:api-governance
           fi
           if [ "$PUBLISH_SDK" = "true" ]; then
-            yarn workspace @happier-dev/sdk -s prepare:api-governance
+            pnpm --filter @happier-dev/sdk run prepare:api-governance
           fi
 
       - name: Compare public SDK APIs for the exact planning source
@@ -752,26 +744,19 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
       - name: Acquire the pinned engine from the external signed Mutagen release
         env:
           HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION: "1"
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          yarn workspace @happier-dev/cli-common test:mutagen-engine:live:local
+          pnpm --filter @happier-dev/cli-common run test:mutagen-engine:live:local
 
   release_notes_admission:
     name: Admit canonical release notes for authorized source

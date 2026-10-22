@@ -2,26 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 
-import { resolveRepoRoot, resolveYarnCommand } from '../pipeline/release/lib/binary-release.mjs';
+import { resolveRepoRoot, resolvePnpmCommand } from '../pipeline/release/lib/binary-release.mjs';
 
-test('resolveYarnCommand prefers yarn when both yarn and corepack are available', () => {
-  const result = resolveYarnCommand({
-    commandProbe: (cmd) => cmd === 'yarn' || cmd === 'corepack',
+test('resolvePnpmCommand requires the installed pnpm executable', () => {
+  const result = resolvePnpmCommand({
+    commandProbe: (cmd) => cmd === 'pnpm',
   });
-  assert.deepEqual(result, { cmd: 'yarn', args: [] });
+  assert.deepEqual(result, { cmd: 'pnpm', args: [] });
 });
 
-test('resolveYarnCommand falls back to corepack yarn when yarn shim is missing', () => {
-  const result = resolveYarnCommand({
+test('resolvePnpmCommand rejects a worker with only Corepack', () => {
+  assert.throws(() => resolvePnpmCommand({
     commandProbe: (cmd) => cmd === 'corepack',
-  });
-  assert.deepEqual(result, { cmd: 'corepack', args: ['yarn'] });
+  }), /requires pnpm/i);
 });
 
-test('resolveYarnCommand throws when yarn and corepack are unavailable', () => {
+test('resolvePnpmCommand throws when pnpm is unavailable', () => {
   assert.throws(
-    () => resolveYarnCommand({ commandProbe: () => false }),
-    /requires yarn .* corepack/i
+    () => resolvePnpmCommand({ commandProbe: () => false }),
+    /requires pnpm/i
   );
 });
 

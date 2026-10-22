@@ -71,7 +71,9 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
       files.add(relative(repoDir, join(root, path)).split(sep).join('/'));
     }
   }
-  if (existsSync(join(repoDir, 'yarn.lock'))) files.add('yarn.lock');
+  for (const path of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    if (existsSync(join(repoDir, path))) files.add(path);
+  }
   if (compiler) for (const path of [
     'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
@@ -155,8 +157,10 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
       watchPaths.add(dirname(sourcePath));
     }
   }
-  if (existsSync(join(repoDir, 'yarn.lock'))) files.add('yarn.lock');
-  watchPaths.add(join(repoDir, 'yarn.lock'));
+  for (const path of ['pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    if (existsSync(join(repoDir, path))) files.add(path);
+    watchPaths.add(join(repoDir, path));
+  }
   return { files: [...files].sort(), workspaceDirs: owners.map(({ root }) => relative(repoDir, root)),
     watchPaths: [...watchPaths] };
 }

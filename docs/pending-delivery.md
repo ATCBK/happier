@@ -435,6 +435,12 @@ the canonical Pending owner returns it to ordinary delivery admission, including
 `after_runtime_idle`. Explicit steering does not require the foreground or
 background activity summary to become idle first.
 
+In 0.3 development source, the Claude plugin's transcript lifecycle mapper treats
+the exact main-chain `[Request interrupted by user]` and
+`[Request interrupted by user for tool use]` markers as foreground aborts on both
+text and user-prompt observation paths. The existing input owner can then release
+a waiting **Send now** prompt; the abort does not prove acceptance of that follow-up.
+
 Claude terminal readiness uses positive native generation evidence even when a
 turn-start lifecycle signal is missing or delayed. Input safety and provider
 acceptance remain owned by the existing terminal readiness and custody paths.
@@ -627,6 +633,12 @@ seen before any matching input is registered remains replayable. Native events
 without an evidence identity retain their existing unique-text matching behavior.
 
 ## Live runner wake-up recovery (development)
+
+Pending counts and versions come from the server's projection. A materialization
+acknowledgement without that projection retains the last server state; it does
+not decrement counts or increment versions. The existing projection owner also
+rejects older snapshots and hints, so a delayed empty response cannot hide a
+newer pending row. Execution Run inputs retain their separate admission owner.
 
 The session client owns pending-input wake subscriptions. A transient socket
 disconnect does not end those subscriptions: idle and active-turn consumers must
@@ -833,7 +845,7 @@ Authenticated page, Pending, and realtime projections use the same Account displ
 After deploying the current writers and the nullable-column migration, run the provider-neutral backfill against the explicitly selected database from `apps/server`:
 
 ```sh
-HAPPIER_DB_PROVIDER=sqlite DATABASE_URL='file:/absolute/path/to/happier-server-light.sqlite' yarn session-message-author:backfill
+HAPPIER_DB_PROVIDER=sqlite DATABASE_URL='file:/absolute/path/to/happier-server-light.sqlite' pnpm run session-message-author:backfill
 ```
 
 For PostgreSQL or MySQL, select `postgres` or `mysql` and supply that deployment's connection URL. The command keyset-pages bounded batches, validates receipts through Protocol, resolves surviving Accounts, and fills only still-null projections. It prints aggregate counts and exits unsuccessfully on a non-null disagreement. It never repairs the receipt from the author column. Stop unsupported older writers before the cutover; if one wrote during the transition, rerun after it has stopped. Enable Lane 09's author-based personal scopes only after the audit succeeds. An interrupted backfill may safely restart; it has no persistent worker or checkpoint.

@@ -255,13 +255,13 @@ echo '[dev-targets] previous SSH/firewall policy restored'
   const rootScript = `
 set -euo pipefail
 worker_user="$1"
-worker_corepack="$2"
+worker_npm="$2"
 worker_node="$3"
 phase="$4"
 [[ "$worker_user" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'Invalid worker user' >&2; exit 1; }
 if [[ "$phase" = prepare ]]; then
 ${toolchain ? `bash -c ${posixQuote(toolchainSource)} -- --profile=toolchain
-worker_corepack="$(command -v corepack)"
+worker_npm="$(command -v npm)"
 worker_node="$(node -p 'process.execPath')"` : ''}
 ${createUser ? `
 worker_user=${posixQuote(createUser)}
@@ -352,7 +352,7 @@ ${passwordlessSudo ? `
 command_path() {
   local path
   case "$1" in
-    corepack) path="$worker_corepack" ;;
+    npm) path="$worker_npm" ;;
     node) path="$worker_node" ;;
     *) path="$(command -v "$1")" ;;
   esac
@@ -383,13 +383,13 @@ grant apt-get '^install -y [a-zA-Z0-9.+ -]+$'
 grant apt-get '^install -y --no-install-recommends [a-zA-Z0-9.+ -]+$'
 # Playwright's Linux dependency owner elevates this exact two-command recipe.
 grant sh '^-c apt-get update&& apt-get install -y --no-install-recommends [a-zA-Z0-9.+ -]+$'
-corepack_entry="$(command_path corepack)"
-corepack_entry="\${corepack_entry//./[.]}"
-corepack_entry="\${corepack_entry//+/[+]}"
+npm_entry="$(command_path npm)"
+npm_entry="\${npm_entry//./[.]}"
+npm_entry="\${npm_entry//+/[+]}"
 node_entry="$(command_path node)"
 node_entry="\${node_entry//./[.]}"
 node_entry="\${node_entry//+/[+]}"
-grant env "^COREPACK_ENABLE_PROJECT_SPEC=0 $node_entry $corepack_entry npm install --global --no-audit --no-fund --allow-scripts=agent-browser agent-browser@[0-9]+[.][0-9]+[.][0-9]+$"
+grant env "^$node_entry $npm_entry install --global --no-audit --no-fund --allow-scripts=agent-browser agent-browser@[0-9]+[.][0-9]+[.][0-9]+$"
 ` : ''}
 visudo -cf "$candidate"
 install -m 0440 "$candidate" /etc/sudoers.d/happier-worker
@@ -546,7 +546,7 @@ if [ "$(uname -s)" != Linux ]; then
   ${allLinux ? "echo '[dev-targets] skipping non-Linux target'; exit 0" : "echo 'host prepare requires Linux' >&2; exit 1"}
 fi
 worker_user="$(id -un)"
-worker_corepack="$(command -v corepack || true)"
+worker_npm="$(command -v npm || true)"
 worker_node="$(node -p 'process.execPath' 2>/dev/null || true)"
 needs_root=${growRoot || passwordlessSudo || diskTmp || inotify || toolchain || createUser || tailscale || autoUpdates ? 'true' : 'false'}
 ${noSleep ? `
@@ -560,7 +560,7 @@ if [ "$needs_root" = false ]; then
   echo '[dev-targets] requested host settings already satisfied'
   exit 0
 fi
-${elevatedBash(rootScript, '"$worker_user" "$worker_corepack" "$worker_node" prepare', tailscaleAuthkeyStdin)}
+${elevatedBash(rootScript, '"$worker_user" "$worker_npm" "$worker_node" prepare', tailscaleAuthkeyStdin)}
 `;
   if (growRoot || noSleep || passwordlessSudo || diskTmp || inotify || toolchain || createUser || tailscale || autoUpdates) {
     await runInteractive({ command: 'ssh', args: configuredSshArgs({ configPath: target.sshConfigFile,
@@ -646,11 +646,11 @@ function discoveryCommand() {
     'node_command="$(command -v node 2>/dev/null || true)"',
     'node_exec="$(node -p "process.execPath" 2>/dev/null || true)"',
     'node_version="$(node --version 2>/dev/null || true)"',
-    'corepack_command="$(command -v corepack 2>/dev/null || true)"',
-    'if [ -z "$corepack_command" ] && [ -n "$node_exec" ]; then node_bin_dir="$(dirname "$node_exec")"; [ -x "$node_bin_dir/corepack" ] && corepack_command="$node_bin_dir/corepack"; fi',
+    'npm_command="$(command -v npm 2>/dev/null || true)"',
+    'if [ -z "$npm_command" ] && [ -n "$node_exec" ]; then node_bin_dir="$(dirname "$node_exec")"; [ -x "$node_bin_dir/npm" ] && npm_command="$node_bin_dir/npm"; fi',
     'printf "__HAPPIER_NODE__=%s\\n" "$node_command"',
     'printf "__HAPPIER_NODE_VERSION__=%s\\n" "$node_version"',
-    'printf "__HAPPIER_COREPACK__=%s\\n" "$corepack_command"',
+    'printf "__HAPPIER_NPM__=%s\\n" "$npm_command"',
   ].join('; ');
   return `remote_shell="${'${SHELL:-/bin/sh}'}"; "$remote_shell" -lic ${posixQuote(inner)}`;
 }
@@ -667,10 +667,10 @@ function normalizeDiscovery(discovery, { requireToolchain }) {
   const remoteHome = requireAbsolutePosixPath(readMarker(discovery.out, 'HOME'), 'discovered remote home');
   const nodePath = readMarker(discovery.out, 'NODE');
   const nodeVersion = readMarker(discovery.out, 'NODE_VERSION');
-  const corepackPath = readMarker(discovery.out, 'COREPACK');
-  if (requireToolchain && (!nodePath.startsWith('/') || !corepackPath.startsWith('/'))) {
+  const npmPath = readMarker(discovery.out, 'NPM');
+  if (requireToolchain && (!nodePath.startsWith('/') || !npmPath.startsWith('/'))) {
     throw new Error(
-      '[dev-targets] SSH is ready, but Node.js and Corepack were not discoverable in the remote login shell; install them and rerun add',
+      '[dev-targets] SSH is ready, but Node.js and npm were not discoverable in the remote login shell; install them and rerun add',
     );
   }
   const nodeMajor = Number(nodeVersion.match(/^v?(\d+)/)?.[1]);
@@ -685,10 +685,10 @@ function normalizeDiscovery(discovery, { requireToolchain }) {
     .filter((entry) => entry.startsWith('/'));
   const remotePath = [...new Set([
     ...(nodePath.startsWith('/') ? [dirname(nodePath)] : []),
-    ...(corepackPath.startsWith('/') ? [dirname(corepackPath)] : []),
+    ...(npmPath.startsWith('/') ? [dirname(npmPath)] : []),
     ...discoveredPath,
   ])];
-  return { remoteHome, remotePath, toolchainReady: nodePath.startsWith('/') && corepackPath.startsWith('/') && (!Number.isInteger(nodeMajor) || nodeMajor >= 22) };
+  return { remoteHome, remotePath, toolchainReady: nodePath.startsWith('/') && npmPath.startsWith('/') && (!Number.isInteger(nodeMajor) || nodeMajor >= 22) };
 }
 
 async function writeSshConfig(path, content) {

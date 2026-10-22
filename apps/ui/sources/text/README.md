@@ -242,9 +242,9 @@ In short:
 
 ```bash
 cd apps/ui
-yarn i18n:locale:extract -- --locale <code> --out /tmp/<code>.todo.json
-yarn i18n:locale:verify  -- --translations /tmp/<code>.json
-yarn i18n:locale:build   -- --locale <code> --translations /tmp/<code>.json
+pnpm run i18n:locale:extract --locale <code> --out /tmp/<code>.todo.json
+pnpm run i18n:locale:verify --translations /tmp/<code>.json
+pnpm run i18n:locale:build --locale <code> --translations /tmp/<code>.json
 ```
 
 Then register the locale in three places: `_all.ts` (the code and its `nativeName`), `i18n.ts` (a

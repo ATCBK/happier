@@ -25,14 +25,14 @@ test('extended DB E2E owns provider generation once and runs only database-relev
     const generate = job.steps.find((step) => step.name === `Generate server provider client (${provider})`);
     assert.ok(generate, `${jobName} should generate its provider client before Vitest starts`);
     assert.equal(generate.env.HAPPIER_BUILD_DB_PROVIDERS, provider);
-    assert.equal(generate.run, 'yarn -s workspace @happier-dev/server generate:providers');
+    assert.equal(generate.run, 'pnpm --filter @happier-dev/server run generate:providers');
 
     const run = job.steps.find((step) => step.name === `Run core e2e database suite (${provider})`);
     assert.ok(run, `${jobName} should own a bounded external-database E2E command`);
     assert.equal(run.env.HAPPIER_E2E_PROVIDER_SKIP_SERVER_GENERATE, '1');
     assert.equal(
       run.run,
-      'yarn test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1',
+      'pnpm run test:e2e:core:fast -- --no-file-parallelism --maxWorkers=1 --minWorkers=1',
     );
 
     const upload = job.steps.find((step) => step.name === 'Upload e2e diagnostics (on failure)');
@@ -54,7 +54,7 @@ test('provider DB contracts check generated schemas without repair before provid
     const runIndex = steps.findIndex((step) => step.name === `Run db contract suite (${provider})`);
     assert.ok(checkIndex >= 0, `${jobName} must run the non-mutating schema check`);
     assert.ok(checkIndex < runIndex, `${jobName} must check schema drift before provider tests`);
-    assert.equal(steps[checkIndex].run, 'yarn --cwd apps/server schema:sync:check');
+    assert.equal(steps[checkIndex].run, 'pnpm --dir apps/server run schema:sync:check');
     assert.doesNotMatch(steps[checkIndex].run, /db push|migrate|repair/iu);
     const providerUrlKey = provider === 'Postgres'
       ? 'HAPPIER_TEST_POSTGRES_DATABASE_URL'
@@ -89,7 +89,7 @@ test('provider DB contracts exercise the Session System Record preview upgrade b
 
   const postgresSteps = workflow.jobs['db-contract-postgres'].steps;
   const postgresMigration = postgresSteps.find((step) => step.name === 'Migrate (Postgres)');
-  assert.equal(postgresMigration.run, 'yarn --cwd apps/server -s migrate:full:deploy');
+  assert.equal(postgresMigration.run, 'pnpm --dir apps/server run migrate:full:deploy');
   assert.doesNotMatch(
     postgresSteps.map((step) => step.run ?? '').join('\n'),
     /prisma\s+migrate\s+deploy/iu,
@@ -103,6 +103,6 @@ test('the primary PostgreSQL DB-contract job also uses the canonical migration o
     (step) => step.name === 'Migrate (Postgres)',
   );
   assert.equal(postgresMigration.env.HAPPIER_DB_PROVIDER, 'postgres');
-  assert.equal(postgresMigration.run, 'yarn --cwd apps/server -s migrate:full:deploy');
+  assert.equal(postgresMigration.run, 'pnpm --dir apps/server run migrate:full:deploy');
   assert.doesNotMatch(postgresMigration.run, /prisma\s+migrate\s+deploy/iu);
 });

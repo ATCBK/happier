@@ -217,8 +217,8 @@ This does **not** affect the full flavor. If your production Postgres requires T
 
 Light DB version pairing note:
 
-- This repo is tested with `@electric-sql/pglite@0.3.15` + `@electric-sql/pglite-socket@0.0.20` (see `yarn.lock`).
-- If you change these versions, run `yarn --cwd packages/happy-server migrate:light:deploy` and `yarn --cwd packages/happy-server start:light` as a smoke check.
+- This repo is tested with `@electric-sql/pglite@0.3.15` + `@electric-sql/pglite-socket@0.0.20` (see `pnpm-lock.yaml`).
+- If you change these versions, run `pnpm --dir apps/server run migrate:light:deploy` and `pnpm --dir apps/server run start:light` from the repository root as a smoke check.
 
 ## Production scaling (multi-core / multi-replica)
 
@@ -297,11 +297,11 @@ For a quick local production-like test (requires Redis):
 
 ```bash
 # Worker (no HTTP server; publishes events via Redis adapter; runs background loops)
-SERVER_ROLE=worker HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 METRICS_PORT=0 yarn start
+SERVER_ROLE=worker HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 METRICS_PORT=0 pnpm run start
 
 # API replicas (different PORTs on the same host; put a load balancer in front in real deployments)
-SERVER_ROLE=api HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 PORT=3005 METRICS_PORT=0 yarn start
-SERVER_ROLE=api HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 PORT=3006 METRICS_PORT=0 yarn start
+SERVER_ROLE=api HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 PORT=3005 METRICS_PORT=0 pnpm run start
+SERVER_ROLE=api HAPPIER_SOCKET_ADAPTER=redis-streams REDIS_URL=redis://127.0.0.1:6379 PORT=3006 METRICS_PORT=0 pnpm run start
 ```
 
 ### Sticky sessions (required for websocket load balancing)
@@ -347,16 +347,16 @@ For a full guide, see `apps/docs/content/docs/deployment/observability.mdx`.
 
 ### Choosing a flavor
 
-- **full**: run `yarn start` (uses `sources/main.ts` → `startServer('full')`)
-- **light**: run `yarn start:light` (uses `sources/main.light.ts` → `startServer('light')`)
+- **full**: run `pnpm run start` (uses `sources/main.ts` → `startServer('full')`)
+- **light**: run `pnpm run start:light` (uses `sources/main.light.ts` → `startServer('light')`)
 
-For local development, `yarn dev:light` is the easiest entrypoint for the light flavor (it creates the local dirs and runs `prisma migrate deploy` against embedded Postgres (PGlite) before starting).
+For local development, `pnpm run dev:light` is the easiest entrypoint for the light flavor (it creates the local dirs and runs `prisma migrate deploy` against embedded Postgres (PGlite) before starting).
 
 ### Local development
 
 #### Prerequisites
 
-- Node.js + Yarn
+- Node.js + the repository-pinned pnpm
 - Docker (required only for the full flavor local deps)
 
 #### Full flavor (Postgres + Redis + S3/Minio)
@@ -364,19 +364,19 @@ For local development, `yarn dev:light` is the easiest entrypoint for the light 
 This repo includes convenience scripts to start Postgres/Redis/Minio via Docker and then run migrations.
 
 ```bash
-yarn install
+pnpm install
 
 # Start dependencies
-yarn db
-yarn redis
-yarn s3
-yarn s3:init
+pnpm run db
+pnpm run redis
+pnpm run s3
+pnpm run s3:init
 
 # Apply migrations (uses `.env.dev`)
-yarn migrate
+pnpm run migrate
 
 # Start the server (loads `.env.dev`)
-PORT=3005 yarn dev
+PORT=3005 pnpm run dev
 ```
 
 Verify:
@@ -388,22 +388,22 @@ curl http://127.0.0.1:3005/health
 Notes:
 
 - If port `3005` is already in use, choose another: `PORT=3007 ...`.
-- `yarn dev` does **not** kill anything by default. You can force-kills whatever is listening on the port by using: `PORT=3005 yarn dev -- --kill-port` (or `yarn dev:kill-port`).
-- `yarn start` is production-style (it expects env vars already set in your environment).
-- Minio cleanup: `yarn s3:down`.
+- `pnpm run dev` does **not** kill anything by default. You can force-kills whatever is listening on the port by using: `PORT=3005 pnpm run dev --kill-port` (or `pnpm run dev:kill-port`).
+- `pnpm run start` is production-style (it expects env vars already set in your environment).
+- Minio cleanup: `pnpm run s3:down`.
 
 #### Light flavor (SQLite + local files)
 
 *The light flavor does not require Docker.* By default it uses SQLite persisted on disk and serves public files from disk under `GET /files/*`.
 
 ```bash
-yarn install
+pnpm install
 
 # Runs light migrations for the selected provider before starting (SQLite by default)
-PORT=3005 yarn dev:light
+PORT=3005 pnpm run dev:light
 
 # Optional: run the light flavor against embedded Postgres (PGlite):
-HAPPIER_DB_PROVIDER=pglite PORT=3005 yarn dev:light
+HAPPIER_DB_PROVIDER=pglite PORT=3005 pnpm run dev:light
 ```
 
 Verify:
@@ -414,13 +414,13 @@ curl http://127.0.0.1:3005/health
 
 Notes:
 
-- `yarn dev:light` runs migrations for the selected light DB provider before starting.
+- `pnpm run dev:light` runs migrations for the selected light DB provider before starting.
 - If you want a clean slate for local dev/testing, delete the light data dir (default: `~/.happy/server-light`) or point the light flavor at a fresh dir via `HAPPIER_SERVER_LIGHT_DATA_DIR=/tmp/happy-server-light`.
 
 ### Prisma schema (providers)
 
 - `prisma/schema.prisma` is the single source of truth for the data model.
-- Provider-specific schemas are generated from it via `yarn schema:sync`:
+- Provider-specific schemas are generated from it via `pnpm run schema:sync`:
   - SQLite: `prisma/sqlite/schema.prisma`
   - MySQL: `prisma/mysql/schema.prisma`
 
@@ -428,13 +428,13 @@ Migrations are provider-specific:
 
 - Postgres (and embedded Postgres via PGlite):
   - migrations: `prisma/migrations/*`
-  - deploy: `yarn prisma migrate deploy` (or `yarn migrate:light:deploy` for embedded PGlite)
+  - deploy: `pnpm run migrate:full:deploy` (or `pnpm run migrate:light:deploy` for embedded PGlite)
 - SQLite:
   - migrations: `prisma/sqlite/migrations/*`
-  - deploy: `yarn migrate:sqlite:deploy` (expects `DATABASE_URL=file:...`)
+  - deploy: `pnpm run migrate:sqlite:deploy` (expects `DATABASE_URL=file:...`)
 - MySQL 8.0.17+:
   - migrations: `prisma/mysql/migrations/*`
-  - deploy: `yarn migrate:mysql:deploy`
+  - deploy: `pnpm run migrate:mysql:deploy`
   - Before first applying
     `20260729102000_add_voice_conversation_grant_provenance`, stop every old
     API and worker writer and complete the
@@ -449,11 +449,11 @@ DB portability contract suite:
 - Spec location: `sources/storage/dbcontract/portability.dbcontract.spec.ts`
 - Run only contract tests (not the full server suite):
   - Preferred local (Docker-provisioned):
-    - Postgres: `yarn test:server:db-contract:postgres:docker` (repo root)
-    - MySQL: `yarn test:server:db-contract:mysql:docker` (repo root)
+    - Postgres: `pnpm run test:server:db-contract:postgres:docker` (repo root)
+    - MySQL: `pnpm run test:server:db-contract:mysql:docker` (repo root)
   - Direct package command (existing DB URL):
-    - Postgres: `HAPPIER_DB_PROVIDER=postgres DATABASE_URL=postgresql://... yarn test:server:db-contract`
-    - MySQL: `HAPPIER_DB_PROVIDER=mysql DATABASE_URL=mysql://... yarn test:server:db-contract`
+    - Postgres: `HAPPIER_DB_PROVIDER=postgres DATABASE_URL=postgresql://... pnpm run test:server:db-contract`
+    - MySQL: `HAPPIER_DB_PROVIDER=mysql DATABASE_URL=mysql://... pnpm run test:server:db-contract`
 
 Light flavor note (SQLite vs PGlite):
 
@@ -467,10 +467,10 @@ When you change the data model:
 
 1. Edit `prisma/schema.prisma`
 2. Create/update the migration:
-   - `yarn migrate --name <name>` (writes to `prisma/migrations/*`)
+   - `pnpm run migrate --name <name>` (writes to `prisma/migrations/*`)
 3. Validate:
-   - `yarn test`
-   - Smoke test both flavors (`yarn dev` and `yarn dev:light`)
+   - `pnpm run test`
+   - Smoke test both flavors (`pnpm run dev` and `pnpm run dev:light`)
 
 No-data-loss guidelines:
 

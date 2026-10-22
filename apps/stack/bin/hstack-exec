@@ -1188,14 +1188,14 @@ run_local() {
       shift
       if [ "${1-}" = "--" ]; then shift; fi
       # The manifest owns publication/admission policy. Resolve its logical
-      # package command before inherited Yarn paths hide it behind Node.
-      resolve_self_publisher_policy corepack yarn -s "$local_script" "$@"
+      # package command before inherited JavaScript entrypoints hide it behind Node.
+      resolve_self_publisher_policy pnpm run --silent "$local_script" "$@"
       local_script_policy_resolved=1
-      if [ -n "${npm_node_execpath-}" ] && [ -n "${npm_execpath-}" ]; then
-        set -- "$npm_node_execpath" "$npm_execpath" -s "$local_script" "$@"
-      else
-        set -- corepack yarn -s "$local_script" "$@"
-      fi
+      case "${npm_execpath-}" in
+        ''|*npm-cli.js) set -- pnpm run --silent "$local_script" "$@" ;;
+        *.js|*.cjs|*.mjs) set -- "${npm_node_execpath:-node}" "$npm_execpath" run --silent "$local_script" "$@" ;;
+        *) set -- "$npm_execpath" run --silent "$local_script" "$@" ;;
+      esac
       ;;
   esac
 
@@ -1837,7 +1837,7 @@ case "${1-}" in
     local_script=${1#--script=}
     shift
     [ "${1-}" = -- ] && shift
-    set -- corepack yarn -s "$local_script" "$@"
+    set -- pnpm run --silent "$local_script" "$@"
     ;;
   --) shift ;;
 esac
@@ -1870,7 +1870,7 @@ remote_preparation_build_mode=${HAPPIER_WORKSPACE_BUILD_MODE-$policy_preparation
 preparation_component_relative_dir=$policy_component
 [ "$preparation_component_relative_dir" = . ] && preparation_component_relative_dir=
 preflight_command=$requested_command
-[ "$requires_remote_dependencies" -eq 1 ] && preflight_command=corepack
+[ "$requires_remote_dependencies" -eq 1 ] && preflight_command=npm
 relative_cwd=${invoked_cwd#"$repo_root"}
 relative_cwd=${relative_cwd#/}
 [ "$explicit_relative_cwd_set" -eq 1 ] && relative_cwd=$explicit_relative_cwd
@@ -2019,9 +2019,10 @@ remote_command_probe() {
   remote_path=$(value_for_target remote_path "$number")
   remote_cwd=$remote_repo
   [ -n "$relative_cwd" ] && remote_cwd="$remote_repo/$relative_cwd"
-  path_setup=
+  remote_home=$(value_for_target cli_home "$number")
+  path_setup="PATH=$(quote_remote "$remote_home/cache/pnpm-toolchain/bin"):\$PATH; export PATH; "
   if [ -n "$remote_path" ]; then
-    path_setup="PATH=$(quote_remote "$remote_path"):\$PATH; export PATH; "
+    path_setup="PATH=$(quote_remote "$remote_home/cache/pnpm-toolchain/bin:$remote_path"):\$PATH; export PATH; "
   fi
   case "$preflight_command" in
     */*) availability="[ -x $(quote_remote "$preflight_command") ]" ;;
@@ -2639,8 +2640,10 @@ remote_cwd=$remote_repo
 pid_file="$remote_home/remote-exec/$execution_id.pid"
 remote_script="set -euo pipefail; export HAPPIER_DEV_TARGET_EXECUTION=1; export HAPPIER_STACK_PM_CACHE_BASE_DIR=$(quote_remote "$remote_home/cache"); export HAPPIER_WORKSPACE_BUILD_MODE=$(quote_remote "$remote_preparation_build_mode");"
 if [ -n "$remote_path" ]; then remote_script="$remote_script PATH=$(quote_remote "$remote_path"):\$PATH; export PATH;"; fi
+remote_script="$remote_script PATH=$(quote_remote "$remote_home/cache/pnpm-toolchain/bin"):\$PATH; export PATH;"
 remote_setup_script=
 if [ "$requires_remote_dependencies" -eq 1 ]; then
+  remote_script="$remote_script export npm_config_prefix=$(quote_remote "$remote_home/cache/pnpm-toolchain");"
   remote_setup_script="$remote_setup_script cd -- $(quote_remote "$remote_repo"); export HAPPIER_STACK_PM_CACHE_BASE_DIR=$(quote_remote "$remote_home/cache"); node $(quote_remote "$remote_executor_repo/apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs") --execution-placement=remote $(quote_remote "--validation-kind=$remote_validation_kind") $(quote_remote "--component-relative-dir=$preparation_component_relative_dir") $(quote_remote "--repo-dir=$remote_repo") $(quote_remote "--default-build-mode=$remote_preparation_build_mode");"
   if [ -n "$command_repo_root" ]; then remote_setup_script="${remote_setup_script%;} --tools-only;"; fi
 fi

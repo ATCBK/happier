@@ -161,7 +161,8 @@ test('matching component inputs reuse artifacts before preparation, while missin
   mkdirSync(join(uiDir, 'sources'), { recursive: true });
   writeFileSync(join(uiDir, 'package.json'), JSON.stringify({ name: '@happier-dev/ui' }));
   writeFileSync(join(uiDir, 'sources', 'index.ts'), 'export const value = 1;\n');
-  writeFileSync(join(repoDir, 'yarn.lock'), 'initial dependencies');
+  writeFileSync(join(repoDir, 'pnpm-lock.yaml'), 'initial dependencies');
+  writeFileSync(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   const producerPaths = [
     join(repoDir, 'apps', 'cli', 'scripts', 'build-owned', 'generateBundledPluginEntries.ts'),
     join(repoDir, 'apps', 'cli', 'scripts', 'build-owned', 'bundledPlugins', 'registry.ts'),
@@ -291,9 +292,11 @@ test('matching component inputs reuse artifacts before preparation, while missin
   rmSync(join(artifactDir, 'payload', 'index.html'));
   await assert.rejects(buildModule.buildRuntimeArtifactComponents(options), /compiler boundary invoked/);
   writeFileSync(join(artifactDir, 'payload', 'index.html'), 'last green');
-  writeFileSync(join(repoDir, 'yarn.lock'), 'changed dependencies');
+  writeFileSync(join(repoDir, 'pnpm-lock.yaml'), 'changed dependencies');
+  writeFileSync(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await assert.rejects(buildModule.buildRuntimeArtifactComponents(options), /compiler boundary invoked/);
-  writeFileSync(join(repoDir, 'yarn.lock'), 'initial dependencies');
+  writeFileSync(join(repoDir, 'pnpm-lock.yaml'), 'initial dependencies');
+  writeFileSync(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   rmSync(join(uiDir, 'sources', 'index.ts'));
   await assert.rejects(buildModule.buildRuntimeArtifactComponents(options), /compiler boundary invoked/);
   let preparedArtifactDir;
@@ -358,12 +361,12 @@ test('runtime artifact identity inputs include only the toolchains consumed by e
       components: { web: true, server: true, daemon: true },
     },
     env: { HAPPIER_BUN_PATH: '/toolchain/bun' },
-    commandProbe: (command) => command === 'corepack',
+    commandProbe: (command) => command === 'pnpm',
     resolveBunCommandImpl: () => '/toolchain/bun',
-    resolveYarnCommandImpl: () => ({ cmd: 'corepack', args: ['yarn'] }),
+    resolvePnpmCommandImpl: () => ({ cmd: 'pnpm', args: [] }),
     runCaptureImpl: async (command, args) => {
       calls.push([command, args]);
-      return command === '/toolchain/bun' ? '1.2.3\n' : '1.22.22\n';
+      return command === '/toolchain/bun' ? '1.2.3\n' : '12.14.0\n';
     },
     nodeVersion: 'v22.22.1',
   });
@@ -371,11 +374,11 @@ test('runtime artifact identity inputs include only the toolchains consumed by e
   assert.deepEqual(inputs, {
     web: ['node=v22.22.1'],
     server: ['node=v22.22.1', 'bun=1.2.3'],
-    daemon: ['node=v22.22.1', 'bun=1.2.3', 'yarn=1.22.22'],
+    daemon: ['node=v22.22.1', 'bun=1.2.3', 'pnpm=12.14.0'],
   });
   assert.deepEqual(calls, [
     ['/toolchain/bun', ['--version']],
-    ['corepack', ['yarn', '--version']],
+    ['pnpm', ['--version']],
   ]);
 
   const webOnly = await buildModule.collectRuntimeBuildToolchainInputs({
@@ -383,7 +386,7 @@ test('runtime artifact identity inputs include only the toolchains consumed by e
       components: { web: true, server: false, daemon: false },
     },
     runCaptureImpl: async () => {
-      throw new Error('web-only builds must not probe Bun or Yarn');
+      throw new Error('web-only builds must not probe Bun or pnpm');
     },
     nodeVersion: 'v22.22.1',
   });
@@ -537,7 +540,7 @@ test('assertSelectedBuildPrerequisites fails fast for activate-runtime builds be
   );
 });
 
-test('assertSelectedBuildPrerequisites fails fast when daemon artifacts need yarn or corepack', () => {
+test('assertSelectedBuildPrerequisites fails fast when daemon artifacts need pnpm', () => {
   assert.equal(typeof buildModule.assertSelectedBuildPrerequisites, 'function');
   assert.throws(
     () =>
@@ -551,7 +554,7 @@ test('assertSelectedBuildPrerequisites fails fast when daemon artifacts need yar
         },
         commandProbe: (cmd) => cmd === 'bun',
       }),
-    /yarn or corepack/i,
+    /requires pnpm/i,
   );
 });
 
@@ -567,7 +570,7 @@ test('assertSelectedBuildPrerequisites fails fast when daemon support needs Go',
             daemon: true,
           },
         },
-        commandProbe: (cmd) => cmd === 'bun' || cmd === 'yarn',
+        commandProbe: (cmd) => cmd === 'bun' || cmd === 'pnpm',
       }),
     /go.*required.*daemon support/i,
   );

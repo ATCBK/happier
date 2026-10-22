@@ -5,11 +5,11 @@ import { describe, expect, it } from 'vitest';
 const sentryPatchMarker = 'HAPPIER PATCH(sentry-native-replay-postinit-guard)';
 
 const sentryNativeStartFiles = [
-    '../../../node_modules/@sentry/react-native/ios/RNSentryStart.m',
-    '../../../node_modules/@sentry/react-native/ios/RNSentry.mm',
+    '../../../../../node_modules/@sentry/react-native/ios/RNSentryStart.m',
+    '../../../../../node_modules/@sentry/react-native/ios/RNSentry.mm',
 ] as const;
 
-const sentryNativePatchFile = '../../../patches/@sentry+react-native+7.11.0.patch';
+const sentryNativePatchFile = '../../../../../patches/@sentry__react-native@7.11.0.patch';
 
 function readSentryNativeStartSource(): string {
     for (const relativePath of sentryNativeStartFiles) {

@@ -8,4 +8,4 @@ test-results/
 .DS_Store
 .turbo/
 .cache/
-.yarn/cache/
+.pnpm-store/

@@ -5,7 +5,7 @@ import {
   resolveSignalExitCode,
 } from './runPlaywrightWithHeartbeat.shared.mjs';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolvePlaywrightWrapperTimeoutFallbackMs } from './playwrightWrapperTimeout.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -18,8 +18,8 @@ if (!config) {
   process.exit(2);
 }
 
-const childArgs = ['-s', 'playwright', 'test', '-c', config, ...passThrough];
-const invocation = resolveYarnCommandInvocation(childArgs, { npmExecPath: '' });
+const childArgs = ['exec', 'playwright', 'test', '-c', config, ...passThrough];
+const invocation = resolvePnpmCommandInvocation(childArgs, { npmExecPath: '' });
 
 await runHeartbeatWrappedCommand({
   toolName: 'playwright',

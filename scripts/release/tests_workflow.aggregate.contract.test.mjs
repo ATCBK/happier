@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import YAML from 'yaml';
 
 function jobIds(raw) {
   const jobs = raw.slice(raw.indexOf('\njobs:'));
@@ -27,11 +28,16 @@ test('tests workflow summary covers every top-level CI lane', async () => {
 test('CLI matrix runs unit-only extras once while both unit and integration partitions remain required', async () => {
   const raw = await readFile(join(process.cwd(), '.github/workflows/tests.yml'), 'utf8');
   const packageJson = JSON.parse(await readFile(join(process.cwd(), 'apps/cli/package.json'), 'utf8'));
-  const cliJob = raw.match(/\n  cli:[\s\S]*?\n  stack:/)?.[0] ?? '';
+  const cliJob = YAML.parse(raw).jobs.cli;
+  const unit = cliJob.steps.find((step) => step.name === 'Run unit tests');
+  const integration = cliJob.steps.find((step) => step.name === 'Run integration tests');
 
-  assert.match(cliJob, /if \[ "\$\{\{ matrix\.part \}\}" = "1" \]; then[\s\S]*?yarn workspace @happier-dev\/cli test:unit[\s\S]*?else[\s\S]*?yarn workspace @happier-dev\/cli test:unit:vitest/);
-  assert.match(cliJob, /name: Run integration tests[\s\S]*?yarn workspace @happier-dev\/cli test:integration/);
-  assert.doesNotMatch(cliJob, /name: Run integration tests[\s\S]*?matrix\.part == 1/);
-  assert.match(packageJson.scripts?.['test:unit:local'] ?? '', /test:unit:vitest:local/);
-  assert.doesNotMatch(packageJson.scripts?.['test:unit:vitest:local'] ?? '', /test:import-cycles|prepack-script|stageManagedRuntimeArchives|runWorkspaceSyncRealIntegration/);
+  assert.ok(unit, 'CLI unit step must exist');
+  assert.ok(integration, 'CLI integration step must exist');
+  assert.match(unit.run, /if \[ "\$\{\{ matrix\.part \}\}" = "1" \]; then[\s\S]*?pnpm --filter @happier-dev\/cli run test:unit[\s\S]*?else[\s\S]*?pnpm --filter @happier-dev\/cli run test:unit:vitest/);
+  assert.match(integration.run, /pnpm --filter @happier-dev\/cli run test:integration/);
+  assert.doesNotMatch(String(integration.if ?? ''), /matrix\.part/);
+  assert.doesNotMatch(integration.run, /matrix\.part/);
+  assert.equal(packageJson.scripts?.['test:unit:local'], 'node scripts/runVitestShards.mjs --config vitest.config.ts --unit-checks');
+  assert.equal(packageJson.scripts?.['test:unit:vitest:local'], 'node scripts/runVitestShards.mjs --config vitest.config.ts');
 });

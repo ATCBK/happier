@@ -21,42 +21,42 @@ In the repo and in CI we also use internal variants for local development.
 
 ```bash
 # Development variant (default)
-yarn ios:dev
+pnpm run ios:dev
 
 # Preview variant
-yarn ios:preview
+pnpm run ios:preview
 
 # Production variant
-yarn ios:production
+pnpm run ios:production
 ```
 
 ### Android Development
 
 ```bash
 # Development variant
-yarn android:dev
+pnpm run android:dev
 
 # Preview variant
-yarn android:preview
+pnpm run android:preview
 
 # Production variant
-yarn android:production
+pnpm run android:production
 ```
 
 ### macOS Desktop (Tauri)
 
 ```bash
 # Development variant - run with hot reload
-yarn tauri:dev
+pnpm run tauri:dev
 
 # Build development variant
-yarn tauri:build:dev
+pnpm run tauri:build:dev
 
 # Build preview variant
-yarn tauri:build:preview
+pnpm run tauri:build:preview
 
 # Build production variant
-yarn tauri:build:production
+pnpm run tauri:build:production
 ```
 
 ### Tauri Manual QA Automation (MCP)
@@ -71,16 +71,16 @@ This repo ships a **dev-only** Tauri MCP bridge so you can drive the running des
 **Run it locally:**
 ```bash
 # Starts the Tauri app and the MCP server together for manual QA.
-yarn tauri:qa
+pnpm run tauri:qa
 
 # Canonical one-shot native desktop activity-surfaces QA lane.
-yarn test:native-e2e:activity-surfaces
+pnpm run test:native-e2e:activity-surfaces
 ```
 
 **Sanity check the driver port (optional):**
 ```bash
 # Starts a driver session against the default plugin port (9223)
-yarn tauri:mcp:session:start
+pnpm run tauri:mcp:session:start
 ```
 
 **Hook it up to Codex (optional):**
@@ -90,7 +90,7 @@ npx -y install-mcp @hypothesi/tauri-mcp-server --client codex
 ```
 
 **Minimal desktop QA checklist structure (recommended):**
-- Setup: start `yarn tauri:qa` for a long-lived manual session, or run `yarn test:native-e2e:activity-surfaces` for the one-shot deterministic overlay capture. Confirm `yarn tauri:mcp:session:start` connects when debugging the bridge directly.
+- Setup: start `pnpm run tauri:qa` for a long-lived manual session, or run `pnpm run test:native-e2e:activity-surfaces` for the one-shot deterministic overlay capture. Confirm `pnpm run tauri:mcp:session:start` connects when debugging the bridge directly.
 - Onboarding: create account, terminal-connect/pairing, session list visible.
 - Local setup flows (desktop-only): file pickers, SSH identity selection, daemon/service controls.
 - Error states: bridge disconnected, daemon not running, daemon unauthenticated, relay drift detected + repair task progress.
@@ -106,13 +106,13 @@ npx -y install-mcp @hypothesi/tauri-mcp-server --client codex
 
 ```bash
 # Start dev server for development variant
-yarn start:dev
+pnpm run start:dev
 
 # Start dev server for preview variant
-yarn start:preview
+pnpm run start:preview
 
 # Start dev server for production variant
-yarn start:production
+pnpm run start:production
 ```
 
 ## Visual Differences
@@ -130,7 +130,7 @@ This makes it easy to distinguish which version you're testing!
 
 1. **Build development variant:**
    ```bash
-   yarn ios:dev
+   pnpm run ios:dev
    ```
 
 2. **Make your changes** to the code
@@ -139,19 +139,19 @@ This makes it easy to distinguish which version you're testing!
 
 4. **Rebuild if needed** for native changes:
    ```bash
-   yarn ios:dev
+   pnpm run ios:dev
    ```
 
 ### Testing Preview (Pre-Release)
 
 1. **Build preview variant:**
    ```bash
-   yarn ios:preview
+   pnpm run ios:preview
    ```
 
 2. **Test OTA updates:**
    ```bash
-   yarn ota  # Publishes to preview branch
+   pnpm run ota  # Publishes to preview branch
    ```
 
 3. **Verify** the preview build works as expected
@@ -160,17 +160,17 @@ This makes it easy to distinguish which version you're testing!
 
 1. **Build production variant:**
    ```bash
-   yarn ios:production
+   pnpm run ios:production
    ```
 
 2. **Submit to App Store:**
    ```bash
-   yarn submit
+   pnpm run submit
    ```
 
 3. **Deploy OTA updates:**
    ```bash
-   yarn ota:production
+   pnpm run ota:production
    ```
 
 ## All Variants Simultaneously
@@ -179,9 +179,9 @@ You can install all three variants on the same device:
 
 ```bash
 # Build all three variants
-yarn ios:dev
-yarn ios:preview
-yarn ios:production
+pnpm run ios:dev
+pnpm run ios:preview
+pnpm run ios:production
 ```
 
 All three apps appear on your device with different icons and names!
@@ -256,12 +256,12 @@ You can connect different variants to different Happier CLI instances:
 
 ```bash
 # Development app → Dev CLI daemon
-yarn android:dev
-# Connect to CLI running: yarn dev:daemon:start
+pnpm run android:dev
+# Connect to CLI running: pnpm --filter @happier-dev/cli run dev:daemon:start
 
 # Production app → Stable CLI daemon
-yarn android:production
-# Connect to CLI running: yarn stable:daemon:start
+pnpm run android:production
+# Connect to CLI running: pnpm --filter @happier-dev/cli run stable:daemon:start
 ```
 
 Each app maintains separate authentication and sessions!
@@ -271,13 +271,10 @@ Each app maintains separate authentication and sessions!
 To test with a local Happier server:
 
 ```bash
-yarn start:local-server
+pnpm exec cross-env EXPO_PUBLIC_HAPPIER_SERVER_URL=http://localhost:3005 pnpm run start:dev
 ```
 
-This sets:
-- `EXPO_PUBLIC_HAPPY_SERVER_URL=http://localhost:3005`
-- `EXPO_PUBLIC_DEBUG=1`
-- Debug logging enabled
+This starts the development variant with the local server as its default connection.
 
 ## Local neural voice (native model packs)
 
@@ -297,8 +294,8 @@ This shouldn't happen - each variant has a unique bundle ID. If it does:
 1. Check `app.config.js` - verify `bundleId` is set correctly for the variant
 2. Clean build:
    ```bash
-   yarn prebuild
-   yarn ios:dev  # or whichever variant
+   pnpm run prebuild
+   pnpm run ios:dev  # or whichever variant
    ```
 
 ### App not updating after changes
@@ -306,12 +303,12 @@ This shouldn't happen - each variant has a unique bundle ID. If it does:
 1. **For JS changes**: Hot reload should work automatically
 2. **For native changes**: Rebuild the variant:
    ```bash
-   yarn ios:dev  # Force rebuild
+   pnpm run ios:dev  # Force rebuild
    ```
 3. **For config changes**: Clean and prebuild:
    ```bash
-   yarn prebuild
-   yarn ios:dev
+   pnpm run prebuild
+   pnpm run ios:dev
    ```
 
 ### All three apps look the same
@@ -328,7 +325,7 @@ If they're all the same name, the variant might not be set correctly. Verify:
 echo $APP_ENV
 
 # Or look at the build output
-yarn ios:dev  # Should show "Happier (dev)" as the name
+pnpm run ios:dev  # Should show "Happier (dev)" as the name
 ```
 
 ### Connected device not found
@@ -340,7 +337,7 @@ For iOS connected device testing:
 xcrun devicectl list devices
 
 # Run on specific connected device
-yarn ios:connected-device
+pnpm run ios:connected-device
 ```
 
 ## Tips

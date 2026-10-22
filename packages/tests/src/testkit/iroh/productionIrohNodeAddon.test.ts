@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveIrohNodeAddonPath } from '@happier-dev/iroh-native/node';
 
-import { yarnCommand } from '../process/commands';
+import { pnpmCommand } from '../process/commands';
 import {
   ensureProductionIrohNodeAddon,
   resolveProductionIrohNodeAddonBuildSpec,
@@ -34,9 +34,9 @@ describe('production Iroh node addon custody', () => {
     const packageRoot = '/repo/packages/iroh-native';
     const build = resolveProductionIrohNodeAddonBuildSpec({ packageRoot });
     // The exact canonical script the real-integration runner invokes, routed
-    // through the same binary-safe `yarnCommand()` corridor every other
+    // through the same binary-safe `pnpmCommand()` corridor every other
     // testkit child launch uses (never a direct cargo/npm/node spawn).
-    expect(build.command).toBe(yarnCommand());
+    expect(build.command).toBe(pnpmCommand());
     expect(build.args).toEqual(['-s', 'build:native']);
     expect(build.cwd).toBe(packageRoot);
     expect(resolveProductionIrohNodeAddonBuildSpec().cwd).toMatch(/packages[\\/]iroh-native$/u);
@@ -57,7 +57,7 @@ describe('production Iroh node addon custody', () => {
     });
 
     expect(builds).toEqual([
-      { command: yarnCommand(), args: ['-s', 'build:native'], cwd: packageRoot },
+      { command: pnpmCommand(), args: ['run', '--silent', 'build:native'], cwd: packageRoot },
     ]);
     // The verified path comes from the production loader's canonical owner,
     // not a restated artifact grammar.

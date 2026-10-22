@@ -20,7 +20,8 @@ export function createPackageLayoutSandbox(prefix: string): {
 
     ensureDirectorySync(happyCliDir);
     writeSandboxJsonFile(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-    writeSandboxTextFile(resolve(repoRoot, 'yarn.lock'), '# lock\n');
+    writeSandboxTextFile(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n');
+    writeSandboxTextFile(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
     return {
         repoRoot,

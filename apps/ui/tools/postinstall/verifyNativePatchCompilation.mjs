@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readPnpmPatches } from './pnpmPatches.mjs';
 
 /**
  * A `patches/` entry that edits a React Native CORE native implementation file only
@@ -18,14 +19,12 @@ import path from 'node:path';
  * Errors vs warnings: a missing declaration is a defect in tracked repository state
  * and always fails. Generated `ios/**` artifacts are per-machine, absent on CI, and
  * self-heal on the next prebuild — they warn loudly rather than blocking an install
- * (this checkout is shared, and a failed `yarn install` would block unrelated work).
+ * (this checkout is shared, and a failed `pnpm install` would block unrelated work).
  */
 
 const IOS_IMPLEMENTATION_EXTENSIONS = new Set(['.m', '.mm', '.swift']);
 const ANDROID_IMPLEMENTATION_EXTENSIONS = new Set(['.java', '.kt']);
 const SHARED_IMPLEMENTATION_EXTENSIONS = new Set(['.c', '.cc', '.cpp']);
-
-const REACT_NATIVE_CORE_PREFIX = 'node_modules/react-native/';
 
 function readPatchTargets(patchContents) {
     const targets = [];
@@ -39,9 +38,8 @@ function readPatchTargets(patchContents) {
 }
 
 function classifyTarget(target) {
-    if (!target.startsWith(REACT_NATIVE_CORE_PREFIX)) return null;
     const extension = path.extname(target).toLowerCase();
-    const isAndroidPath = target.includes('/ReactAndroid/') || target.includes('/android/');
+    const isAndroidPath = target.includes('ReactAndroid/') || target.startsWith('android/') || target.includes('/android/');
 
     if (ANDROID_IMPLEMENTATION_EXTENSIONS.has(extension)) return 'android';
     if (IOS_IMPLEMENTATION_EXTENSIONS.has(extension)) return 'ios';
@@ -50,13 +48,11 @@ function classifyTarget(target) {
     return null;
 }
 
-function collectCorePatchTargets(patchesDir) {
-    if (!fs.existsSync(patchesDir)) return { ios: [], android: [] };
-
+function collectCorePatchTargets(repoRootDir) {
     const byPlatform = { ios: [], android: [] };
-    for (const entry of fs.readdirSync(patchesDir).sort()) {
-        if (!entry.endsWith('.patch')) continue;
-        const contents = fs.readFileSync(path.join(patchesDir, entry), 'utf8');
+    for (const { packageName, patchFile } of readPnpmPatches(repoRootDir)) {
+        if (packageName !== 'react-native') continue;
+        const contents = fs.readFileSync(patchFile, 'utf8');
         for (const target of readPatchTargets(contents)) {
             const platform = classifyTarget(target);
             if (platform) byPlatform[platform].push(target);
@@ -80,7 +76,7 @@ export function verifyNativePatchCompilation({ uiDir }) {
     const errors = [];
     const warnings = [];
 
-    const coreTargets = collectCorePatchTargets(path.join(uiDir, 'patches'));
+    const coreTargets = collectCorePatchTargets(path.resolve(uiDir, '../..'));
     if (coreTargets.ios.length === 0 && coreTargets.android.length === 0) {
         return { ok: true, errors, warnings };
     }
@@ -117,7 +113,7 @@ export function verifyNativePatchCompilation({ uiDir }) {
                 `ios/Podfile.properties.json is missing "ios.buildReactNativeFromSource": "true", so the generated\n`
                 + `project links prebuilt React Native core and the patches under patches/ are not compiled.\n`
                 + `This generated project predates the app.config.js declaration — regenerate it:\n`
-                + `  yarn prebuild && yarn ios`,
+                + `  pnpm run prebuild && pnpm run ios`,
             );
         }
     }
@@ -131,7 +127,7 @@ export function verifyNativePatchCompilation({ uiDir }) {
                 `The generated Pods project does not compile these patched implementation files:\n`
                 + `${formatTargets(uncompiled)}\n`
                 + `Their fixes are absent from any binary built from ios/. Regenerate the project:\n`
-                + `  yarn prebuild && (cd ios && pod install)`,
+                + `  pnpm run prebuild && (cd ios && pod install)`,
             );
         }
     }

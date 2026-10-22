@@ -40,19 +40,19 @@ Default-following automatic startup entries follow the selected release channel.
 ## Testing
 
 ```bash
-yarn --cwd apps/cli test:unit
+pnpm --dir apps/cli run test:unit
 ```
 
 Integration (real process/fs/network style):
 
 ```bash
-yarn --cwd apps/cli test:integration
+pnpm --dir apps/cli run test:integration
 ```
 
 Slow build+wiring validation suite:
 
 ```bash
-yarn --cwd apps/cli test:slow
+pnpm --dir apps/cli run test:slow
 ```
 
 ## Usage

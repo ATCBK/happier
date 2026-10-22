@@ -19,12 +19,12 @@ async function main() {
 
     if (plan.shouldRunMigrateDeploy && plan.migrateDeployArgs) {
         console.log(JSON.stringify({ happierStackTransition: 'migration_started' }));
-        await runCommand('yarn', plan.migrateDeployArgs, env);
+        await runCommand('pnpm', plan.migrateDeployArgs, env);
         console.log(JSON.stringify({ happierStackTransition: 'migration_completed' }));
     }
 
     // Run the light flavor.
-    await runCommand('yarn', plan.startLightArgs, env);
+    await runCommand('pnpm', plan.startLightArgs, env);
 }
 
 main().catch((err) => {

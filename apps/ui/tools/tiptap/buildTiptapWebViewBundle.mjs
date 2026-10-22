@@ -26,7 +26,7 @@ function chunkString(value, chunkSize) {
 function findRepoRoot(startDir) {
     let dir = startDir;
     for (let i = 0; i < 8; i++) {
-        if (fs.existsSync(path.resolve(dir, 'package.json')) && fs.existsSync(path.resolve(dir, 'yarn.lock'))) {
+        if (fs.existsSync(path.resolve(dir, 'package.json')) && fs.existsSync(path.resolve(dir, 'pnpm-lock.yaml')) && fs.existsSync(path.resolve(dir, 'pnpm-workspace.yaml'))) {
             return dir;
         }
         const parent = path.dirname(dir);

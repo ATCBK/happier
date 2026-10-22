@@ -3,8 +3,8 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { parseMarkdown } from '../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown';
-import type { ASTNode } from '../../../node_modules/react-native-enriched-markdown/src/web/types';
+import { parseMarkdown } from 'react-native-enriched-markdown/src/web/parseMarkdown';
+import type { ASTNode } from 'react-native-enriched-markdown/src/web/types';
 import { installMarkdownCommonModuleMocks } from './markdownTestHelpers';
 import type { MarkdownImageResolver } from './markdownImages';
 import type { MarkdownSourceRangeAction } from './MarkdownView';

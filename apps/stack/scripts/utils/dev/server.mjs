@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveServerMigrationsEnabled } from '@happier-dev/cli-common/firstPartyRuntime/selfHostServerEnv';
 
-import { ensureDepsInstalled, hasUsableWorkspaceLastGreen, pmExecBin, pmSpawnScript, readWorkspaceComponentDependencyGraph } from '../proc/pm.mjs';
+import { ensureDepsInstalled, hasUsableWorkspaceLastGreen, pmExecScript, pmSpawnScript, readWorkspaceComponentDependencyGraph } from '../proc/pm.mjs';
 import { resolveWorkspaceBuildInputWatchPaths } from '../fs/workspaceBuildInputs.mjs';
 import { killProcessTree, markSpawnedProcessPlannedExit, spawnProc } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
@@ -660,7 +660,7 @@ export async function preflightDevServerRestart(
   { serverDir, serverComponentName, serverEnv = {}, consoleImpl = console, sourceRuntimeOptions },
   {
     ensureSourceServerWorkspacePackagesBuiltImpl = ensureSourceServerWorkspacePackagesBuilt,
-    pmExecBinImpl = pmExecBin,
+    pmExecScriptImpl = pmExecScript,
   } = {},
 ) {
   const parentPreflightAlreadyDone = String(
@@ -692,9 +692,9 @@ export async function preflightDevServerRestart(
     quiet: false,
   });
   if (runtimeTypecheckScript === 'typecheck:runtime' && hasPackageScript(serverDir, 'generate:providers')) {
-    await pmExecBinImpl({
+    await pmExecScriptImpl({
       dir: serverDir,
-      bin: 'generate:providers',
+      script: 'generate:providers',
       args: [],
       env: {
         ...serverEnv,
@@ -703,9 +703,9 @@ export async function preflightDevServerRestart(
       quiet: false,
     });
   }
-  await pmExecBinImpl({
+  await pmExecScriptImpl({
     dir: serverDir,
-    bin: runtimeTypecheckScript,
+    script: runtimeTypecheckScript,
     args: [],
     env: {
       ...serverEnv,

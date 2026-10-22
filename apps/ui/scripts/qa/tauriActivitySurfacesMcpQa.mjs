@@ -3433,12 +3433,12 @@ export function buildTauriActivitySurfacesQaPlan({ env = process.env } = {}) {
         },
         preflight,
         commandRunner: {
-            command: 'yarn',
-            baseArgs: ['-s', 'tauri:mcp:cli'],
+            command: 'pnpm',
+            baseArgs: ['--silent', 'run', 'tauri:mcp:cli'],
         },
         driverSession: {
-            command: 'yarn',
-            baseArgs: ['-s', 'tauri:mcp:cli'],
+            command: 'pnpm',
+            baseArgs: ['--silent', 'run', 'tauri:mcp:cli'],
         },
         steps: stepPlan,
         manual: [
@@ -6593,11 +6593,11 @@ export async function startDriverSession(
         },
     });
 
-    const driverSessionCommand = ['yarn', '-s', 'tauri:mcp:cli', 'driver-session', 'start', '--port', String(driverSessionResult.driverSessionPort)].join(' ');
+    const driverSessionCommand = ['pnpm', '--silent', 'run', 'tauri:mcp:cli', 'driver-session', 'start', '--port', String(driverSessionResult.driverSessionPort)].join(' ');
     const driverSessionResponseFile = join(plan.artifactRoot, '00-driver-session.json');
     await writeTextArtifact(driverSessionResponseFile, `${JSON.stringify(driverSessionResult.driverSessionResponse, null, 2)}\n`);
 
-    const driverSessionStatusCommand = ['yarn', '-s', 'tauri:mcp:cli', 'driver-session', 'status', '--port', String(driverSessionResult.driverSessionPort)].join(' ');
+    const driverSessionStatusCommand = ['pnpm', '--silent', 'run', 'tauri:mcp:cli', 'driver-session', 'status', '--port', String(driverSessionResult.driverSessionPort)].join(' ');
     const driverSessionStatusResponseFile = join(plan.artifactRoot, '00-driver-session-status.json');
     await writeTextArtifact(driverSessionStatusResponseFile, `${JSON.stringify(driverSessionResult.driverSessionStatusResponse, null, 2)}\n`);
 
@@ -6986,7 +6986,7 @@ export async function main(
             '  --json   Print the deterministic capture plan without driving the app',
             '',
             'Run mode (default):',
-            '  - assumes `yarn --cwd apps/ui tauri:qa --serve` or another Tauri dev run is already running',
+            '  - assumes `pnpm --dir apps/ui run tauri:qa --serve` or another Tauri dev run is already running',
             '  - opens an MCP driver session',
             '  - captures the desktop overlay settings section and overlay window states',
             '  - appends evidence paths to the activity-surfaces QA tracker',

@@ -201,7 +201,8 @@ describe('apps/cli bin/happier.mjs preflight', () => {
       copyCliWorkspaceSyncRuntimeFiles({ scriptsDir });
 
       writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'repo', private: true }), 'utf8');
-      writeFileSync(join(tmp, 'yarn.lock'), '# lock\n', 'utf8');
+      writeFileSync(join(tmp, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+      writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
       writeProtocolBundleStub({
         packageDir: workspaceProtocolDir,
         exportsMap: {

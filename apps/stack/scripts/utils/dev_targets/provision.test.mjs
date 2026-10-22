@@ -42,6 +42,7 @@ test('host SSH inspection reads effective policy and rejection counts without ch
 test('QA provisioning refreshes the worker catalog before importing its installer dependencies', async t => {
   const { root } = await createTempFixture(t, { prefix: 'happier-qa-catalog-' });
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n  - "apps/*"\n');
   for (const component of ['cli', 'ui', 'server']) {
     const directory = join(root, 'apps', component);
     await mkdir(directory, { recursive: true });
@@ -152,7 +153,7 @@ test(`POSIX provisioning preserves ${name} in its dedicated identity and remote 
               '__HAPPIER_HOME__=/Users/leeroy',
               '__HAPPIER_PATH__=/Users/leeroy/.nvm/versions/node/v22/bin:/opt/homebrew/bin:/usr/bin:/bin',
               '__HAPPIER_NODE__=/Users/leeroy/.nvm/versions/node/v22/bin/node',
-              '__HAPPIER_COREPACK__=/Users/leeroy/.nvm/versions/node/v22/bin/corepack',
+              '__HAPPIER_NPM__=/Users/leeroy/.nvm/versions/node/v22/bin/npm',
             ].join('\n'),
             err: '',
           };
@@ -215,7 +216,7 @@ test('enrollment refuses a password-authenticated master when its dedicated key 
       ok: !args.includes('ControlPath=none'),
       // Keep discovery valid so a reused master cannot be rejected later for
       // an unrelated missing-toolchain fixture error instead of key auth.
-      out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/root\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_COREPACK__=/usr/bin/corepack\n',
+      out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/root\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_NPM__=/usr/bin/npm\n',
       err: 'dedicated key denied',
     }),
   }), /could not verify provisioned SSH key/);
@@ -234,7 +235,7 @@ async function onboardingFixture(t) {
     runInteractive: async ({ args }) => { scripts.push(args.at(-1)); },
     runCaptureResult: async ({ args }) => {
       probes.push(args);
-      return { ok: true, out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/home/happier\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_COREPACK__=/usr/bin/corepack\n__HAPPIER_TAILNET__=100.84.248.35\n', err: '' };
+      return { ok: true, out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/home/happier\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_NPM__=/usr/bin/npm\n__HAPPIER_TAILNET__=100.84.248.35\n', err: '' };
     },
   };
   return { root, config, target, scripts, probes, boundary };
@@ -561,7 +562,7 @@ test('POSIX provisioning reuses an authorized dedicated key and honors directory
           return {
             ok: true,
             exitCode: 0,
-            out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/home/dev\n__HAPPIER_PATH__=/opt/node/bin:/usr/bin\n__HAPPIER_NODE__=/opt/node/bin/node\n__HAPPIER_COREPACK__=/opt/node/bin/corepack\n',
+            out: '__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=/home/dev\n__HAPPIER_PATH__=/opt/node/bin:/usr/bin\n__HAPPIER_NODE__=/opt/node/bin/node\n__HAPPIER_NPM__=/opt/node/bin/npm\n',
             err: '',
           };
         },
@@ -576,7 +577,7 @@ test('POSIX provisioning reuses an authorized dedicated key and honors directory
   }
 });
 
-test('POSIX provisioning fails before registration when Node and Corepack are not discoverable', async () => {
+test('POSIX provisioning fails before registration when Node and npm are not discoverable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dev-target-provision-'));
   try {
     await assert.rejects(
@@ -591,13 +592,13 @@ test('POSIX provisioning fails before registration when Node and Corepack are no
               : {
                   ok: true,
                   exitCode: 0,
-                  out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_COREPACK__=\n',
+                  out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_NPM__=\n',
                   err: '',
                 }
           ),
         },
       ),
-      /Node\.js and Corepack/i,
+      /Node\.js and npm/i,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -626,7 +627,7 @@ test('POSIX outer-host enrollment can omit the guest toolchain requirement while
             : {
                 ok: true,
                 exitCode: 0,
-                out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_COREPACK__=\n',
+                out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_NPM__=\n',
                 err: '',
               }
         ),
@@ -671,7 +672,7 @@ test('existing POSIX target inspection verifies its strict controller key withou
           return {
             ok: true,
             exitCode: 0,
-            out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/opt/homebrew/bin:/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_COREPACK__=\n',
+            out: '__HAPPIER_UNAME__=Darwin\n__HAPPIER_HOME__=/Users/dev\n__HAPPIER_PATH__=/opt/homebrew/bin:/usr/bin:/bin\n__HAPPIER_NODE__=\n__HAPPIER_NPM__=\n',
             err: '',
           };
         },
@@ -691,7 +692,7 @@ test('existing POSIX target inspection verifies its strict controller key withou
   }
 });
 
-test('POSIX provisioning discovers Corepack beside the resolved Node runtime when a version-manager shim omits it', async () => {
+test('POSIX provisioning discovers npm beside the resolved Node runtime when a version-manager shim omits it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dev-target-provision-'));
   try {
     let discoveryCommand = '';
@@ -712,7 +713,7 @@ test('POSIX provisioning discovers Corepack beside the resolved Node runtime whe
               '__HAPPIER_PATH__=/Users/dev/.volta/bin:/usr/bin:/bin',
               '__HAPPIER_NODE__=/Users/dev/.volta/bin/node',
               '__HAPPIER_NODE_VERSION__=v22.22.1',
-              '__HAPPIER_COREPACK__=/Users/dev/.volta/tools/image/node/22.22.1/bin/corepack',
+              '__HAPPIER_NPM__=/Users/dev/.volta/tools/image/node/22.22.1/bin/npm',
             ].join('\n'),
             err: '',
           };
@@ -751,7 +752,7 @@ test('POSIX provisioning rejects a discovered Node runtime older than the reposi
                     '__HAPPIER_PATH__=/opt/node/bin:/usr/bin:/bin',
                     '__HAPPIER_NODE__=/opt/node/bin/node',
                     '__HAPPIER_NODE_VERSION__=v18.15.0',
-                    '__HAPPIER_COREPACK__=/opt/node/bin/corepack',
+                    '__HAPPIER_NPM__=/opt/node/bin/npm',
                   ].join('\n'),
                   err: '',
                 }

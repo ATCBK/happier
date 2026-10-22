@@ -19,8 +19,8 @@ import {
   cleanupPackedTriageGithubVoiceQaHandoff,
 } from '../../../packages/tests/scripts/plugin-platform/triage-github-voice-qa-handoff.mjs';
 import {
-  resolveYarnCommandInvocation,
-} from '../../workspaces/execYarnCommand.mjs';
+  resolvePnpmCommandInvocation,
+} from '../../workspaces/execPnpmCommand.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -202,8 +202,8 @@ export function buildCandidatePlatformQaRecipe({
     }),
     runnerPrerequisites: Object.freeze({
       nodeMajor: 22,
-      yarnVersion: '1.22.22',
-      common: Object.freeze(['node', 'yarn']),
+      pnpmVersion: '12.14.0',
+      common: Object.freeze(['node', 'pnpm']),
       posix: Object.freeze(['bash', 'curl', 'tar', 'unzip']),
       windows: Object.freeze(['powershell.exe', 'tar.exe']),
       network:
@@ -387,10 +387,9 @@ export function resolveCandidatePlatformQaPlan({
     '--ref',
     resolvedCandidateManifestPath,
   ];
-  const packedManagedInvocation = resolveYarnCommandInvocation(
+  const packedManagedInvocation = resolvePnpmCommandInvocation(
     [
-      'workspace',
-      '@happier-dev/tests',
+      '--filter', '@happier-dev/tests', 'run',
       'test:plugin-platform:packed-managed-provider-candidate',
       '--candidate',
       resolvedCandidateManifestPath,
@@ -401,10 +400,9 @@ export function resolveCandidatePlatformQaPlan({
       processExecPath: process.execPath,
     },
   );
-  const packedPluginsDevInvocation = resolveYarnCommandInvocation(
+  const packedPluginsDevInvocation = resolvePnpmCommandInvocation(
     [
-      'workspace',
-      '@happier-dev/tests',
+      '--filter', '@happier-dev/tests', 'run',
       'test:plugin-platform:plugins-dev',
       '--candidate',
       resolvedCandidateManifestPath,
@@ -417,10 +415,9 @@ export function resolveCandidatePlatformQaPlan({
   );
   const packedResourcesBrowserInvocation =
     resolvedPackedNovelHandoffManifestPath
-      ? resolveYarnCommandInvocation(
+      ? resolvePnpmCommandInvocation(
         [
-          'workspace',
-          '@happier-dev/tests',
+          '--filter', '@happier-dev/tests', 'run',
           'test:plugin-platform:candidate-resources-browser',
           '--candidate',
           resolvedCandidateManifestPath,
@@ -434,10 +431,9 @@ export function resolveCandidatePlatformQaPlan({
       : null;
   const packedVoiceInvocation =
     resolvedPackedNovelHandoffManifestPath
-      ? resolveYarnCommandInvocation(
+      ? resolvePnpmCommandInvocation(
         [
-          'workspace',
-          '@happier-dev/tests',
+          '--filter', '@happier-dev/tests', 'run',
           'test:plugin-platform:packed-voice',
         ],
         {
@@ -449,10 +445,9 @@ export function resolveCandidatePlatformQaPlan({
       : null;
   const packedNovelIosDeviceInvocation =
     resolvedPackedNovelHandoffManifestPath
-      ? resolveYarnCommandInvocation(
+      ? resolvePnpmCommandInvocation(
         [
-          'workspace',
-          '@happier-dev/tests',
+          '--filter', '@happier-dev/tests', 'run',
           'test:mobile:e2e:ios:plugin-platform-candidate',
         ],
         {
@@ -464,10 +459,9 @@ export function resolveCandidatePlatformQaPlan({
       : null;
   const packedNovelAndroidDeviceInvocation =
     resolvedPackedNovelHandoffManifestPath
-      ? resolveYarnCommandInvocation(
+      ? resolvePnpmCommandInvocation(
         [
-          'workspace',
-          '@happier-dev/tests',
+          '--filter', '@happier-dev/tests', 'run',
           'test:mobile:e2e:android:plugin-platform-candidate',
         ],
         {

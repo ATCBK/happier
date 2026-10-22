@@ -155,6 +155,8 @@ test('Darwin leaf handoff retains archives, evidence, and notary logs for every 
 
 const PINNED_PUBLISH_ACTIONS = Object.freeze({
   'actions/attest': 'f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6',
+  'actions/cache/restore': '0057852bfaa89a56745cba8c7296529d2fc39830',
+  'actions/cache/save': '0057852bfaa89a56745cba8c7296529d2fc39830',
   'actions/checkout': '11d5960a326750d5838078e36cf38b85af677262',
   'actions/create-github-app-token': 'd72941d797fd3113feb6b93fd0dec494b13a2547',
   'actions/download-artifact': 'd3f86a106a0bac45b974a628896c90dbdf5c8093',
@@ -462,7 +464,7 @@ test('CLI binary publishing builds and validates each released target on its nat
   );
   assert.match(
     String(nativeConfinedSmoke?.run ?? ''),
-    /yarn workspace @happier-dev\/cli vitest run[\s\S]*workspaceSyncNativeConfinedFileSystem\.test\.ts[\s\S]*uses the staged native helper for read, abort preservation, and committed deletion/,
+    /pnpm --filter @happier-dev\/cli exec vitest run[\s\S]*workspaceSyncNativeConfinedFileSystem\.test\.ts[\s\S]*uses the staged native helper for read, abort preservation, and committed deletion/,
     'the native matrix must cross the real TypeScript resolver/spawn/protocol boundary',
   );
   const packagedConformanceStep = build.steps.find(
@@ -494,7 +496,7 @@ test('CLI binary publishing builds and validates each released target on its nat
   assert.match(String(sourceSecurity?.run ?? ''), /\bgo tool govulncheck \.\/\.\.\./);
   assert.match(
     buildRuns,
-    /yarn workspace @happier-dev\/plugins-cliproxyapi managed-runtime:build[\s\S]*?--target "\$GO_TARGET"[\s\S]*?--output "\$\{WRAPPER_PATH\}"/,
+    /pnpm --filter @happier-dev\/plugins-cliproxyapi run managed-runtime:build[\s\S]*?--target "\$GO_TARGET"[\s\S]*?--output "\$\{WRAPPER_PATH\}"/,
   );
   assert.doesNotMatch(buildRuns, /\bgo build\b/, 'workflow must not create a second Go build definition');
   assert.doesNotMatch(buildRuns, /notarize-standalone-binary\.mjs/);
@@ -1056,13 +1058,13 @@ test('the plugin package ships its managed runtime while the CLI payload remains
   // build catalogs without executing plugin code, plus the bundled daemon runtime that the
   // manifest itself points at. The daemon bundle lives here rather than in `dist/` so the
   // TypeScript compiler and the plugin bundler do not both own one output directory.
-  assert.deepEqual(manifest.files, ['dist', '.happier-plugin', 'package.json']);
+  assert.deepEqual(manifest.files, ['assets', 'dist', '.happier-plugin', 'package.json']);
 
   const projected = JSON.parse(await readFile(resolve(packageRoot, '.happier-plugin/plugin.json'), 'utf8'));
   const daemonEntrypoint = String(projected.entrypoints?.daemon ?? '');
   assert.equal(daemonEntrypoint, './.happier-plugin/daemon.js');
 
-  const shipped = (await readdir(resolve(packageRoot, '.happier-plugin'), { recursive: true, withFileTypes: true }))
+  const materialized = (await readdir(resolve(packageRoot, '.happier-plugin'), { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
     .map((entry) => relative(
       resolve(packageRoot, '.happier-plugin'),
@@ -1075,17 +1077,19 @@ test('the plugin package ships its managed runtime while the CLI payload remains
   // ran rather than the package shape. What the shape actually forbids is a Go binary,
   // archive, or build input becoming a second binary distribution surface, so every file
   // present must be a declared member: the projected manifest, the exact daemon entry that
-  // manifest points at, or one of that bundle's code-split chunks.
+  // manifest points at, one of that bundle's code-split chunks, or the canonical
+  // daemon publisher's output-transition metadata retained after a local build.
   const declaredDaemonEntry = daemonEntrypoint.replace('./.happier-plugin/', '');
-  assert.ok(shipped.includes('plugin.json'), 'the projected plugin manifest must be published');
+  assert.ok(materialized.includes('plugin.json'), 'the projected plugin manifest must be published');
   assert.deepEqual(
-    shipped.filter((entry) => (
+    materialized.filter((entry) => (
       entry !== 'plugin.json'
       && entry !== declaredDaemonEntry
+      && entry !== '.happier-daemon-outputs.json'
       && !entry.startsWith('.happier-chunks/')
     )),
     [],
-    'only the projected manifest, its declared daemon entry, and that bundle\'s chunks may ship here',
+    'only the projected manifest, declared daemon outputs, and publisher metadata may be materialized here',
   );
 
   assert.equal(

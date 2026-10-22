@@ -32,7 +32,7 @@ describe('stageCliProxyApiManagedRuntime', () => {
       repoRoot,
       payloadDir: join(repoRoot, 'payload'),
       target: { bunTarget: 'bun-linux-x64-baseline', os: 'linux', arch: 'x64', exeExt: '' },
-      yarn: { cmd: 'corepack', args: ['yarn'] },
+      pnpm: { cmd: 'pnpm', args: [] },
       runCommand,
       publicationFailures: [{
         packageName: '@happier-dev/plugins-cliproxyapi',
@@ -79,7 +79,7 @@ describe('stageCliProxyApiManagedRuntime', () => {
       repoRoot,
       payloadDir,
       target,
-      yarn: { cmd: 'corepack', args: ['yarn'] },
+      pnpm: { cmd: 'pnpm', args: [] },
       runCommand: async (cmd, args, options) => {
         calls.push({ cmd, args, cwd: options?.cwd });
         const outputIndex = args.indexOf('--output');
@@ -89,11 +89,11 @@ describe('stageCliProxyApiManagedRuntime', () => {
     });
 
     expect(calls).toEqual([{
-      cmd: 'corepack',
+      cmd: 'pnpm',
       args: [
-        'yarn',
-        'workspace',
+        '--filter',
         '@happier-dev/plugins-cliproxyapi',
+        'run',
         'managed-runtime:build',
         '--target',
         'linux-amd64',
@@ -137,7 +137,7 @@ describe('stageCliProxyApiManagedRuntime', () => {
         arch: 'x64',
         exeExt: '.exe',
       },
-      yarn: { cmd: 'yarn', args: [] },
+      pnpm: { cmd: 'pnpm', args: [] },
       prebuiltExecutablePath,
       runCommand: () => {
         throw new Error('prebuilt staging must not invoke the Go build');
@@ -170,7 +170,7 @@ describe('stageCliProxyApiManagedRuntime', () => {
         arch: 'arm64',
         exeExt: '',
       },
-      yarn: { cmd: 'yarn', args: [] },
+      pnpm: { cmd: 'pnpm', args: [] },
       runCommand: () => undefined,
     })).rejects.toThrow(/expected file to exist.*happier-cliproxyapi-managed/i);
   });
@@ -193,7 +193,7 @@ describe('stageCliProxyApiManagedRuntime', () => {
         arch: 'x64',
         exeExt: '',
       },
-      yarn: { cmd: 'yarn', args: [] },
+      pnpm: { cmd: 'pnpm', args: [] },
       prebuiltExecutablePath,
       runCommand: () => {
         throw new Error('prebuilt staging must not invoke the Go build');

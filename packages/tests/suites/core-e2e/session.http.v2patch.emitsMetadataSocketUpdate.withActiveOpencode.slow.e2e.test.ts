@@ -15,7 +15,7 @@ import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
 import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
 import { enqueuePendingQueueV2 } from '../../src/testkit/pendingQueueV2';
 import { seedCliAuthForTestAccount } from '../../src/testkit/cliAuth';
@@ -183,7 +183,7 @@ await connection.closed;
     await ensureCliDistBuilt({ testDir, env: cliEnv });
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: [
         '-s',
         'workspace',

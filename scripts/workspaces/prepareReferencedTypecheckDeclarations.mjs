@@ -98,8 +98,10 @@ export async function prepareReferencedTypecheckDeclarations(projects, cwd, inve
       const path = redirects.get(owner);
       if (path && !references.some(reference => reference.path === path)) references.push({ path });
     }
-    const primaryNamespaces = new Set((inventory?.consumerPrimaryAmbientInputs?.get(authored) ?? [])
+    const primaryInputs = inventory?.consumerPrimaryAmbientInputs?.get(authored) ?? [];
+    const primaryNamespaces = new Set(primaryInputs
       .flatMap(file => modulesFor(file).namespaces));
+    const primaryModules = new Set(primaryInputs.flatMap(file => modulesFor(file).moduleDefinitions));
     const consumerAmbientInputs = [...requiredOwners].flatMap(owner => {
       return (ambientInputs.get(owner) ?? []).filter(file => {
         // Reached ambient modules/type namespaces form declaration contracts,
@@ -108,6 +110,7 @@ export async function prepareReferencedTypecheckDeclarations(projects, cwd, inve
         const contribution = modulesFor(file);
         return !contribution.hasOtherGlobals
           && !contribution.namespaces.some(name => primaryNamespaces.has(name))
+          && !contribution.moduleDefinitions.some(name => primaryModules.has(name))
           && contribution.modules.length + contribution.namespaces.length > 0;
       });
     });

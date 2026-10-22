@@ -53,7 +53,7 @@ export async function runSqliteMigrationDeploy(
     if (params.runSchemaSync) {
         await params.runSchemaSync({ env, serverRoot });
     } else {
-        await runCommand("yarn", ["-s", "schema:sync", "--quiet"], env, { cwd: serverRoot });
+        await runCommand("pnpm", ["--silent", "run", "schema:sync", "--quiet"], env, { cwd: serverRoot });
     }
 
     ensureSqliteDatabaseUrl(env);

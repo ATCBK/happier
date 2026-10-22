@@ -174,14 +174,13 @@ export function resolveBunCommand({
   return null;
 }
 
-export function resolveYarnCommand({
+export function resolvePnpmCommand({
   commandProbe = commandExists,
 }: {
   commandProbe?: (cmd: string) => boolean;
 } = {}): { cmd: string; args: string[] } {
-  if (commandProbe('yarn')) return { cmd: 'yarn', args: [] };
-  if (commandProbe('corepack')) return { cmd: 'corepack', args: ['yarn'] };
-  throw new Error('[component-artifacts] building binary artifacts requires yarn or corepack (corepack yarn)');
+  if (commandProbe('pnpm')) return { cmd: 'pnpm', args: [] };
+  throw new Error('[component-artifacts] building binary artifacts requires pnpm on PATH');
 }
 
 export async function ensureFileExists(path: string): Promise<void> {

@@ -978,7 +978,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-script-terminal-')));
     const cwd = join(root, 'web');
     await mkdir(cwd);
-    await writeFile(join(root, 'yarn.lock'), '');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'web; echo untrusted', scripts: { dev: 'vite', 'dev; echo injected': 'evil' } }));
     try {
       for (const platform of ['linux', 'win32'] as const) {

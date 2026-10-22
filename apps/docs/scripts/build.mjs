@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { execPnpm } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { formatProblems, runContentChecks } from './checkContent.mjs';
 import { renderRedirects } from './generateRedirects.mjs';
 import { relocateMdxSources } from './exportMdxSources.mjs';
@@ -20,7 +20,7 @@ export async function runDocsBuild({
   packageRoot = defaultPackageRoot,
   env = process.env,
   processExecPath = process.execPath,
-  execYarnImpl = execYarn,
+  execPnpmImpl = execPnpm,
   resolveNextCliPathImpl = resolveNextCliPath,
   spawnSyncImpl = spawnSync,
   runContentChecksImpl = runContentChecks,
@@ -60,7 +60,7 @@ export async function runDocsBuild({
     'utf8',
   );
 
-  execYarnImpl(['-s', 'types:check'], { cwd: packageRoot, stdio: 'inherit' });
+  execPnpmImpl(['--silent', 'run', 'types:check'], { cwd: packageRoot, stdio: 'inherit' });
   const result = spawnSyncImpl(
     processExecPath,
     [resolveNextCliPathImpl(), 'build', '--webpack'],

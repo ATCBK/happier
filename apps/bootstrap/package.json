@@ -10,7 +10,7 @@
     "tsc": "node ../../scripts/workspaces/runTypeScriptCli.mjs",
     "build:shared": "node scripts/buildSharedDeps.mjs",
     "build": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json && node scripts/writeDistBinWrappers.mjs",
-    "build:binary": "yarn -s build:shared && yarn -s build && node scripts/buildBinary.mjs",
+    "build:binary": "pnpm --silent run build:shared && pnpm --silent run build && node scripts/buildBinary.mjs",
     "typecheck": "../stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ./scripts/runTsc.mjs --noEmit -p tsconfig.json",
     "test": "../stack/bin/hstack-exec --script=test:local",
@@ -27,6 +27,5 @@
     "@happier-dev/tests": "0.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
-  },
-  "packageManager": "yarn@1.22.22"
+  }
 }

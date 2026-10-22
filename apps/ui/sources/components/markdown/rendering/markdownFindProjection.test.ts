@@ -1,3 +1,4 @@
+import { enrichedMarkdownPackageFileUrl } from '@/dev/testkit/harness/enrichedMarkdownPackage';
 import { describe, expect, it } from 'vitest';
 import { projectMarkdownFindSpans, projectMarkdownFindText } from './markdownFindProjection';
 
@@ -91,8 +92,8 @@ describe('projectMarkdownFindText', () => {
 
     it('agrees with the real enriched md4c text leaves for nested, escaped, reference and entity fixtures', async () => {
         // Load the actual pinned web parser rather than the UI testkit native-view stub.
-        const parserUrl = new URL('../../../../node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js', import.meta.url);
-        const runtime: unknown = await import(/* @vite-ignore */ parserUrl.href);
+        const parserUrl = enrichedMarkdownPackageFileUrl('lib/module/web/parseMarkdown.js');
+        const runtime: unknown = await import(/* @vite-ignore */ parserUrl);
         if (typeof runtime !== 'object' || runtime === null || !('parseMarkdown' in runtime) || typeof runtime.parseMarkdown !== 'function') {
             throw new Error('Pinned enriched parser unavailable');
         }

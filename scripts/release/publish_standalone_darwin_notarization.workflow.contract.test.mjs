@@ -14,10 +14,11 @@ async function loadWorkflow(name) {
 test('CLI native builders install the complete cross-target optional native package set', async () => {
   const { workflow } = await loadWorkflow('publish-cli-binaries.yml');
   const install = workflow.jobs.build_native.steps.find(
-    (step) => step.uses === './.github/actions/install-yarn-dependencies',
+    (step) => step.uses === './.github/actions/install-pnpm-dependencies',
   );
 
-  assert.match(String(install?.with?.args ?? ''), /(?:^|\s)--ignore-platform(?:\s|$)/);
+  assert.equal(install?.with?.['cross-target-optionals'], 'true');
+  assert.doesNotMatch(String(install?.with?.args ?? ''), /(?:^|\s)--ignore-platform(?:\s|$)/);
 });
 
 test('fresh Darwin finalizers explicitly build the trusted archive runtime before extraction', async () => {
@@ -33,7 +34,7 @@ test('fresh Darwin finalizers explicitly build the trusted archive runtime befor
     const installStep = steps.find((step) => String(step.name ?? '').includes('Install'));
     assert.ok(buildIndex >= 0, `${workflowName} must explicitly build @happier-dev/release-runtime`);
     assert.ok(extractionIndex > buildIndex, `${workflowName} must build release-runtime before extraction`);
-    assert.match(String(steps[buildIndex].run ?? ''), /yarn workspace @happier-dev\/release-runtime build/);
+    assert.match(String(steps[buildIndex].run ?? ''), /pnpm --filter @happier-dev\/release-runtime run build/);
     assert.match(
       String(installStep?.with?.args ?? ''),
       /(?:^|\s)--ignore-scripts(?:\s|$)/,

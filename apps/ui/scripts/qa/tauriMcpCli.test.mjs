@@ -44,12 +44,12 @@ test('throwIfTauriMcpCliError is a no-op for successful output', () => {
   assert.doesNotThrow(() => throwIfTauriMcpCliError({ stdout: 'Ready', stderr: '' }));
 });
 
-test('buildTauriMcpCliCommand invokes tauri-mcp through the workspace yarn script', () => {
+test('buildTauriMcpCliCommand invokes tauri-mcp through the workspace pnpm script', () => {
   assert.deepEqual(
     buildTauriMcpCliCommand(['driver-session', 'status', '--port', '9223']),
     {
-      command: 'yarn',
-      args: ['-s', 'tauri:mcp:cli', 'driver-session', 'status', '--port', '9223'],
+      command: 'pnpm',
+      args: ['--silent', 'run', 'tauri:mcp:cli', 'driver-session', 'status', '--port', '9223'],
     },
   );
 });

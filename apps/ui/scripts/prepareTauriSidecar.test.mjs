@@ -86,8 +86,8 @@ test('prepareTauriSidecar publishes app workspace dependencies before compiling 
   assert.equal(calls[1][0], 'ensure');
   assert.match(String(calls[1][1]), /apps\/bootstrap$/);
   assert.equal(calls[2][0], 'spawn');
-  assert.equal(calls[2][1], 'yarn');
-  assert.deepEqual(calls[2][2], ['-s', 'workspace', '@happier-dev/bootstrap', 'build:binary']);
+  assert.equal(calls[2][1], 'pnpm');
+  assert.deepEqual(calls[2][2], ['--silent', '--filter', '@happier-dev/bootstrap', 'run', 'build:binary']);
   assert.equal(calls[2][3].env.HAPPIER_BUN_TARGET, 'bun-darwin-arm64');
   assert.equal(calls[3][0], 'binary');
   assert.equal(calls[4][0], 'runtime');
@@ -115,7 +115,7 @@ test('ensureTauriSidecarBinaryFile stages the host target-scoped sidecar filenam
   assert.equal(await readFile(targetPath, 'utf8'), 'native-sidecar-binary');
 });
 
-test('prepareTauriSidecar invokes Yarn via a Windows-safe shell so yarn.cmd can be resolved', async () => {
+test('prepareTauriSidecar invokes pnpm through the canonical Windows cmd wrapper', async () => {
   const calls = [];
   const ensureUiWorkspacePackagesBuilt = async () => {};
   const ensureWorkspacePackagesBuiltForComponent = async () => {};
@@ -142,9 +142,12 @@ test('prepareTauriSidecar invokes Yarn via a Windows-safe shell so yarn.cmd can 
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'spawn');
-  assert.equal(calls[0][1], 'yarn');
-  assert.deepEqual(calls[0][2], ['-s', 'workspace', '@happier-dev/bootstrap', 'build:binary']);
-  assert.equal(calls[0][3].shell, true);
+  assert.equal(calls[0][1], 'cmd.exe');
+  assert.equal(calls[0][2].slice(0, 3).join(' '), '/d /s /c');
+  assert.match(calls[0][2][3], /pnpm\.cmd/);
+  assert.match(calls[0][2][3], /build:binary/);
+  assert.equal(calls[0][3].windowsVerbatimArguments, true);
+  assert.equal(calls[0][3].shell, undefined);
 });
 
 test('ensureTauriSidecarEntrypointFile copies the compiled hsetup JS companion next to the native wrapper', async () => {

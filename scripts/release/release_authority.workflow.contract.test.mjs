@@ -609,7 +609,7 @@ test('CLI candidate code is separated from every standalone signing and publishi
     assert.equal(checkouts[0].with?.path, undefined, `${jobName} must execute trusted control at the workspace root`);
     assert.doesNotMatch(
       JSON.stringify(job),
-      /uses":"\.\/\.release-control|node \.release-control|yarn --cwd \.release-control/,
+      /uses":"\.\/\.release-control|node \.release-control|pnpm --dir \.release-control/,
       `${jobName} must not leave candidate source as the workspace execution owner`,
     );
   }
@@ -673,7 +673,7 @@ test('CLI preparation never executes candidate source with the GitHub token', ()
   const source = JSON.stringify(prepare);
   assert.doesNotMatch(source, /uses":"\.\/\.candidate-source/);
   assert.doesNotMatch(source, /working-directory":"\.candidate-source/);
-  assert.doesNotMatch(source, /node \.candidate-source|yarn --cwd \.candidate-source/);
+  assert.doesNotMatch(source, /node \.candidate-source|pnpm --dir \.candidate-source/);
 });
 
 test('CLI candidate base versions cross the privileged shell only as canonical data', async () => {
@@ -765,6 +765,6 @@ test('CLI candidate builders have no OIDC or attestation authority', () => {
   assert.match(JSON.stringify(attest), /actions\/attest/);
   assert.doesNotMatch(
     JSON.stringify(attest),
-    /Checkout exact source|install-yarn-dependencies|release-build-cli-binaries|managed-runtime:build/,
+    /Checkout exact source|install-pnpm-dependencies|release-build-cli-binaries|managed-runtime:build/,
   );
 });

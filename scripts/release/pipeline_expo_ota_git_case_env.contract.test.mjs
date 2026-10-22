@@ -20,7 +20,7 @@ function createExpoOtaStubEnvironment(prefix) {
     dir,
     binDir,
     npxLogPath: path.join(dir, 'npx.log'),
-    yarnLogPath: path.join(dir, 'yarn.log'),
+    pnpmLogPath: path.join(dir, 'pnpm.log'),
     gitLogPath: path.join(dir, 'git.log'),
   };
 
@@ -44,12 +44,12 @@ function createExpoOtaStubEnvironment(prefix) {
   );
 
   writeExecutable(
-    path.join(binDir, 'yarn'),
+    path.join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      `echo "$*" >> ${JSON.stringify(paths.yarnLogPath)}`,
-      `echo "NODE_OPTIONS=${'${NODE_OPTIONS:-}'}" >> ${JSON.stringify(paths.yarnLogPath)}`,
+      `echo "$*" >> ${JSON.stringify(paths.pnpmLogPath)}`,
+      `echo "NODE_OPTIONS=${'${NODE_OPTIONS:-}'}" >> ${JSON.stringify(paths.pnpmLogPath)}`,
       'exit 0',
       '',
     ].join('\n'),
@@ -164,8 +164,8 @@ test('expo ota update raises the Node heap limit for UI typecheck by default', (
     prefix: 'happier-pipeline-eas-ota-typecheck-heap-default-',
   });
 
-  const yarnLog = fs.readFileSync(stub.yarnLogPath, 'utf8');
-  assert.match(yarnLog, /typecheck\nNODE_OPTIONS=.*--max-old-space-size=8192/);
+  const pnpmLog = fs.readFileSync(stub.pnpmLogPath, 'utf8');
+  assert.match(pnpmLog, /typecheck\nNODE_OPTIONS=.*--max-old-space-size=8192/);
 });
 
 test('expo ota update respects explicit Expo heap overrides for EAS update', () => {
@@ -193,10 +193,10 @@ test('expo ota update publishes production directly through EAS update instead o
   });
 
   const npxLog = fs.readFileSync(stub.npxLogPath, 'utf8');
-  const yarnLog = fs.readFileSync(stub.yarnLogPath, 'utf8');
+  const pnpmLog = fs.readFileSync(stub.pnpmLogPath, 'utf8');
 
   assert.match(npxLog, /update --channel production/);
-  assert.match(yarnLog, /tsx sources\/scripts\/parseChangelog\.ts/);
-  assert.match(yarnLog, /tsx sources\/scripts\/parseReleaseNotes\.ts/);
-  assert.doesNotMatch(yarnLog, /ota:production/);
+  assert.match(pnpmLog, /tsx sources\/scripts\/parseChangelog\.ts/);
+  assert.match(pnpmLog, /tsx sources\/scripts\/parseReleaseNotes\.ts/);
+  assert.doesNotMatch(pnpmLog, /ota:production/);
 });

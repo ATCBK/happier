@@ -71,5 +71,9 @@ test('publish-server-runtime installs target-native packages on each native cand
   const install = parsed.jobs.build_native.steps.find((step) => step.name === 'Install dependencies');
 
   assert.doesNotMatch(install.with.args, /(?:^|\s)--ignore-platform(?:\s|$)/);
+  assert.equal(install.with['cross-target-optionals'], 'true');
+  const prepare = parsed.jobs.prepare.steps.find((step) => step.name === 'Install dependencies');
+  assert.equal(prepare.with['cross-target-optionals'], 'true');
+  assert.doesNotMatch(prepare.with.args, /(?:^|\s)--ignore-platform(?:\s|$)/);
   assert.equal(parsed.jobs.build_native.strategy.matrix.include.length, 5);
 });

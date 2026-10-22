@@ -9,7 +9,7 @@ function parseOptionalBoolean(raw) {
 export function resolveUiPostinstallTasks({ env }) {
     const tasks = [
         'prepare-atmosphere-renderers',
-        'patch-package',
+        'verify-patched-dependencies',
         'verify-native-patch-compilation',
         'verify-vendored-reanimated-patch',
         'verify-vendored-legend-patch',

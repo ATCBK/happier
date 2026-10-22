@@ -257,7 +257,7 @@ export function buildPackedManagedProviderRecipe({ packageRoot }) {
     kind: 'packed_managed_provider_current_source_recipe',
     packageRoot: resolve(packageRoot),
     command:
-      'yarn workspace @happier-dev/tests test:plugin-platform:packed-managed-provider',
+      'pnpm --filter @happier-dev/tests run test:plugin-platform:packed-managed-provider',
     inputs: Object.freeze({
       source:
         'the current checkout through the normal development CLI snapshot and canonical npm pack owners',

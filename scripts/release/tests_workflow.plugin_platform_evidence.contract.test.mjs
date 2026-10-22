@@ -17,7 +17,7 @@ test('automatic CI exercises Plugin Platform feature contracts from current sour
   const workflow = YAML.parse(raw);
   assert.equal(workflow?.jobs?.['plugin-platform-packed'], undefined);
   assert.equal(workflow?.on?.workflow_call?.inputs?.run_plugin_platform_packed, undefined);
-  assert.match(raw, /yarn workspace @happier-dev\/tests test:plugin-platform:source/u);
+  assert.match(raw, /pnpm --filter @happier-dev\/tests run test:plugin-platform:source/u);
   assert.doesNotMatch(raw, /build:plugin-platform:natural|PACKED_PLUGIN_PLATFORM_|test:plugin-platform:packed-/u);
 });
 
@@ -54,7 +54,7 @@ test('automatic CI runs the public-only out-of-tree fixtures without a package a
   assert.match(sourceLane, /out-of-tree-channel-socket-provider\/test\/public-runtime\.test\.mjs/u);
   assert.match(sourceLane, /composer-external-dogfood\/test\/public-only\.test\.mjs/u);
   assert.doesNotMatch(sourceLane, /pack-fixture|installedTarballProof|action-contract-composition|\.tgz|tarball/iu);
-  assert.match(raw, /yarn workspace @happier-dev\/tests test:plugin-platform:source/u);
+  assert.match(raw, /pnpm --filter @happier-dev\/tests run test:plugin-platform:source/u);
 });
 
 test('the existing weekly automatic workflow reaches the slow core route', async () => {

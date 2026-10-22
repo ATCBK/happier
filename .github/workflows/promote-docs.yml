@@ -217,21 +217,12 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack (Yarn)
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: |
-          set -euo pipefail
-          bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+        uses: ./.github/actions/install-pnpm-dependencies
 
       # The build is unconditional now: deploy_cloudflare publishes exactly these
       # bytes, so skipping it would leave nothing to publish. `run_build` is
@@ -241,7 +232,7 @@ jobs:
           # This is a public browser write key, not a secret. The static Next
           # export must receive it here; Cloudflare only gets the finished out/.
           NEXT_PUBLIC_POSTHOG_KEY: ${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}
-        run: yarn workspace docs build
+        run: pnpm --filter docs run build
 
       - name: Upload the exact built site
         uses: actions/upload-artifact@v4

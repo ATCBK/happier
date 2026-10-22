@@ -297,7 +297,7 @@ function applyCommandRules(facts, rules, policy) {
 function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROOT) {
   let args = Array.isArray(commandArgs) ? commandArgs.map(String) : [];
   if (args[0] === '--') args = args.slice(1);
-  if (args[0]?.startsWith('--script=')) args = ['corepack', 'yarn', '-s', args[0].slice(9), ...args.slice(1)];
+  if (args[0]?.startsWith('--script=')) args = ['pnpm', 'run', '--silent', args[0].slice(9), ...args.slice(1)];
   const command = commandBasename(args[0]);
   if (command === 'hstack-exec' && args[1] === '--heavyweight-admission') {
     let admissionClass = 'validation';
@@ -324,10 +324,13 @@ function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROO
   if (REMOTE_COMMAND_CLASSIFICATION.packageManagerCommands.includes(manager)) {
     for (let index = managerIndex + 1; index < args.length; index += 1) {
       const arg = args[index];
-      if (arg === '--cwd' || arg === '-C') { managerCwd = args[++index] ?? '.'; continue; }
+      if (arg === '--cwd' || arg === '--dir' || arg === '-C') { managerCwd = args[++index] ?? '.'; continue; }
       if (arg.startsWith('--cwd=')) { managerCwd = arg.slice(6); continue; }
+      if (arg.startsWith('--dir=')) { managerCwd = arg.slice(6); continue; }
       if (arg === 'workspace' && manager === 'yarn') { workspace = args[++index] ?? ''; continue; }
-      if (arg === 'run' || arg.startsWith('-')) continue;
+      if (manager === 'pnpm' && (arg === '--filter' || arg === '-F')) { workspace = args[++index] ?? ''; continue; }
+      if (manager === 'pnpm' && arg.startsWith('--filter=')) { workspace = arg.slice(9); continue; }
+      if (arg === 'run' || arg === 'exec' || arg.startsWith('-')) continue;
       script = arg;
       if (arg === 'node') { managerNode = '1'; managerEntryIndex = index + 1; entry = commandBasename(args[managerEntryIndex]); }
       break;
@@ -821,7 +824,7 @@ native_try_admission_payload() {
 }
 resolve_native_command_policy() {
   [ "\${1-}" = -- ] && shift
-  case "\${1-}" in --script=*) native_script=\${1#--script=}; shift; [ "\${1-}" = -- ] && shift; set -- corepack yarn -s "$native_script" "$@" ;; esac
+  case "\${1-}" in --script=*) native_script=\${1#--script=}; shift; [ "\${1-}" = -- ] && shift; set -- pnpm run --silent "$native_script" "$@" ;; esac
   native_command_basename "\${1-}"; policy_command=$native_basename
   if [ "$policy_command" = hstack-exec ] && [ "\${2-}" = --heavyweight-admission ]; then
     if native_try_admission_payload "$@"; then return
@@ -934,9 +937,12 @@ resolve_native_command_policy() {
     [ "$#" -gt 0 ] && shift
     while [ "$#" -gt 0 ]; do
       case "$1" in
-        run|-s|--silent) shift ;;
-        --cwd|-C) shift; native_manager_cwd=\${1-.}; [ "$#" -gt 0 ] && shift ;;
+        run|exec|-s|--silent) shift ;;
+        --cwd|--dir|-C) shift; native_manager_cwd=\${1-.}; [ "$#" -gt 0 ] && shift ;;
         --cwd=*) native_manager_cwd=\${1#--cwd=}; shift ;;
+        --dir=*) native_manager_cwd=\${1#--dir=}; shift ;;
+        --filter|-F) if [ "$native_manager" = pnpm ]; then shift; policy_workspace=\${1-}; [ "$#" -gt 0 ] && shift; else shift; fi ;;
+        --filter=*) if [ "$native_manager" = pnpm ]; then policy_workspace=\${1#--filter=}; fi; shift ;;
         workspace) if [ "$native_manager" = yarn ]; then shift; policy_workspace=\${1-}; [ "$#" -gt 0 ] && shift; else policy_script=$1; break; fi ;;
         -*) shift ;;
         *) policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=\${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; break ;;
@@ -998,6 +1004,8 @@ export function buildRemotePowerShellCommand(script) {
 
 export function prependRemotePath(target, script) {
   const entries = Array.isArray(target.remotePath) ? target.remotePath.map(String) : [];
+  const workerHome = String(target.cliHomeDir ?? '').replace(/[\\/]+$/, '');
+  if (workerHome) entries.unshift(`${workerHome}/cache/pnpm-toolchain${target.platform === 'windows' ? '' : '/bin'}`);
   if (entries.length === 0) return script;
   if (target.platform === 'windows') {
     return `$env:PATH = ${powershellQuote(entries.join(';'))} + [IO.Path]::PathSeparator + $env:PATH; ${script}`;
@@ -1075,6 +1083,8 @@ export function buildRemoteExecCommand(
     body.push(`export HAPPIER_WORKSPACE_BUILD_MODE=${posixQuote(defaultBuildMode)}`);
     const cacheEnv = `env ${posixQuote(`HAPPIER_STACK_PM_CACHE_BASE_DIR=${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache`)}`;
     if (preparation?.bootstrap) {
+      const prefix = `${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache/pnpm-toolchain`;
+      body.push(`export npm_config_prefix=${posixQuote(prefix)}`, `export PATH=${posixQuote(`${prefix}/bin`)}:"$PATH"`);
       body.push(`${cacheEnv} node ./apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs --execution-placement=remote ${posixQuote(`--validation-kind=${preparation.validationKind}`)} ${posixQuote(`--component-relative-dir=${preparation.bootstrapComponentRelativeDir ?? '.'}`)} ${posixQuote(`--default-build-mode=${defaultBuildMode}`)}`);
     }
     if (preparation?.componentRelativeDir != null) {
@@ -1323,6 +1333,8 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   'METRICS_ENABLED',
   // The application origin mailed links (verification, reset, invitations) are rendered on.
   'HAPPIER_WEBAPP_URL',
+  // Publishing requires the service operator's public report contact on the serving host.
+  'HAPPIER_PUBLIC_PROFILE_REPORT_URL',
   'HAPPIER_SQLITE_BUSY_TIMEOUT_MS',
   'HAPPIER_SQLITE_CONNECTION_LIMIT',
   // A Stack's Postgres pool budget (overrides DATABASE_URL connection_limit) belongs to its server too.
@@ -1828,7 +1840,7 @@ function remoteStackLauncher(invocation) {
   // launch owner; no package-manager wrapper or publication belongs here.
   return invocation.runtimeMode === 'source-snapshot'
     ? 'node ./apps/stack/bin/hstack.mjs'
-    : 'corepack yarn workspace @happier-dev/stack';
+    : 'pnpm --filter @happier-dev/stack run';
 }
 
 export function buildRemoteStackStopCommand(target, options) {

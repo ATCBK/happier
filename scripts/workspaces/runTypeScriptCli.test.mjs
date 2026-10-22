@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
-import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
 import { callerHoldsWorkspaceBundleLock, withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
 import { WORKSPACE_BUILD_MODE_ENV } from './workspaceChildBuildEnv.mjs';
@@ -250,14 +250,14 @@ test('compiler --local executes on its current worker without forwarding executo
   assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
 });
 
-test('root yarn tsc delegates direct project compilation to the same AUTO owner', { skip: process.platform === 'win32' }, async t => {
+test('root pnpm tsc delegates direct project compilation to the same AUTO owner', { skip: process.platform === 'win32' }, async t => {
   const setup = await fixture(t, { route: true, exitCode: 7 });
   const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
   await writeFile(join(setup.root, 'package.json'), JSON.stringify({
     private: true, scripts: { tsc: manifest.scripts.tsc.replace('scripts/workspaces/runTypeScriptCli.mjs', JSON.stringify(runner)) },
   }));
-  const yarn = resolveYarnCommandInvocation(['-s', 'tsc', '-p', 'apps/ui/tsconfig.json']);
-  const { child, stderr } = setup.start(yarn.args, { command: yarn.command });
+  const pnpm = resolvePnpmCommandInvocation(['-s', 'tsc', '-p', 'apps/ui/tsconfig.json']);
+  const { child, stderr } = setup.start(pnpm.args, { command: pnpm.command });
   assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
   const routed = JSON.parse(await readFile(setup.routedArgsFile, 'utf8'));
   assert.deepEqual(routed.args.slice(0, 2), ['--', 'node']);
@@ -275,7 +275,7 @@ for (const env of [
     const setup = await fixture(t, { exitCode: 0 });
     const { child, stderr } = setup.start([runner], { env: { ...env, HAPPIER_TYPECHECK_DISPATCHED: '' } });
     assert.deepEqual(await once(child, 'exit'), [1, null], stderr());
-    assert.match(stderr(), /run `yarn typecheck` \(routed\) instead of `typecheck:(?:source:)?finite`/);
+    assert.match(stderr(), /run `pnpm typecheck` \(routed\) instead of `typecheck:(?:source:)?finite`/);
     await assert.rejects(readFile(setup.pidFile), { code: 'ENOENT' });
   });
 }
@@ -370,21 +370,21 @@ for (const windows of [false, true]) {
   }
 }
 
-test('actual CLI and Plugin SDK direct finite Yarn entries refuse before compilation', () => {
+test('actual CLI and Plugin SDK direct finite Pnpm entries refuse before compilation', () => {
   for (const [workspace, task] of [['apps/cli', 'typecheck:source:finite'], ['packages/plugin-sdk', 'typecheck:finite']]) {
-    const yarn = resolveYarnCommandInvocation(['--cwd', fileURLToPath(new URL(`../../${workspace}/`, import.meta.url)), '-s', task]);
-    const result = spawnSync(yarn.command, yarn.args, {
+    const pnpm = resolvePnpmCommandInvocation(['--cwd', fileURLToPath(new URL(`../../${workspace}/`, import.meta.url)), '-s', task]);
+    const result = spawnSync(pnpm.command, pnpm.args, {
       encoding: 'utf8',
       env: { ...process.env, HAPPIER_TYPECHECK_DISPATCHED: '', TURBO_TASK_ID: '' },
     });
     assert.ifError(result.error);
     assert.equal(result.status, 1, result.stderr);
-    assert.ok(result.stderr.includes(`run \`yarn typecheck\` (routed) instead of \`${task}\``), result.stderr);
+    assert.ok(result.stderr.includes(`run \`pnpm typecheck\` (routed) instead of \`${task}\``), result.stderr);
   }
 });
 
 for (const explicitLocal of [false, true]) {
-  test(`public Yarn typecheck reaches its finite compiler (${explicitLocal ? '--local' : 'already routed'})`, { skip: process.platform === 'win32' }, async (t) => {
+  test(`public Pnpm typecheck reaches its finite compiler (${explicitLocal ? '--local' : 'already routed'})`, { skip: process.platform === 'win32' }, async (t) => {
     const setup = await fixture(t, { exitCode: 0 });
     const launcher = fileURLToPath(new URL('../../apps/stack/bin/hstack-exec', import.meta.url));
     const cliPackage = JSON.parse(await readFile(new URL('../../apps/cli/package.json', import.meta.url), 'utf8'));
@@ -404,15 +404,15 @@ for (const explicitLocal of [false, true]) {
     await chmod(join(binDir, 'uname'), 0o755);
     await writeFile(join(setup.root, 'package.json'), JSON.stringify({
       name: 'finite-dispatch-fixture',
-      packageManager: 'yarn@1.22.22',
+      packageManager: 'pnpm@12.14.0',
       scripts: {
         typecheck: cliPackage.scripts.typecheck.replace('../stack/bin/hstack-exec', `${JSON.stringify(launcher)}${explicitLocal ? ' --local' : ''}`),
         'typecheck:local': cliPackage.scripts['typecheck:local'],
         'typecheck:source:finite': cliPackage.scripts['typecheck:source:finite'].replace('../../scripts/workspaces/runTypeScriptCli.mjs', JSON.stringify(runner)),
       },
     }));
-    const yarn = resolveYarnCommandInvocation(['-s', 'typecheck']);
-    const { child, stderr } = setup.start(yarn.args, { command: yarn.command, env: {
+    const pnpm = resolvePnpmCommandInvocation(['-s', 'typecheck']);
+    const { child, stderr } = setup.start(pnpm.args, { command: pnpm.command, env: {
       HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_TYPECHECK_DISPATCHED: '',
       PATH: `${binDir}:${process.env.PATH}`,
     } });
@@ -555,7 +555,7 @@ test('compiler cancellation reaches its native worker process group', { skip: pr
 });
 
 for (const target of ['compiler leaf', 'outer heartbeat']) {
-  test(`root Yarn suite distinguishes SIGTERM of ${target} from an aggregate failure`, { skip: process.platform === 'win32' }, async (t) => {
+  test(`root Pnpm suite distinguishes SIGTERM of ${target} from an aggregate failure`, { skip: process.platform === 'win32' }, async (t) => {
     const setup = await fixture(t, { tree: target === 'outer heartbeat' });
     const sentinelFile = join(setup.root, 'sentinel');
     const suiteStartedFile = join(setup.root, 'suite-started.json');
@@ -563,7 +563,7 @@ for (const target of ['compiler leaf', 'outer heartbeat']) {
     await writeFile(suiteScript, `
       import { writeFile } from 'node:fs/promises';
       import { runRootTypecheck } from ${JSON.stringify(rootTypecheckModule)};
-      await writeFile(${JSON.stringify(suiteStartedFile)}, JSON.stringify({ yarn: process.env.npm_config_user_agent }));
+      await writeFile(${JSON.stringify(suiteStartedFile)}, JSON.stringify({ pnpm: process.env.npm_config_user_agent }));
       try {
         await runRootTypecheck({ commands: [
           { id: 'compiler-leaf', args: ['-s', 'compiler'] },
@@ -579,18 +579,18 @@ for (const target of ['compiler leaf', 'outer heartbeat']) {
     await writeFile(join(setup.root, 'package.json'), JSON.stringify({
       name: 'cancellation-fixture',
       type: 'module',
-      packageManager: 'yarn@1.22.22',
+      packageManager: 'pnpm@12.14.0',
       scripts: {
         'root-suite': `${JSON.stringify(process.execPath)} --experimental-strip-types ${JSON.stringify(suiteScript)}`,
         compiler: nodeScript(runner),
         sentinel: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(sentinelScript)}`,
       },
     }));
-    const yarn = resolveYarnCommandInvocation(['-s', 'root-suite']);
-    const { child, stderr } = setup.start([heartbeatRunner, '--', yarn.command, ...yarn.args]);
+    const pnpm = resolvePnpmCommandInvocation(['-s', 'root-suite']);
+    const { child, stderr } = setup.start([heartbeatRunner, '--', pnpm.command, ...pnpm.args]);
     // The marker belongs only to the substituted compiler, before any signal is sent.
     await waitUntil(() => readFile(setup.pidFile).then(() => true, () => false), () => `fake compiler did not start: ${stderr()}`);
-    assert.match(JSON.parse(await readFile(suiteStartedFile, 'utf8')).yarn, /^yarn\/1\.22\.22\b/);
+    assert.match(JSON.parse(await readFile(suiteStartedFile, 'utf8')).pnpm, /^pnpm\/1\.22\.22\b/);
     const compilerPid = Number(await readFile(setup.pidFile, 'utf8'));
     const exited = once(child, 'exit');
     if (target === 'compiler leaf') {

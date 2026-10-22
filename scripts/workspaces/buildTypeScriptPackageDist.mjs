@@ -34,7 +34,7 @@ import {
   resolvePackageBuildOutputTargetMatches,
   resolvePackageBuildOutputTargetPath,
 } from './packageBuildOutputTargets.mjs';
-import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
 import { withWorkspaceOutputScriptArgs } from './workspaceOutputScriptArgs.mjs';
 import { requiresTypeScriptAdmission, resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { resolveTypeScriptProjectPathFromArgs } from './prepareTypeScriptProjectBuild.mjs';
@@ -174,11 +174,11 @@ async function runStagedOutputScripts({
   env,
   stdio,
   runCommandImpl,
-  resolveYarnCommandInvocationImpl,
+  resolvePnpmCommandInvocationImpl,
 }) {
   for (const scriptName of stagedOutputScripts) {
     await withWorkspaceOutputScriptArgs({ packageDir, scriptName, env }, async (args) => {
-      const invocation = resolveYarnCommandInvocationImpl(args, {
+      const invocation = resolvePnpmCommandInvocationImpl(args, {
         npmExecPath: env.npm_execpath,
       });
       const result = await runCommandImpl(invocation.command, invocation.args, {
@@ -675,7 +675,7 @@ export async function buildTypeScriptPackageDist({
   stdio = 'inherit',
   runCommandImpl = runCommand,
   resolveTypeScriptCliInvocationImpl = resolveTypeScriptCliInvocation,
-  resolveYarnCommandInvocationImpl = resolveYarnCommandInvocation,
+  resolvePnpmCommandInvocationImpl = resolvePnpmCommandInvocation,
   withWorkspaceBundleLockImpl = withWorkspaceBundleLock,
 } = {}) {
   const resolvedPackageDir = resolve(packageDir);
@@ -811,7 +811,7 @@ export async function buildTypeScriptPackageDist({
         env: stagedBuildEnv,
         stdio,
         runCommandImpl,
-        resolveYarnCommandInvocationImpl,
+        resolvePnpmCommandInvocationImpl,
       });
 
       verifyStagedExportTargets({ packageDir: resolvedPackageDir, outputDir: stagedDistDir, packageJson });

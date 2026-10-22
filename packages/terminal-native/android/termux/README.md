@@ -13,7 +13,7 @@ Approved source is extracted into ignored `android/termux/vendor/` with:
 ```bash
 HAPPIER_TERMINAL_NATIVE_TERMUX_SOURCE_ROOT=/path/to/termux-app \
 HAPPIER_TERMINAL_NATIVE_TERMUX_COMMIT=401bbe54b8f4e68302b1ff70678015a24628fb1d \
-yarn workspace @happier-dev/terminal-native fetch:termux:android
+pnpm --filter @happier-dev/terminal-native run fetch:termux:android
 ```
 
 The source checkout must be clean and exactly at that pinned revision. The extractor copies only `terminal-view` and `terminal-emulator`, rejects `app` and `termux-shared`, copies the root upstream `LICENSE.md` plus an upstream `NOTICE` when present, and writes the matching provenance and license-closure fields to `android/termux/vendor/TERMUX-SOURCE.json`. Gradle consumes the ignored source tree only when its module set, pin, policy metadata, package notice, and copied license closure all match.
@@ -48,7 +48,7 @@ HAPPIER_TERMINAL_NATIVE_ANDROID_CANDIDATE_APK=/path/to/native-enabled.apk \
 HAPPIER_TERMINAL_NATIVE_ANDROID_EXPECT_TERMUX_INCLUDED=1 \
 HAPPIER_TERMINAL_NATIVE_ANDROID_BASELINE_APK=/path/to/native-disabled.apk \
 HAPPIER_TERMINAL_NATIVE_ANDROID_REQUIRED_ABIS=arm64-v8a,x86_64 \
-yarn workspace @happier-dev/terminal-native evidence:android:artifact
+pnpm --filter @happier-dev/terminal-native run evidence:android:artifact
 ```
 
 This command does not satisfy `HAPPIER_TERMINAL_NATIVE_ANDROID_ABI_SMOKE_PASSED`: that gate additionally requires install/load evidence on every supported ABI.

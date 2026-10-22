@@ -10,7 +10,7 @@ if ($invocation.Count -gt 0 -and $invocation[0].StartsWith('--script=')) {
     if ($rest.Count -gt 0 -and $rest[0] -eq '--') {
         $rest = @($rest | Select-Object -Skip 1)
     }
-    & corepack yarn -s $script @rest
+    & node "$PSScriptRoot/../../../scripts/workspaces/execPnpmCommand.mjs" run --silent $script @rest
     exit $LASTEXITCODE
 }
 if ($invocation.Count -gt 0 -and $invocation[0] -eq '--') {

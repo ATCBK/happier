@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
@@ -14,6 +15,7 @@ import {
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const packageRoot = fileURLToPath(new URL('.', import.meta.url));
+const requireUiDependency = createRequire(new URL('./package.json', import.meta.url));
 // Vitest's --root does not change process.cwd(); aliases and setup belong to this package.
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths);
 
@@ -273,7 +275,7 @@ export default defineConfig({
             { find: /^react-native$/, replacement: resolve('./sources/dev/reactNativeStub.ts') },
             // Plugin UI's nested SVG peer must reach the same native drawing boundary as UI leaves.
             // Keep the XML parser real: safe native previews validate its AST before drawing.
-            { find: /^react-native-svg\/lib\/commonjs\/xml$/, replacement: resolve('./node_modules/react-native-svg/lib/module/xml.js') },
+            { find: /^react-native-svg\/lib\/commonjs\/xml$/, replacement: requireUiDependency.resolve('react-native-svg/lib/module/xml.js') },
             { find: /^react-native-svg$/, replacement: resolve('./sources/dev/testkit/mocks/reactNativeSvg.ts') },
             { find: /^(?:.*[\\/])?node_modules[\\/]react-native-svg[\\/](?!lib[\\/]module[\\/](?:xml\.js|utils[\\/]fetchData\.js)$).*$/, replacement: resolve('./sources/dev/testkit/mocks/reactNativeSvg.ts') },
             { find: '@livekit/react-native-webrtc', replacement: resolve('./sources/dev/reactNativeWebRtcStub.ts') },
@@ -334,11 +336,8 @@ export default defineConfig({
             { find: 'react-native-purchases', replacement: resolve('./sources/dev/reactNativePurchasesStub.ts') },
             { find: 'react-native-purchases-ui', replacement: resolve('./sources/dev/reactNativePurchasesUiStub.ts') },
             { find: 'react-native-mmkv', replacement: resolve('./sources/dev/reactNativeMmkvStub.ts') },
-            // The pure web streaming-reveal module stays REAL under the stub below: it is the
-            // shared word classifier for both streaming surfaces and its gate tests must
-            // exercise the patched package logic, not a stub.
-            { find: 'react-native-enriched-markdown/lib/module/web/streamingReveal.js', replacement: resolve('./node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js') },
-            { find: 'react-native-enriched-markdown', replacement: resolve('./sources/dev/reactNativeEnrichedMarkdownStub.tsx') },
+            // Mock the public native view only; package subpaths exercise real patched logic.
+            { find: /^react-native-enriched-markdown$/, replacement: resolve('./sources/dev/reactNativeEnrichedMarkdownStub.tsx') },
             // PostHog React Native eagerly loads optional Expo native packages in node. Keep route/unit tests node-safe.
             { find: 'posthog-react-native', replacement: resolve('./sources/dev/posthogReactNativeStub.tsx') },
             // Use libsodium-wrappers in tests instead of the RN native binding.

@@ -8,9 +8,10 @@ import { buildStackHarnessEnv, writeFakeBin } from './testkit/core/fake_bin_harn
 import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 
-async function writeYarnOkPackage({ dir, name, scriptOutput }) {
+async function writePnpmOkPackage({ dir, name, scriptOutput }) {
   await mkdir(join(dir, 'node_modules'), { recursive: true });
-  await writeFile(join(dir, 'yarn.lock'), '# stub lock\n', 'utf-8');
+  await writeFile(join(dir, 'pnpm-lock.yaml'), '# stub lock\n', 'utf-8');
+  await writeFile(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   await writeFile(join(dir, 'test-script.mjs'), `process.stdout.write(${JSON.stringify(scriptOutput)});\n`, 'utf-8');
   await writeFile(
     join(dir, 'package.json'),
@@ -18,7 +19,7 @@ async function writeYarnOkPackage({ dir, name, scriptOutput }) {
       {
         name,
         private: true,
-        packageManager: 'yarn@1.22.22',
+        packageManager: 'pnpm@12.14.0',
         scripts: {
           test: 'node ./test-script.mjs',
         },
@@ -28,18 +29,18 @@ async function writeYarnOkPackage({ dir, name, scriptOutput }) {
     ),
     'utf-8'
   );
-  // Ensure deps are considered "already installed" by hstack.
-  await writeFile(join(dir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
 }
 
-async function writeFakeYarn({ dir }) {
+async function writeFakePnpm({ dir }) {
   return writeFakeBin({
     root: dir,
-    name: 'yarn',
+    name: 'pnpm',
     content: [
       '#!/usr/bin/env node',
       "const args = process.argv.slice(2);",
-      "if (args[0] === '-s') args.shift();",
+      "if (args[0] === '--version') { console.log('12.14.0'); process.exit(0); }",
+      "if (args[0] === 'run') args.shift();",
+      "if (args[0] === '--silent') args.shift();",
       "if (args[0] !== 'test') process.exit(0);",
       "const { spawnSync } = require('node:child_process');",
       "const { readFileSync } = require('node:fs');",
@@ -61,12 +62,12 @@ async function setupTestCmdFixture({ importMetaUrl, t, tmpPrefix }) {
 
   const monoRoot = join(tmp, 'mono');
   const appDir = join(monoRoot, 'apps', 'ui');
-  const { binDir } = await writeFakeYarn({ dir: tmp });
+  const { binDir } = await writeFakePnpm({ dir: tmp });
 
   await mkdir(appDir, { recursive: true });
 
-  await writeYarnOkPackage({ dir: monoRoot, name: 'monorepo', scriptOutput: 'ROOT_TEST_RUN' });
-  await writeYarnOkPackage({ dir: appDir, name: 'happy-app', scriptOutput: 'APP_TEST_RUN' });
+  await writePnpmOkPackage({ dir: monoRoot, name: 'monorepo', scriptOutput: 'ROOT_TEST_RUN' });
+  await writePnpmOkPackage({ dir: appDir, name: 'happy-app', scriptOutput: 'APP_TEST_RUN' });
 
   const env = buildStackHarnessEnv({
     binDirs: [binDir],
@@ -136,9 +137,9 @@ test('hstack test (non-json) keeps monorepo-root routing and reports human-reada
   });
   assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
 
-  assert.ok(res.stdout.includes('[test] ui: running yarn test'), res.stdout);
+  assert.ok(res.stdout.includes('[test] ui: running pnpm test'), res.stdout);
   assert.ok(res.stdout.includes('ROOT_TEST_RUN'), res.stdout);
   assert.ok(!res.stdout.includes('APP_TEST_RUN'), res.stdout);
   assert.ok(res.stdout.includes('[test] results:'), res.stdout);
-  assert.ok(res.stdout.includes('- ✅ ui: ok (yarn test)'), res.stdout);
+  assert.ok(res.stdout.includes('- ✅ ui: ok (pnpm test)'), res.stdout);
 });

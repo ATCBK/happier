@@ -5,13 +5,13 @@
  * This script creates a symlink for the happier-dev command pointing to the local
  * development version, while leaving the stable npm version of `happier` untouched.
  *
- * Usage: yarn link:dev
+ * Usage: pnpm run link:dev
  *
  * What it does:
  * 1. Finds the global npm bin directory
  * 2. Creates/updates a symlink: happier-dev -> ./bin/happier-dev.mjs
  *
- * To undo: yarn unlink:dev
+ * To undo: pnpm run unlink:dev
  */
 
 const childProcess = require('node:child_process');
@@ -69,7 +69,7 @@ function link() {
     // Check if source exists
     if (!fs.existsSync(binSource)) {
         console.error(`\n❌ Error: ${binSource} does not exist.`);
-        console.error("   Run 'yarn build' first to compile the project.");
+        console.error("   Run 'pnpm run build' first to compile the project.");
         process.exit(1);
     }
 
@@ -92,11 +92,11 @@ function link() {
         console.log('\nNow you can use:');
         console.log('  happier      → stable npm version (unchanged)');
         console.log('  happier-dev  → local development version');
-        console.log('\nTo undo: yarn unlink:dev');
+        console.log('\nTo undo: pnpm run unlink:dev');
     } catch (e) {
         if (e.code === 'EACCES') {
             console.error('\n❌ Permission denied. Try running with sudo:');
-            console.error('   sudo yarn link:dev');
+            console.error('   sudo pnpm run link:dev');
         } else {
             console.error(`\n❌ Error creating symlink: ${e.message}`);
         }

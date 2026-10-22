@@ -23,7 +23,7 @@ import { startTestDaemon, stopDaemonFromHomeDir, type StartedDaemon } from '../.
 import { sleep } from '../../timing';
 import { createUserScopedSocketCollector } from '../../socketClient';
 import { createLegacyRpcClient, type RpcSocket } from '../../syntheticAgent/rpcClient';
-import { which, yarnCommand } from '../../process/commands';
+import { which, pnpmCommand } from '../../process/commands';
 import { ensureCliDistBuilt, ensureCliSharedDepsBuilt } from '../../process/cliDist';
 import {
   resolveCliTestLaunchSpec,
@@ -863,7 +863,7 @@ async function runOneScenario(params: {
               scenarioCliArgs,
               providerCliExtraArgs: provider.cli.extraArgs ?? [],
             } as const;
-            const baseCommand = sourceLaunchSpec?.command ?? yarnCommand();
+            const baseCommand = sourceLaunchSpec?.command ?? pnpmCommand();
             const baseArgs = sourceLaunchSpec
               ? [...sourceLaunchSpec.args, ...buildProviderCliCommandArgs(providerCommandParams)]
               : buildProviderDevCommandArgs(providerCommandParams);
@@ -1621,8 +1621,8 @@ async function runOneScenario(params: {
 
   // Extract fixtures using the same repo logic used for curated allowlists.
   await runLoggedCommand({
-    command: yarnCommand(),
-    args: ['-s', 'workspace', '@happier-dev/cli', 'tool:trace:extract', '--out', fixturesFile, mergedTraceFile],
+    command: pnpmCommand(),
+    args: ['--filter', '@happier-dev/cli', 'run', '--silent', 'tool:trace:extract', '--out', fixturesFile, mergedTraceFile],
     cwd: repoRootDir(),
     env: { ...process.env, CI: '1' },
     stdoutPath: resolve(join(testDir, 'tooltrace.extract.stdout.log')),

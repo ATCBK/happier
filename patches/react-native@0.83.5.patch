@@ -1,0 +1,151 @@
+diff --git a/React/Fabric/Mounting/ComponentViews/ScrollView/RCTScrollViewComponentView.mm b/React/Fabric/Mounting/ComponentViews/ScrollView/RCTScrollViewComponentView.mm
+index 15a5ab7bce4581e0ff42ea4983ae3fbe3885835e..41cecfb3ab3708a73f4a03207c90f9a056d502db 100644
+--- a/React/Fabric/Mounting/ComponentViews/ScrollView/RCTScrollViewComponentView.mm
++++ b/React/Fabric/Mounting/ComponentViews/ScrollView/RCTScrollViewComponentView.mm
+@@ -1043,7 +1043,17 @@ static inline UIViewAnimationOptions animationOptionsWithCurve(UIViewAnimationCu
+ - (void)_prepareForMaintainVisibleScrollPosition
+ {
+   const auto &props = static_cast<const ScrollViewProps &>(*_props);
+-  if (!props.maintainVisibleContentPosition || _avoidAdjustmentForMaintainVisibleContentPosition) {
++  if (!props.maintainVisibleContentPosition) {
++    // HAPPIER PATCH(react-native-mvcp-null-prop-clear): React Native stores the previous
++    // first-visible view/frame between prepare and adjust. If MVCP is later disabled and
++    // re-enabled on the same recycled native view, leaving these fields populated can make
++    // the next adjust compute a huge offset against stale FlashList ScrollAnchor geometry.
++    _prevFirstVisibleFrame = CGRectZero;
++    _firstVisibleView = nil;
++    _firstVisibleViewTag = 0;
++    return;
++  }
++  if (_avoidAdjustmentForMaintainVisibleContentPosition) {
+     return;
+   }
+ 
+diff --git a/React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm b/React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
+index d02e003a439e410ddab597b2c036256c80db0395..6df48f21ce8a561937417d6451bfdf2bbf5fbd2d 100644
+--- a/React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
++++ b/React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
+@@ -491,6 +491,36 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
+ 
+   [self _updateState];
+ 
++  // HAPPIER PATCH(composer-jiggle): UITextView does not scroll the caret into view when a typed
++  // character wraps onto a new line while the input height is clamped (Yoga maxHeight). Without
++  // this, the caret line stays clipped until the JS value round-trip re-applies the attributed
++  // string ~150-200ms later, whose scrollRangeToVisible then slides the text a full line late —
++  // the visible typing "jiggle". Scroll at insertion time instead, like every native editor.
++  // The reveal must be NON-animated: an animated scrollRangeToVisible is re-triggered by every
++  // subsequent keystroke while the caret is still clipped, restarting the ease curve each time,
++  // which degrades the one-line scroll into a ~1s crawl during fast typing.
++  // HAPPIER PATCH(composer-jiggle-reveal-gate): only reveal once the box has STOPPED growing.
++  // While the input is still below its clamped max height, `_updateState` has only queued an async
++  // Fabric commit, so `bounds.height` here is the PRE-growth height; revealing against it
++  // bottom-aligns to a stale viewport and overshoots by a full line until the real frame mounts.
++  // When the content already overflows, the height is final (clamped) and the reveal is exact —
++  // which is the only case the reveal was needed for anyway.
++  if (_backedTextInputView.isFirstResponder && [_backedTextInputView isKindOfClass:[UIScrollView class]] &&
++      ((UIScrollView *)_backedTextInputView).contentSize.height >
++          CGRectGetHeight(_backedTextInputView.bounds) + 0.5) {
++    UITextRange *typingSelectedRange = _backedTextInputView.selectedTextRange;
++    if (typingSelectedRange != nil && typingSelectedRange.empty) {
++      CGRect caretRect = [_backedTextInputView caretRectForPosition:typingSelectedRange.start];
++      if (!CGRectIsNull(caretRect) && !CGRectIsInfinite(caretRect) && !isnan(caretRect.origin.y) &&
++          !isnan(caretRect.size.height)) {
++        // Reveal the caret line including the bottom text inset so the line is not half-clipped.
++        CGRect revealRect = caretRect;
++        revealRect.size.height += _backedTextInputView.textContainerInset.bottom;
++        [(UIScrollView *)_backedTextInputView scrollRectToVisible:revealRect animated:NO];
++      }
++    }
++  }
++
+   if (_eventEmitter) {
+     const auto &textInputEventEmitter = static_cast<const TextInputEventEmitter &>(*_eventEmitter);
+     textInputEventEmitter.onChange([self _textInputMetrics]);
+@@ -765,6 +795,20 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
+   }
+   UITextRange *selectedRange = _backedTextInputView.selectedTextRange;
+   NSInteger oldTextLength = _backedTextInputView.attributedText.string.length;
++  // HAPPIER PATCH(composer-jiggle): when only attributes differ (the string content is identical),
++  // this is a re-apply of text the user already sees — typically the per-keystroke echo commit
++  // after the keyboard added language/autocorrect attribute runs. Moving the scroll position for
++  // such a refresh causes late one-line jumps while typing (the composer "jiggle"), so only
++  // restore the scroll when the string content actually changed.
++  BOOL contentStringChanged = ![attributedString.string isEqualToString:_backedTextInputView.attributedText.string];
++  // HAPPIER PATCH(composer-jiggle): assigning attributedText makes UIKit move the caret to the end
++  // and scroll (see RN's note below). Stock RN repairs that with an unconditional
++  // scrollRangeToVisible; skipping the repair for attribute-only re-applies left the composer
++  // parked at whatever offset UIKit chose — the last line clipped until the next keystroke.
++  // Capture the offset so the repair can put it back EXACTLY instead of chasing the caret.
++  BOOL canPreserveContentOffset = [_backedTextInputView isKindOfClass:[UIScrollView class]];
++  CGPoint preservedContentOffset =
++      canPreserveContentOffset ? ((UIScrollView *)_backedTextInputView).contentOffset : CGPointZero;
+   _backedTextInputView.attributedText = attributedString;
+   // Updating the UITextView attributedText, for example changing the lineHeight, the color or adding
+   // a new paragraph with \n, causes the cursor to move to the end of the Text and scroll.
+@@ -778,7 +822,17 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
+                                                                  offset:newOffset];
+   [_backedTextInputView setSelectedTextRange:[_backedTextInputView textRangeFromPosition:position toPosition:position]
+                               notifyDelegate:YES];
+-  [_backedTextInputView scrollRangeToVisible:NSMakeRange(offsetStart, 0)];
++  // HAPPIER PATCH(composer-jiggle): see contentStringChanged above. Content genuinely changed ->
++  // follow the caret (stock behaviour). Attribute-only re-apply -> undo UIKit's scroll dump by
++  // restoring the exact previous offset, which neither jiggles nor leaves the last line clipped.
++  if (contentStringChanged) {
++    [_backedTextInputView scrollRangeToVisible:NSMakeRange(offsetStart, 0)];
++  } else if (canPreserveContentOffset) {
++    UIScrollView *textScrollView = (UIScrollView *)_backedTextInputView;
++    if (!CGPointEqualToPoint(textScrollView.contentOffset, preservedContentOffset)) {
++      [textScrollView setContentOffset:preservedContentOffset animated:NO];
++    }
++  }
+ 
+   // A zero-length selection range can cause the caret position to change on iOS,
+   // and we have already updated the caret position, so we can safely ignore caret changing in this place.
+diff --git a/scripts/cocoapods/utils.rb b/scripts/cocoapods/utils.rb
+index 03ce89ecadb96f952f7f8796b0f71666f289aace..038ec7ccb5aabc50b9cdd11a99d235132d01b266 100644
+--- a/scripts/cocoapods/utils.rb
++++ b/scripts/cocoapods/utils.rb
+@@ -10,6 +10,30 @@ require_relative "./jsengine.rb"
+ 
+ # Utilities class for React Native Cocoapods
+ class ReactNativePodsUtils
++    # logging.h includes these fragments inside namespace google. Inferred
++    # Clang submodule imports are invalid there when Swift imports Fabric headers.
++    def self.fix_glog_module_map(installer)
++        installer.pod_targets.select { |target| target.pod_name == 'glog' }.each do |target|
++            headers = target.file_accessors.flat_map(&:public_headers)
++            declarations = %w[log_severity.h vlog_is_on.h].map do |name|
++                header = headers.find { |candidate| candidate.basename.to_s == name }
++                raise "Missing glog namespace header #{name}" unless header
++                "  textual header #{header.to_s.inspect}"
++            end
++
++            module_map = target.module_map_path
++            contents = module_map.read
++            missing = declarations.reject { |declaration| contents.include?(declaration.strip) }
++            next if missing.empty?
++
++            updated = contents.sub(/(^\s*(?:framework\s+)?module\s+glog\s*\{)/) do |start|
++                "#{start}\n#{missing.join("\n")}"
++            end
++            raise "Could not locate glog module declaration in #{module_map}" if updated == contents
++            module_map.write(updated)
++        end
++    end
++
+     def self.warn_if_not_on_arm64
+         if SysctlChecker.new().call_sysctl_arm64() == 1 && !Environment.new().ruby_platform().include?('arm64')
+             Pod::UI.warn 'Do not use "pod install" from inside Rosetta2 (x86_64 emulation on arm64).'
+diff --git a/scripts/react_native_pods.rb b/scripts/react_native_pods.rb
+index 75b21b4861366e871d8f943a3abf40218e876eda..2cbacb1b5b6cc0a445932c7595fced3122352a77 100644
+--- a/scripts/react_native_pods.rb
++++ b/scripts/react_native_pods.rb
+@@ -513,6 +513,7 @@ def react_native_post_install(
+   end
+   ReactNativePodsUtils.set_gcc_preprocessor_definition_for_debugger(installer)
+ 
++  ReactNativePodsUtils.fix_glog_module_map(installer)
+   ReactNativePodsUtils.fix_library_search_paths(installer)
+   ReactNativePodsUtils.update_search_paths(installer)
+   ReactNativePodsUtils.set_build_setting(installer, build_setting: "USE_HERMES", value: use_hermes())

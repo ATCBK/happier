@@ -125,7 +125,7 @@ if [ "$should_migrate" = "1" ] && [ "$migrations_enabled" = "1" ]; then
       fi
       out="$("$migration_binary" 2>&1)" && status=0 || status=$?
     else
-      out="$(yarn --cwd apps/server migrate:deploy 2>&1)" && status=0 || status=$?
+      out="$(pnpm --dir apps/server run migrate:deploy 2>&1)" && status=0 || status=$?
     fi
     if [ "$status" -eq 0 ]; then
       printf "%s\n" "$out"
@@ -163,4 +163,4 @@ fi
 if [ -n "$server_binary" ]; then
   exec "$server_binary"
 fi
-exec yarn --cwd apps/server "$start_script"
+exec pnpm --dir apps/server run "$start_script"

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import type { Plugin } from 'vite';
 import type { UserConfig } from 'vitest/config';
@@ -14,6 +15,7 @@ import {
 const packageRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(packageRoot, '../..');
 const uiRoot = resolve(repoRoot, 'apps/ui');
+const requireUiDependency = createRequire(resolve(uiRoot, 'package.json'));
 const uiSourcesRoot = resolve(uiRoot, 'sources');
 const cliSourcesRoot = resolve(repoRoot, 'apps/cli/src');
 const serverSourcesRoot = resolve(repoRoot, 'apps/server/sources');
@@ -218,15 +220,15 @@ export function createUiProductionHooksVitestConfig(): UserConfig {
       alias: [
         {
           find: /^react(\/.*)?$/,
-          replacement: `${resolve(uiRoot, 'node_modules/react')}$1`,
+          replacement: `${dirname(requireUiDependency.resolve('react/package.json'))}$1`,
         },
         {
           find: /^react-dom(\/.*)?$/,
-          replacement: `${resolve(uiRoot, 'node_modules/react-dom')}$1`,
+          replacement: `${dirname(requireUiDependency.resolve('react-dom/package.json'))}$1`,
         },
         {
           find: /^react-test-renderer$/,
-          replacement: resolve(uiRoot, 'node_modules/react-test-renderer/index.js'),
+          replacement: requireUiDependency.resolve('react-test-renderer'),
         },
         { find: /^react-native-reanimated(?:\/.*)?$/, replacement: uiDev('reactNativeReanimatedStub.ts') },
         { find: /(?:^|[\\/])node_modules[\\/]react-native-reanimated[\\/].*$/, replacement: uiDev('reactNativeReanimatedStub.ts') },
@@ -265,10 +267,7 @@ export function createUiProductionHooksVitestConfig(): UserConfig {
         { find: 'react-native-mmkv', replacement: uiDev('reactNativeMmkvStub.ts') },
         {
           find: 'react-native-enriched-markdown/lib/module/web/streamingReveal.js',
-          replacement: resolve(
-            uiRoot,
-            'node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js',
-          ),
+          replacement: requireUiDependency.resolve('react-native-enriched-markdown/lib/module/web/streamingReveal.js'),
         },
         { find: 'react-native-enriched-markdown', replacement: uiDev('reactNativeEnrichedMarkdownStub.tsx') },
         { find: 'posthog-react-native', replacement: uiDev('posthogReactNativeStub.tsx') },

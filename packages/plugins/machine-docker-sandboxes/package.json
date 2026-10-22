@@ -16,7 +16,7 @@
     "typecheck": "../../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json",
     "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
-    "build:finite": "yarn -s build",
+    "build:finite": "pnpm --silent run build",
     "project:finite": "node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs"
   },
   "dependencies": { "@happier-dev/plugin-sdk": "0.0.0" },

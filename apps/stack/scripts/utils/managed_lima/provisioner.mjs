@@ -13,7 +13,7 @@ function readPinnedBunVersion() {
 
 export const REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN = Object.freeze([
   Object.freeze({ command: 'node', label: 'Node.js' }),
-  Object.freeze({ command: 'corepack', label: 'Corepack' }),
+  Object.freeze({ command: 'npm', label: 'npm' }),
   Object.freeze({ command: 'rg', label: 'ripgrep (rg)' }),
 ]);
 
@@ -37,7 +37,6 @@ function provisionVersion({
   scriptSource,
   profile,
   nodeMajor,
-  yarnVersion,
   mutagenVersion,
   agentBrowserVersion,
   playwrightVersion,
@@ -48,7 +47,6 @@ function provisionVersion({
       schemaVersion: 1,
       profile,
       nodeMajor,
-      yarnVersion,
       mutagenVersion,
       agentBrowserVersion,
       playwrightVersion,
@@ -87,7 +85,6 @@ const LOGIN_MANAGER_REPAIR_COMMAND = [
 ].join('; ');
 const MANAGED_LIMA_GUEST_COMMANDS = Object.freeze([
   ...REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN,
-  Object.freeze({ command: 'yarn', label: 'Yarn' }),
   Object.freeze({ command: 'mutagen', label: 'Mutagen' }),
   Object.freeze({ command: 'bwrap', label: 'Bubblewrap (bwrap)' }),
   Object.freeze({ command: 'agent-browser', label: 'agent-browser' }),
@@ -97,18 +94,17 @@ const MANAGED_LIMA_GUEST_COMMANDS = Object.freeze([
   Object.freeze({ command: 'jq', label: 'jq' }),
 ]);
 
-function guestToolchainHealthCommand({ nodeMajor, yarnVersion, mutagenVersion, agentBrowserVersion, playwrightVersion, bunVersion }) {
+function guestToolchainHealthCommand({ nodeMajor, mutagenVersion, agentBrowserVersion, playwrightVersion, bunVersion }) {
   return [
     'set -eu',
     ...MANAGED_LIMA_GUEST_COMMANDS.map(({ command, label }) => (
       `command -v ${command} >/dev/null 2>&1 || { echo "${label} is required in the managed Lima guest" >&2; exit 127; }`
     )),
     ...MANAGED_LIMA_GUEST_COMMANDS
-      .filter(({ command }) => command !== 'yarn' && command !== 'mutagen' && command !== 'agent-browser' && command !== 'bun' && command !== 'go')
+      .filter(({ command }) => command !== 'mutagen' && command !== 'agent-browser' && command !== 'bun' && command !== 'go')
       .map(({ command }) => `${command} --version >/dev/null`),
     'go version >/dev/null',
     `node --version | grep -Eq '^v?${nodeMajor}(\\.|$)' || { echo "Node.js ${nodeMajor} is required in the managed Lima guest" >&2; exit 1; }`,
-    `yarn --version | grep -Fx '${yarnVersion}' >/dev/null || { echo "Yarn ${yarnVersion} is required in the managed Lima guest" >&2; exit 1; }`,
     `mutagen version | grep -Fx '${mutagenVersion}' >/dev/null || { echo "Mutagen ${mutagenVersion} is required in the managed Lima guest" >&2; exit 1; }`,
     `agent-browser --version | awk '{print $NF}' | grep -Fx '${agentBrowserVersion}' >/dev/null || { echo "agent-browser ${agentBrowserVersion} is required in the managed Lima guest" >&2; exit 1; }`,
     `bun --version | grep -Fx '${bunVersion}' >/dev/null || { echo "Bun ${bunVersion} is required in the managed Lima guest" >&2; exit 1; }`,
@@ -160,7 +156,6 @@ export async function inspectManagedLimaGuestToolchain({
   executor,
   instance: rawInstance,
   nodeMajor: rawNodeMajor = '24',
-  yarnVersion: rawYarnVersion = '1.22.22',
   mutagenVersion: rawMutagenVersion = '0.18.1',
   agentBrowserVersion: rawAgentBrowserVersion = '0.34.0',
   playwrightVersion: rawPlaywrightVersion = '1.58.2',
@@ -169,7 +164,6 @@ export async function inspectManagedLimaGuestToolchain({
   if (!executor || typeof executor.capture !== 'function') throw new Error('[managed-lima] executor is required');
   const instance = validateManagedLimaInstanceName(rawInstance);
   const nodeMajor = requireToolchainValue(rawNodeMajor, 'Node major');
-  const yarnVersion = requireToolchainValue(rawYarnVersion, 'Yarn version');
   const mutagenVersion = requireToolchainValue(rawMutagenVersion, 'Mutagen version');
   const agentBrowserVersion = requireToolchainValue(rawAgentBrowserVersion, 'agent-browser version');
   const playwrightVersion = requireToolchainValue(rawPlaywrightVersion, 'Playwright version');
@@ -177,7 +171,6 @@ export async function inspectManagedLimaGuestToolchain({
   const result = await runLimaGuestCommand({ executor, instance, argv: [
     'sh', '-lc', guestToolchainHealthCommand({
       nodeMajor,
-      yarnVersion,
       mutagenVersion,
       agentBrowserVersion,
       playwrightVersion,
@@ -221,7 +214,6 @@ export async function provisionManagedLimaGuest({
   scriptSource,
   profile: rawProfile = 'happier',
   nodeMajor: rawNodeMajor = '24',
-  yarnVersion: rawYarnVersion = '1.22.22',
   mutagenVersion: rawMutagenVersion = '0.18.1',
   agentBrowserVersion: rawAgentBrowserVersion = '0.34.0',
   playwrightVersion: rawPlaywrightVersion = '1.58.2',
@@ -233,7 +225,6 @@ export async function provisionManagedLimaGuest({
   const instance = validateManagedLimaInstanceName(rawInstance);
   const profile = requireProvisionProfile(rawProfile);
   const nodeMajor = requireToolchainValue(rawNodeMajor, 'Node major');
-  const yarnVersion = requireToolchainValue(rawYarnVersion, 'Yarn version');
   const mutagenVersion = requireToolchainValue(rawMutagenVersion, 'Mutagen version');
   const agentBrowserVersion = requireToolchainValue(rawAgentBrowserVersion, 'agent-browser version');
   const playwrightVersion = requireToolchainValue(rawPlaywrightVersion, 'Playwright version');
@@ -252,7 +243,6 @@ export async function provisionManagedLimaGuest({
     scriptSource: source,
     profile,
     nodeMajor,
-    yarnVersion,
     mutagenVersion,
     agentBrowserVersion,
     playwrightVersion,
@@ -266,7 +256,6 @@ export async function provisionManagedLimaGuest({
       executor,
       instance,
       nodeMajor,
-      yarnVersion,
       mutagenVersion,
       agentBrowserVersion,
       playwrightVersion,
@@ -278,7 +267,6 @@ export async function provisionManagedLimaGuest({
   await runLimaGuestCommand({ executor, instance, interactive: true, argv: [
     'env',
     `HAPPIER_PROVISION_NODE_MAJOR=${nodeMajor}`,
-    `HAPPIER_PROVISION_YARN_VERSION=${yarnVersion}`,
     `HAPPIER_PROVISION_MUTAGEN_VERSION=${mutagenVersion}`,
     `HAPPIER_PROVISION_AGENT_BROWSER_VERSION=${agentBrowserVersion}`,
     `HAPPIER_PROVISION_PLAYWRIGHT_VERSION=${playwrightVersion}`,
@@ -289,7 +277,6 @@ export async function provisionManagedLimaGuest({
     executor,
     instance,
     nodeMajor,
-    yarnVersion,
     mutagenVersion,
     agentBrowserVersion,
     playwrightVersion,

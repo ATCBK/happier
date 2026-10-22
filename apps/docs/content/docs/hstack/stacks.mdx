@@ -182,7 +182,7 @@ Notes:
 - `hstack stack runtime <name> select` adopts the build authority's already-active snapshot without building, publishing, changing that producer's selection, or changing the consumer's launch mode.
 - In 0.3 development, every successful component build publishes a complete snapshot for its target, reusing that target's current unrequested components. Native-target publication advances the producer's current selection; foreign-target publication remains selectable without replacing its native pin. Initialize a target once with `--all` if it has no complete snapshot. The consumer adopts the result through `runtime select`; other consumers use only `select`, with no rebuild. Publication and selection do **not** restart a running stack: server and daemon bytes change only after an explicit restart.
 - `--tauri` remains the legacy local `hstack build` flag. It is not part of named-stack artifact/runtime builds in v1.
-- Runtime snapshots are currently for **named stacks**. Repo-local `yarn tui` / `hstack start` remain source-backed flows.
+- Runtime snapshots are currently for **named stacks**. Repo-local `pnpm run tui` / `hstack start` remain source-backed flows.
 - `hstack stack auth <name> login` follows the same mode: if a valid runtime snapshot is active, guided login uses the stack-served runtime UI instead of waiting for Expo.
 
 Select how a named stack starts:

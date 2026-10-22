@@ -107,15 +107,15 @@ local relay when `restoreAutomatic` succeeds.
 Run the source-level native and browser journeys through their existing owners:
 
 ```sh
-corepack yarn --cwd packages/iroh-native -s test:home-iroh:real
-corepack yarn --cwd apps/ui -s proof:browser-iroh-real-verticals
+pnpm --dir packages/iroh-native run test:home-iroh:real
+pnpm --dir apps/ui run proof:browser-iroh-real-verticals
 ```
 
 The Docker relay journey uses the pinned stock relay image in
 `deploy/iroh-relay/Dockerfile` and requires a running Docker engine:
 
 ```sh
-corepack yarn --cwd packages/iroh-native -s test:home-iroh:docker
+pnpm --dir packages/iroh-native run test:home-iroh:docker
 ```
 
 It verifies relayed file and attachment bytes against the stock containerized

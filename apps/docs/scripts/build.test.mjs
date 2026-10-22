@@ -34,7 +34,7 @@ test('writes the redirects file and typechecks before invoking the local Next bu
     writeFileImpl(path, contents) {
       calls.push({ kind: 'write', path, contents });
     },
-    execYarnImpl(args, options) {
+    execPnpmImpl(args, options) {
       calls.push({ kind: 'yarn', args, options });
     },
     resolveNextCliPathImpl: () => '/repo/node_modules/next/dist/bin/next',
@@ -53,7 +53,7 @@ test('writes the redirects file and typechecks before invoking the local Next bu
       path: '/repo/apps/docs/public/_redirects',
       contents: '/old /new 301\n',
     },
-    { kind: 'yarn', args: ['-s', 'types:check'], options: { cwd: '/repo/apps/docs', stdio: 'inherit' } },
+    { kind: 'yarn', args: ['--silent', 'run', 'types:check'], options: { cwd: '/repo/apps/docs', stdio: 'inherit' } },
     {
       kind: 'next',
       command: '/managed/node',
@@ -78,7 +78,7 @@ test('refuses to build a production docs bundle without an explicit PostHog key'
       renderRedirectsImpl: () => '',
       writeFileImpl() {},
       relocateMdxSourcesImpl() {},
-      execYarnImpl() { calls.push('yarn'); },
+      execPnpmImpl() { calls.push('yarn'); },
       resolveNextCliPathImpl: () => '/repo/node_modules/next/dist/bin/next',
       spawnSyncImpl() { calls.push('next'); return { status: 0 }; },
     }),
@@ -97,7 +97,7 @@ test('fails when the local Next CLI exits unsuccessfully', async () => {
       renderRedirectsImpl: () => '',
       writeFileImpl() {},
       relocateMdxSourcesImpl() {},
-      execYarnImpl() {},
+      execPnpmImpl() {},
       resolveNextCliPathImpl: () => '/repo/node_modules/next/dist/bin/next',
       spawnSyncImpl: () => ({ status: 2 }),
     }),
@@ -118,7 +118,7 @@ test('refuses to build when a documented link or UI label is wrong', async () =>
         labels: [],
         generated: [],
       }),
-      execYarnImpl() { calls.push('yarn'); },
+      execPnpmImpl() { calls.push('yarn'); },
       resolveNextCliPathImpl: () => '/repo/node_modules/next/dist/bin/next',
       spawnSyncImpl() { calls.push('next'); return { status: 0 }; },
     }),

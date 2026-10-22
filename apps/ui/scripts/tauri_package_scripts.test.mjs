@@ -36,17 +36,17 @@ test('apps/ui package.json exposes shared stack-owned Tauri dev entrypoints', as
 
   assert.equal(scripts['typecheck'], '../stack/bin/hstack-exec --script=typecheck:local');
   assert.equal(scripts['typecheck:local'], 'node ../../scripts/workspaces/runTypeScriptCli.mjs -p tsconfig.json --noEmit');
-  assert.equal(scripts['tauri:dev'], 'yarn -s ensure:workspace:built && node ../stack/scripts/tauri_dev.mjs');
-  assert.equal(scripts['ui:tauri'], 'yarn -s ensure:workspace:built && node ../stack/scripts/tauri_dev.mjs');
-  assert.equal(scripts['tauri:qa'], 'yarn -s ensure:workspace:built && node ./scripts/tauriMcpQa.mjs');
+  assert.equal(scripts['tauri:dev'], 'pnpm --silent run ensure:workspace:built && node ../stack/scripts/tauri_dev.mjs');
+  assert.equal(scripts['ui:tauri'], 'pnpm --silent run ensure:workspace:built && node ../stack/scripts/tauri_dev.mjs');
+  assert.equal(scripts['tauri:qa'], 'pnpm --silent run ensure:workspace:built && node ./scripts/tauriMcpQa.mjs');
   assert.equal(scripts['tauri:mcp:wizard:qa'], 'node ./scripts/qa/tauriOnboardingWizardMcpQa.mjs');
   assert.equal(scripts['tauri:mcp:activity-surfaces:qa'], 'node ./scripts/qa/tauriActivitySurfacesMcpQa.mjs');
   assert.equal(scripts['tauri:mcp:desktop-sidebar-chrome:qa'], 'node ./scripts/qa/tauriDesktopSidebarChromeMcpQa.mjs');
-  assert.equal(scripts['test:native-e2e:activity-surfaces'], 'yarn -s ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --activity-surfaces');
-  assert.equal(scripts['test:native-e2e:desktop-sidebar-chrome'], 'yarn -s ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --desktop-sidebar-chrome');
+  assert.equal(scripts['test:native-e2e:activity-surfaces'], 'pnpm --silent run ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --activity-surfaces');
+  assert.equal(scripts['test:native-e2e:desktop-sidebar-chrome'], 'pnpm --silent run ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --desktop-sidebar-chrome');
   // The Personal Home journey has no caller-attested completion mode: every gate it names is
   // proven from the loaded app and real runtime facts, so it fails rather than downgrading.
-  assert.equal(scripts['test:native-e2e:personal-home'], 'yarn -s ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --personal-home');
+  assert.equal(scripts['test:native-e2e:personal-home'], 'pnpm --silent run ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --personal-home');
   assert.equal(scripts['tauri:mcp:server'], 'npx -y @hypothesi/tauri-mcp-server');
   assert.equal(scripts['tauri:mcp:cli'], 'npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp');
   assert.equal(scripts['tauri:mcp:session:start'], 'npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9225');

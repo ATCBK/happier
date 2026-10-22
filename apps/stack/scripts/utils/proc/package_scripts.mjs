@@ -1,23 +1,9 @@
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
-import { pathExists } from '../fs/fs.mjs';
-import { coerceHappyMonorepoRootFromPath } from '../paths/paths.mjs';
-
 export async function detectPackageManagerCmd(dir) {
-  if (await pathExists(join(dir, 'yarn.lock'))) {
-    return { name: 'yarn', cmd: 'yarn', argsForScript: (script) => ['-s', script] };
-  }
-
-  // When running against the Happy monorepo, stacks/worktrees often point at a package directory
-  // (e.g. apps/server) instead of the monorepo root. Prefer Yarn in that case so
-  // workspace-only deps like `@happier-dev/agents` resolve locally instead of being fetched from npm.
-  const happyMonorepoRoot = coerceHappyMonorepoRootFromPath(dir);
-  if (happyMonorepoRoot && (await pathExists(join(happyMonorepoRoot, 'yarn.lock')))) {
-    return { name: 'yarn', cmd: 'yarn', argsForScript: (script) => ['-s', script] };
-  }
-  // Yarn-only: if no lockfile is found, still default to yarn to avoid mixing package managers.
-  return { name: 'yarn', cmd: 'yarn', argsForScript: (script) => ['-s', script] };
+  // Stack source package scripts always use the repository's pinned manager.
+  return { name: 'pnpm', cmd: 'pnpm', argsForScript: (script) => ['run', '--silent', script] };
 }
 
 export async function readPackageJsonScripts(dir) {

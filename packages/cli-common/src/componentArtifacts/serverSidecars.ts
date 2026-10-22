@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { WORKSPACE_PACKAGE_BUILD_INPUT_RECORD } from '../../packageBuildOutputTargets.mjs';
 import { resolveInstalledRuntimePackage } from '../../workspaceRuntimeDependencies.mjs';
 
-import { commandExists, execOrThrow, resolveYarnCommand, type RunCommand } from './commands.js';
+import { commandExists, execOrThrow, resolvePnpmCommand, type RunCommand } from './commands.js';
 import type { BinaryTarget } from './targets.js';
 
 export type StageEntry = {
@@ -141,10 +141,10 @@ export async function prepareUiWebDist({
     },
   });
 
-  const yarn = resolveYarnCommand({ commandProbe });
+  const pnpm = resolvePnpmCommand({ commandProbe });
   await runCommand(
-    yarn.cmd,
-    [...yarn.args, '--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'],
+    pnpm.cmd,
+    [...pnpm.args, '--dir', 'apps/ui', '--silent', 'exec', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'],
     {
       cwd: repoRoot,
       env: {
@@ -415,15 +415,15 @@ export async function resolveServerRuntimeSupportEntries({
   runCommand?: RunCommand;
   commandProbe?: (cmd: string) => boolean;
 }): Promise<StageEntry[]> {
-  const yarn = resolveYarnCommand({ commandProbe });
+  const pnpm = resolvePnpmCommand({ commandProbe });
   const effectiveBuildDbProviders = resolveServerRuntimeSupportBuildDbProviders({
     serverComponent,
     buildDbProviders,
     env,
   });
   await runCommand(
-    yarn.cmd,
-    [...yarn.args, '--cwd', 'apps/server', '-s', 'generate:providers'],
+    pnpm.cmd,
+    [...pnpm.args, '--dir', 'apps/server', '--silent', 'run', 'generate:providers'],
     {
       cwd: repoRoot,
       env: {

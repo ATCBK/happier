@@ -17,7 +17,8 @@ async function createCliAdmissionFixture(t) {
   const lockPath = join(root, '.project/tmp/cli-dist-build.lock');
   await Promise.all([mkdir(join(packageRoot, 'src'), { recursive: true }), mkdir(dirname(lockPath), { recursive: true })]);
   await writeFile(join(root, 'package.json'), '{"private":true}\n');
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
     name: '@happier-dev/cli-build-admission-fixture', version: '0.0.0', type: 'module',
     main: './dist/index.mjs', module: './dist/index.mjs',

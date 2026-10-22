@@ -10,7 +10,7 @@ import { resolveTsxEntrypointLaunchSpec } from '../runTsxEntrypoint.mjs';
  *
  * The contract tests used to be reachable only through per-file package scripts, which meant a new
  * `*.test.ts` beside them silently had no runner. The file set is derived from the directory here
- * so adding a contract test is enough to have it executed by `yarn test` and by CI.
+ * so adding a contract test is enough to have it executed by `pnpm run test` and by CI.
  */
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const contractDirectory = join(workspaceRoot, 'src', 'plugin-platform');

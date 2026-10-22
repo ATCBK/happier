@@ -14,22 +14,22 @@ function createPackageJsonText(): string {
   return JSON.stringify(
     {
       scripts: {
-        test: 'yarn -s test:unit',
+        test: 'pnpm run test:unit',
         'check:public-sdk:finite': 'apps/stack/bin/hstack-exec --script=check:public-sdk:finite:local',
         'check:public-sdk:finite:local': 'turbo run api:finite test:finite typecheck:finite --filter=@happier-dev/plugin-sdk --filter=@happier-dev/plugin-ui --filter=@happier-dev/sdk',
-        'test:unit': 'yarn workspace privacy-kit test && yarn workspace @happier-dev/protocol test && yarn workspace @happier-dev/peer-mediation test && yarn workspace @happier-dev/transfers test && yarn workspace @happier-dev/agents test && yarn workspace @happier-dev/cli-common test && yarn workspace @happier-dev/support test && yarn workspace @happier-dev/connection-supervisor test && yarn workspace @happier-dev/bootstrap test && yarn workspace @happier-dev/plugin-sdk test && yarn workspace @happier-dev/plugin-ui test && yarn workspace @happier-dev/app test && yarn workspace @happier-dev/cli test:unit && yarn --cwd apps/server test:unit && yarn --cwd packages/relay-server test && yarn --cwd apps/stack test:unit',
+        'test:unit': 'pnpm --filter privacy-kit run test && pnpm --filter @happier-dev/protocol run test && pnpm --filter @happier-dev/peer-mediation run test && pnpm --filter @happier-dev/transfers run test && pnpm --filter @happier-dev/agents run test && pnpm --filter @happier-dev/cli-common run test && pnpm --filter @happier-dev/support run test && pnpm --filter @happier-dev/connection-supervisor run test && pnpm --filter @happier-dev/bootstrap run test && pnpm --filter @happier-dev/plugin-sdk run test && pnpm --filter @happier-dev/plugin-ui run test && pnpm --filter @happier-dev/app run test && pnpm --filter @happier-dev/cli run test:unit && pnpm --dir apps/server run test:unit && pnpm --dir packages/relay-server run test && pnpm --dir apps/stack run test:unit',
         'test:plugin-workspaces': 'node --experimental-strip-types scripts/testing/runPluginWorkspaceTests.ts',
-        'test:plugin-platform:source': 'yarn workspace @happier-dev/tests test:plugin-platform:source',
-        'test:integration': 'yarn workspace @happier-dev/app test:integration && yarn workspace @happier-dev/cli test:integration && yarn --cwd apps/server test:integration && yarn --cwd apps/stack test:integration',
-        'test:e2e:core:fast': 'yarn workspace @happier-dev/tests test:core:fast',
-        'test:e2e:core:slow': 'yarn workspace @happier-dev/tests test:core:slow',
-        'test:e2e:ui': 'yarn workspace @happier-dev/tests test:ui:e2e',
-        'test:e2e:desktop:native': 'yarn workspace @happier-dev/app test:native-e2e:activity-surfaces',
-        'test:workspace-sync:real': 'yarn workspace @happier-dev/cli test:workspace-sync:real',
-        'test:e2e:mobile': 'yarn workspace @happier-dev/tests test:mobile:e2e:android',
-        'test:agents': 'yarn workspace @happier-dev/tests test:agents',
-        'test:stress': 'yarn workspace @happier-dev/tests test:stress',
-        'test:db-contract:docker': 'yarn -s test:db-contract:postgres:docker && yarn -s test:db-contract:mysql:docker',
+        'test:plugin-platform:source': 'pnpm --filter @happier-dev/tests run test:plugin-platform:source',
+        'test:integration': 'pnpm --filter @happier-dev/app run test:integration && pnpm --filter @happier-dev/cli run test:integration && pnpm --dir apps/server run test:integration && pnpm --dir apps/stack run test:integration',
+        'test:e2e:core:fast': 'pnpm --filter @happier-dev/tests run test:core:fast',
+        'test:e2e:core:slow': 'pnpm --filter @happier-dev/tests run test:core:slow',
+        'test:e2e:ui': 'pnpm --filter @happier-dev/tests run test:ui:e2e',
+        'test:e2e:desktop:native': 'pnpm --filter @happier-dev/app run test:native-e2e:activity-surfaces',
+        'test:workspace-sync:real': 'pnpm --filter @happier-dev/cli run test:workspace-sync:real',
+        'test:e2e:mobile': 'pnpm --filter @happier-dev/tests run test:mobile:e2e:android',
+        'test:agents': 'pnpm --filter @happier-dev/tests run test:agents',
+        'test:stress': 'pnpm --filter @happier-dev/tests run test:stress',
+        'test:db-contract:docker': 'pnpm run test:db-contract:postgres:docker && pnpm run test:db-contract:mysql:docker',
         'test:wiring:self': 'node --experimental-strip-types --test scripts/testing/lib/*.test.ts scripts/testing/validateTestWiring.test.ts scripts/testing/runPluginWorkspaceTests.test.ts',
         'test:wiring': 'node --import tsx ./scripts/testing/validateTestWiring.ts',
         'test:policy:self': 'node --import tsx --test scripts/testing/lib/*.test.ts scripts/testing/*.test.ts scripts/testing/migrations/lib/*.test.ts scripts/testing/migrations/runtimeUnification/validators/*.test.ts',
@@ -38,7 +38,7 @@ function createPackageJsonText(): string {
         'test:migration:inventory': 'node --import tsx ./scripts/testing/migrations/validateMigrationInventory.ts',
         'test:migration:v2-zero:enforce': 'node --experimental-strip-types ./scripts/testing/migrations/validateV2ZeroInventory.ts --enforce',
         'test:migration:bundled-plugin-projections': 'node apps/cli/scripts/withNodeHeapLimit.mjs node --experimental-strip-types apps/cli/scripts/build-owned/generateBundledPluginEntries.ts --mode check --scope projections',
-        'test:migration:governance': 'yarn -s test:migration:v2-zero:enforce && yarn -s test:migration:wire-compat && yarn -s test:migration:bundled-plugin-projections',
+        'test:migration:governance': 'pnpm run test:migration:v2-zero:enforce && pnpm run test:migration:wire-compat && pnpm run test:migration:bundled-plugin-projections',
       },
     },
     null,
@@ -51,64 +51,64 @@ function createWorkflowText(): string {
 jobs:
   testing:
     steps:
-      - run: yarn workspace privacy-kit test
-      - run: yarn workspace @happier-dev/protocol test
-      - run: yarn workspace @happier-dev/peer-mediation test
-      - run: yarn workspace @happier-dev/transfers test
-      - run: yarn workspace @happier-dev/agents test
-      - run: yarn workspace @happier-dev/cli-common test
-      - run: yarn workspace @happier-dev/support test
-      - run: yarn workspace @happier-dev/connection-supervisor test
-      - run: yarn workspace @happier-dev/bootstrap test
-      - run: yarn workspace @happier-dev/plugin-sdk test
-      - run: yarn workspace @happier-dev/plugin-ui test
-      - run: yarn test:plugin-workspaces
-      - run: yarn workspace @happier-dev/tests test:plugin-platform:source
-      - run: yarn workspace @happier-dev/app test:unit
-      - run: yarn workspace @happier-dev/app test:integration
-      - run: yarn workspace @happier-dev/cli test:unit
-      - run: yarn workspace @happier-dev/cli test:integration
-      - run: yarn --cwd apps/server test:unit
-      - run: yarn --cwd apps/server test:integration
-      - run: yarn --cwd apps/server test:server:db-contract
-      - run: yarn --cwd packages/relay-server test
-      - run: yarn --cwd apps/stack test:unit
-      - run: yarn --cwd apps/stack test:integration
-      - run: yarn test:e2e:core:fast
-      - run: yarn test:e2e:core:slow
-      - run: yarn -s test:e2e:ui
-      - run: yarn test:workspace-sync:real
-      - run: yarn -s test:e2e:mobile
-      - run: yarn workspace @happier-dev/tests providers:run all smoke
-      - run: yarn test:stress
-      - run: yarn test:wiring:self && yarn test:wiring && yarn test:policy && yarn test:inventory && yarn test:migration:inventory && yarn test:migration:governance
+      - run: pnpm --filter privacy-kit run test
+      - run: pnpm --filter @happier-dev/protocol run test
+      - run: pnpm --filter @happier-dev/peer-mediation run test
+      - run: pnpm --filter @happier-dev/transfers run test
+      - run: pnpm --filter @happier-dev/agents run test
+      - run: pnpm --filter @happier-dev/cli-common run test
+      - run: pnpm --filter @happier-dev/support run test
+      - run: pnpm --filter @happier-dev/connection-supervisor run test
+      - run: pnpm --filter @happier-dev/bootstrap run test
+      - run: pnpm --filter @happier-dev/plugin-sdk run test
+      - run: pnpm --filter @happier-dev/plugin-ui run test
+      - run: pnpm run test:plugin-workspaces
+      - run: pnpm --filter @happier-dev/tests run test:plugin-platform:source
+      - run: pnpm --filter @happier-dev/app run test:unit
+      - run: pnpm --filter @happier-dev/app run test:integration
+      - run: pnpm --filter @happier-dev/cli run test:unit
+      - run: pnpm --filter @happier-dev/cli run test:integration
+      - run: pnpm --dir apps/server run test:unit
+      - run: pnpm --dir apps/server run test:integration
+      - run: pnpm --dir apps/server run test:server:db-contract
+      - run: pnpm --dir packages/relay-server run test
+      - run: pnpm --dir apps/stack run test:unit
+      - run: pnpm --dir apps/stack run test:integration
+      - run: pnpm run test:e2e:core:fast
+      - run: pnpm run test:e2e:core:slow
+      - run: pnpm --silent run test:e2e:ui
+      - run: pnpm run test:workspace-sync:real
+      - run: pnpm --silent run test:e2e:mobile
+      - run: pnpm --filter @happier-dev/tests run providers:run all smoke
+      - run: pnpm run test:stress
+      - run: pnpm run test:wiring:self && pnpm run test:wiring && pnpm run test:policy && pnpm run test:inventory && pnpm run test:migration:inventory && pnpm run test:migration:governance
 `;
 }
 
 function createDocsText(): string {
   return `
 \`\`\`bash
-yarn test
-yarn test:plugin-workspaces
-yarn test:plugin-platform:source
-yarn test:integration
-yarn test:e2e:core:fast
-yarn test:e2e:core:slow
-yarn test:e2e:ui
-yarn test:e2e:desktop:native
-yarn test:workspace-sync:real
-yarn test:e2e:mobile
-yarn test:agents
-yarn test:stress
-yarn test:db-contract:docker
-yarn test:wiring:self
-yarn test:wiring
-yarn test:policy
-yarn test:policy:self
-yarn test:inventory
-yarn test:migration:inventory
-yarn test:migration:v2-zero:enforce
-yarn test:migration:governance
+pnpm run test
+pnpm run test:plugin-workspaces
+pnpm run test:plugin-platform:source
+pnpm run test:integration
+pnpm run test:e2e:core:fast
+pnpm run test:e2e:core:slow
+pnpm run test:e2e:ui
+pnpm run test:e2e:desktop:native
+pnpm run test:workspace-sync:real
+pnpm run test:e2e:mobile
+pnpm run test:agents
+pnpm run test:stress
+pnpm run test:db-contract:docker
+pnpm run test:wiring:self
+pnpm run test:wiring
+pnpm run test:policy
+pnpm run test:policy:self
+pnpm run test:inventory
+pnpm run test:migration:inventory
+pnpm run test:migration:v2-zero:enforce
+pnpm run test:migration:governance
 \`\`\`
 `;
 }
@@ -148,35 +148,35 @@ test('flags missing governance docs and feature gating drift', () => {
   const report = collectWorkflowScriptParityReport({
     packageJsonText: createPackageJsonText(),
     workflowText: createWorkflowText(),
-    docsText: createDocsText().replace('yarn test:policy\n', ''),
+    docsText: createDocsText().replace('pnpm run test:policy\n', ''),
     configTexts,
   });
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
-  assert.match(messages, /Docs are missing command yarn test:policy/);
+  assert.match(messages, /Docs are missing command pnpm run test:policy/);
   assert.match(messages, /Feature gating is not verified for apps\/server\/vitest\.dbcontract\.config\.ts/);
 });
 
 test('flags missing migration governance parity in docs and workflow', () => {
   const report = collectWorkflowScriptParityReport({
     packageJsonText: createPackageJsonText(),
-    workflowText: createWorkflowText().replace(' && yarn test:migration:governance', ''),
+    workflowText: createWorkflowText().replace(' && pnpm run test:migration:governance', ''),
     docsText: createDocsText()
-      .replace('yarn test:migration:v2-zero:enforce\n', '')
-      .replace('yarn test:migration:governance\n', ''),
+      .replace('pnpm run test:migration:v2-zero:enforce\n', '')
+      .replace('pnpm run test:migration:governance\n', ''),
     configTexts: createFeatureGatingConfigTexts(),
   });
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
-  assert.match(messages, /Docs are missing command yarn test:migration:v2-zero:enforce/);
-  assert.match(messages, /Docs are missing command yarn test:migration:governance/);
+  assert.match(messages, /Docs are missing command pnpm run test:migration:v2-zero:enforce/);
+  assert.match(messages, /Docs are missing command pnpm run test:migration:governance/);
   assert.match(messages, /Workflow coverage is missing for test:migration:governance/);
 });
 
 test('flags shared package unit workflow drift when peer mediation coverage falls out of the root lane', () => {
   const report = collectWorkflowScriptParityReport({
     packageJsonText: createPackageJsonText(),
-    workflowText: createWorkflowText().replace('      - run: yarn workspace @happier-dev/peer-mediation test\n', ''),
+    workflowText: createWorkflowText().replace('      - run: pnpm --filter @happier-dev/peer-mediation run test\n', ''),
     docsText: createDocsText(),
     configTexts: createFeatureGatingConfigTexts(),
   });
@@ -187,9 +187,9 @@ test('flags shared package unit workflow drift when peer mediation coverage fall
 
 test('recognizes the exact finite public SDK task as unit coverage for its three workspaces', () => {
   const workflowText = createWorkflowText()
-    .replace('      - run: yarn workspace @happier-dev/plugin-sdk test\n', '')
-    .replace('      - run: yarn workspace @happier-dev/plugin-ui test\n', '')
-    .replace('      - run: yarn test:plugin-workspaces\n', '      - run: yarn -s check:public-sdk:finite\n      - run: yarn test:plugin-workspaces\n');
+    .replace('      - run: pnpm --filter @happier-dev/plugin-sdk run test\n', '')
+    .replace('      - run: pnpm --filter @happier-dev/plugin-ui run test\n', '')
+    .replace('      - run: pnpm run test:plugin-workspaces\n', '      - run: pnpm run check:public-sdk:finite\n      - run: pnpm run test:plugin-workspaces\n');
   const report = collectWorkflowScriptParityReport({
     packageJsonText: createPackageJsonText(),
     workflowText,
@@ -205,9 +205,9 @@ test('withholds finite public SDK credit from a workspace its turbo filter no lo
     '--filter=@happier-dev/plugin-sdk --filter=@happier-dev/sdk',
   );
   const workflowText = createWorkflowText()
-    .replace('      - run: yarn workspace @happier-dev/plugin-sdk test\n', '')
-    .replace('      - run: yarn workspace @happier-dev/plugin-ui test\n', '')
-    .replace('      - run: yarn test:plugin-workspaces\n', '      - run: yarn -s check:public-sdk:finite\n      - run: yarn test:plugin-workspaces\n');
+    .replace('      - run: pnpm --filter @happier-dev/plugin-sdk run test\n', '')
+    .replace('      - run: pnpm --filter @happier-dev/plugin-ui run test\n', '')
+    .replace('      - run: pnpm run test:plugin-workspaces\n', '      - run: pnpm run check:public-sdk:finite\n      - run: pnpm run test:plugin-workspaces\n');
   const report = collectWorkflowScriptParityReport({
     packageJsonText,
     workflowText,
@@ -226,9 +226,9 @@ test('withholds finite public SDK credit when the command no longer runs the wor
     'turbo run api:finite typecheck:finite',
   );
   const workflowText = createWorkflowText()
-    .replace('      - run: yarn workspace @happier-dev/plugin-sdk test\n', '')
-    .replace('      - run: yarn workspace @happier-dev/plugin-ui test\n', '')
-    .replace('      - run: yarn test:plugin-workspaces\n', '      - run: yarn -s check:public-sdk:finite\n      - run: yarn test:plugin-workspaces\n');
+    .replace('      - run: pnpm --filter @happier-dev/plugin-sdk run test\n', '')
+    .replace('      - run: pnpm --filter @happier-dev/plugin-ui run test\n', '')
+    .replace('      - run: pnpm run test:plugin-workspaces\n', '      - run: pnpm run check:public-sdk:finite\n      - run: pnpm run test:plugin-workspaces\n');
   const report = collectWorkflowScriptParityReport({
     packageJsonText,
     workflowText,
@@ -247,20 +247,20 @@ test('requires the derived plugin workspace test runner in scripts, docs, and CI
 
   const report = collectWorkflowScriptParityReport({
     packageJsonText: JSON.stringify(packageJson, null, 2),
-    workflowText: createWorkflowText().replace('      - run: yarn test:plugin-workspaces\n', ''),
-    docsText: createDocsText().replace('yarn test:plugin-workspaces\n', ''),
+    workflowText: createWorkflowText().replace('      - run: pnpm run test:plugin-workspaces\n', ''),
+    docsText: createDocsText().replace('pnpm run test:plugin-workspaces\n', ''),
     configTexts: createFeatureGatingConfigTexts(),
   });
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
   assert.match(messages, /Missing root script test:plugin-workspaces/);
-  assert.match(messages, /Docs are missing command yarn test:plugin-workspaces/);
+  assert.match(messages, /Docs are missing command pnpm run test:plugin-workspaces/);
   assert.match(messages, /Workflow coverage is missing for test:plugin-workspaces/);
 });
 
 test('flags governed root script body drift when migration governance no longer runs the owned validator chain', () => {
   const packageJson = JSON.parse(createPackageJsonText());
-  packageJson.scripts['test:migration:governance'] = 'yarn -s test:migration:wire-compat';
+  packageJson.scripts['test:migration:governance'] = 'pnpm run test:migration:wire-compat';
 
   const report = collectWorkflowScriptParityReport({
     packageJsonText: JSON.stringify(packageJson, null, 2),
@@ -295,14 +295,14 @@ test('flags root self-lane drift when migration lib self-tests fall out of test:
 test('flags unknown root commands mentioned in docs or workflow', () => {
   const report = collectWorkflowScriptParityReport({
     packageJsonText: createPackageJsonText(),
-    workflowText: `${createWorkflowText()}\n      - run: yarn test:not-real`,
-    docsText: `${createDocsText()}\nyarn test:imaginary`,
+    workflowText: `${createWorkflowText()}\n      - run: pnpm run test:not-real`,
+    docsText: `${createDocsText()}\npnpm run test:imaginary`,
     configTexts: createFeatureGatingConfigTexts(),
   });
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
-  assert.match(messages, /Workflow references unknown root command yarn test:not-real/);
-  assert.match(messages, /Docs reference unknown root command yarn test:imaginary/);
+  assert.match(messages, /Workflow references unknown root command pnpm run test:not-real/);
+  assert.match(messages, /Docs reference unknown root command pnpm run test:imaginary/);
 });
 
 test('tracks required workflow coverage for the real workspace-sync lane', () => {
@@ -324,13 +324,13 @@ test('requires the native desktop e2e root script and docs even though workflow 
   const report = collectWorkflowScriptParityReport({
     packageJsonText: JSON.stringify(packageJson, null, 2),
     workflowText: createWorkflowText(),
-    docsText: createDocsText().replace('yarn test:e2e:desktop:native\n', ''),
+    docsText: createDocsText().replace('pnpm run test:e2e:desktop:native\n', ''),
     configTexts: createFeatureGatingConfigTexts(),
   });
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
   assert.match(messages, /Missing root script test:e2e:desktop:native/);
-  assert.match(messages, /Docs are missing command yarn test:e2e:desktop:native/);
+  assert.match(messages, /Docs are missing command pnpm run test:e2e:desktop:native/);
   assert.doesNotMatch(messages, /Workflow coverage is missing for test:e2e:desktop:native/);
 });
 
@@ -357,10 +357,10 @@ test('wires shared SDK packages into the default root validation lanes', () => {
     'Support source compilation is reused as its typecheck evidence before the source-only Turbo lane',
   );
   assert.match(typecheckCommandText, /--filter=@happier-dev\/plugin-ui/);
-  assert.match(workflowText, /yarn -s test:shared-packages --mode ci/);
-  assert.match(workflowText, /yarn -s check:public-sdk:finite/);
-  assert.doesNotMatch(workflowText, /yarn workspace @happier-dev\/plugin-sdk test/);
-  assert.doesNotMatch(workflowText, /yarn workspace @happier-dev\/plugin-ui test/);
+  assert.match(workflowText, /pnpm run test:shared-packages --mode ci/);
+  assert.match(workflowText, /pnpm run check:public-sdk:finite/);
+  assert.doesNotMatch(workflowText, /pnpm --filter @happier-dev\/plugin-sdk run test/);
+  assert.doesNotMatch(workflowText, /pnpm --filter @happier-dev\/plugin-ui run test/);
 });
 
 test('routes the root ordinary integration lane through the Stack executor', () => {
@@ -387,7 +387,7 @@ test('runs current-source Plugin Platform contracts without a release representa
   assert.match(sourceLane, /run-contract-tests\.mjs/);
   assert.match(sourceLane, /public-only\.test\.mjs/);
   assert.doesNotMatch(sourceLane, /pack-fixture|installedTarballProof|\.tgz|tarball/i);
-  assert.match(workflowText, /yarn workspace @happier-dev\/tests test:plugin-platform:source/);
+  assert.match(workflowText, /pnpm --filter @happier-dev\/tests run test:plugin-platform:source/);
   assert.doesNotMatch(workflowText, /build:plugin-platform:natural|test:plugin-platform:packed-/);
 });
 
@@ -395,9 +395,9 @@ test('runs plugin workspace unit tests only through the derived workspace runner
   const workflowText = readFileSync(join(ROOT_DIR, '.github/workflows/tests.yml'), 'utf8');
 
   assert.match(workflowText, /^  plugin-workspaces-unit:\n/m);
-  assert.match(workflowText, /run: yarn test:plugin-workspaces/);
-  assert.doesNotMatch(workflowText, /yarn workspace @happier-dev\/plugins-[a-z0-9-]+ test/);
-  assert.doesNotMatch(workflowText, /yarn workspace @happier-dev\/plugins-[a-z0-9-]+ typecheck/);
+  assert.match(workflowText, /run: pnpm run test:plugin-workspaces/);
+  assert.doesNotMatch(workflowText, /pnpm --filter @happier-dev\/plugins-[a-z0-9-]+ run test/);
+  assert.doesNotMatch(workflowText, /pnpm --filter @happier-dev\/plugins-[a-z0-9-]+ run typecheck/);
 });
 
 test('keeps plugin workspace typechecks reachable when plugin workspace tests fail', () => {
@@ -416,14 +416,14 @@ test('keeps plugin workspace typechecks reachable when plugin workspace tests fa
   );
   assert.match(
     workflowText,
-    /- name: Run every plugin workspace test\n        run: yarn test:plugin-workspaces\n\n      - name: Run every plugin workspace typecheck\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: yarn typecheck:plugin-workspaces/,
+    /- name: Run every plugin workspace test\n        run: pnpm run test:plugin-workspaces\n\n      - name: Run every plugin workspace typecheck\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: pnpm run typecheck:plugin-workspaces/,
   );
 });
 
 test('keeps the repository typecheck reachable when the governance validators fail', () => {
   const workflowText = readFileSync(join(ROOT_DIR, '.github/workflows/tests.yml'), 'utf8');
   const typecheckJob = workflowText.slice(workflowText.indexOf('\n  typecheck:\n'));
-  const guardedTypecheckStep = /- name: Run typecheck\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: yarn typecheck/;
+  const guardedTypecheckStep = /- name: Run typecheck\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: pnpm run typecheck/;
 
   // The wiring/policy validators and the inventory reports must not be able to swallow the
   // typecheck evidence: a red governance gate has to leave the typecheck result visible.
@@ -431,7 +431,7 @@ test('keeps the repository typecheck reachable when the governance validators fa
   assert.match(typecheckJob, /- name: Run governance inventory reports\n        if: \$\{\{ !cancelled\(\) \}\}/);
   assert.match(typecheckJob, guardedTypecheckStep);
   assert.doesNotMatch(
-    typecheckJob.replace(guardedTypecheckStep, '- name: Run typecheck\n        run: yarn typecheck'),
+    typecheckJob.replace(guardedTypecheckStep, '- name: Run typecheck\n        run: pnpm run typecheck'),
     guardedTypecheckStep,
   );
 });

@@ -113,7 +113,7 @@ export function buildPluginWorkspaceTestInvocations(
 ): readonly PluginWorkspaceTestInvocation[] {
   return packages.map((pluginPackage) => ({
     packageName: pluginPackage.packageName,
-    args: ['workspace', pluginPackage.packageName, scriptName],
+    args: ['--filter', pluginPackage.packageName, '--silent', 'run', scriptName],
   }));
 }
 

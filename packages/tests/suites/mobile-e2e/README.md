@@ -54,7 +54,7 @@ standard selected app.
 From repo root:
 
 ```bash
-yarn -s test:e2e:mobile:android
+pnpm run test:e2e:mobile:android
 ```
 
 By default the runner starts an ephemeral **server-light** instance (and stops it at the end of the run). To use an existing server instead, set:
@@ -86,8 +86,8 @@ Artifacts are written under:
   - run from repo root with:
 
 ```bash
-yarn -s test:e2e:mobile:ios:connected-machine:transcript
-yarn -s test:e2e:mobile:android:connected-machine:transcript
+pnpm run test:e2e:mobile:ios:connected-machine:transcript
+pnpm run test:e2e:mobile:android:connected-machine:transcript
 ```
 
 Equivalent direct commands from `packages/tests`:
@@ -123,8 +123,8 @@ state.
 Then run, from the repository root on the device host:
 
 ```bash
-HAPPIER_QA_STACK_RUNTIME_JSON_PATH=<exact-stack.runtime.json> HAPPIER_E2E_IOS_SIMULATOR_UDID=<exact-simulator-udid> corepack yarn --cwd packages/tests -s test:mobile:e2e:ios:plugin-platform-current-source
-HAPPIER_QA_STACK_RUNTIME_JSON_PATH=<exact-stack.runtime.json> HAPPIER_E2E_ANDROID_SERIAL=<exact-adb-serial> corepack yarn --cwd packages/tests -s test:mobile:e2e:android:plugin-platform-current-source
+HAPPIER_QA_STACK_RUNTIME_JSON_PATH=<exact-stack.runtime.json> HAPPIER_E2E_IOS_SIMULATOR_UDID=<exact-simulator-udid> pnpm --dir packages/tests run test:mobile:e2e:ios:plugin-platform-current-source
+HAPPIER_QA_STACK_RUNTIME_JSON_PATH=<exact-stack.runtime.json> HAPPIER_E2E_ANDROID_SERIAL=<exact-adb-serial> pnpm --dir packages/tests run test:mobile:e2e:android:plugin-platform-current-source
 ```
 
 The wrapper refuses an unqualified device and rejects conflicting environment

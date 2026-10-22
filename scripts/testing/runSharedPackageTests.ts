@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { runCommandSuite, type CommandSuiteEntry } from './lib/runCommandSuite.ts';
-import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { runPnpmCommand } from './lib/runPnpmCommand.ts';
 import {
   selectSharedPackageTestCommands,
   type SharedPackageTestMode,
@@ -26,7 +26,7 @@ export async function runSharedPackageTests(
     commands: options.commands ?? selectSharedPackageTestCommands(options.mode ?? 'local'),
     maxConcurrent: options.maxConcurrent,
     suiteName: 'Shared package test suite',
-    runCommand: options.runCommand ?? ((command) => runYarnCommand(command, rootDir)),
+    runCommand: options.runCommand ?? ((command) => runPnpmCommand(command, rootDir)),
   });
 }
 

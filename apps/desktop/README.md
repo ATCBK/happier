@@ -25,10 +25,10 @@ Command names, event delivery, and the `@tauri-apps/api` channel protocol are al
 
 ```bash
 cd apps/desktop
-yarn build          # compiles src/ -> build/ with the repo's TypeScript runner
-yarn start          # opens the window (runs yarn build first)
-yarn test           # node:test suite over the compiled output
-yarn typecheck
+pnpm run build          # compiles src/ -> build/ with the repo's TypeScript runner
+pnpm run start          # opens the window (runs pnpm run build first)
+pnpm run test           # node:test suite over the compiled output
+pnpm run typecheck
 ```
 
 Environment:
@@ -41,8 +41,8 @@ Environment:
 | `HAPPIER_DESKTOP_INVOKE_LOG` | Append one JSON line per `invoke` to this path. Every invoke is logged to stdout regardless. |
 | `HAPPIER_HSETUP_PATH` | Override the bundled `hsetup` executable used by system tasks. An invalid override fails closed. |
 
-Production mode serves `apps/ui/dist`. Rebuild that bundle from `apps/ui` with
-`yarn tauri:prepare:build`; both desktop targets consume the same export.
+Production mode serves `apps/ui/dist`. Rebuild that bundle from the repository root with
+`pnpm --dir apps/ui run tauri:prepare:build`; both desktop targets consume the same export.
 
 ### You will need a relay
 
@@ -103,6 +103,6 @@ Known gaps beyond the command list:
 ## Workspace installation
 
 `apps/desktop` is listed in the root `package.json` workspaces. Electron was installed directly into
-`apps/desktop/node_modules` to avoid disturbing the shared checkout's `node_modules` and `yarn.lock`
-while other work was in flight; a normal root `yarn install` will hoist it and is the intended
+`apps/desktop/node_modules` to avoid disturbing the shared checkout's `node_modules` and `pnpm-lock.yaml`
+while other work was in flight; a normal root `pnpm install` will hoist it and is the intended
 steady state.

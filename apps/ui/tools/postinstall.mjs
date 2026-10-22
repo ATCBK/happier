@@ -6,8 +6,6 @@ import { resolveUiPostinstallTasks } from './resolveUiPostinstallTasks.mjs';
 import { buildPasswordKdfWorker } from './password/buildPasswordKdfWorker.mjs';
 import { buildCryptoWorker } from './crypto/buildCryptoWorker.mjs';
 import { buildAtmosphereRenderers } from './atmosphere/buildAtmosphereRenderers.mjs';
-import { ensureNohoistPeerLinks } from './ensureNohoistPeerLinks.mjs';
-import { createFilteredPatchDir } from './postinstall/filteredPatchDirectory.mjs';
 import { runCommandBestEffort, runCommandOrExit } from './postinstall/runCommand.mjs';
 import { verifyNativePatchCompilation } from './postinstall/verifyNativePatchCompilation.mjs';
 import {
@@ -24,9 +22,8 @@ import {
     verifyReactNativeEnrichedMarkdownWebStreamingPatch,
     verifyUiPatchedDependencies,
 } from './postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
-import { repairReactNativeEnrichedMarkdownWebStreamingPatch } from './postinstall/repairReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 
-// Yarn workspaces can execute this script via a symlinked path (e.g. repoRoot/node_modules/happy/...).
+// Workspace installs can execute this script via a symlinked path (e.g. repoRoot/node_modules/happy/...).
 // Resolve symlinks so repoRootDir/expoAppDir are computed from the real filesystem location.
 const toolsDir = path.dirname(fs.realpathSync(url.fileURLToPath(import.meta.url)));
 const expoAppDir = path.resolve(toolsDir, '..');
@@ -36,7 +33,8 @@ function findRepoRoot(startDir) {
     for (let i = 0; i < 8; i++) {
         if (
             fs.existsSync(path.resolve(dir, 'package.json')) &&
-            fs.existsSync(path.resolve(dir, 'yarn.lock'))
+            fs.existsSync(path.resolve(dir, 'pnpm-workspace.yaml')) &&
+            fs.existsSync(path.resolve(dir, 'pnpm-lock.yaml'))
         ) {
             return dir;
         }
@@ -49,36 +47,8 @@ function findRepoRoot(startDir) {
 }
 
 const repoRootDir = findRepoRoot(expoAppDir);
-const patchDir = path.resolve(expoAppDir, 'patches');
-const patchDirFromRepoRoot = path.relative(repoRootDir, patchDir);
-const patchDirFromExpoApp = path.relative(expoAppDir, patchDir);
 const repoRootNodeModulesDir = path.resolve(repoRootDir, 'node_modules');
 const expoAppNodeModulesDir = path.resolve(expoAppDir, 'node_modules');
-
-try {
-    ensureNohoistPeerLinks({ repoRootDir, expoAppDir });
-} catch (e) {
-    console.error(e instanceof Error ? e.message : String(e));
-    process.exit(1);
-}
-
-const patchPackageCliCandidatePaths = [
-    path.resolve(expoAppDir, 'node_modules', 'patch-package', 'dist', 'index.js'),
-    path.resolve(repoRootDir, 'node_modules', 'patch-package', 'dist', 'index.js'),
-];
-
-const patchPackageCliPath = patchPackageCliCandidatePaths.find((candidatePath) =>
-    fs.existsSync(candidatePath),
-);
-
-if (!patchPackageCliPath) {
-    console.error(
-        `Could not find patch-package CLI at:\n${patchPackageCliCandidatePaths
-            .map((p) => `- ${p}`)
-            .join('\n')}`,
-    );
-    process.exit(1);
-}
 
 const tasks = resolveUiPostinstallTasks({ env: process.env });
 const wants = (id) => tasks.includes(id);
@@ -94,46 +64,9 @@ if (wants('prepare-atmosphere-renderers')) {
     await buildAtmosphereRenderers({ web: wants('vendor-password-kdf-worker') });
 }
 
-// Repair incomplete markdown artifacts before the all-package patch pass:
-// otherwise its strict failure exits before the existing partial repair runs.
+// pnpm installs the patches before lifecycle scripts. Prepare the owned WASM
+// output, then verify installed artifacts without a second patch writer.
 prepareEnrichedMarkdownOutputs();
-
-if (wants('patch-package')) {
-    // Note: this repo uses Yarn workspaces, so some dependencies are hoisted to the repo root.
-    // patch-package only patches packages present in the current working directory's
-    // node_modules, so we run it from the repo root but keep patch files in expo-app/patches.
-    if (fs.existsSync(repoRootNodeModulesDir)) {
-        const filteredPatchDir = createFilteredPatchDir({ patchDir, nodeModulesDir: repoRootNodeModulesDir, label: 'root' });
-        if (filteredPatchDir) {
-            try {
-                runCommandOrExit({
-                    command: process.execPath,
-                    args: [patchPackageCliPath, '--error-on-fail', '--patch-dir', path.relative(repoRootDir, filteredPatchDir)],
-                    options: { cwd: repoRootDir },
-                });
-            } finally {
-                fs.rmSync(filteredPatchDir, { recursive: true, force: true });
-            }
-        }
-    }
-
-    // Some dependencies are not hoisted (e.g. expo-router) and are installed under expo-app/node_modules.
-    // Run patch-package again scoped to expo-app to apply those patches.
-    if (fs.existsSync(expoAppNodeModulesDir)) {
-        const filteredPatchDir = createFilteredPatchDir({ patchDir, nodeModulesDir: expoAppNodeModulesDir, label: 'ui' });
-        if (filteredPatchDir) {
-            try {
-                runCommandOrExit({
-                    command: process.execPath,
-                    args: [patchPackageCliPath, '--error-on-fail', '--patch-dir', path.relative(expoAppDir, filteredPatchDir)],
-                    options: { cwd: expoAppDir },
-                });
-            } finally {
-                fs.rmSync(filteredPatchDir, { recursive: true, force: true });
-            }
-        }
-    }
-}
 
 if (wants('verify-sentry-native-replay-postinit-patch')) {
     const marker = 'HAPPIER PATCH(sentry-native-replay-postinit-guard)';
@@ -192,8 +125,8 @@ if (wants('verify-native-patch-compilation')) {
 // The reanimated settled-updates fix is the one patch in this repository that NOTHING else can
 // observe: it lives in a dependency's C++, is reached through a native timer race, and when the hunk
 // is lost every first-party test still passes while animated values silently stick at stale
-// positions. It is verified right after `patch-package` runs, because that is the step that can drop
-// it — a regeneration against a partially-reverted tree rewrites the .patch file and exits 0.
+// positions. Verify it after pnpm installs the patches: regeneration from an incomplete
+// edit directory can still omit the fix while producing a syntactically valid patch.
 if (wants('verify-vendored-reanimated-patch')) {
     const reanimatedPackageDirs = [
         path.resolve(repoRootNodeModulesDir, 'react-native-reanimated'),
@@ -217,10 +150,8 @@ if (wants('verify-vendored-reanimated-patch')) {
     }
 }
 
-// Same failure mode as the reanimated guard above, and the reason this one exists at all: patch-package
-// regenerates silently and can drop hunks without a non-zero exit. Until now this check ran only inside
-// `yarn test`, so an install-time hunk drop stayed invisible for a ~27-minute suite — long enough to
-// build and ship a client from it.
+// Like the reanimated guard, verify the installed behavior rather than trusting
+// successful patch generation or application to prove that every fix survived.
 if (wants('verify-vendored-legend-patch')) {
     const legendPackageDirs = [
         path.resolve(repoRootNodeModulesDir, '@legendapp', 'list'),
@@ -282,16 +213,8 @@ function prepareEnrichedMarkdownOutputs() {
         }
 
         const failureReports = [];
-        for (const [index, packageDir] of packageDirs.entries()) {
-            const initialResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
-            const result = initialResult.status === 'ok'
-                ? initialResult
-                : repairReactNativeEnrichedMarkdownWebStreamingPatch({
-                    packageDir,
-                    patchDir,
-                    patchPackageCliPath,
-                    label: index === 0 ? 'root' : 'ui',
-                });
+        for (const packageDir of packageDirs) {
+            const result = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
             if (result.status !== 'ok') {
                 failureReports.push(`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`);
             }
@@ -304,7 +227,7 @@ function prepareEnrichedMarkdownOutputs() {
     }
 }
 
-if (wants('patch-package')) verifyUiPatchedDependencies({ uiPackageDir: expoAppDir });
+if (wants('verify-patched-dependencies')) verifyUiPatchedDependencies({ uiPackageDir: expoAppDir });
 
 if (wants('verify-expo-router-web-modal-patch')) {
     const expoRouterPackageRoots = [

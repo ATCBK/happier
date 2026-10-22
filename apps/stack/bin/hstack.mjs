@@ -228,7 +228,7 @@ function applySandboxDirIfRequested(argv) {
     process.env.HAPPIER_STACK_STORAGE_DIR = storageDir;
 
     // When sandboxing with a shared (non-temporary) workspace, keep package-manager caches stable
-    // across runs. This makes `yarn install` much faster and avoids re-downloading toolchains.
+    // across runs. This makes `pnpm install` much faster and avoids re-downloading toolchains.
     const pmCacheBaseRaw = (process.env.HAPPIER_STACK_PM_CACHE_BASE_DIR ?? '').trim();
     const sandboxAbs = resolve(sandboxDir);
     const wsAbs = resolve(workspaceDir);

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import {
   filterProviderIdsForScenarioSelection,
   parseMaxParallel,
@@ -84,7 +84,7 @@ function usage(exitCode) {
   console.error(
     [
       'Usage:',
-      '  yarn providers:run:parallel <preset> <tier> [--max-parallel N] [--update-baselines] [--strict-keys] [--flake-retry|--no-flake-retry] [--no-retry-serial]',
+      '  pnpm providers:run:parallel <preset> <tier> [--max-parallel N] [--update-baselines] [--strict-keys] [--flake-retry|--no-flake-retry] [--no-retry-serial]',
       '',
       'Presets: opencode | claude | codex | kilo | gemini | qwen | kimi | auggie | pi | grok | all',
       'Tiers:   smoke | extended',
@@ -95,17 +95,17 @@ function usage(exitCode) {
       '  - Serial retry first targets failed scenario tail (failed scenario -> end of tier)',
       '',
       'Examples:',
-      '  yarn providers:run:parallel all extended',
-      '  yarn providers:run:parallel all extended --max-parallel 5',
-      '  yarn providers:run:parallel opencode extended --strict-keys',
-      '  yarn providers:run:parallel grok extended',
+      '  pnpm providers:run:parallel all extended',
+      '  pnpm providers:run:parallel all extended --max-parallel 5',
+      '  pnpm providers:run:parallel opencode extended --strict-keys',
+      '  pnpm providers:run:parallel grok extended',
     ].join('\n'),
   );
   return exitCode;
 }
 
-export function resolveProviderRunYarnInvocation(args, options = {}) {
-  return resolveYarnCommandInvocation(args, options);
+export function resolveProviderRunPnpmInvocation(args, options = {}) {
+  return resolvePnpmCommandInvocation(args, options);
 }
 
 function signalExitCode(signal) {
@@ -171,7 +171,7 @@ export async function filterProviderIdsByScenarioRegistry(params) {
 }
 
 function buildProviderRunArgs(params) {
-  const args = ['-s', 'providers:run', params.providerId, params.tier];
+  const args = ['run', '--silent', 'providers:run', params.providerId, params.tier];
   if (params.updateBaselines) args.push('--update-baselines');
   if (params.strictKeys) args.push('--strict-keys');
   if (!params.flakeRetry) args.push('--no-flake-retry');
@@ -277,7 +277,7 @@ async function runProvider(params, state) {
   const reportPath = join(reportDir, 'failure-report.json');
   return new Promise((resolveResult) => {
     const startedAt = Date.now();
-    const invocation = resolveProviderRunYarnInvocation(buildProviderRunArgs(params));
+    const invocation = resolveProviderRunPnpmInvocation(buildProviderRunArgs(params));
     const child = spawn(invocation.command, invocation.args, {
       stdio: 'inherit',
       env: buildProviderChildEnv({
@@ -327,7 +327,7 @@ async function prewarmServerGenerateProviders(state) {
 
   const serverWorkspace = await resolveServerAppWorkspaceName();
   await new Promise((resolveResult, rejectResult) => {
-    const invocation = resolveProviderRunYarnInvocation(['-s', 'workspace', serverWorkspace, 'generate:providers']);
+    const invocation = resolveProviderRunPnpmInvocation(['--filter', serverWorkspace, 'run', '--silent', 'generate:providers']);
     const child = spawn(invocation.command, invocation.args, {
       stdio: 'inherit',
       env,

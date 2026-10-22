@@ -79,11 +79,11 @@ else process.exit(1);
   for (const command of ['ditto', 'xcrun']) {
     writeFileSync(join(bin, command), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
   }
-  writeFileSync(join(bin, 'yarn'), `#!/usr/bin/env node
+  writeFileSync(join(bin, 'pnpm'), `#!/usr/bin/env node
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args.includes('--version')) { process.stdout.write('1.22.22'); process.exit(0); }
+if (args.includes('--version')) { process.stdout.write('12.14.0'); process.exit(0); }
 assert.equal(Object.keys(process.env).some((key) =>
   ['TAURI_SIGNING_PRIVATE_KEY', 'TAURI_PRIVATE_KEY'].includes(key.toUpperCase())), false);
 assert.equal(fs.readFileSync(args[args.indexOf('--private-key-path') + 1], 'utf8'), 'opaque-key');

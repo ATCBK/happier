@@ -14,7 +14,7 @@ async function writeEsmPkg({ dir, name, body }) {
 
 async function seedServerLightProbeDeps({ serverDir, socketPort }) {
   await mkdir(join(serverDir, 'node_modules'), { recursive: true });
-  await writeFile(join(serverDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(serverDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   await writeEsmPkg({
     dir: join(serverDir, 'node_modules', '@electric-sql', 'pglite'),
     name: '@electric-sql/pglite',
@@ -56,24 +56,24 @@ export class PrismaClient {
   );
 }
 
-async function writeYarnShim({ root, markerPath }) {
+async function writePnpmShim({ root, markerPath }) {
   const binDir = join(root, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const fs = require('node:fs');",
       'const args = process.argv.slice(2);',
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
-      `if ((args[0] === '-s' && args[1] === 'migrate:deploy') || (args[0] === 'run' && args[1] === 'migrate:deploy')) { fs.writeFileSync(${JSON.stringify(markerPath)}, 'ok\\n', 'utf-8'); process.exit(0); }`,
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
+      `if (args[0] === 'run' && args[1] === '--silent' && args[2] === 'migrate:deploy') { fs.writeFileSync(${JSON.stringify(markerPath)}, 'ok\\n', 'utf-8'); process.exit(0); }`,
       'process.exit(0);',
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
-  return { binDir, yarnPath };
+  await chmod(pnpmPath, 0o755);
+  return { binDir, pnpmPath };
 }
 
 export async function createServerLightFixture(t, { prefix, serverDirRelative = 'server', socketPort }) {
@@ -85,18 +85,19 @@ export async function createServerLightFixture(t, { prefix, serverDirRelative = 
   const serverDir = join(root, serverDirRelative);
   await mkdir(serverDir, { recursive: true });
   await writeJson(join(serverDir, 'package.json'), { name: 'server', version: '0.0.0', type: 'module' });
-  await writeFile(join(serverDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(serverDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(serverDir, 'pnpm-workspace.yaml'), "packages:\n");
   await seedServerLightProbeDeps({ serverDir, socketPort });
 
   const markerPath = join(root, 'called-migrate-sqlite-deploy.txt');
-  const yarnShim = await writeYarnShim({ root, markerPath });
+  const pnpmShim = await writePnpmShim({ root, markerPath });
 
   return {
-    binDir: yarnShim.binDir,
+    binDir: pnpmShim.binDir,
     markerPath,
     root,
     serverDir,
-    yarnPath: yarnShim.yarnPath,
+    pnpmPath: pnpmShim.pnpmPath,
   };
 }
 

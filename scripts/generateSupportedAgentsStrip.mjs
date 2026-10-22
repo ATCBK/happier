@@ -25,7 +25,7 @@
  * has `svgIconXml: null` (no mark to draw — e.g. coderabbit, deepsec) are skipped and
  * listed on stdout.
  *
- * Regenerate with:  yarn generate:agents-strip
+ * Regenerate with:  pnpm run generate:agents-strip
  *             (or:  node --experimental-strip-types scripts/generateSupportedAgentsStrip.mjs)
  *
  * PNGs are rasterized at 2x for retina README rendering, via the repo's `sharp`
@@ -314,7 +314,7 @@ async function main() {
     if (sharpError) console.warn(`  (${String(sharpError.message).split('\n')[0]})`);
     console.warn('  To produce the PNGs, either:');
     console.warn('    - re-run inside the dev VM / any machine where the workspace sharp install matches the platform, or');
-    console.warn('    - SUPPORTED_AGENTS_STRIP_SHARP=/path/to/node_modules/sharp yarn generate:agents-strip, or');
+    console.warn('    - SUPPORTED_AGENTS_STRIP_SHARP=/path/to/node_modules/sharp pnpm run generate:agents-strip, or');
     console.warn(`    - rsvg-convert -w ${VIEW_WIDTH * PNG_SCALE} .github/supported-agents-light.svg -o .github/supported-agents-light.png (and the dark variant).`);
     process.exitCode = 2;
   }

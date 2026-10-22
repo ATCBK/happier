@@ -45,7 +45,7 @@ function pinnedPortOccupiedError({ stackName, port }) {
   return new Error(
     `[stack] ${stackName}: pinned server port ${port} is not available (in use by another process).\n` +
       `[stack] Fix: stop the process using it, or reallocate by unsetting the pin:\n` +
-      `  yarn env unset HAPPIER_STACK_SERVER_PORT\n` +
+      `  pnpm run env unset HAPPIER_STACK_SERVER_PORT\n` +
       `  # (or) hstack env unset HAPPIER_STACK_SERVER_PORT`
   );
 }

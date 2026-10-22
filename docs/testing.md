@@ -6,15 +6,15 @@ This document records the repository-level test lane map and placement conventio
 
 Canonical lanes:
 
-- `yarn test` — fast unit lane across apps.
-- `yarn test:import-cycles` — CLI runtime import-cycle guard, also enforced by the CLI unit lane.
-- `yarn test:integration` — orchestration-heavy app integration lane.
-- `yarn test:e2e:core:fast` — default local core e2e loop.
-- `yarn test:e2e:core:slow` — long orchestration core e2e.
-- `yarn test:e2e:ui` — Playwright UI/browser e2e exercising real UI + server + CLI/daemon flows.
-- `yarn test:agents` — executable Agent runtime contracts; opt-in/flag-driven. The historical script name is retained for runner compatibility and does not refer to first-class model Providers.
-- `yarn test:db-contract:docker` — server DB contract via Docker.
-- `yarn test:plugin-platform:source` — current-source Plugin Platform owner contracts and public-only external-author/runtime fixtures. It never packs or installs an SDK, UI, CLI, or plugin archive.
+- `pnpm run test` — fast unit lane across apps.
+- `pnpm run test:import-cycles` — CLI runtime import-cycle guard, also enforced by the CLI unit lane.
+- `pnpm run test:integration` — orchestration-heavy app integration lane.
+- `pnpm run test:e2e:core:fast` — default local core e2e loop.
+- `pnpm run test:e2e:core:slow` — long orchestration core e2e.
+- `pnpm run test:e2e:ui` — Playwright UI/browser e2e exercising real UI + server + CLI/daemon flows.
+- `pnpm run test:agents` — executable Agent runtime contracts; opt-in/flag-driven. The historical script name is retained for runner compatibility and does not refer to first-class model Providers.
+- `pnpm run test:db-contract:docker` — server DB contract via Docker.
+- `pnpm run test:plugin-platform:source` — current-source Plugin Platform owner contracts and public-only external-author/runtime fixtures. It never packs or installs an SDK, UI, CLI, or plugin archive.
 
 Use the smallest relevant subset during RED/GREEN loops. Before handoff, run the touched package typecheck/build-enforcing lane and at least one broader relevant lane when shared contracts are touched.
 
@@ -33,7 +33,7 @@ input; Expo's live `.expo/types/router.d.ts` remains the editor/watcher's output
 This also lets these checks run without an Expo server or a synchronized
 `.expo` directory.
 
-In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. CLI unit aliases use source-test preparation. Explicit test-file requests retain the existing validation envelope; the complete lane uses the existing compilation envelope because it executes real compiler owners. Focused compiler-consuming requests use the explicit compilation-class wrapper inside a routed outer `hstack-exec` command, never a controller-local admission implementation.
+In 0.3 development, `pnpm --filter @happier-dev/cli run test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. CLI unit aliases use source-test preparation. Explicit test-file requests retain the existing validation envelope; the complete lane uses the existing compilation envelope because it executes real compiler owners. Focused compiler-consuming requests use the explicit compilation-class wrapper inside a routed outer `hstack-exec` command, never a controller-local admission implementation.
 
 Source-test tool requirements come from the selected package's optional
 `package.json#happierSourceTestTools` array of executable names, for both direct
@@ -65,7 +65,7 @@ discovery without an override retains the warm native path. Runtime/service
 placement continues to read its selected Stack's configuration.
 Implicit discovery also honors source-path provenance when present; older implicit
 projections without that field keep their existing warm behavior until refreshed.
-For example, a root `yarn workspace @happier-dev/server build` prepares Server's
+For example, a root `pnpm --filter @happier-dev/server run build` prepares Server's
 workspace prerequisites before reserving the build's compilation capacity.
 Manifest traversal follows repository-local `--cwd` and workspace references,
 including lifecycle hooks: Server's prebuild and Plugin UI's public SDK
@@ -131,7 +131,7 @@ Use shared boundary fixtures and real internal owners. A changed internal export
 
 Root unit and integration commands collect failures across independent workspaces instead of stopping at the first red package. Package preparation remains a prerequisite; aggregate failure collection cannot expose behavior behind an unavailable build, database, or candidate. Do not call an unexecuted lane successful.
 
-The development push Gate runs each non-UI partition through `yarn test:gate-unit cli protocol server plugins` (or its selected subset). One Vitest instance composes the existing package-owned projects, retaining aliases, setup, exclusions and package working directories. Non-Vitest prerequisites and post-suite checks remain package-owned `test:unit:prepare` and `test:unit:checks` scripts shared with standalone commands; their failures fail the partition. `yarn test:plugin-workspaces` uses the same project runner. UI partitions retain their existing public wrapper and file selection. Focused Gate reruns accept `--filter=<file substring>`; they do not establish full-partition coverage.
+The development push Gate runs each non-UI partition through `pnpm run test:gate-unit cli protocol server plugins` (or its selected subset). One Vitest instance composes the existing package-owned projects, retaining aliases, setup, exclusions and package working directories. Non-Vitest prerequisites and post-suite checks remain package-owned `test:unit:prepare` and `test:unit:checks` scripts shared with standalone commands; their failures fail the partition. `pnpm run test:plugin-workspaces` uses the same project runner. UI partitions retain their existing public wrapper and file selection. Focused Gate reruns accept `--filter=<file substring>`; they do not establish full-partition coverage.
 
 In 0.3 development, runtime worker bootstrap, runtime validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode and public packing/publication still check semantics. Public `typecheck` reads published dependency declarations and leaves project declaration emission to its compiler; its preparation never republishes CLI dist or bundled plugins, and missing declarations remain compiler diagnostics. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
@@ -294,7 +294,7 @@ policy and canonical workspace leases. These changes do not replace already
 loaded launchers; a stranded old invocation requires owner-controlled retirement
 and reinvocation, never an unrelated Stack restart.
 
-Routed POSIX commands default scratch beneath `tmp` in the configured worker CLI home, on the worker's disk-backed filesystem. On Linux, custody allocates a unique `hstack-*` directory there and exports it as `TMPDIR` before admission, preparation and payload execution. After the payload group stops, custody reuses its process-binding inventory to remove that command's scratch, including Yarn's per-run directories and killed test fixtures. A surviving group, inherited `TMPDIR`/test-root binding or unavailable newer-process observation retains it. Explicit `TMPDIR` remains caller-owned and unchanged; non-Linux commands retain the shared disk-backed default. This prevents default test/build scratch from consuming RAM-backed `/tmp` quotas.
+Routed POSIX commands default scratch beneath `tmp` in the configured worker CLI home, on the worker's disk-backed filesystem. On Linux, custody allocates a unique `hstack-*` directory there and exports it as `TMPDIR` before admission, preparation and payload execution. After the payload group stops, custody reuses its process-binding inventory to remove that command's scratch, including package-manager scratch and killed test fixtures. A surviving group, inherited `TMPDIR`/test-root binding or unavailable newer-process observation retains it. Explicit `TMPDIR` remains caller-owned and unchanged; non-Linux commands retain the shared disk-backed default. This prevents default test/build scratch from consuming RAM-backed `/tmp` quotas.
 
 For broad local collection, inspect `node scripts/pipeline/run.mjs checks --profile fast --dry-run` first. For a focused rerun, use a workspace command or `checks --profile custom --custom-checks integration,typecheck --install-deps false`. Custom selection is exact, not an implicit full baseline. The checks owner collects independent failures and returns nonzero; install failure still stops dependent checks.
 
@@ -331,10 +331,10 @@ In 0.3 development, supervisor bootstrap, readiness and worker channels reuse th
 Source-replica readiness shares one known-transition-race policy between JSON consumers and native placement. A staged-file relocation collision requests the existing causal flush and requires fresh clean evidence before selection; permission failures, unknown errors and excluded transition evidence remain fail closed. Placement surfaces the recovery diagnostics, while flush progress stays on stderr rather than contaminating its health record. Translation declaration tests keep their fixture and declaration output in private OS temporary storage, outside the synchronized source tree.
 
 In 0.3 development, `provision.mjs` owns first-contact enrollment and explicit Linux host
-preparation. Enrollment accepts missing Node/Corepack and prints the exact
+preparation. Enrollment accepts missing Node/npm and prints the exact
 `host prepare NAME --toolchain` next step; commands still need that toolchain. Explicit
-`--toolchain` consumes the Ubuntu worker provision profile's NodeSource Node 24, Corepack,
-pinned Yarn, Go and ripgrep setup. It verifies these tools and skips installation when they
+`--toolchain` consumes the Ubuntu worker provision profile's NodeSource Node 24, npm,
+Go and ripgrep setup. It verifies these tools and skips installation when they
 are already usable. `--create-user=NAME [--home=/absolute/path]` installs the dedicated public key, enables
 general passwordless sudo for the account, and switches the existing target's SSH user. The
 default home is `/home/NAME`; `--create-user=leeroy.guest --home=/home/leeroy.guest` provides path
@@ -344,6 +344,8 @@ must pass both master-free key login and `sudo -n true` before the target change
 with another home are refused, as are existing UID-zero aliases and requested homes used by another
 account (including canonical path aliases), before SSH keys change. Default mirror/CLI-home paths
 follow the new home, explicit paths remain.
+After source synchronization, dependency bootstrap installs the root `packageManager`'s
+exact, integrity-checked pnpm pin through `scripts/ci/setup-pnpm.mjs`.
 CLI Vitest commands declare Go in the shared command policy, and executable preflight checks
 that declaration before dependency bootstrap or payload dispatch. Repair a missing Go executable
 with the same `host prepare NAME --toolchain` command; no pool-entry removal is needed.
@@ -356,8 +358,8 @@ then invokes the existing QA tooling owner and exact-target executor before sele
 For existing workers with only the older narrow sudo grant, explicitly refresh it with
 `hstack dev-targets host prepare NAME --passwordless-sudo --passwordless-provisioning`
 before `hstack dev-targets qa setup NAME`. The browser installer uses
-`env COREPACK_ENABLE_PROJECT_SPEC=0` inside sudo to bypass the checkout's Yarn `packageManager`;
-the grant permits that exact assignment, not arbitrary elevated environment variables.
+the discovered absolute Node executable and npm CLI entry inside sudo for the constrained
+global agent-browser installation; arbitrary elevated environment variables are not granted.
 QA setup does not broaden privileges automatically; full `--create-user` grants need no refresh.
 
 `--lockdown[=tailscale-only|ssh-public]` owns UFW default-deny incoming policy and SSH password,
@@ -391,7 +393,7 @@ own lifetime and does not move the daemon. The implicit browser pool includes on
 registered in that consumer's existing target registry, so registries predating either worker still work.
 An empty implicit pool and an unknown explicitly named target fail without local browser fallback.
 
-In current 0.3 development, an unplaced package-script command whose entire payload directly invokes `hstack-exec --script=...`, without local pre/post hooks, reaches that script before the outer launcher selects a host or reserves memory. The package manifest owns this delegation, including `--cwd` and Yarn workspace commands; there is no separate list of routed script names. The script's dispatcher owns placement and admission on the executing host. Binary runners, implementation scripts, already-placed commands and genuine local payloads keep their existing admission envelopes.
+In current 0.3 development, an unplaced package-script command whose entire payload directly invokes `hstack-exec --script=...`, without local pre/post hooks, reaches that script before the outer launcher selects a host or reserves memory. The package manifest owns this delegation, including `--dir` and pnpm workspace filters; there is no separate list of routed script names. The script's dispatcher owns placement and admission on the executing host. Binary runners, implementation scripts, already-placed commands and genuine local payloads keep their existing admission envelopes.
 
 On the Linux controller, explicit `--local` heavyweight compilation (including package-dist and runtime-build) refuses by default and points to AUTO. A caller can explicitly authorize `--local --allow-local-compilation`; this changes placement only and retains class admission plus the existing 8 GiB local floor, even under CI. Deferred finite producers and compiler leaves inherit that admission requirement rather than reserving their package-manager parent. Already-placed workers do not require the controller override. Light local commands remain immediate. Ordinary automatic CI execution retains its existing exemption.
 
@@ -439,7 +441,7 @@ Linux worker disk admission uses `worker_disk_budget.mjs` to observe free bytes 
 the command's known write filesystems. It refuses an already exhausted filesystem;
 resident dependencies, caches and retained outputs do not establish additional writes,
 so there is no disk-envelope reservation or guessed build peak. Exhaustion triggers
-ordered custody reclamation (oldest stale staging across stacks, unneeded Yarn entries,
+ordered custody reclamation (oldest stale staging across stacks, unneeded pnpm entries,
 stale lane scratch). Explicit maintenance can run that retention policy independently.
 In 0.3 development, maintenance nominates the former worker `runtime-build/<stack>`
 platform directories, private `store`, and `.incoming-happier-runtime-build-*` roots
@@ -526,7 +528,7 @@ CLI tests that copy or natively import physical public SDK packages run in `vite
 Run a source integration slice through the canonical wrapper, for example:
 
 ```bash
-./apps/stack/bin/hstack-exec -- yarn --cwd apps/cli vitest:local run --config vitest.source.integration.config.ts src/api/apiMachine.preflightCatalogs.runtimeCatalog.integration.test.ts
+./apps/stack/bin/hstack-exec -- pnpm --dir apps/cli run vitest:local run --config vitest.source.integration.config.ts src/api/apiMachine.preflightCatalogs.runtimeCatalog.integration.test.ts
 ```
 
 The wrapper recognizes this exact CLI source configuration and retains normal validation admission and installed-dependency readiness. Other custom configurations retain workspace preparation.
@@ -704,7 +706,7 @@ The repository deliberately separates the compiler from the programmatic TypeScr
 - In 0.3 development, pinned `tsrs` handles typechecks, including internal declaration partitions and routine CI, on Linux x64/arm64 and macOS arm64. `@typescript/native` provides Microsoft TypeScript 7.1.0-beta for builds/shipped declarations, release validation, editors, Windows and Intel Mac; Microsoft remains the final diagnostic authority. Set `HAPPIER_TYPESCRIPT_COMPILER=microsoft|tsrs` for typechecks (`auto` restores selection); builds and watch/tooling stay Microsoft. Missing binaries and compiler failures propagate without fallback. Tsrs incremental caches, internal declaration outputs and reference projections use `.tsrs`, preserving the Microsoft graph consumed by prepared CLI builds.
 - `typescript` remains the TypeScript 5.9 API consumed by AST tooling and ecosystem integrations. Do not replace it with TypeScript 7 until the native release provides a stable compatible API and every consumer supports it.
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. First-party scripts must use `runTypeScriptCli.mjs`, `buildTypeScriptPackageDist.mjs`, or that resolver directly; do not invoke a bare `tsc` shim or resolve `typescript/bin/tsc`.
-- `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the same selector and runner.
+- `pnpm run tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the same selector and runner.
 
 CLI typechecks run `tsconfig.foundation.json`, `tsconfig.services.json`,
 `tsconfig.core.json`, `tsconfig.source.json` and `tsconfig.test.json` sequentially
@@ -821,4 +823,4 @@ When introducing or moving a lane/pattern, update all relevant places in the sam
 - No duplicate test intent.
 - Evidence must come from trusted runners, not fabricated/manual output.
 - Prefer contract-focused assertions over copy/formatting assertions.
-- CLI runtime import cycles are fail-closed: update the baseline only for known debt, and keep `yarn test:import-cycles` wired through the root script and `@happier-dev/cli` unit lane so CI exercises it with CLI tests.
+- CLI runtime import cycles are fail-closed: update the baseline only for known debt, and keep `pnpm run test:import-cycles` wired through the root script and `@happier-dev/cli` unit lane so CI exercises it with CLI tests.

@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 import {
   commandExists,
   resolveBunCommand,
-  resolveYarnCommand,
+  resolvePnpmCommand,
   SERVER_BINARY_DEFAULT_EXTERNALS,
 } from '@happier-dev/cli-common/componentArtifacts';
 import {
@@ -117,7 +117,8 @@ export function resolveRuntimeComponentSourcePaths({
         join(repoDir, 'packages', 'cli-common', 'workspaceBundleLock.mjs'),
         join(repoDir, 'packages', 'cli-common', 'workspaceLockLease.mjs'),
         join(repoDir, 'packages', 'cli-common', 'workspaceRuntimeDependencies.mjs'),
-        join(repoDir, 'yarn.lock'),
+        join(repoDir, 'pnpm-lock.yaml'),
+        join(repoDir, 'pnpm-workspace.yaml'),
       ]
     : [
         join(hostDir, 'sources'),
@@ -126,7 +127,8 @@ export function resolveRuntimeComponentSourcePaths({
         join(hostDir, 'package.json'),
         join(hostDir, 'tsconfig.json'),
         join(hostDir, 'tsconfig.build.json'),
-        join(repoDir, 'yarn.lock'),
+        join(repoDir, 'pnpm-lock.yaml'),
+        join(repoDir, 'pnpm-workspace.yaml'),
       ];
   return [...new Set([
     ...ownPaths.filter((path) => existsSyncImpl(path)),
@@ -230,7 +232,7 @@ export function assertSelectedBuildPrerequisites({
     }
   }
   if (needsDaemonBinary) {
-    resolveYarnCommand({ commandProbe });
+    resolvePnpmCommand({ commandProbe });
     if (!commandProbe('go')) {
       throw new Error('[build] Go is required before starting daemon support artifact builds.');
     }
@@ -242,13 +244,13 @@ export async function collectRuntimeBuildToolchainInputs({
   env = process.env,
   commandProbe = commandExists,
   resolveBunCommandImpl = resolveBunCommand,
-  resolveYarnCommandImpl = resolveYarnCommand,
+  resolvePnpmCommandImpl = resolvePnpmCommand,
   runCaptureImpl = runCapture,
   nodeVersion = process.version,
 }) {
   const nodeInput = `node=${String(nodeVersion ?? '').trim()}`;
   let bunInput = null;
-  let yarnInput = null;
+  let pnpmInput = null;
   if (selection?.components?.server || selection?.components?.daemon) {
     const bunCommand = resolveBunCommandImpl({ commandProbe, processEnv: env });
     if (!bunCommand) {
@@ -262,18 +264,18 @@ export async function collectRuntimeBuildToolchainInputs({
     bunInput = `bun=${bunVersion}`;
   }
   if (selection?.components?.daemon) {
-    const yarn = resolveYarnCommandImpl({ commandProbe });
-    const yarnVersion = String(await runCaptureImpl(yarn.cmd, [...yarn.args, '--version'], {
+    const pnpm = resolvePnpmCommandImpl({ commandProbe });
+    const pnpmVersion = String(await runCaptureImpl(pnpm.cmd, [...pnpm.args, '--version'], {
       env,
       timeoutMs: 10_000,
     })).trim();
-    if (!yarnVersion) throw new Error('[build] Yarn returned an empty version while collecting runtime build identity.');
-    yarnInput = `yarn=${yarnVersion}`;
+    if (!pnpmVersion) throw new Error('[build] pnpm returned an empty version while collecting runtime build identity.');
+    pnpmInput = `pnpm=${pnpmVersion}`;
   }
   return {
     web: selection?.components?.web ? [nodeInput] : [],
     server: selection?.components?.server ? [nodeInput, bunInput] : [],
-    daemon: selection?.components?.daemon ? [nodeInput, bunInput, yarnInput] : [],
+    daemon: selection?.components?.daemon ? [nodeInput, bunInput, pnpmInput] : [],
   };
 }
 

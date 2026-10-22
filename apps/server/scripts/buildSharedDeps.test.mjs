@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { prepareServerWorkspacePrerequisites } from './buildSharedDeps.mjs';
+import { buildPublicProfileRenderer } from './buildPublicProfileRenderer.mjs';
+import { buildPublicShareViewerBundle } from './buildPublicShareViewer.mjs';
 
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const adapterSource = await readFile(new URL('./buildSharedDeps.mjs', import.meta.url), 'utf8');
@@ -44,20 +49,20 @@ test('server source tests verify generated schemas without rebuilding shared run
 test('server ordinary typecheck prepares stale ignored Prisma clients before checking source', () => {
   assert.match(
     packageJson.scripts['typecheck:local'],
-    /^yarn -s generate:providers && node \.\/scripts\/runTypeScriptCli\.mjs --noEmit$/,
+    /^pnpm --silent run generate:providers && node \.\/scripts\/runTypeScriptCli\.mjs --noEmit(?: -p [\w.]+)*$/,
   );
   assert.doesNotMatch(packageJson.scripts['typecheck:local'], /\b(?:build|build:shared)\b/);
 });
 
 test('server build prepares generated clients through the canonical postinstall lifecycle', () => {
-  assert.equal(packageJson.scripts.prebuild, 'yarn -s postinstall:real');
-  assert.equal(packageJson.scripts['postinstall:real'], 'yarn -s generate:providers && yarn -s build:shared');
+  assert.equal(packageJson.scripts.prebuild, 'pnpm --silent run postinstall:real');
+  assert.equal(packageJson.scripts['postinstall:real'], 'pnpm --silent run generate:providers && pnpm --silent run build:shared');
 });
 
 test('server finite typecheck verifies generated clients before checking source', () => {
-  assert.equal(
+  assert.match(
     packageJson.scripts['typecheck:source:finite'],
-    'yarn -s generate:providers:check && node ./scripts/runTypeScriptCli.mjs --noEmit',
+    /^pnpm --silent run generate:providers:check && node \.\/scripts\/runTypeScriptCli\.mjs --noEmit(?: -p [\w.]+)*$/,
   );
 });
 
@@ -68,3 +73,83 @@ test('server ordinary integration entries route through hstack without runtime p
     assert.doesNotMatch(packageJson.scripts[`${scriptName}:local`], /\bbuild:shared\b/);
   }
 });
+
+for (const renderer of ['profile', 'share']) {
+  test(`public ${renderer} renderer resolves real web packages from a hoisted workspace install`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-public-renderer-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const projectDir = join(root, 'apps/server');
+    const sourceDir = join(projectDir, renderer === 'profile'
+      ? 'sources/app/account/profile/render' : 'sources/app/api/routes/share');
+    await mkdir(sourceDir, { recursive: true });
+    await mkdir(join(root, 'apps/ui'), { recursive: true });
+    const requireServer = createRequire(import.meta.url);
+    await mkdir(join(root, 'node_modules/@happier-dev'), { recursive: true });
+    for (const name of ['react', 'react-dom', 'react-native-web', 'react-native-svg']) {
+      await symlink(dirname(requireServer.resolve(`${name}/package.json`)), join(root, 'node_modules', name), 'junction');
+    }
+    // The filesystem boundary models a workspace export and an installed private copy;
+    // no protocol schema or domain behavior is replaced by the fixture.
+    const protocolDir = join(root, 'packages/protocol');
+    const privateDir = join(sourceDir, 'private');
+    const privateProtocolDir = join(privateDir, 'node_modules/@happier-dev/protocol');
+    await mkdir(join(protocolDir, 'src/sharing'), { recursive: true });
+    await mkdir(join(privateProtocolDir, 'dist/sharing'), { recursive: true });
+    await writeFile(join(protocolDir, 'package.json'), JSON.stringify({ name: '@happier-dev/protocol', type: 'module', exports: {
+      './sharing/public-viewer': { 'happier-source': './src/sharing/publicViewer.ts', default: './dist/sharing/publicViewer.js' },
+      './widgets': { 'happier-source': './src/widgets.ts', default: './dist/widgets.js' },
+    } }));
+    await symlink(protocolDir, join(root, 'node_modules/@happier-dev/protocol'), 'junction');
+    await writeFile(join(privateProtocolDir, 'package.json'), JSON.stringify({ name: '@happier-dev/protocol', type: 'module', exports: {
+      './sharing/public-viewer': './dist/sharing/publicViewer.js', './widgets': './dist/widgets.js',
+    } }));
+    for (const file of ['sharing/publicViewer', 'widgets']) {
+      await writeFile(join(protocolDir, `src/${file}.ts`), 'export const probe = "workspace-protocol-source";');
+      await writeFile(join(privateProtocolDir, `dist/${file}.js`), 'export const probe = "private-protocol-copy";');
+    }
+    await writeFile(join(privateDir, 'index.ts'), `
+      import { probe as viewer } from '@happier-dev/protocol/sharing/public-viewer';
+      import { probe as widgets } from '@happier-dev/protocol/widgets';
+      export const protocol = [viewer, widgets];
+    `);
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }));
+    await writeFile(join(projectDir, 'package.json'), '{}');
+    await writeFile(join(root, 'apps/ui/package.json'), '{}');
+    await writeFile(join(projectDir, 'tsconfig.json'), '{}');
+    const entry = renderer === 'profile' ? 'publicProfileRenderer.ts' : 'publicShareViewerBrowser.ts';
+    await writeFile(join(sourceDir, entry), `
+      import { createElement } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { View } from 'react-native';
+      import { Svg } from 'react-native-svg';
+      import { protocol } from './private/index';
+      globalThis.publicRendererDependencyProbe = [createElement, createRoot, View, Svg, protocol];
+    `);
+
+    const buildRenderer = renderer === 'profile' ? buildPublicProfileRenderer : buildPublicShareViewerBundle;
+    await buildRenderer({ projectDir });
+    await buildRenderer({ projectDir, check: true });
+    const target = join(sourceDir, renderer === 'profile'
+      ? 'publicProfileRenderer.generated.mjs' : 'publicShareViewerBundle.generated.ts');
+    const output = await readFile(target, 'utf8');
+    assert.match(output, /publicRendererDependencyProbe/);
+    assert.match(output, /workspace-protocol-source/);
+    assert.doesNotMatch(output, /private-protocol-copy/);
+    await writeFile(target, 'previous-generation\n');
+    let patch = '';
+    const stdout = t.mock.method(process.stdout, 'write', chunk => {
+      patch += String(chunk);
+      return true;
+    });
+    try {
+      await buildRenderer({ projectDir, printPatch: true });
+    } finally {
+      stdout.mock.restore();
+    }
+    assert.equal(await readFile(target, 'utf8'), 'previous-generation\n');
+    const lines = patch.split('\n');
+    assert.equal(lines[0], '*** Begin Patch');
+    assert.equal(lines[1], `*** Add File: ${target}`);
+    assert.equal(lines.slice(2, -2).map(line => line.slice(1)).join('\n') + '\n', output);
+  });
+}

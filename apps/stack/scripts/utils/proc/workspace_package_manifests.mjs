@@ -3,22 +3,56 @@ import { join } from 'node:path';
 
 import { pathExists } from '../fs/fs.mjs';
 
-async function readJsonIfExists(path) {
-  if (!(await pathExists(path))) {
-    return null;
-  }
-  return JSON.parse(await readFile(path, 'utf-8'));
+export function isYarnWorkspace(manifest) {
+  return typeof manifest?.packageManager === 'string' && manifest.packageManager.startsWith('yarn@');
 }
 
-function readWorkspacePatterns(pkgJson) {
-  const workspaces = pkgJson?.workspaces;
-  if (Array.isArray(workspaces)) {
-    return workspaces;
+export async function readWorkspacePatterns(monorepoRoot) {
+  // The executor also serves the supported Yarn predecessor checkout. Its
+  // declared workspace set remains owned by package.json, never pnpm's YAML.
+  const manifestPath = join(monorepoRoot, 'package.json');
+  if (await pathExists(manifestPath)) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf-8'));
+    if (isYarnWorkspace(manifest)) {
+      const patterns = Array.isArray(manifest.workspaces) ? manifest.workspaces : manifest.workspaces?.packages;
+      if (!Array.isArray(patterns) || patterns.some(pattern => typeof pattern !== 'string' || !pattern.trim())) {
+        throw new Error(`Invalid Yarn workspace patterns in ${manifestPath}`);
+      }
+      return patterns;
+    }
   }
-  if (Array.isArray(workspaces?.packages)) {
-    return workspaces.packages;
+  const workspacePath = join(monorepoRoot, 'pnpm-workspace.yaml');
+  const lines = (await readFile(workspacePath, 'utf-8')).split(/\r?\n/u);
+  const header = lines.findIndex((line) => /^packages:/u.test(line));
+  const unsupported = () => new Error(`Unsupported packages syntax in ${workspacePath}: expected a block sequence of string globs.`);
+  if (header < 0 || !/^packages:\s*(?:#.*)?$/u.test(lines[header])) throw unsupported();
+
+  // Gate selection consumes this before dependencies are installed. Keep its one workspace
+  // reader dependency-free: the repository writes a block sequence of string globs. If the
+  // workspace owner adopts other YAML syntax, extend this boundary explicitly instead of
+  // guessing a different workspace set or falling back to directory discovery.
+  const patterns = [];
+  for (const line of lines.slice(header + 1)) {
+    if (/^\s*(?:#.*)?$/u.test(line)) continue;
+    if (/^\S/u.test(line)) break;
+    const item = line.match(/^ +-[ \t]+(.+)$/u)?.[1];
+    if (!item) throw unsupported();
+    const doubleQuoted = item.match(/^("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/u);
+    const singleQuoted = item.match(/^'((?:[^']|'')*)'\s*(?:#.*)?$/u);
+    let pattern;
+    if (doubleQuoted) {
+      try { pattern = JSON.parse(doubleQuoted[1]); } catch { throw unsupported(); }
+    } else if (singleQuoted) {
+      pattern = singleQuoted[1].replaceAll("''", "'");
+    } else {
+      pattern = item.replace(/\s+#.*$/u, '').trim();
+      if (/^["'&*!\[\]{}>|%@`]/u.test(pattern) || /:\s/u.test(pattern)
+        || /^(?:null|true|false|~|[-+]?\d+(?:\.\d+)?)$/iu.test(pattern)) throw unsupported();
+    }
+    if (!pattern) throw unsupported();
+    patterns.push(pattern);
   }
-  return [];
+  return patterns;
 }
 
 function workspacePatternToSegments(pattern) {
@@ -92,8 +126,7 @@ async function expandWorkspacePatternSegments(baseDir, segments, index = 0) {
 }
 
 export async function collectWorkspacePackageJsonPaths(monorepoRoot) {
-  const rootPkgJson = await readJsonIfExists(join(monorepoRoot, 'package.json'));
-  const patterns = readWorkspacePatterns(rootPkgJson);
+  const patterns = await readWorkspacePatterns(monorepoRoot);
   const out = new Set();
 
   for (const pattern of patterns) {
@@ -103,25 +136,6 @@ export async function collectWorkspacePackageJsonPaths(monorepoRoot) {
       const pkgJsonPath = join(workspaceDir, 'package.json');
       if (await pathExists(pkgJsonPath)) {
         out.add(pkgJsonPath);
-      }
-    }
-  }
-
-  if (out.size === 0) {
-    for (const bucket of ['apps', 'packages']) {
-      const bucketDir = join(monorepoRoot, bucket);
-      let entries = [];
-      try {
-        entries = await readdir(bucketDir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const pkgJsonPath = join(bucketDir, entry.name, 'package.json');
-        if (await pathExists(pkgJsonPath)) {
-          out.add(pkgJsonPath);
-        }
       }
     }
   }

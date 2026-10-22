@@ -184,30 +184,17 @@ describe('startFullComposeStressTarget', () => {
     );
     expect(readFileSync(nginxPath, 'utf8')).toContain('location /v1/updates');
     const generatedDockerfile = readFileSync(generatedDockerfilePath, 'utf8');
-    expect(generatedDockerfile).toContain('COPY package.json yarn.lock ./');
+    expect(generatedDockerfile).toContain('COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./');
+    expect(generatedDockerfile).toContain('COPY patches ./patches');
     expect(generatedDockerfile).toContain(
-      'RUN mkdir -p apps/cli apps/server apps/ui packages/agents packages/cli-common packages/plugin-sdk packages/plugins/review-coderabbit packages/plugins/review-deepsec packages/protocol packages/release-runtime scripts/pipeline/expo scripts/workspaces',
+      'COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./',
     );
-    expect(generatedDockerfile).toContain(
-      'delete packageJson.dependencies?.[\'@happier-dev/cli\']',
-    );
-    expect(generatedDockerfile).toContain('COPY apps/server/package.json apps/server/');
-    expect(generatedDockerfile).toContain('COPY apps/cli/package.json apps/cli/');
-    expect(generatedDockerfile).toContain('COPY apps/ui/package.json apps/ui/');
     expect(generatedDockerfile).toContain(
       'COPY apps/stack/scripts/utils ./apps/stack/scripts/utils',
     );
     expect(generatedDockerfile).toContain(
       'COPY .github/feature-policy ./.github/feature-policy',
     );
-    expect(generatedDockerfile).toContain('COPY packages/plugin-sdk/package.json packages/plugin-sdk/');
-    expect(generatedDockerfile).toContain(
-      'COPY packages/plugins/review-coderabbit/package.json packages/plugins/review-coderabbit/',
-    );
-    expect(generatedDockerfile).toContain(
-      'COPY packages/plugins/review-deepsec/package.json packages/plugins/review-deepsec/',
-    );
-    expect(generatedDockerfile).toContain('COPY packages/protocol/package.json packages/protocol/');
     expect(generatedDockerfile).toContain('COPY scripts/workspaces ./scripts/workspaces');
     expect(generatedDockerfile).toContain('COPY apps/server ./apps/server');
     expect(generatedDockerfile).toContain('COPY packages/agents ./packages/agents');
@@ -221,16 +208,16 @@ describe('startFullComposeStressTarget', () => {
     expect(generatedDockerfile).toContain('resolveWorkspaceDependencyBuildOrder');
     expect(generatedDockerfile).not.toContain('ensureWorkspacePackagesBuiltForComponent');
     expect(generatedDockerfile).not.toContain(
-      'RUN yarn workspace @happier-dev/server build:shared',
+      'RUN pnpm --filter @happier-dev/server run build:shared',
     );
     expect(generatedDockerfile).not.toContain('postinstall:real');
     expect(generatedDockerfile).not.toContain('COPY . .');
-    expect(generatedDockerfile).not.toContain('RUN yarn workspace @happier-dev/server build:runtime');
+    expect(generatedDockerfile).not.toContain('RUN pnpm --filter @happier-dev/server run build:runtime');
     expect(generatedDockerfile).not.toContain(
-      'RUN yarn workspace @happier-dev/server postinstall:real',
+      'RUN pnpm --filter @happier-dev/server run postinstall:real',
     );
     expect(generatedDockerfile).toContain(
-      'RUN yarn workspace @happier-dev/server generate:providers',
+      'RUN pnpm --filter @happier-dev/server run generate:providers',
     );
     expect(generatedDockerfile).toContain(
       'ENV HAPPIER_INSTALL_SCOPE=server,protocol,agents,cli-common,release-runtime',

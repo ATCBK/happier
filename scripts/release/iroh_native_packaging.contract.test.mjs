@@ -17,7 +17,7 @@ test('the Iroh package owns one pinned Rust command and existing CI consumes it'
     /cargo test --locked[\s\S]*-p happier-iroh-core --all-targets --features test-relay-fixture/u,
   );
   assert.match(packageJson.scripts['test:rust:local'], /verify-browser-iroh-wasm\.mjs/u);
-  assert.match(workflow, /cargo install wasm-bindgen-cli[\s\S]*Run the canonical pinned Rust suite[\s\S]*yarn workspace @happier-dev\/iroh-native test:rust/u);
+  assert.match(workflow, /cargo install wasm-bindgen-cli[\s\S]*Run the canonical pinned Rust suite[\s\S]*pnpm --filter @happier-dev\/iroh-native run test:rust/u);
 });
 
 test('CLI native release matrix builds and loads the Iroh addon from the packaged payload', async () => {
@@ -32,7 +32,7 @@ test('CLI native release matrix builds and loads the Iroh addon from the package
   assert.match(workflow, /rustup default 1\.94\.1/u);
   assert.match(
     workflow,
-    /yarn workspace @happier-dev\/iroh-native build:native[\s\S]*?yarn workspace @happier-dev\/iroh-native verify:native/u,
+    /pnpm --filter @happier-dev\/iroh-native run build:native[\s\S]*?pnpm --filter @happier-dev\/iroh-native run verify:native/u,
   );
   assert.match(workflow, /verify:native:bun/u);
   assert.match(workflow, /verify:native:lifecycle/u);
@@ -92,7 +92,7 @@ test('server release builds and loads one native Iroh leaf on each supported tar
   assert.match(workflow, /rustup default 1\.94\.1/u);
   assert.match(
     workflow,
-    /yarn workspace @happier-dev\/iroh-native build[\s\S]*?yarn workspace @happier-dev\/iroh-native build:native[\s\S]*?yarn workspace @happier-dev\/iroh-native verify:native/u,
+    /pnpm --filter @happier-dev\/iroh-native run build[\s\S]*?pnpm --filter @happier-dev\/iroh-native run build:native[\s\S]*?pnpm --filter @happier-dev\/iroh-native run verify:native/u,
   );
   assert.match(workflow, /verify:native:lifecycle/u);
   assert.match(

@@ -14,7 +14,7 @@ import { repoRootDir } from '../paths';
 import { runLoggedCommand, spawnLoggedProcess, type SpawnedProcess } from './spawnProcess';
 import { terminateProcessTreeByPid } from './processTree';
 import { waitForOkHealth } from '../http';
-import { yarnCommand } from './commands';
+import { pnpmCommand } from './commands';
 import { resolveServerAppWorkspaceName } from './serverWorkspaceName';
 import { createServerLightTemplateCacheKey, prepareCachedDataDir } from './serverLightTemplateCache';
 import { resolveTsxImportHookSpecifier } from './tsxImportHook';
@@ -111,7 +111,7 @@ function isSilentHealthTimeoutDuringStartup(params: { error: unknown; stderrTail
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    // Yarn prints the selected workspace script before the server itself emits anything.
+    // pnpm prints the selected workspace script before the server itself emits anything.
     .filter((line) => !/^\$ node \.\/scripts\/runTsx\.mjs --tsconfig \.\/tsconfig\.json \.\/sources\/main(?:\.light)?\.ts$/.test(line));
   if (substantiveStdout.length > 0) return false;
 
@@ -340,7 +340,7 @@ export function renderServerLightSqliteDatabaseUrl(params: Readonly<{
 
 export function resolveStartCommandArgs(provider: TestDbProvider): string[] {
   const script = provider === 'postgres' || provider === 'mysql' ? 'start' : 'start:light';
-  return ['-s', 'workspace', resolveServerAppWorkspaceName(), script];
+  return ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', script];
 }
 
 function resolveServerWorkspaceDir(rootDir: string): string {
@@ -628,7 +628,7 @@ export function resolveServerStartLaunchSpec(params: {
   }
 
   return {
-    command: yarnCommand(),
+    command: pnpmCommand(),
     args: resolveStartCommandArgs(params.provider),
     cwd: rootDir,
     env: {
@@ -638,7 +638,7 @@ export function resolveServerStartLaunchSpec(params: {
 }
 
 export function resolveSharedDepsBuildArgs(): string[] {
-  return ['-s', 'workspace', resolveServerAppWorkspaceName(), 'build:shared'];
+  return ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', 'build:shared'];
 }
 
 export function shouldSkipServerSharedDepsBuild(env: NodeJS.ProcessEnv): boolean {
@@ -655,15 +655,15 @@ export function shouldSkipServerSharedDepsBuild(env: NodeJS.ProcessEnv): boolean
 
 export function resolveMigrateCommandArgs(provider: TestDbProvider): string[] {
   if (provider === 'sqlite') {
-    return ['-s', 'workspace', resolveServerAppWorkspaceName(), 'migrate:sqlite:deploy'];
+    return ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', 'migrate:sqlite:deploy'];
   }
   if (provider === 'pglite') {
-    return ['-s', 'workspace', resolveServerAppWorkspaceName(), 'migrate:light:deploy'];
+    return ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', 'migrate:light:deploy'];
   }
   if (provider === 'mysql') {
-    return ['-s', 'workspace', resolveServerAppWorkspaceName(), 'migrate:mysql:deploy'];
+    return ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', 'migrate:mysql:deploy'];
   }
-  return ['-s', 'workspace', resolveServerAppWorkspaceName(), 'prisma', 'migrate', 'deploy'];
+  return ['--filter', resolveServerAppWorkspaceName(), 'exec', 'prisma', 'migrate', 'deploy'];
 }
 
 function supportsServerLightTemplateCache(provider: TestDbProvider): provider is 'sqlite' | 'pglite' {
@@ -688,7 +688,7 @@ async function runServerMigrationCommand(params: {
   for (let attempt = 1; attempt <= migrateMaxAttempts; attempt++) {
     try {
       await runLoggedCommand({
-        command: yarnCommand(),
+        command: pnpmCommand(),
         args: migrateArgs,
         cwd: repoRootDir(),
         env: params.env,
@@ -791,7 +791,7 @@ async function ensureServerSharedDepsBuilt(params: { testDir: string; env: NodeJ
   sharedDepsBuildPromise = withServerSharedDepsBuildLock(async () => {
     // The canonical builder owns freshness and its no-op decision; output presence is not freshness.
     await runLoggedCommand({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: resolveSharedDepsBuildArgs(),
       cwd: rootDir,
       env: { ...params.env, CI: '1' },
@@ -859,8 +859,8 @@ async function ensureServerGeneratedProviders(params: { testDir: string; env: No
     hasOutputs: (provider) => hasServerGeneratedProviderOutputs(rootDir, provider),
     generate: async (provider) => {
       await runLoggedCommand({
-        command: yarnCommand(),
-        args: ['-s', 'workspace', resolveServerAppWorkspaceName(), 'generate:providers'],
+        command: pnpmCommand(),
+        args: ['--filter', resolveServerAppWorkspaceName(), 'run', '--silent', 'generate:providers'],
         cwd: rootDir,
         env: {
           ...params.env,

@@ -76,9 +76,10 @@ Module._load = function (id, ...rest) {
 printf '%s\\n' "$ACTOOL_EXECUTABLE"
 `, { mode: 0o755 });
   fs.symlinkSync(realActool, resolve(bin, 'actool'));
-  fs.writeFileSync(resolve(bin, 'yarn'), `#!/bin/sh
-if [ "$1" = --version ]; then printf '1.22.22\\n'; exit 0; fi
-if [ "$1" = -s ]; then exit 0; fi
+  fs.writeFileSync(resolve(bin, 'pnpm'), `#!/bin/sh
+if [ "$1" = --version ]; then printf '12.14.0\\n'; exit 0; fi
+if [ "$1" = run ] || [ "$1" = --silent ]; then exit 0; fi
+[ "$1" = exec ] && shift
 [ "$1" = tauri ] || exit 44
 # Reproduce the inherited FD_CLOEXEC effect of the native Tauri Node CLI.
 exec 0<&-
@@ -212,10 +213,10 @@ test('tauri build-updater-artifacts script supports preview dry-run', async () =
   );
 
   // We run the frontend build explicitly and override Tauri's beforeBuildCommand to avoid
-  // Corepack/Yarn resolution issues on Windows runners.
+  // Corepack/Pnpm resolution issues on Windows runners.
   assert.match(out, /\btauri:prepare:build\b/);
   assert.match(out, /tauri\.beforeBuild\.override\.json/);
-  assert.match(out, /\byarn tauri build -v\b/);
+  assert.match(out, /\bpnpm exec tauri build -v\b/);
   assert.match(out, /tauri\.preview\.conf\.json/);
   assert.match(out, /tauri\.version\.override\.json/);
 });
@@ -242,7 +243,7 @@ test('tauri build-updater-artifacts script supports dev dry-run', async () => {
 
   assert.match(out, /\btauri:prepare:build\b/);
   assert.match(out, /tauri\.beforeBuild\.override\.json/);
-  assert.match(out, /\byarn tauri build -v\b/);
+  assert.match(out, /\bpnpm exec tauri build -v\b/);
   assert.match(out, /tauri\.publicdev\.conf\.json/);
   assert.match(out, /tauri\.version\.override\.json/);
 });
@@ -267,6 +268,6 @@ test('tauri build-updater-artifacts script supports production dry-run', async (
 
   assert.match(out, /\btauri:prepare:build\b/);
   assert.match(out, /tauri\.beforeBuild\.override\.json/);
-  assert.match(out, /\byarn tauri build -v\b/);
+  assert.match(out, /\bpnpm exec tauri build -v\b/);
   assert.doesNotMatch(out, /tauri\.preview\.conf\.json/);
 });

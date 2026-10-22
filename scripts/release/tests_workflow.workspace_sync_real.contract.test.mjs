@@ -39,7 +39,7 @@ test('the real workspace-sync lane invokes the canonical runner exactly once', (
 
   const invocations = job.steps.filter((step) => String(step.run ?? '').includes('test:workspace-sync:real'));
   assert.equal(invocations.length, 1, 'exactly one step may invoke the canonical real workspace-sync runner');
-  assert.equal(invocations[0].run.trim(), 'yarn test:workspace-sync:real');
+  assert.equal(invocations[0].run.trim(), 'pnpm test:workspace-sync:real');
 
   assert.equal(
     job.steps.some((step) => String(step.uses ?? '').startsWith('actions/upload-artifact@')),
@@ -48,7 +48,7 @@ test('the real workspace-sync lane invokes the canonical runner exactly once', (
   );
 
   const rootScripts = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts;
-  assert.equal(rootScripts['test:workspace-sync:real'], 'yarn workspace @happier-dev/cli test:workspace-sync:real');
+  assert.equal(rootScripts['test:workspace-sync:real'], 'pnpm workspace @happier-dev/cli test:workspace-sync:real');
   const cliScripts = JSON.parse(readFileSync(join(repoRoot, 'apps/cli/package.json'), 'utf8')).scripts;
   assert.match(cliScripts['test:workspace-sync:real'], /hstack-exec .*--script=test:workspace-sync:real:local/u);
   assert.match(cliScripts['test:workspace-sync:real:local'], /runWorkspaceSyncRealIntegration\.mjs/u);
@@ -63,7 +63,7 @@ test('the required lane also proves the production signed release-acquisition pa
   // gate does so the two required owners cannot drift into two commands.
   assert.equal(
     acquisition.run.trim(),
-    'set -euo pipefail\nyarn workspace @happier-dev/cli-common test:mutagen-engine:live',
+    'set -euo pipefail\npnpm workspace @happier-dev/cli-common test:mutagen-engine:live',
   );
   assert.equal(acquisition.env.HAPPIER_TEST_MUTAGEN_ENGINE_LIVE_ACQUISITION, '1');
   // Public verification only: the automatic workflow token plus the built-in Happier
@@ -86,7 +86,7 @@ test('the required lane also proves the production signed release-acquisition pa
     job.steps.some((step) => String(step.run ?? '').includes('cmd/mutagen-sidecar')),
     'the released artifact check must not displace the source-built broker/carrier integration',
   );
-  assert.ok(job.steps.some((step) => String(step.run ?? '').trim() === 'yarn test:workspace-sync:real'));
+  assert.ok(job.steps.some((step) => String(step.run ?? '').trim() === 'pnpm test:workspace-sync:real'));
   assert.doesNotMatch(acquisition.run, /go build|gh release download/u);
 
   // Ordinary unit lanes stay offline: the live test is inert unless explicitly opted in.
@@ -131,11 +131,11 @@ test('one independent drift lane checks the generated public Action contract for
   const invocations = Object.values(workflow.jobs).flatMap(candidate => candidate.steps ?? [])
     .filter(step => /check:action-type-map|generated:finite/u.test(String(step.run ?? '')));
   assert.deepEqual(invocations, [actionContract], 'one CI owner checks drift outside prerequisite builds');
-  assert.equal(actionContract.run.trim(), 'yarn turbo run generated:finite --filter=@happier-dev/plugin-sdk');
+  assert.equal(actionContract.run.trim(), 'pnpm turbo run generated:finite --filter=@happier-dev/plugin-sdk');
   assert.equal(actionContract.if, "inputs.select_jobs_explicitly || steps.changes.outputs.action_dtos == 'true'");
   const filters = YAML.parse(stepNamed(job, 'Detect Action declaration inputs and outputs').with.filters).action_dtos;
   for (const path of ['packages/**/src/**', 'packages/plugin-sdk/scripts/**', 'packages/plugin-sdk/package.json',
-    'scripts/workspaces/**', 'apps/stack/scripts/utils/proc/**', 'turbo.json', 'package.json', 'yarn.lock']) {
+    'scripts/workspaces/**', 'apps/stack/scripts/utils/proc/**', 'turbo.json', 'package.json', 'pnpm-lock.yaml']) {
     assert.ok(filters.includes(path), `${path} must select Action DTO drift verification`);
   }
 });
@@ -326,7 +326,7 @@ test('the real workspace-sync lane selects itself from Lane 08 change surfaces',
     'apps/cli/native/processcustody/**',
     'apps/cli/scripts/runWorkspaceSyncRealIntegration.mjs',
     'apps/cli/scripts/runWorkspaceSyncRealIntegration.test.mjs',
-    'scripts/workspaces/execYarnCommand.mjs',
+    'scripts/workspaces/execPnpmCommand.mjs',
     'apps/cli/vitest.integration.config.ts',
     // Owns test:workspace-sync:real:local, the only definition of what the lane runs.
     'apps/cli/package.json',

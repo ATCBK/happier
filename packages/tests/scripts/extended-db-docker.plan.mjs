@@ -127,22 +127,22 @@ export function buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile
 
   const prebuildCliSharedStep = {
     kind: 'prebuild-cli-shared',
-    command: 'yarn',
-    args: ['-s', 'workspace', resolveCliAppWorkspaceName(), 'build:shared'],
+    command: 'pnpm',
+    args: ['--silent', '--filter', resolveCliAppWorkspaceName(), 'run', 'build:shared'],
     env: { CI: '1' },
   };
 
   const prebuildCliStep = {
     kind: 'prebuild-cli',
-    command: 'yarn',
-    args: ['-s', 'workspace', resolveCliAppWorkspaceName(), 'build'],
+    command: 'pnpm',
+    args: ['--silent', '--filter', resolveCliAppWorkspaceName(), 'run', 'build'],
     env: { CI: '1' },
   };
 
   const e2eStep = {
     kind: 'e2e',
-    command: 'yarn',
-    args: ['test:e2e'],
+    command: 'pnpm',
+    args: ['run', 'test:e2e'],
     env: {
       HAPPIER_E2E_DB_PROVIDER: db,
       DATABASE_URL: String(databaseUrl),
@@ -161,8 +161,8 @@ export function buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile
     db === 'mysql'
       ? {
           kind: 'migrate',
-          command: 'yarn',
-          args: ['-s', 'workspace', resolveServerAppWorkspaceName(), 'migrate:mysql:deploy'],
+          command: 'pnpm',
+          args: ['--silent', '--filter', resolveServerAppWorkspaceName(), 'run', 'migrate:mysql:deploy'],
           env: {
             ...providerEnv,
             HAPPIER_DB_MIGRATION_APPROVAL: '20260729102000_add_voice_conversation_grant_provenance',
@@ -170,22 +170,22 @@ export function buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile
         }
       : {
           kind: 'migrate',
-          command: 'yarn',
-          args: ['-s', 'workspace', resolveServerAppWorkspaceName(), 'migrate:full:deploy'],
+          command: 'pnpm',
+          args: ['--silent', '--filter', resolveServerAppWorkspaceName(), 'run', 'migrate:full:deploy'],
           env: providerEnv,
         };
 
   const contractStep = {
     kind: 'contract',
-    command: 'yarn',
-    args: ['workspace', resolveServerAppWorkspaceName(), 'test:db-contract', ...(contractFile === undefined ? [] : [contractFile])],
+    command: 'pnpm',
+    args: ['--filter', resolveServerAppWorkspaceName(), 'run', 'test:db-contract', ...(contractFile === undefined ? [] : [contractFile])],
     env: providerEnv,
   };
 
   const mysqlVoiceIdentityUpgradeContractStep = {
     kind: 'mysql-voice-identity-upgrade-contract',
-    command: 'yarn',
-    args: ['-s', 'workspace', resolveServerAppWorkspaceName(), 'test:mysql-voice-identity-upgrade-contract'],
+    command: 'pnpm',
+    args: ['--silent', '--filter', resolveServerAppWorkspaceName(), 'run', 'test:mysql-voice-identity-upgrade-contract'],
     env: {
       HAPPIER_DB_PROVIDER: 'mysql',
       DATABASE_URL: String(databaseUrl),
@@ -195,11 +195,12 @@ export function buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile
   if (mode === 'session-system-record-upgrade') {
     const fixtureStep = (operation) => ({
       kind: `session-system-record-upgrade-${operation}`,
-      command: 'yarn',
+      command: 'pnpm',
       args: [
-        '-s',
-        'workspace',
+        '--silent',
+        '--filter',
         resolveServerAppWorkspaceName(),
+        'run',
         'test:session-system-record-upgrade-fixture',
         operation,
       ],
@@ -218,8 +219,9 @@ export function buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile
         ...contractStep,
         kind: 'session-system-record-board-contract',
         args: [
-          'workspace',
+          '--filter',
           resolveServerAppWorkspaceName(),
+          'run',
           'test:db-contract',
           'sources/app/session/systemRecords/sessionSystemRecords.dbcontract.spec.ts',
         ],

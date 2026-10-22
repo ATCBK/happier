@@ -46,8 +46,9 @@ export function readTypecheckAmbientModules(file) {
   const source = readAmbientSource(file);
   const namespaces = [];
   const modules = [];
+  const moduleDefinitions = [];
   let hasOtherGlobals = false;
-  if (!source) return { namespaces, modules, hasOtherGlobals };
+  if (!source) return { namespaces, modules, moduleDefinitions, hasOtherGlobals };
   const external = ts.isExternalModule(source);
   const declarations = source.statements.flatMap(statement => {
     if (ts.isModuleDeclaration(statement) && statement.flags & ts.NodeFlags.GlobalAugmentation) {
@@ -58,9 +59,10 @@ export function readTypecheckAmbientModules(file) {
   for (const declaration of declarations) {
     if (ts.isModuleDeclaration(declaration)) {
       (ts.isStringLiteral(declaration.name) ? modules : namespaces).push(declaration.name.text);
+      if (!external && ts.isStringLiteral(declaration.name)) moduleDefinitions.push(declaration.name.text);
     } else if (!ts.isEmptyStatement(declaration)) hasOtherGlobals = true;
   }
-  return { namespaces, modules, hasOtherGlobals };
+  return { namespaces, modules, moduleDefinitions, hasOtherGlobals };
 }
 
 /** Derive source cycles, their dependency-ordered prerequisites, the source

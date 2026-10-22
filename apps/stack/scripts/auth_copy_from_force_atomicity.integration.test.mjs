@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { buildStackStableScopeId } from './utils/auth/stable_scope_id.mjs';
 import { runNodeCapture } from './testkit/auth_testkit.mjs';
 
@@ -66,7 +66,7 @@ async function createSqliteCopyFixture(t, prefix) {
   await writeStackEnv({ name: targetStack, baseDir: targetBaseDir, cliHomeDir: targetCliHome, dataDir: targetDataDir });
 
   const migrateSqlite = (dataDir) => {
-    const invocation = resolveYarnCommandInvocation(['-s', 'migrate:sqlite:deploy']);
+    const invocation = resolvePnpmCommandInvocation(['-s', 'migrate:sqlite:deploy']);
     const result = spawnSync(invocation.command, invocation.args, {
       cwd: serverDir,
       env: {

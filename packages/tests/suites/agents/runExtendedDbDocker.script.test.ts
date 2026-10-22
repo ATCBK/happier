@@ -8,7 +8,7 @@ import * as runExtendedDbDockerScript from '../../scripts/run-extended-db-docker
 import { parseArgs, resolveExtendedDbCommandTimeoutMs, resolveExtendedDbStepTimeoutMs } from '../../scripts/run-extended-db-docker.mjs';
 import { buildExtendedDbCommandPlan } from '../../scripts/extended-db-docker.plan.mjs';
 
-type YarnInvocationResolver = (
+type PnpmInvocationResolver = (
   args: readonly string[],
   options?: Readonly<{ platform?: NodeJS.Platform; npmExecPath?: string; comspec?: string }>,
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
@@ -89,15 +89,15 @@ describe('extended-db docker script args', () => {
     );
   });
 
-  it('wraps the Windows Yarn shim through cmd.exe', () => {
-    const resolveExtendedDbYarnInvocation = (runExtendedDbDockerScript as {
-      resolveExtendedDbYarnInvocation?: YarnInvocationResolver;
-    }).resolveExtendedDbYarnInvocation;
+  it('wraps the Windows pnpm shim through cmd.exe', () => {
+    const resolveExtendedDbPnpmInvocation = (runExtendedDbDockerScript as {
+      resolveExtendedDbPnpmInvocation?: PnpmInvocationResolver;
+    }).resolveExtendedDbPnpmInvocation;
 
-    expect(resolveExtendedDbYarnInvocation).toBeTypeOf('function');
-    if (!resolveExtendedDbYarnInvocation) throw new Error('missing extended DB Yarn invocation resolver');
+    expect(resolveExtendedDbPnpmInvocation).toBeTypeOf('function');
+    if (!resolveExtendedDbPnpmInvocation) throw new Error('missing extended DB Yarn invocation resolver');
 
-    const invocation = resolveExtendedDbYarnInvocation(['-s', 'test:e2e:core:fast'], {
+    const invocation = resolveExtendedDbPnpmInvocation(['--silent', 'run', 'test:e2e:core:fast'], {
       platform: 'win32',
       npmExecPath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js',
       comspec: 'C:\\Windows\\System32\\cmd.exe',
@@ -105,8 +105,8 @@ describe('extended-db docker script args', () => {
 
     expect(invocation.command).toBe('C:\\Windows\\System32\\cmd.exe');
     expect(invocation.windowsVerbatimArguments).toBe(true);
-    expect(invocation.args.join(' ')).toContain('corepack.cmd');
-    expect(invocation.args.join(' ')).toContain('yarn');
+    expect(invocation.args.join(' ')).toContain('pnpm.cmd');
+    expect(invocation.args.join(' ')).toContain('pnpm');
     expect(invocation.args.join(' ')).not.toContain('npm-cli.js');
   });
 });
@@ -136,30 +136,34 @@ describe('Session System Record provider upgrade command plan', () => {
       'session-system-record-board-contract',
     ]);
     expect(plan[0]?.args).toEqual([
-      '-s',
-      'workspace',
+      '--silent',
+      '--filter',
       '@happier-dev/server',
+      'run',
       'test:session-system-record-upgrade-fixture',
       'seed',
     ]);
     for (const migrationStep of plan.slice(1, 3)) {
       expect(migrationStep.args).toEqual([
-        '-s',
-        'workspace',
+        '--silent',
+        '--filter',
         '@happier-dev/server',
+        'run',
         migrationScript,
       ]);
     }
     expect(plan[3]?.args).toEqual([
-      '-s',
-      'workspace',
+      '--silent',
+      '--filter',
       '@happier-dev/server',
+      'run',
       'test:session-system-record-upgrade-fixture',
       'verify',
     ]);
     expect(plan[4]?.args).toEqual([
-      'workspace',
+      '--filter',
       '@happier-dev/server',
+      'run',
       'test:db-contract',
       'sources/app/session/systemRecords/sessionSystemRecords.dbcontract.spec.ts',
     ]);
@@ -176,9 +180,10 @@ describe('Session System Record provider upgrade command plan', () => {
   it('uses the canonical PostgreSQL migration owner for ordinary final-schema contracts too', () => {
     const plan = buildExtendedDbCommandPlan({ db: 'postgres', mode: 'contract', databaseUrl });
     expect(plan[0]?.args).toEqual([
-      '-s',
-      'workspace',
+      '--silent',
+      '--filter',
       '@happier-dev/server',
+      'run',
       'migrate:full:deploy',
     ]);
     expect(plan.flatMap((step) => step.args).join(' ')).not.toMatch(/\bprisma\s+migrate\s+deploy\b/u);

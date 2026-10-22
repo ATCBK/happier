@@ -149,7 +149,8 @@ test('Expo crashes three times then recovers when dependencies heal without a so
     await cleanup();
   });
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const component of ['ui', 'cli', 'server']) {
     await mkdir(join(root, 'apps', component), { recursive: true });
     await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));

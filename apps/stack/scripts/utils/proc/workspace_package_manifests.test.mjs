@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { collectWorkspacePackageJsonPaths } from './workspace_package_manifests.mjs';
+import { collectWorkspacePackageJsonPaths, readWorkspacePatterns } from './workspace_package_manifests.mjs';
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -16,17 +16,14 @@ test('collectWorkspacePackageJsonPaths expands character-class workspace globs f
     await rm(root, { recursive: true, force: true });
   });
 
-  await writeJson(join(root, 'package.json'), {
-    name: 'repo',
-    private: true,
-    workspaces: {
-      packages: [
-        'apps/ui',
-        'packages/protocol',
-        'packages/plugins/[a-z]*',
-      ],
-    },
-  });
+  await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
+  await writeFile(join(root, 'pnpm-workspace.yaml'), [
+    'packages:',
+    '  - apps/ui',
+    '  - packages/protocol',
+    '  - packages/plugins/[a-z]*',
+    '',
+  ].join('\n'));
 
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
@@ -50,4 +47,33 @@ test('collectWorkspacePackageJsonPaths expands character-class workspace globs f
     'packages/plugins/claude/package.json',
     'packages/protocol/package.json',
   ]);
+});
+
+test('reads quoted string globs and comments without loading installed dependencies', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-workspace-patterns-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), [
+    'packages: # canonical workspace set',
+    '  - "apps/*" # apps',
+    "  - 'packages/it''s-a-workspace'",
+    '  # nested plugins',
+    '  - packages/plugins/[a-z]*',
+    'nodeLinker: hoisted',
+    '',
+  ].join('\n'));
+  assert.deepEqual(await readWorkspacePatterns(root), ['apps/*', "packages/it's-a-workspace", 'packages/plugins/[a-z]*']);
+
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: [apps/*]\n');
+  await assert.rejects(readWorkspacePatterns(root), /Unsupported packages syntax/u);
+});
+
+test('reads the declared Yarn predecessor workspace without requiring a pnpm manifest', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-yarn-workspaces-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeJson(join(root, 'package.json'), {
+    packageManager: 'yarn@1.22.22', workspaces: { packages: ['apps/*', 'packages/*'] },
+  });
+  assert.deepEqual(await readWorkspacePatterns(root), ['apps/*', 'packages/*']);
+  await writeJson(join(root, 'package.json'), { packageManager: 'pnpm@12.14.0', workspaces: ['wrong/*'] });
+  await assert.rejects(readWorkspacePatterns(root), { code: 'ENOENT' });
 });

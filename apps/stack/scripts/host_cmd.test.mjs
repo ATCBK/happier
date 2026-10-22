@@ -366,7 +366,7 @@ test('dev-vm forward status reads the execution-host-owned tunnel state without 
   assert.equal(JSON.parse(result.stdout).status, 'absent');
 });
 
-test('dev-vm exec preserves an explicit guest cwd through direct hstack and the Yarn convenience command', async (t) => {
+test('dev-vm exec preserves an explicit guest cwd through direct hstack and the pnpm convenience command', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-host-exec-' });
   const home = fixture.path('home');
   const bin = fixture.path('bin');
@@ -423,18 +423,18 @@ test('dev-vm exec preserves an explicit guest cwd through direct hstack and the 
   const direct = await runNodeCapture([launcher, 'dev-vm', ...command], { env });
   assert.equal(direct.code, 0, direct.stderr);
 
-  const yarn = await runCommandCapture('yarn', ['-s', 'dev-vm', '--', ...command], {
+  const pnpm = await runCommandCapture('pnpm', ['--silent', 'run', 'dev-vm', ...command], {
     cwd: new URL('..', import.meta.url).pathname,
     env,
   });
-  assert.equal(yarn.code, 0, yarn.stderr);
+  assert.equal(pnpm.code, 0, pnpm.stderr);
 
   const calls = await readFile(log, 'utf8');
   assert.equal((calls.match(/shell --workdir \/home\/happier\/workspace\/dev candidate -- systemd-run --user --scope --quiet --unit=\S+ -- sh -lc pwd/g) ?? []).length, 2);
   assert.doesNotMatch(calls, /create|delete/);
 });
 
-test('dev-vm help gives the Yarn forwarding form for guest cwd arguments', async () => {
+test('dev-vm help gives the pnpm forwarding form for guest cwd arguments', async () => {
   const result = await runNodeCapture([launcher, 'dev-vm', '--help'], {
     env: {
       ...process.env,
@@ -446,7 +446,7 @@ test('dev-vm help gives the Yarn forwarding form for guest cwd arguments', async
   assert.equal(result.code, 0, result.stderr);
   assert.match(
     result.stdout,
-    /yarn -s dev-vm -- exec --guest-cwd=\/absolute\/path -- COMMAND \[ARG\.\.\.\]/,
+    /pnpm --silent run dev-vm exec --guest-cwd=\/absolute\/path -- COMMAND \[ARG\.\.\.\]/,
   );
   assert.match(result.stdout, /hstack dev-vm stop \[--force\] \[--json\]/);
   assert.match(result.stdout, /hstack dev-vm restart \[--force\] \[--json\]/);

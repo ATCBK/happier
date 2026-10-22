@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { execPnpm } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveArtifactName } from './build-node-addon.mjs';
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -30,7 +30,7 @@ export function createHomeIrohRealIntegrationPlan({
   );
   return {
     builds: [
-      { args: ['-s', 'build'], cwd: selectedPackageDir },
+      { args: ['run', '--silent', 'build'], cwd: selectedPackageDir },
       { args: ['-s', 'build:native:test-relay'], cwd: selectedPackageDir },
       // The production-composed process journey must load the ordinary addon
       // through the package's production loader, not the relay-fixture addon.
@@ -41,14 +41,14 @@ export function createHomeIrohRealIntegrationPlan({
     // rebuilds the protocol exports from current source instead of consuming
     // a stale dist tree or a frozen/archive representation.
     workspacePreparation: {
-      args: ['-s', 'workspace', '@happier-dev/server', 'build:shared'],
+      args: ['-s', '--filter', '@happier-dev/server', 'run', 'build:shared'],
       cwd: selectedRepoRoot,
     },
     // A source-launched daemon resolves the CLI's bundled physical workspace
     // packages. Publish the current Protocol build to that runtime copy before
     // the composed child starts; the server build only prepares its own closure.
     cliWorkspacePreparation: {
-      args: ['-s', 'workspace', '@happier-dev/cli', 'build:shared', '--source-dev', 'protocol'],
+      args: ['-s', '--filter', '@happier-dev/cli', 'run', 'build:shared', '--source-dev', 'protocol'],
       cwd: selectedRepoRoot,
     },
     tests: {
@@ -132,7 +132,7 @@ export function createHomeIrohRealIntegrationPlan({
 }
 
 export function runHomeIrohRealIntegration({
-  execYarnImpl = execYarn,
+  execPnpmImpl = execPnpm,
   env = process.env,
   makeTempDirImpl = mkdtempSync,
   copyFileImpl = copyFileSync,
@@ -148,7 +148,7 @@ export function runHomeIrohRealIntegration({
   try {
     const stableRelayFixtureAddonPath = join(stableDir, 'relay-fixture.node');
     for (const build of plan.builds.slice(0, 2)) {
-      execYarnImpl(build.args, {
+      execPnpmImpl(build.args, {
         cwd: build.cwd,
         env,
         stdio: 'inherit',
@@ -169,7 +169,7 @@ export function runHomeIrohRealIntegration({
           plan.tests.clientMachineRelay,
         ];
     for (const testPlan of testsBeforeOrdinary) {
-      execYarnImpl(testPlan.args, {
+      execPnpmImpl(testPlan.args, {
         cwd: testPlan.cwd,
         env: {
           ...env,
@@ -179,24 +179,24 @@ export function runHomeIrohRealIntegration({
         stdio: 'inherit',
       });
     }
-    execYarnImpl(plan.workspacePreparation.args, {
+    execPnpmImpl(plan.workspacePreparation.args, {
       cwd: plan.workspacePreparation.cwd,
       env,
       stdio: 'inherit',
     });
-    execYarnImpl(plan.cliWorkspacePreparation.args, {
+    execPnpmImpl(plan.cliWorkspacePreparation.args, {
       cwd: plan.cliWorkspacePreparation.cwd,
       env,
       stdio: 'inherit',
     });
     const ordinaryBuild = plan.builds[2];
     if (!ordinaryBuild) throw new Error('Missing ordinary native addon build step.');
-    execYarnImpl(ordinaryBuild.args, {
+    execPnpmImpl(ordinaryBuild.args, {
       cwd: ordinaryBuild.cwd,
       env,
       stdio: 'inherit',
     });
-    execYarnImpl(plan.tests.composed.args, {
+    execPnpmImpl(plan.tests.composed.args, {
       cwd: plan.tests.composed.cwd,
       env: {
         ...env,

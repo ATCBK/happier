@@ -42,7 +42,7 @@ test('collectWiringReport surfaces invalid feature tags and miswired lane names'
 
 test('collectWiringReport merges parity issues when repo metadata drifts', async () => {
   const report = await collectWiringReport(['packages/tests/suites/core-e2e/login.test.ts'], {
-    packageJsonText: JSON.stringify({ scripts: { test: 'yarn -s test:unit' } }),
+    packageJsonText: JSON.stringify({ scripts: { test: 'pnpm --silent run test:unit' } }),
     workflowText: '',
     docsText: '',
     configTexts: {},
@@ -50,7 +50,7 @@ test('collectWiringReport merges parity issues when repo metadata drifts', async
 
   const messages = report.issues.map((issue) => issue.message).join('\n');
   assert.match(messages, /Missing root script test:integration/);
-  assert.match(messages, /Docs are missing command yarn test/);
+  assert.match(messages, /Docs are missing command pnpm run test/);
 });
 
 test('collectWiringReport fails plugin test wiring when a workspace has no executable test script', async () => {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 
 import { collectWorkspacePackageJsonPaths } from "../../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs";
 
@@ -17,7 +18,7 @@ function extractStageSection(dockerfile, stageMarker) {
   return nextFromIndex >= 0 ? after.slice(0, nextFromIndex) : after;
 }
 
-test("Dockerfile deps stages include the root postinstall script (eas-postinstall.mjs) so yarn install can run in minimal build contexts", () => {
+test("Dockerfile deps stages include the pnpm setup, workspace graph and postinstall in minimal build contexts", () => {
   const dockerfilePath = path.join(repoRoot, "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
@@ -28,13 +29,15 @@ test("Dockerfile deps stages include the root postinstall script (eas-postinstal
   ]) {
     const section = extractStageSection(raw, marker);
     assert.match(section, /COPY scripts\/pipeline\/expo\/eas-postinstall\.mjs scripts\/pipeline\/expo\//);
-    assert.match(section, /COPY scripts\/ci\/yarn-install-with-retry\.sh \/usr\/local\/bin\/yarn-install-with-retry/);
+    assert.match(section, /COPY scripts\/ci\/setup-pnpm\.mjs \.\/scripts\/ci\//);
+    assert.match(section, /COPY package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\//);
+    assert.match(section, /COPY --parents apps\/\*\/package\.json packages\/\*\/package\.json packages\/plugins\/\*\/package\.json \.\//);
     if (marker.endsWith('AS deps-debian')) {
       const dockerIgnore = fs.readFileSync(path.join(repoRoot, '.dockerignore'), 'utf8');
       assert.match(dockerIgnore, /^!patches\/?$/m, 'root dependency patches must enter the Docker build context');
       assert.match(dockerIgnore, /^!patches\/\*\*$/m, 'root dependency patch contents must enter the Docker build context');
       const patchCopyIndex = section.search(/^\s*COPY\s+patches\/?\s+\.\/patches\/?\s*$/m);
-      const installIndex = section.indexOf('yarn-install-with-retry --frozen-lockfile');
+      const installIndex = section.indexOf('pnpm install --frozen-lockfile');
       assert.ok(patchCopyIndex >= 0 && patchCopyIndex < installIndex,
         'server dependencies must consume root dependency patches during the existing install');
     }
@@ -51,14 +54,14 @@ test("Dockerfile deps stages copy shared workspace build tooling for derived wor
     "FROM node:${NODE_VERSION} AS deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
-    const installIndex = section.indexOf("yarn-install-with-retry --frozen-lockfile");
+    const installIndex = section.indexOf("pnpm install --frozen-lockfile");
     const copyIndex = section.indexOf("COPY scripts/workspaces ./scripts/workspaces");
 
     assert.ok(installIndex >= 0, `${marker} must install dependencies`);
     assert.ok(copyIndex >= 0, `${marker} must copy scripts/workspaces`);
     assert.ok(
-      installIndex < copyIndex,
-      `${marker} must copy scripts/workspaces after dependency install so helper edits do not invalidate the install cache`,
+      copyIndex < installIndex,
+      `${marker} must copy the canonical bootstrap invocation owner before installation`,
     );
   }
 });
@@ -81,8 +84,34 @@ test("server images share the production dependency closure and retain their dec
 
   const builder = extractStageSection(raw, "FROM deps-debian AS server-builder");
   assert.match(builder, /COPY packages \.\/packages/);
-  const prepareIndex = builder.indexOf("yarn workspace @happier-dev/server build:shared");
-  const generateIndex = builder.indexOf("yarn workspace @happier-dev/server postinstall:real");
+  const copiedSources = `${deps}\n${builder}`.split('\n').flatMap((line) => {
+    const match = /^COPY\s+([^\s]+)\s+[^\s]+\s*$/.exec(line);
+    return match ? [match[1].replace(/\/$/, '')] : [];
+  });
+  const admissionLauncher = 'apps/stack/bin/hstack-exec';
+  assert.ok(copiedSources.some((input) => admissionLauncher === input || admissionLauncher.startsWith(`${input}/`)),
+    'server builder must copy the canonical workspace compiler admission process entry point');
+  const sharedBuilderPath = path.join(repoRoot, 'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs');
+  const pendingSources = [sharedBuilderPath];
+  const checkedSources = new Set();
+  while (pendingSources.length > 0) {
+    const file = pendingSources.pop();
+    if (checkedSources.has(file)) continue;
+    checkedSources.add(file);
+    const source = path.relative(repoRoot, file).split(path.sep).join('/');
+    assert.ok(copiedSources.some((input) => source === input || source.startsWith(`${input}/`)),
+      `server builder must copy the shared workspace owner's transitive source dependency ${source}`);
+    const parsed = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    for (const statement of parsed.statements) {
+      if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+      if (statement.isTypeOnly || statement.importClause?.isTypeOnly) continue;
+      const specifier = statement.moduleSpecifier;
+      if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith('.')) continue;
+      pendingSources.push(path.resolve(path.dirname(file), specifier.text));
+    }
+  }
+  const prepareIndex = builder.indexOf("pnpm --filter @happier-dev/server run build:shared");
+  const generateIndex = builder.indexOf("pnpm --filter @happier-dev/server run postinstall:real");
   assert.ok(prepareIndex >= 0 && prepareIndex < generateIndex,
     "the canonical workspace builder must prepare shared exports before server generation");
 

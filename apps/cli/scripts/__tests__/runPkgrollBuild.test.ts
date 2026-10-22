@@ -69,7 +69,8 @@ function writeIsolatedPkgrollRepo(prefix: string) {
   const stagingDir = join(packageRoot, outputDir);
   mkdirSync(packageRoot, { recursive: true });
   writeFileSync(join(repoRoot, 'package.json'), '{"private":true}\n', 'utf8');
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# isolated wrapper fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# isolated wrapper fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(packageJsonPath, JSON.stringify({
     name: '@happier-dev/pkgroll-fixture',
     version: '0.0.0',
@@ -123,7 +124,8 @@ async function runPhysicalPackageAlias(aliasKind: 'directory' | 'file') {
   const aliasPackageRoot = join(aliasRepoRoot, 'apps', 'cli');
   const aliasPackageJsonPath = join(aliasPackageRoot, 'package.json');
   writeFileSync(join(aliasRepoRoot, 'package.json'), '{"private":true}\n', 'utf8');
-  writeFileSync(join(aliasRepoRoot, 'yarn.lock'), '# lexical alias repository\n', 'utf8');
+  writeFileSync(join(aliasRepoRoot, 'pnpm-lock.yaml'), '# lexical alias repository\n', 'utf8');
+  writeFileSync(join(aliasRepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   mkdirSync(join(aliasRepoRoot, 'apps'), { recursive: true });
   if (aliasKind === 'directory') {
     symlinkSync(

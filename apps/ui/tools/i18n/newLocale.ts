@@ -7,10 +7,10 @@ import { findSatelliteReferences, replaceLocaleBlock } from './satelliteModules'
 /**
  * Author a new locale, or retranslate an existing one, without hand-editing a 13k-line file.
  *
- *   yarn i18n:locale:extract -- --locale fr --out /tmp/fr.todo.json
+ *   pnpm run i18n:locale:extract -- --locale fr --out /tmp/fr.todo.json
  *   …fill in the translations…
- *   yarn i18n:locale:build   -- --locale fr --translations /tmp/fr.json --out /tmp/fr.preview.ts
- *   yarn i18n:locale:build   -- --locale fr --translations /tmp/fr.json
+ *   pnpm run i18n:locale:build   -- --locale fr --translations /tmp/fr.json --out /tmp/fr.preview.ts
+ *   pnpm run i18n:locale:build   -- --locale fr --translations /tmp/fr.json
  *
  * Keys are `<key path>#<occurrence>`, so `build` re-extracts from the CURRENT source and matches by
  * key rather than by position — English can move underneath a half-finished translation without

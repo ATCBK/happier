@@ -43,7 +43,7 @@ test('npm release script defaults to skipping tests locally when run-tests=auto'
   );
 
   assertCanonicalCliPublicationBuild(out);
-  assert.doesNotMatch(out, /\byarn prepublishOnly\b/);
+  assert.doesNotMatch(out, /\bpnpm run prepublishOnly\b/);
 });
 
 test('npm release script defaults to running tests in GitHub Actions when run-tests=auto', async () => {
@@ -75,5 +75,5 @@ test('npm release script defaults to running tests in GitHub Actions when run-te
   );
 
   assertCanonicalCliPublicationBuild(out);
-  assert.match(out, /\byarn prepublishOnly\b/);
+  assert.match(out, /\bpnpm run prepublishOnly\b/);
 });

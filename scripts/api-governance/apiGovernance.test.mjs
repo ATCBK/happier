@@ -286,7 +286,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginSdkPackage.scripts['prepare:api-governance:prepared'],
-    'yarn -s prepare:declarations:prepared && node ./scripts/apiSurfaceCli.mjs --materialize-source --write && yarn -s build:compiled',
+    'pnpm --silent run prepare:declarations:prepared && node ./scripts/apiSurfaceCli.mjs --materialize-source --write && pnpm --silent run build:compiled',
   );
   assert.equal(
     pluginSdkPackage.scripts['check:api-governance'],
@@ -294,7 +294,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginSdkPackage.scripts['check:api-governance:locked'],
-    'yarn -s check:prepare:api-governance:prepared && node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --check',
+    'pnpm --silent run check:prepare:api-governance:prepared && node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --check',
     'The locked governance transaction must end with the one full-publisher output plan so capability-matrix.json derivation is validated after declaration preparation',
   );
   assert.equal(
@@ -307,7 +307,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginSdkPackage.scripts['check:prepare:api-governance:prepared'],
-    'yarn -s prepare:declarations:prepared && node ./scripts/apiSurfaceCli.mjs --materialize-source --check && yarn -s build:compiled',
+    'pnpm --silent run prepare:declarations:prepared && node ./scripts/apiSurfaceCli.mjs --materialize-source --check && pnpm --silent run build:compiled',
   );
   assert.match(
     pluginSdkPackage.scripts['test:prepared'],
@@ -316,11 +316,11 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginUiPackage.scripts['prepare:declarations'],
-    'yarn --cwd ../plugin-sdk -s prepare:declarations',
+    'pnpm --dir ../plugin-sdk --silent run prepare:declarations',
   );
   assert.equal(
     pluginUiPackage.scripts['prepare:api-governance'],
-    'yarn -s prepare:declarations && yarn --cwd ../plugin-sdk -s check:public-toolchain:prepared && yarn -s build:compiled',
+    'pnpm --silent run prepare:declarations && pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && pnpm --silent run build:compiled',
   );
   assert.equal(
     pluginUiPackage.scripts['build:compiled'],
@@ -328,7 +328,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginUiPackage.scripts['check:api-governance'],
-    'yarn -s prepare:api-governance && node --max-old-space-size=6144 ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
+    'pnpm --silent run prepare:api-governance && node --max-old-space-size=6144 ../../scripts/api-governance/cli.mjs --profile plugin-ui --check',
   );
   assert.match(pluginUiPackage.scripts.prepack, /check:api-governance/u);
   assert.equal(
@@ -341,11 +341,11 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     sdkPackage.scripts['prepare:api-governance'],
-    'yarn -s prepare:declarations && node ./scripts/bundleWorkspaceDeps.mjs --artifact && yarn -s build:compiled',
+    'pnpm --silent run prepare:declarations && node ./scripts/bundleWorkspaceDeps.mjs --artifact && pnpm --silent run build:compiled',
   );
   assert.equal(
     sdkPackage.scripts['check:api-governance'],
-    'yarn -s prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --check',
+    'pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --check',
   );
   assert.equal(
     sdkPackage.scripts['check:api-governance:prepared'],
@@ -353,7 +353,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     sdkPackage.scripts.prepack,
-    'yarn -s prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && yarn -s check:api-governance:prepared',
+    'pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && pnpm --silent run check:api-governance:prepared',
     'SDK prepack must materialize the exact bundled declaration graph and its generated records before governing them',
   );
 
@@ -364,7 +364,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
       active.add(scriptName);
       const command = packageJson.scripts[scriptName] ?? '';
       let count = [...command.matchAll(/buildTypeScriptPackageDist\.mjs/gu)].length;
-      for (const match of command.matchAll(/yarn -s ([\w:-]+)/gu)) {
+      for (const match of command.matchAll(/pnpm --silent run ([\w:-]+)/gu)) {
         if (packageJson.scripts[match[1]] !== undefined) count += visit(match[1]);
       }
       for (const match of command.matchAll(/--run-script=([\w:-]+)/gu)) {
@@ -412,7 +412,7 @@ test('the finite public SDK task stages materialization before its mutation guar
   );
   assert.equal(
     pluginSdkPackage.scripts['test:finite'],
-    'yarn -s test:prepared',
+    'pnpm --silent run test:prepared',
   );
   assert.match(
     pluginSdkPackage.scripts['test:prepared'],
@@ -420,9 +420,9 @@ test('the finite public SDK task stages materialization before its mutation guar
   );
   assert.equal(
     pluginUiPackage.scripts['api:finite'],
-    'yarn --cwd ../plugin-sdk -s check:public-toolchain:prepared && yarn -s check:api-governance:prepared',
+    'pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && pnpm --silent run check:api-governance:prepared',
   );
-  assert.equal(sdkPackage.scripts['api:finite'], 'yarn -s check:api-governance:prepared');
+  assert.equal(sdkPackage.scripts['api:finite'], 'pnpm --silent run check:api-governance:prepared');
   assert.equal(
     rootPackage.scripts['check:public-sdk:finite:local'],
     'turbo run api:finite test:finite typecheck:finite --filter=@happier-dev/plugin-sdk --filter=@happier-dev/plugin-ui --filter=@happier-dev/sdk --filter=@happier-dev/embed',
@@ -542,6 +542,39 @@ test('the plugin-ui profile gates only its committed census and generates declar
     assert.equal(drift.status, 1, drift.stderr);
     assert.match(drift.stdout, /drift authorApiMarkdown API\.md/u);
     assert.doesNotMatch(drift.stdout, /api-surface\.json|api-declarations\.md/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the plugin-ui census releases the declaration graph before reading author source', async () => {
+  const root = await createEntrypointFixture();
+  try {
+    // Each graph fits this heap on its own; retaining both compiler graphs
+    // reproduces the public plugin-ui command's measured heap exhaustion.
+    const declarations = Array.from({ length: 12_000 }, (_, index) => (
+      `interface Private${index} { readonly id: string; readonly value?: number; }`
+    )).join('\n');
+    await writeFixtureFile(root, 'dist/hidden.d.ts', [
+      declarations,
+      'export declare class Hidden { value?: string; }',
+      '',
+    ].join('\n'));
+    await writeFixtureFile(root, 'src/runtime.ts', [
+      declarations,
+      'export class Hidden { value?: string; }',
+      'export function run(): Hidden { return new Hidden(); }',
+      '',
+    ].join('\n'));
+    const result = spawnSync(process.execPath, [
+      '--max-old-space-size=128',
+      CLI_PATH, '--profile', 'plugin-ui', '--package-root', root, '--write',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /plugin-ui write: current/u);
+    const inventory = JSON.parse(await readFile(join(root, 'api-surface.json'), 'utf8'));
+    assert.deepEqual(inventory.symbols.map((symbol) => symbol.exportName), ['run']);
+    assert.match(await readFile(join(root, 'api-declarations.md'), 'utf8'), /value\?: string/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

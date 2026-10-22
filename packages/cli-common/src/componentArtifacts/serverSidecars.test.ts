@@ -65,7 +65,7 @@ test.each(['linux', 'darwin'])('cross-target %s server support acquires target S
       repoRoot: root,
       target,
       buildDbProviders: 'sqlite',
-      commandProbe: (command) => command === 'yarn' || command === 'npm',
+      commandProbe: (command) => command === 'pnpm' || command === 'npm',
       runCommand: async (command, args, options) => {
         if (command !== 'npm') return;
         // npm is the external acquisition boundary. It installs only packages

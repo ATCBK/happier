@@ -226,7 +226,7 @@ describe('runVitestShards', () => {
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
         expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
-          expect.arrayContaining(['-s', 'test:import-cycles']),
+          expect.arrayContaining(['--silent', 'run', 'test:import-cycles']),
         );
       });
       const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
@@ -251,7 +251,7 @@ describe('runVitestShards', () => {
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
         expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
-          expect.arrayContaining(['-s', 'test:import-cycles']),
+          expect.arrayContaining(['--silent', 'run', 'test:import-cycles']),
         );
       });
       const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
@@ -281,7 +281,7 @@ describe('runVitestShards', () => {
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
         expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
-          expect.arrayContaining(['-s', 'test:import-cycles']),
+          expect.arrayContaining(['--silent', 'run', 'test:import-cycles']),
         );
       });
       const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));

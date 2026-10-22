@@ -11,7 +11,7 @@ import {
   type CliSharedDepPackageName,
 } from '../../src/testkit/process/workspacePackageResolution';
 import { sleep } from '../../src/testkit/timing';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 
 function writeSharedDepWorkspacePackageManifest(repoRoot: string, packageName: CliSharedDepPackageName) {
   const packageDir = resolve(repoRoot, 'packages', packageName);
@@ -151,8 +151,8 @@ describe('providers: CLI dist build invocation', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-dist-cmd-'));
     const invocation = resolveCliDistBuildInvocation({ repoRoot });
 
-    expect(invocation.command).toBe(yarnCommand());
-    expect(invocation.args).toEqual(['-s', 'workspace', '@happier-dev/cli', 'build']);
+    expect(invocation.command).toBe(pnpmCommand());
+    expect(invocation.args).toEqual(['--filter', '@happier-dev/cli', 'run', '--silent', 'build']);
     expect(invocation.cwd).toBe(repoRoot);
   });
 

@@ -1355,8 +1355,8 @@ test('buildServerBinaryArtifactPayload stages and finalizes self-contained runti
         args: ['apps/server/scripts/buildSharedDeps.mjs', '--quiet'],
       },
       {
-        cmd: 'yarn',
-        args: ['--cwd', 'apps/server', '-s', 'generate:providers'],
+        cmd: 'pnpm',
+        args: ['--dir', 'apps/server', '--silent', 'run', 'generate:providers'],
       },
       {
         cmd: process.execPath,
@@ -1789,8 +1789,8 @@ test('buildServerBinaryArtifactPayload delegates provider freshness to generate:
         args: ['apps/server/scripts/buildSharedDeps.mjs', '--quiet'],
       },
       {
-        cmd: 'yarn',
-        args: ['--cwd', 'apps/server', '-s', 'generate:providers'],
+        cmd: 'pnpm',
+        args: ['--dir', 'apps/server', '--silent', 'run', 'generate:providers'],
       },
       {
         cmd: process.execPath,
@@ -2007,10 +2007,10 @@ test('prepareUiWebDist refreshes an existing ui-web dist before server sidecars 
 
     assert.deepEqual(runCalls, [
       { cmd: process.execPath, args: ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'] },
-      { cmd: 'yarn', args: ['--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'] },
+      { cmd: 'pnpm', args: ['--dir', 'apps/ui', '--silent', 'exec', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'] },
       { cmd: process.execPath, args: ['scripts/pipeline/release/precompress-ui-web-assets.mjs', '--dir', 'apps/ui/dist'] },
       { cmd: process.execPath, args: ['apps/server/scripts/buildSharedDeps.mjs', '--quiet'] },
-      { cmd: 'yarn', args: ['--cwd', 'apps/server', '-s', 'generate:providers'] },
+      { cmd: 'pnpm', args: ['--dir', 'apps/server', '--silent', 'run', 'generate:providers'] },
     ]);
     assert.equal(uiWebDistPath, uiDistDir);
     assert.equal(readFileSync(join(payloadDir, 'ui-web', 'current', 'index.html'), 'utf8'), '<html>fresh ui</html>\n');

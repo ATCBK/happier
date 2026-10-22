@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { cp, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 
-import { execYarn } from '../../../../scripts/workspaces/execYarnCommand.mjs';
+import { execPnpm } from '../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { buildIntoTempThenReplace } from '../utils/fs/atomic_dir_swap.mjs';
 import { ensureDepsInstalled, requireDir } from '../utils/proc/pm.mjs';
 import { withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
@@ -21,7 +21,7 @@ import { artifactPayloadDir, readArtifactManifest, readReusableArtifactManifest,
 import { assertWebArtifactPayload } from '../runtime/shared/web_payload.mjs';
 
 function runCanonicalUiPostinstall({ uiDir, env }) {
-  execYarn(['-s', 'postinstall:real'], {
+  execPnpm(['run', '--silent', 'postinstall:real'], {
     cwd: uiDir,
     env,
     stdio: 'inherit',

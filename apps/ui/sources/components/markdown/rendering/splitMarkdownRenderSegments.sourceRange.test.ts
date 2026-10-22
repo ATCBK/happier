@@ -1,3 +1,4 @@
+import { enrichedMarkdownPackageFileUrl } from '@/dev/testkit/harness/enrichedMarkdownPackage';
 import { describe, expect, it } from 'vitest';
 
 import { splitMarkdownRenderSegments } from './splitMarkdownRenderSegments';
@@ -32,7 +33,7 @@ describe('splitMarkdownRenderSegments source ranges', () => {
     });
 
     it('preserves complete-list, paragraph, heading and reference-link semantics in the real enriched parser', async () => {
-        const wasmPath = new URL('../../../../node_modules/react-native-enriched-markdown/src/web/wasm/md4c.js', import.meta.url).href;
+        const wasmPath = enrichedMarkdownPackageFileUrl('src/web/wasm/md4c.js');
         const { default: initialize } = await import(/* @vite-ignore */ wasmPath);
         const wasm = await initialize();
         const parse = wasm.cwrap('parseMarkdown', 'string', ['string', 'number', 'number']) as (text: string, underline: number, math: number) => string;

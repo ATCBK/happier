@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { runCommandSuite } from './lib/runCommandSuite.ts';
-import { runYarnCommand } from './lib/runYarnCommand.ts';
+import { runPnpmCommand } from './lib/runPnpmCommand.ts';
 import { discoverWorkspaceManifests } from './lib/workspaceManifests.ts';
 import { runWorkspaceUnitProjects } from './runWorkspaceUnitProjects.ts';
 
@@ -54,7 +54,7 @@ export async function runPluginWorkspaceTests(
   }
 
   const runInvocation = options.runInvocation
-    ?? ((invocation: PluginWorkspaceTestInvocation) => runYarnCommand({ id: invocation.packageName, args: invocation.args }, rootDir));
+    ?? ((invocation: PluginWorkspaceTestInvocation) => runPnpmCommand({ id: invocation.packageName, args: invocation.args }, rootDir));
   const maxConcurrent = Number.isInteger(options.maxConcurrent) && Number(options.maxConcurrent) > 0
     ? Number(options.maxConcurrent)
     : DEFAULT_MAX_CONCURRENT_PLUGIN_WORKSPACES;

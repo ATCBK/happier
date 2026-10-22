@@ -162,7 +162,8 @@ describe('discoverLocalServiceRunTargets', () => {
         const root = await makeRepo();
         try {
             await writeJson(join(root, 'package.json'), { name: 'root', packageManager: 'bun@1.2.8' });
-            await writeFile(join(root, 'yarn.lock'), '');
+            await writeFile(join(root, 'pnpm-lock.yaml'), '');
+            await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
             const cwd = join(root, 'web');
             await mkdir(cwd);
             await writeJson(join(cwd, 'package.json'), { name: 'web', scripts: { dev: 'vite' } });

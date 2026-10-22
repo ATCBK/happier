@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +14,7 @@ test('QA setup admits a fresh worker dependency graph before loading its entrypo
   const source = fileURLToPath(new URL('../../../../../', import.meta.url));
   // Relocate the actual authored bootstrap/worker import graph. No inherited
   // node_modules or compiled cli-common can make this fresh worker load.
-  for (const relative of ['apps/stack/scripts/utils', 'apps/stack/scripts/provision', 'scripts/workspaces']) {
+  for (const relative of ['apps/stack/scripts/utils', 'apps/stack/scripts/provision', 'scripts/workspaces', 'scripts/ci']) {
     await cp(join(source, relative), join(worker, relative), { recursive: true,
       filter: path => !path.endsWith('.test.mjs') });
   }
@@ -24,17 +25,35 @@ test('QA setup admits a fresh worker dependency graph before loading its entrypo
       await cp(join(source, 'packages/cli-common', entry.name), join(common, entry.name));
     }
   }
-  await writeFile(join(worker, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  await writeFile(join(worker, 'yarn.lock'), '# cold worker fixture\n');
+  const archiveBytes = 'fixture pnpm archive';
+  const integrity = createHash('sha512').update(archiveBytes).digest('hex');
+  await writeFile(join(worker, 'package.json'), JSON.stringify({
+    private: true, packageManager: `pnpm@12.14.0+sha512.${integrity}`,
+  }));
+  await writeFile(join(worker, 'pnpm-lock.yaml'), '# cold worker fixture\n');
+  await writeFile(join(worker, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   for (const component of ['stack', 'ui', 'cli', 'server']) {
     const directory = join(worker, 'apps', component);
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
   }
   const installs = join(root, 'installs');
+  const bootstrapFailure = join(root, 'bootstrap-failure');
   const commands = join(root, 'ssh-commands');
-  const { binDir } = writeFakeBin({ root, name: 'corepack', content:
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$QA_INSTALLS"\necho "fixture package service unavailable" >&2\nexit 86\n' });
+  const { binDir } = writeFakeBin({ root, name: 'pnpm', content:
+    '#!/bin/sh\nif [ "$1" = --version ]; then echo 12.14.0; exit 0; fi\nprintf "%s\\n" "$*" >> "$QA_INSTALLS"\necho "fixture package service unavailable" >&2\nexit 86\n' });
+  // Package acquisition and installation are process boundaries. The real
+  // setup owner verifies the archive integrity before reaching dependency install.
+  writeFakeBin({ root, name: 'npm', content: `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === 'pack') {
+  const filename = 'pnpm-12.14.0.tgz';
+  fs.writeFileSync(path.join(args[args.indexOf('--pack-destination') + 1], filename), ${JSON.stringify(archiveBytes)});
+  console.log(JSON.stringify([{ filename }]));
+} else if (args.join(' ') !== 'install --global ' + args[2]) process.exit(79);
+` });
   writeFakeBin({ root, name: 'mutagen', content: `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === 'sync' && args[1] === 'list') {
@@ -56,7 +75,12 @@ else if (command.includes('linux_power_healthy')) console.log('__HAPPIER_WORKER_
 else {
   // A real remote login inherits its configured remotePath. A local test
   // login shell would replace that PATH with the test runner's shell profile.
-  const result = spawnSync('/bin/bash', ['-c', command.replaceAll('bash -lc', 'bash -c')], { stdio: 'inherit' });
+  const result = spawnSync('/bin/bash', ['-c', command.replaceAll('bash -lc', 'bash -c')], {
+    encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe'],
+  });
+  process.stdout.write(result.stdout ?? '');
+  process.stderr.write(result.stderr ?? '');
+  if (result.status !== 0) fs.writeFileSync(process.env.QA_BOOTSTRAP_FAILURE, result.stderr ?? '');
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 }
@@ -65,12 +89,14 @@ else {
     cliHomeDir: join(root, 'worker-home'), remotePath: [binDir, join(process.execPath, '..')] };
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, npm_execpath: '', NODE_PATH: '', NODE_OPTIONS: '',
     HAPPIER_STACK_HOME_DIR: join(root, 'stack-home'), HAPPIER_STACK_STACKS_DIR: join(root, 'stacks'),
-    QA_INSTALLS: installs, QA_COMMANDS: commands };
+    QA_INSTALLS: installs, QA_COMMANDS: commands, QA_BOOTSTRAP_FAILURE: bootstrapFailure };
   await assert.rejects(stat(join(worker, 'node_modules')), { code: 'ENOENT' });
   const result = await provisionQaDevTarget({ target, stackName: 'fixture', stackBaseDir: join(root, 'stack'), env });
   assert.equal(result.dependenciesReady, false);
   assert.match(result.dependencies.error, /dependency bootstrap.*1/i);
-  assert.match(await readFile(installs, 'utf8'), /^yarn install .*--ignore-scripts/m);
+  assert.equal(await stat(installs).then(() => true, () => false), true,
+    await readFile(bootstrapFailure, 'utf8').catch(() => 'dependency install was not reached'));
+  assert.match(await readFile(installs, 'utf8'), /^install --prod=false --ignore-scripts --frozen-lockfile/m);
   const dispatched = (await readFile(commands, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.ok(!dispatched.some(command => command.includes('--qa-setup-worker')), 'failed admission must not start the dependency-consuming entrypoint');
 });

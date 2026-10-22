@@ -18,7 +18,7 @@ export const CLI_DIST_BUILD_MANIFEST = cliDistBuildManifest.CLI_DIST_BUILD_MANIF
 function resolveCliCommonBootstrapModulePath(sourceFileName, packageExport) {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const sourcePath = resolve(repoRoot, 'packages', 'cli-common', sourceFileName);
-  const isRepoSource = existsSync(resolve(repoRoot, 'package.json')) && existsSync(resolve(repoRoot, 'yarn.lock'));
+  const isRepoSource = existsSync(resolve(repoRoot, 'package.json')) && existsSync(resolve(repoRoot, 'pnpm-lock.yaml')) && existsSync(resolve(repoRoot, 'pnpm-workspace.yaml'));
   return isRepoSource && existsSync(sourcePath) ? sourcePath : packageExport;
 }
 
@@ -57,7 +57,7 @@ export function isReachableImportClosureComplete(outputDir, entrypointPath) {
 function findRepoRoot(projectRoot) {
   let dir = resolve(projectRoot);
   for (let index = 0; index < 5; index += 1) {
-    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'yarn.lock'))) {
+    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'pnpm-lock.yaml')) && existsSync(join(dir, 'pnpm-workspace.yaml'))) {
       return dir;
     }
     const parent = resolve(dir, '..');

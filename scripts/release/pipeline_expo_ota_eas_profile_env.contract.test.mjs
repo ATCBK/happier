@@ -33,7 +33,7 @@ function createStubBin(prefix) {
 
   const envLogPath = path.join(dir, 'env.log');
   const npxLogPath = path.join(dir, 'npx.log');
-  const yarnLogPath = path.join(dir, 'yarn.log');
+  const pnpmLogPath = path.join(dir, 'pnpm.log');
 
   writeExecutable(
     path.join(binDir, 'git'),
@@ -41,11 +41,11 @@ function createStubBin(prefix) {
   );
 
   writeExecutable(
-    path.join(binDir, 'yarn'),
+    path.join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      `echo "$*" >> ${JSON.stringify(yarnLogPath)}`,
+      `echo "$*" >> ${JSON.stringify(pnpmLogPath)}`,
       'exit 0',
       '',
     ].join('\n'),
@@ -63,7 +63,7 @@ function createStubBin(prefix) {
     ].join('\n'),
   );
 
-  return { dir, binDir, envLogPath, npxLogPath, yarnLogPath };
+  return { dir, binDir, envLogPath, npxLogPath, pnpmLogPath };
 }
 
 function buildCleanEnv(extraEnv) {

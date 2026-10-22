@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { resolveVitestWorkers } from '../../scripts/testing/vitestWorkers';
 import { configDefaults, defineConfig } from 'vitest/config'
 import { realpathSync } from 'node:fs'
@@ -10,6 +11,8 @@ import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnviron
 // X1 scratch harness: the real config imports the protocol BARREL (dist) at
 // config-load time, and the shared protocol dist is currently a stale broken
 // artifact from a concurrent lane. Nothing else differs.
+const requireUiDependency = createRequire(new URL('../ui/package.json', import.meta.url));
+
 const resolveVitestFeatureTestExcludeGlobs = (_env: NodeJS.ProcessEnv): string[] => [];
 import {
     workspacePackageOptimizationExcludes,
@@ -92,12 +95,12 @@ export default defineConfig({
                 find: '@',
                 replacement: resolve('./src'),
             },
-            { find: /^react$/u, replacement: resolve('../ui/node_modules/react/index.js') },
-            { find: /^react\/jsx-runtime$/u, replacement: resolve('../ui/node_modules/react/jsx-runtime.js') },
-            { find: /^react\/jsx-dev-runtime$/u, replacement: resolve('../ui/node_modules/react/jsx-dev-runtime.js') },
-            { find: /^react-dom\/client$/u, replacement: resolve('../ui/node_modules/react-dom/client.js') },
-            { find: /^react-dom$/u, replacement: resolve('../ui/node_modules/react-dom/index.js') },
-            { find: /^react-native$/u, replacement: resolve('../ui/node_modules/react-native-web/dist/index.js') },
+            { find: /^react$/u, replacement: requireUiDependency.resolve('react') },
+            { find: /^react\/jsx-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-runtime') },
+            { find: /^react\/jsx-dev-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-dev-runtime') },
+            { find: /^react-dom\/client$/u, replacement: requireUiDependency.resolve('react-dom/client') },
+            { find: /^react-dom$/u, replacement: requireUiDependency.resolve('react-dom') },
+            { find: /^react-native$/u, replacement: requireUiDependency.resolve('react-native-web/dist/index.js') },
         ],
         dedupe: ['react', 'react-dom'],
     },

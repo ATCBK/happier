@@ -290,7 +290,7 @@ function createLaneExecutionCommands(
     {
       title: 'Run the migration policy lane',
       description: 'Re-run the migration policy lane to catch stale fixtures, drift, or helper regressions after edits land.',
-      argv: ['yarn', '-s', 'test:policy:self'],
+      argv: ['pnpm', '--silent', 'run', 'test:policy:self'],
     },
   ] as const;
 }

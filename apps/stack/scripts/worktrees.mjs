@@ -34,7 +34,8 @@ import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.
 import { isSandboxed } from './utils/env/sandbox.mjs';
 import { applyStackCacheEnv } from './utils/proc/pm.mjs';
 import { seedNodeModulesFromBase } from './utils/worktrees/seed_node_modules.mjs';
-import { withYarnInstallGuard } from './utils/worktrees/yarn_install_guard.mjs';
+import { withPnpmInstallGuard } from './utils/worktrees/pnpm_install_guard.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
@@ -354,7 +355,7 @@ async function ensureWorktreeExclude(worktreeDir, patterns) {
 }
 
 async function detectPackageManager(dir) {
-  if (await pathExists(join(dir, 'package.json'))) return { kind: 'yarn' };
+  if (await pathExists(join(dir, 'package.json'))) return { kind: 'pnpm' };
   return { kind: null };
 }
 
@@ -385,12 +386,12 @@ async function installDependencies({ dir }) {
 
   // IMPORTANT:
   // When a caller requests --json, stdout must be reserved for JSON output only.
-  // Package managers (especially Yarn) write progress to stdout, which would corrupt JSON parsing
+  // Package managers (especially pnpm) write progress to stdout, which would corrupt JSON parsing
   // in wrappers like `stack pr`.
   const jsonMode = Boolean((process.argv ?? []).includes('--json'));
-  const runForJson = async (cmd, args, runEnv = env) => {
+  const runForJson = async (cmd, args, runEnv = env, windowsVerbatimArguments = false) => {
     try {
-      const out = await runCapture(cmd, args, { cwd: dir, env: runEnv });
+      const out = await runCapture(cmd, args, { cwd: dir, env: runEnv, windowsVerbatimArguments });
       if (out) process.stderr.write(out);
     } catch (e) {
       const out = String(e?.out ?? '');
@@ -401,13 +402,14 @@ async function installDependencies({ dir }) {
     }
   };
 
-  if (pm.kind === 'yarn') {
-    const outcome = await withYarnInstallGuard({ installDir: dir, componentDir: dir, env, quiet: jsonMode }, async ({ env: installEnv }) => {
-      // Works for yarn classic; yarn berry will ignore/translate flags as needed.
+  if (pm.kind === 'pnpm') {
+    const outcome = await withPnpmInstallGuard({ installDir: dir, componentDir: dir, env, quiet: jsonMode }, async ({ env: installEnv }) => {
+      const invocation = resolvePnpmCommandInvocation(['install', '--frozen-lockfile'], { npmExecPath: installEnv.npm_execpath });
       if (jsonMode) {
-        await runForJson('yarn', ['install', '--frozen-lockfile'], installEnv);
+        await runForJson(invocation.command, invocation.args, installEnv, invocation.windowsVerbatimArguments);
       } else {
-        await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir, env: installEnv });
+        await run(invocation.command, invocation.args, { cwd: dir, env: installEnv,
+          ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
       }
     });
     return outcome.refreshed
@@ -415,9 +417,7 @@ async function installDependencies({ dir }) {
       : { installed: false, reason: 'up-to-date' };
   }
 
-  // Preserve the existing non-Yarn fallback behavior.
-  await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir, env });
-  return { installed: true, reason: null };
+  throw new Error('Unsupported source package manager');
 }
 
 function allowNodeModulesSymlinkForRepo() {

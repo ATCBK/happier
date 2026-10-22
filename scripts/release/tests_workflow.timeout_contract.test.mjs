@@ -29,7 +29,7 @@ test('tests workflow keeps slow CI jobs above the observed timeout floor', async
   assert.match(uiE2eJob, /name:\s*UI E2E \(Playwright\) \/ shard \$\{\{ matrix\.shard \}\}\/18/);
   assert.match(uiE2eJob, /\[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18\]/);
   assert.match(uiE2eJob, /select-ui-e2e-shard\.mjs --shard "\$\{\{ matrix\.shard \}\}\/18"/);
-  assert.match(uiE2eJob, /yarn -s test:e2e:ui -- "\$\{specs\[@\]\}"/);
+  assert.match(uiE2eJob, /pnpm run test:e2e:ui -- "\$\{specs\[@\]\}"/);
   assert.match(uiE2eJob, /ui-e2e-playwright-artifacts-shard-\$\{\{ matrix\.shard \}\}-of-18/);
 
   assert.match(
@@ -68,14 +68,14 @@ test('UI unit and integration suites run independently before the stable aggrega
   const uiIntegrationJob = extractJobBlock(raw, 'ui-integration');
   const uiJob = extractJobBlock(raw, 'ui');
 
-  assert.match(uiUnitJob, /yarn workspace @happier-dev\/protocol test/);
-  assert.match(uiUnitJob, /yarn workspace @happier-dev\/app test:unit/);
+  assert.match(uiUnitJob, /pnpm --filter @happier-dev\/protocol run test/);
+  assert.match(uiUnitJob, /pnpm --filter @happier-dev\/app run test:unit/);
   assert.doesNotMatch(uiUnitJob, /test:integration/);
-  assert.match(uiIntegrationJob, /yarn workspace @happier-dev\/app test:integration/);
+  assert.match(uiIntegrationJob, /pnpm --filter @happier-dev\/app run test:integration/);
 
   assert.match(uiJob, /name:\s*UI Tests \(unit \+ integration\)/);
   assert.match(uiJob, /needs:\s*\[ui-unit, ui-integration\]/);
-  assert.match(uiJob, /if:\s*\$\{\{ always\(\)/);
+  assert.match(uiJob, /if:\s*\$\{\{[^\n]*\balways\(\)/);
   assert.match(uiJob, /needs\.ui-unit\.result/);
   assert.match(uiJob, /needs\.ui-integration\.result/);
 });

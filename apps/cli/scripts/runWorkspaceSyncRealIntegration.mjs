@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { execPnpm } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveArtifactName } from '../../../packages/iroh-native/scripts/build-node-addon.mjs';
 
 const cliDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -46,7 +46,8 @@ export function createWorkspaceSyncRealIntegrationPlan({
     config = 'vitest.integration.config.ts',
   ) => ({
     args: [
-      '-s',
+      '--silent',
+      'run',
       'vitest:local',
       'run',
       '--isolate',
@@ -66,13 +67,14 @@ export function createWorkspaceSyncRealIntegrationPlan({
     binaryPaths: requiredWorkspaceSyncRealBinaryEnvironment.map((name) => resolve(String(env[name]))),
     addonPath,
     build: {
-      args: ['-s', 'build:native:test-relay'],
+      args: ['--silent', 'run', 'build:native:test-relay'],
       cwd: irohNativeDirectory,
     },
     tests: [
       {
         args: [
-          '-s',
+          '--silent',
+          'run',
           'test:local',
           'src/actions/actionExecutor.workspaceSyncConflict.test.ts',
           'src/actions/actionExecutor.sessionHandoff.test.ts',
@@ -82,7 +84,8 @@ export function createWorkspaceSyncRealIntegrationPlan({
       },
       {
         args: [
-          '-s',
+          '--silent',
+          'run',
           'vitest:local',
           'run',
           '-c',
@@ -141,7 +144,7 @@ export function createWorkspaceSyncRealIntegrationPlan({
 export function runWorkspaceSyncRealIntegration({
   env = process.env,
   accessSyncImpl = accessSync,
-  execYarnImpl = execYarn,
+  execPnpmImpl = execPnpm,
   makeTempDirImpl = mkdtempSync,
   copyFileImpl = copyFileSync,
   removeDirImpl = rmSync,
@@ -156,7 +159,7 @@ export function runWorkspaceSyncRealIntegration({
       );
     }
   }
-  execYarnImpl(plan.build.args, {
+  execPnpmImpl(plan.build.args, {
     cwd: plan.build.cwd,
     env,
     stdio: 'inherit',
@@ -181,7 +184,7 @@ export function runWorkspaceSyncRealIntegration({
     const stableAddonPath = join(stableDirectory, 'addon.node');
     copyFileImpl(plan.addonPath, stableAddonPath);
     for (const testPlan of plan.tests) {
-      execYarnImpl(testPlan.args, {
+      execPnpmImpl(testPlan.args, {
         cwd: testPlan.cwd,
         env: {
           ...testPlan.env,

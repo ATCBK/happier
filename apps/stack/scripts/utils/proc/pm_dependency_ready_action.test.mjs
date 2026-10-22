@@ -9,27 +9,27 @@ import { ensureMinimalMonorepoLayout } from '../../testkit/core/minimal_monorepo
 import { withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
 import { ensureDepsInstalled } from './pm.mjs';
 
-async function writeYarnInstallStub(binDir) {
+async function writePnpmInstallStub(binDir) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const { mkdirSync, writeFileSync } = require('node:fs');",
       "if (process.env.HAPPIER_SCOPE_LOG) require('node:fs').appendFileSync(process.env.HAPPIER_SCOPE_LOG, `${process.env.HAPPIER_INSTALL_SCOPE || ''}\\n`);",
       "if (process.argv[2] === '--version') {",
-      "  process.stdout.write('1.22.22\\n');",
+      "  process.stdout.write('12.14.0\\n');",
       '  process.exit(0);',
       '}',
       "if (process.argv[2] === 'install') {",
       "  mkdirSync('node_modules', { recursive: true });",
-      "  writeFileSync('node_modules/.yarn-integrity', 'fixture\\n');",
+      "  writeFileSync('node_modules/.pnpm-integrity', 'fixture\\n');",
       '}',
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
 test('ensureDepsInstalled serializes dependency-ready actions inside the existing refresh lock', async (t) => {
@@ -43,6 +43,7 @@ test('ensureDepsInstalled serializes dependency-ready actions inside the existin
   const dependencyLockPath = join(root, '.project', 'tmp', 'dependency-install.lock');
   const cliLockPath = join(root, '.project', 'tmp', 'cli-dist-build.lock');
   await Promise.all([
+    writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n'),
     mkdir(componentDir, { recursive: true }),
     mkdir(join(root, 'apps', 'cli'), { recursive: true }),
     mkdir(join(root, 'apps', 'server'), { recursive: true }),
@@ -53,12 +54,12 @@ test('ensureDepsInstalled serializes dependency-ready actions inside the existin
       private: true,
       workspaces: ['apps/*'],
     }) + '\n', 'utf-8'),
-    writeFile(join(root, 'yarn.lock'), '# fixture\n', 'utf-8'),
+    writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n', 'utf-8'),
     writeFile(join(root, 'apps', 'ui', 'package.json'), '{"name":"@happier-dev/ui"}\n', 'utf-8'),
     writeFile(join(root, 'apps', 'cli', 'package.json'), '{"name":"@happier-dev/cli"}\n', 'utf-8'),
     writeFile(join(root, 'apps', 'server', 'package.json'), '{"name":"@happier-dev/server"}\n', 'utf-8'),
   ]);
-  await writeYarnInstallStub(binDir);
+  await writePnpmInstallStub(binDir);
 
   const env = {
     ...process.env,
@@ -92,7 +93,7 @@ test('ensureDepsInstalled serializes dependency-ready actions inside the existin
   });
   await Promise.race([
     firstActionStarted,
-    // Remote test lanes can spend more than 500ms scheduling the Yarn stub under
+    // Remote test lanes can spend more than 500ms scheduling the Pnpm stub under
     // machine load. This deadline guards a real deadlock without racing setup.
     delay(5_000).then(() => {
       throw new Error('timed out waiting for the dependency-ready action');
@@ -131,12 +132,13 @@ for (const [mode, options, env] of [
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-current-tree-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const { uiDir } = await ensureMinimalMonorepoLayout(root);
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"private":true,"workspaces":["apps/*"]}\n'),
-    writeFile(join(root, 'yarn.lock'), '# fixture\n'),
+    writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n'),
     writeFile(join(uiDir, 'package.json'), '{"name":"@happier-dev/app"}\n'),
     mkdir(join(root, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web'), { recursive: true }),
-    writeYarnInstallStub(join(root, 'bin')),
+    writePnpmInstallStub(join(root, 'bin')),
   ]);
   await writeFile(join(root, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js'), 'export {};');
   const baseEnv = {
@@ -161,7 +163,7 @@ for (const [mode, options, env] of [
   const settled = async (promise, ms) => await Promise.race([promise.then(() => 'done'), delay(ms).then(() => 'waiting')]);
   assert.equal(await settled(ensure(), 5_000), 'done', 'a current tree must be verified without waiting for the reader');
 
-  await writeFile(join(root, 'yarn.lock'), '# changed\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# changed\n');
   const stale = ensure();
   assert.equal(await settled(stale, 400), 'waiting', 'a stale tree still waits for live read custody');
   release();

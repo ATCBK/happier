@@ -7,7 +7,7 @@ function formatMissingTool({ name, why, install }) {
 
 export async function assertCliPrereqs({
   git = false,
-  yarn = false,
+  pnpm = false,
   codex = false,
   coderabbit = false,
   augment = false,
@@ -30,15 +30,15 @@ export async function assertCliPrereqs({
     }
   }
 
-  if (yarn) {
-    const hasYarn = await commandExists('yarn');
-    if (!hasYarn) {
+  if (pnpm) {
+    const haspnpm = await commandExists('pnpm');
+    if (!haspnpm) {
       missing.push({
-        name: 'yarn',
+        name: 'pnpm',
         why: 'required to install dependencies',
         install: [
-          'Enable Corepack (recommended): `corepack enable`',
-          'Or install Yarn: `npm install -g yarn`',
+          'Run `node scripts/ci/setup-pnpm.mjs` from the repository',
+          'Install the exact pnpm version declared in packageManager',
         ],
       });
     }

@@ -6,21 +6,20 @@ import {
   matchesWorkspaceScriptTarget,
   resolveRootScriptWorkspaceTargets,
   resolveScriptNodeTestFiles,
-  scanYarnInvocations,
+  scanPnpmInvocations,
 } from './rootScriptWorkspaceTargets.ts';
 
-test('separates workspace invocations from root script delegation', () => {
-  const scan = scanYarnInvocations(
-    'yarn workspace privacy-kit test && yarn -s workspace @happier-dev/tests test:core:fast '
-    + '&& yarn --cwd packages/relay-server test && yarn --cwd apps/server -s prisma migrate deploy '
-    + '&& yarn -s test:integration',
+test('reads pnpm filter and directory scripts without crediting binary execution as a script', () => {
+  const scan = scanPnpmInvocations(
+    'pnpm --filter @happier-dev/app --silent run test:unit '
+    + '&& pnpm --dir packages/relay-server run test '
+    + '&& pnpm --silent run test:integration '
+    + '&& pnpm exec test:binary && pnpm --filter @happier-dev/cli exec vitest run',
   );
 
   assert.deepEqual(scan.workspaceTargets, [
-    { packageName: 'privacy-kit', workspaceDirectory: null, scriptName: 'test' },
-    { packageName: '@happier-dev/tests', workspaceDirectory: null, scriptName: 'test:core:fast' },
+    { packageName: '@happier-dev/app', workspaceDirectory: null, scriptName: 'test:unit' },
     { packageName: null, workspaceDirectory: 'packages/relay-server', scriptName: 'test' },
-    { packageName: null, workspaceDirectory: 'apps/server', scriptName: 'prisma' },
   ]);
   assert.deepEqual(scan.rootScriptRefs, ['test:integration']);
 });
@@ -29,9 +28,9 @@ test('follows the Stack executor and root script delegation to the real workspac
   const targets = resolveRootScriptWorkspaceTargets(
     {
       test: 'apps/stack/bin/hstack-exec --script=test:local',
-      'test:local': 'yarn -s test:unit:local',
-      'test:unit:local': 'yarn workspace privacy-kit test && yarn --cwd apps/stack test:unit',
-      'test:integration': 'yarn workspace @happier-dev/app test:integration',
+      'test:local': 'pnpm --silent run test:unit:local',
+      'test:unit:local': 'pnpm --filter privacy-kit --silent run test && pnpm --dir apps/stack --silent run test:unit',
+      'test:integration': 'pnpm --filter @happier-dev/app --silent run test:integration',
     },
     'test',
   );
@@ -45,7 +44,7 @@ test('follows the Stack executor and root script delegation to the real workspac
 test('resolves the declarative shared-package runner without a second package list', () => {
   const targets = resolveRootScriptWorkspaceTargets(
     {
-      test: 'yarn -s test:shared-packages:local',
+      test: 'pnpm --silent run test:shared-packages:local',
       'test:shared-packages:local': 'node --experimental-strip-types scripts/testing/runSharedPackageTests.ts',
     },
     'test',
@@ -62,7 +61,7 @@ test('resolves the declarative shared-package runner without a second package li
 
 test('stops instead of looping when root scripts delegate to each other', () => {
   const targets = resolveRootScriptWorkspaceTargets(
-    { test: 'yarn -s test:alias', 'test:alias': 'yarn -s test && yarn workspace privacy-kit test' },
+    { test: 'pnpm --silent run test:alias', 'test:alias': 'pnpm --silent run test && pnpm --filter privacy-kit --silent run test' },
     'test',
   );
 
@@ -72,12 +71,12 @@ test('stops instead of looping when root scripts delegate to each other', () => 
 test('projects the shared runner selected CI inventory rather than defaulting to local mode', () => {
   const runner = 'node --experimental-strip-types scripts/testing/runSharedPackageTests.ts --mode ci';
   const expected = selectSharedPackageTestCommands('ci').flatMap(({ args }) =>
-    scanYarnInvocations(`yarn ${args.join(' ')}`).workspaceTargets);
+    scanPnpmInvocations(`pnpm ${args.join(' ')}`).workspaceTargets);
 
-  assert.deepEqual(scanYarnInvocations(runner).workspaceTargets, expected);
+  assert.deepEqual(scanPnpmInvocations(runner).workspaceTargets, expected);
   assert.deepEqual(resolveRootScriptWorkspaceTargets({ test: runner }, 'test'), expected);
   assert.throws(
-    () => scanYarnInvocations(runner.replace('--mode ci', '--mode unknown')),
+    () => scanPnpmInvocations(runner.replace('--mode ci', '--mode unknown')),
     /Usage: runSharedPackageTests/,
   );
 });
@@ -99,17 +98,14 @@ test('matches a workspace by package name or by directory', () => {
   );
 });
 
-test('follows `$npm_execpath run <script>` delegation like any other script reference', () => {
-  // `apps/cli` delegates its whole test lane this way (`test:local` is
-  // `"$npm_execpath run test:unit:local"`), so a scanner that only understands `yarn <script>`
-  // stops at the wrapper and reports every file the real lane names as having no runner.
-  const scan = scanYarnInvocations('$npm_execpath run test:unit:local');
+test('follows `pnpm run <script>` delegation like any other script reference', () => {
+  const scan = scanPnpmInvocations('pnpm run test:unit:local');
   assert.deepEqual(scan.rootScriptRefs, ['test:unit:local']);
 
   const files = resolveScriptNodeTestFiles(
     {
       test: '../stack/bin/hstack-exec --script=test:local',
-      'test:local': '$npm_execpath run test:unit:local',
+      'test:local': 'pnpm run test:unit:local',
       'test:unit:local': 'vitest run && node --test scripts/prepack-script.test.mjs',
     },
     'test',

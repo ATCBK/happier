@@ -1,0 +1,79 @@
+diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
+index 8314469bd2b833d393d0dec3bc3f26244010aad6..6cf0ef586a0071c94f05935538faa84e088e2fe4 100644
+--- a/dist/renderers/DiffHunksRenderer.js
++++ b/dist/renderers/DiffHunksRenderer.js
+@@ -750,6 +750,7 @@ var DiffHunksRenderer = class {
+ 					collapsedLines: collapsedBefore,
+ 					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
+ 					hunkSpecs: hunk?.hunkSpecs,
++					hunkContext: hunk?.hunkContext,
+ 					isFirstHunk: hunkIndex === 0,
+ 					isLastHunk: false,
+ 					isExpandable: isExpandableDiff
+@@ -781,7 +782,7 @@ var DiffHunksRenderer = class {
+ 						additionLineIndex: additionLine?.lineIndex,
+ 						deletionLineIndex: deletionLine?.lineIndex
+ 					});
+-					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
++					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, { ...lineDecoration.gutterProperties, "data-old-line-number": deletionLine?.lineNumber, "data-new-line-number": additionLine?.lineNumber });
+ 					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
+ 						"data-line": additionLine.lineNumber,
+ 						"data-line-index": `${unifiedLineIndex},${splitLineIndex}`
+@@ -1145,7 +1146,7 @@ function pushLineWithAnnotation({ diffStyle, type, deletionLine, additionLine, u
+ 	}
+ 	if (hasAnnotationRow) context.incrementRowCount(1);
+ }
+-function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, isFirstHunk, isLastHunk, isExpandable }, context) {
++function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, hunkContext, isFirstHunk, isLastHunk, isExpandable }, context) {
+ 	if (typeof collapsedLines === "number" && collapsedLines <= 0) return;
+ 	const linesAST = type === "unified" ? context.unifiedContentAST : type === "deletions" ? context.deletionsContentAST : context.additionsContentAST;
+ 	if (context.hunkSeparators === "metadata") {
+@@ -1198,6 +1199,7 @@ function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs,
+ 	linesAST.push(createSeparator({
+ 		type: context.hunkSeparators,
+ 		content,
++		hunkContext,
+ 		expandIndex,
+ 		chunked,
+ 		slotName,
+diff --git a/dist/utils/createSeparator.js b/dist/utils/createSeparator.js
+index f3878295981424f452b215df958603e446c6ef64..3cdf38b3e8e10127a0a255e56fa63747050443a1 100644
+--- a/dist/utils/createSeparator.js
++++ b/dist/utils/createSeparator.js
+@@ -16,7 +16,7 @@ function createExpandButton(type) {
+ 		}
+ 	});
+ }
+-function createSeparator({ type, content, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk }) {
++function createSeparator({ type, content, hunkContext, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk }) {
+ 	let buttonCount = 0;
+ 	const children = [];
+ 	if (type === "metadata" && content != null) children.push(createHastElement({
+@@ -47,7 +47,11 @@ function createSeparator({ type, content, expandIndex, chunked = false, slotName
+ 				tagName: "span",
+ 				children: [createTextNodeElement(content)],
+ 				properties: { "data-unmodified-lines": "" }
+-			})],
++			}), ...(type === "line-info" && hunkContext ? [createHastElement({
++				tagName: "span",
++				children: [createTextNodeElement(hunkContext)],
++				properties: { "data-hunk-context": "" }
++			})] : [])],
+ 			properties: { "data-separator-content": "" }
+ 		}));
+ 		if (chunked && expandIndex != null) contentChildren.push(createHastElement({
+diff --git a/dist/worker/WorkerPoolManager.js b/dist/worker/WorkerPoolManager.js
+index 243aa38e4e13fdf19eb9df2f2a27a3d9eb350f66..3a38ebabe97dc20de10e323dc95c76950924ab2e 100644
+--- a/dist/worker/WorkerPoolManager.js
++++ b/dist/worker/WorkerPoolManager.js
+@@ -337,6 +337,10 @@ var WorkerPoolManager = class {
+ 		const timeoutMs = this.options.workerInitializationTimeout ?? DEFAULT_WORKER_INITIALIZATION_TIMEOUT;
+ 		let timeoutId;
+ 		try {
++			if (timeoutMs === 0) {
++				await Promise.all(initPromises);
++				return;
++			}
+ 			await Promise.race([Promise.all(initPromises), new Promise((_, reject) => {
+ 				timeoutId = setTimeout(() => {
+ 					reject(/* @__PURE__ */ new Error(`WorkerPoolManager: worker initialization timed out after ${timeoutMs}ms`));

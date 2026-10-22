@@ -252,7 +252,7 @@ async function main() {
     return;
   }
 
-  await assertCliPrereqs({ git: true, yarn: true });
+  await assertCliPrereqs({ git: true, pnpm: true });
 
   const prRepo = (kv.get('--repo') ?? kv.get('--pr') ?? '').trim();
   const legacyHappy = (kv.get('--happy') ?? '').trim();

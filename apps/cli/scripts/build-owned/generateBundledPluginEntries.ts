@@ -36,7 +36,7 @@
  * It runs this same publisher in check mode and fails when an emitted
  * semantic projection differs from a fresh run:
  *
- *   yarn test:migration:bundled-plugin-projections           # --mode check --scope projections
+ *   pnpm run test:migration:bundled-plugin-projections           # --mode check --scope projections
  *
  * App-preseed byte graphs are owned separately by the `apps/ui` prebuild.
  * The retired whole-repo build-determinism re-stage gate is intentionally
@@ -4302,13 +4302,10 @@ function assertDescriptorConnectedServiceLabelTranslations(
 }
 
 
-async function generateBundledPluginEntries(
+async function generateDaemonProjections(
   options: GeneratorOptions,
   dependencies: GeneratorWorkspaceDependencies,
-  publicationLease: WorkspaceBundleLockContext,
-  inheritedFailures: readonly BundledPluginPackageFailure[] = [],
 ): Promise<readonly BundledPluginPackageFailure[]> {
-  if (options.daemonProjectionsOnly) {
     const { sourcePluginPackages: pluginPackages, failures } = await collectBundledPluginSourcePackages({
       repoRoot: options.rootDir,
       bundledPluginPackageNames: readBundledPluginPackageNames(options.rootDir),
@@ -4321,13 +4318,24 @@ async function generateBundledPluginEntries(
     // These are precisely readCliSourceEntries' generated inputs. Normalization
     // above still evaluates real Agent registration to derive runner locators;
     // UI/Voice/locale and Agent catalog projections belong to the full gate.
-    const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
-    assertGeneratedOutputMatches(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
+    const outputRoot = options.daemonOutputRoot ? resolve(options.daemonOutputRoot) : options.rootDir;
+    const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(outputRoot);
+    const emit = options.daemonOutputRoot ? writeFileAtomic : assertGeneratedOutputMatches;
+    emit(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
     for (const asset of renderCliBundledPluginManifestAssets({ pluginPackages })) {
-      assertGeneratedOutputMatches(resolve(options.rootDir, 'apps/cli', asset.relativePath), asset.out);
+      emit(resolve(outputRoot, 'apps/cli', asset.relativePath), asset.out);
     }
+    if (options.daemonOutputRoot) writeBundledPluginPublicationFailures(outputRoot, failures);
     return failures;
-  }
+}
+
+async function generateBundledPluginEntries(
+  options: GeneratorOptions,
+  dependencies: GeneratorWorkspaceDependencies,
+  publicationLease: WorkspaceBundleLockContext,
+  inheritedFailures: readonly BundledPluginPackageFailure[] = [],
+): Promise<readonly BundledPluginPackageFailure[]> {
+  if (options.daemonProjectionsOnly) return await generateDaemonProjections(options, dependencies);
   if (options.aggregateOnly) {
     return await publishBundledPluginSemanticProjection(options, dependencies, publicationLease, [], inheritedFailures);
   }
@@ -4649,6 +4657,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const { options } = normalizeCanonicalGeneratorPublication(argv, parsed,
     readBundledPluginPackageNames(parsed.rootDir).map((name) => name.replace('@happier-dev/', '')));
   const timing = createBundledPluginTimingReporter();
+  if (options.daemonOutputRoot) {
+    if (resolve(options.daemonOutputRoot) === resolve(options.rootDir)) {
+      throw new Error('Daemon projection output must be separate from its source checkout');
+    }
+    // The caller owns this private captured build output. No checkout
+    // publication or workspace writer lock participates in source derivation.
+    const dependencies = await loadGeneratorWorkspaceDependencies();
+    await loadPluginAuthorRuntimeForScope('manifest');
+    await generateDaemonProjections(options, dependencies);
+    timing.phase('daemon-source-derivation');
+    return;
+  }
   await withGeneratorPublicationLock(async (lease) => {
     if (options.agentDefinitionsOnly) {
       await publishSourceAgentDefinitions(options, lease);

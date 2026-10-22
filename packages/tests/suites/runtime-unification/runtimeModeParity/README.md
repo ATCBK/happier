@@ -28,7 +28,7 @@ Add a `RuntimeModeParityScenario` in `scenarios.ts` with an explicit `expected` 
 ## Commands
 
 ```bash
-yarn workspace @happier-dev/tests test suites/runtime-unification/runtimeModeParity/
+pnpm --filter @happier-dev/tests run test suites/runtime-unification/runtimeModeParity/
 grep -c "RuntimeModeParityScenario" packages/tests/suites/runtime-unification/runtimeModeParity/scenarios.ts
 grep -c "it\\.skip\\|test\\.skip" packages/tests/suites/runtime-unification/runtimeModeParity/parity.test.ts
 ```

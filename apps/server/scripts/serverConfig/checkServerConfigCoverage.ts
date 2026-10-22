@@ -10,7 +10,7 @@ import { SERVER_CONFIG_REGISTRY } from '@/config/serverConfigRegistry';
 import { checkServerConfigCoverage, formatServerConfigCoverageReport, listServerSourceFiles } from './serverConfigCoverage';
 
 /**
- * `yarn --cwd apps/server config:coverage` — prints every env read the server configuration
+ * `pnpm --dir apps/server run config:coverage` — prints every env read the server configuration
  * registry does not cover. CI enforces the same check through `serverConfigCoverage.spec.ts`.
  */
 const sources = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'sources');

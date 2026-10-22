@@ -2,12 +2,12 @@
 
 import * as childProcess from 'node:child_process';
 
-import { buildWindowsCmdShimInvocation } from '../../workspaces/execYarnCommand.mjs';
+import { buildWindowsCmdShimInvocation } from '../../workspaces/execPnpmCommand.mjs';
 
 /**
  * `execFileSync` wrapper that works on Windows when the resolved command is a `.cmd`/`.bat`.
  *
- * GitHub Actions Node toolcache often resolves Corepack or Yarn to a `.cmd` shim, which cannot be
+ * GitHub Actions Node toolcache often resolves Corepack or Pnpm to a `.cmd` shim, which cannot be
  * spawned directly (CreateProcess). Invoke that shim through an explicitly encoded `cmd.exe`
  * command so paths and secrets remain distinct arguments.
  *

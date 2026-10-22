@@ -240,6 +240,51 @@ test('foreign declaration roots retain their transitive implementation membershi
   assert.ok(!config.files.includes(join(server, 'sources/unrelated.ts')), 'unreached implementations stay outside the producer slice');
 });
 
+test('foreign declarations preserve consumer primary modules and genuine augmentations', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-compiler-primary-modules-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cli = join(root, 'apps/cli');
+  const server = join(root, 'apps/server');
+  const primary = join(cli, 'node_modules/@types/runtime/index.d.ts');
+  const foreignPrimary = join(server, 'node_modules/@types/runtime/index.d.ts');
+  const augmentation = join(server, 'sources/runtimeAugmentation.d.ts');
+  const files = {
+    'apps/cli/src/entry.ts': 'export const entry = true;',
+    'apps/cli/src/consumer.test.ts': 'export { value } from "../../server/sources/entry";',
+    'apps/cli/node_modules/@types/runtime/package.json': '{"name":"@types/runtime","version":"1.0.0","types":"index.d.ts"}',
+    'apps/cli/node_modules/@types/runtime/index.d.ts': 'declare module "host-events" { export class EventEmitter { once(): void; } }',
+    'apps/server/node_modules/@types/runtime/package.json': '{"name":"@types/runtime","version":"2.0.0","types":"index.d.ts"}',
+    'apps/server/node_modules/@types/runtime/index.d.ts': 'declare module "host-events" { export class EventEmitter { changed(): void; } }',
+    'apps/server/sources/entry.ts': 'import "./runtimeAugmentation"; export const value = true;',
+    'apps/server/sources/runtimeAugmentation.d.ts': 'export {}; declare module "host-events" { interface EventEmitter { addedByProducer(): void; } }',
+    ...Object.fromEntries(['cli', 'server'].map(app => [`apps/${app}/tsconfig.json`, JSON.stringify({
+      compilerOptions: { module: 'esnext', moduleResolution: 'bundler', lib: ['ES2022'],
+        types: ['runtime'], typeRoots: ['./node_modules/@types'],
+        paths: { '@/*': [app === 'cli' ? './src/*' : './sources/*'] } },
+      include: [app === 'cli' ? 'src/**/*.ts' : 'sources/**/*'],
+    })])),
+  };
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+  for (const name of ['foundation', 'services', 'core', 'source', 'test', 'test-ui']) {
+    await writeFile(join(cli, `tsconfig.${name}.json`), JSON.stringify({ extends: './tsconfig.json', files: [], include: [] }));
+  }
+  const inventory = await deriveCliTypecheckProjects(cli);
+  assert.ok(inventory.consumerPrimaryAmbientInputs.get(join(cli, 'tsconfig.test.json')).includes(primary));
+  const consumer = { project: inventory.find(item => item.project === 'test').configPath,
+    authoredProject: join(cli, 'tsconfig.test.json') };
+  const producers = await prepareReferencedTypecheckDeclarations([consumer], cli, inventory);
+  const prepared = readTypecheckProject(consumer.project);
+  assert.ok(!prepared.config.files.includes(foreignPrimary),
+    'a producer must not replace consumer-owned ambient module definitions with another installed version');
+  assert.ok(prepared.config.files.includes(augmentation), 'a genuine external module augmentation remains reachable');
+  const producer = producers.find(item => item.project.startsWith(server));
+  assert.ok(readTypecheckProject(producer.project).config.files.includes(foreignPrimary),
+    'the producer still compiles against its own primary type definitions');
+});
+
 test('foreign ambient implementation roots stay in their producer program', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-compiler-ambient-owner-'));
   t.after(() => rm(root, { recursive: true, force: true }));

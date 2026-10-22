@@ -23,7 +23,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveIrohNodeAddonPath } from '@happier-dev/iroh-native/node';
 
 import { repoRootDir } from '../paths';
-import { yarnCommand } from '../process/commands';
+import { pnpmCommand } from '../process/commands';
 import { runLoggedCommand } from '../process/spawnProcess';
 
 export type IrohNodeAddonBuildSpec = Readonly<{
@@ -47,8 +47,8 @@ export function resolveProductionIrohNodeAddonBuildSpec(
     // runner invokes. `runLoggedCommand` resolves this through the
     // repository's binary-safe yarn invocation owner; never spawn cargo,
     // npm, or node directly here.
-    command: yarnCommand(),
-    args: ['-s', 'build:native'],
+    command: pnpmCommand(),
+    args: ['run', '--silent', 'build:native'],
     cwd: packageRoot,
   };
 }

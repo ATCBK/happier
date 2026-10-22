@@ -14,7 +14,19 @@ vi.mock('node:child_process', () => ({
     spawn: spawnMock,
 }));
 
-import { compileBunBinary, execOrThrow, resolveBunCommand } from './commands.js';
+import { compileBunBinary, execOrThrow, resolveBunCommand, resolvePnpmCommand } from './commands.js';
+
+describe('resolvePnpmCommand', () => {
+    it('uses pnpm directly when its executable is available', () => {
+        expect(resolvePnpmCommand({ commandProbe: command => command === 'pnpm' }))
+            .toEqual({ cmd: 'pnpm', args: [] });
+    });
+
+    it('requires pnpm even when Corepack or Yarn is available', () => {
+        expect(() => resolvePnpmCommand({ commandProbe: command => command === 'corepack' || command === 'yarn' }))
+            .toThrow(/requires pnpm/);
+    });
+});
 
 describe('resolveBunCommand', () => {
     it('expands ~/ explicit bun overrides against HOME', () => {
@@ -130,12 +142,12 @@ describe('execOrThrow', () => {
 
         try {
             const shimDir = join(tempRoot, 'node_modules', '.bin');
-            const yarnShimPath = join(shimDir, 'yarn.cmd');
+            const pnpmShimPath = join(shimDir, 'pnpm.cmd');
             mkdirSync(shimDir, { recursive: true });
-            writeFileSync(yarnShimPath, '@echo off\r\n', 'utf8');
+            writeFileSync(pnpmShimPath, '@echo off\r\n', 'utf8');
             arrangeCompletion();
 
-            await execOrThrow('yarn', ['--cwd', 'apps/cli', 'build'], {
+            await execOrThrow('pnpm', ['--dir', 'apps/cli', 'run', 'build'], {
                 cwd: 'C:\\repo',
                 env: {
                     PATH: shimDir,
@@ -149,8 +161,8 @@ describe('execOrThrow', () => {
             const [command, args, options] = spawnMock.mock.calls[0] ?? [];
             expect(command).toBe('C:\\Windows\\System32\\cmd.exe');
             expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
-            expect(String(args[3]).toLowerCase()).toContain(yarnShimPath.toLowerCase());
-            expect(String(args[3])).toContain('--cwd');
+            expect(String(args[3]).toLowerCase()).toContain(pnpmShimPath.toLowerCase());
+            expect(String(args[3])).toContain('--dir');
             expect(String(args[3])).toContain('apps/cli');
             expect(String(args[3])).toContain('build');
             expect(options).toEqual(expect.objectContaining({

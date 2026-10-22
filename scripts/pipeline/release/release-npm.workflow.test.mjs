@@ -39,7 +39,7 @@ test('npm publication workflow leaves public-package preparation to package test
 
   assert.doesNotMatch(
     npmWorkflow,
-    /yarn --cwd packages\/plugin-sdk -s prepare:declarations/u,
+    /pnpm --dir packages\/plugin-sdk --silent run prepare:declarations/u,
   );
   assert.match(npmWorkflow, /node scripts\/pipeline\/run\.mjs npm-release/u);
 });

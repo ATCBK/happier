@@ -5,7 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveStackCredentialPaths } from './utils/auth/credentials_paths.mjs';
 import { buildStackStableScopeId } from './utils/auth/stable_scope_id.mjs';
 import { authScriptPath, runNodeCapture } from './testkit/auth_testkit.mjs';
@@ -56,12 +56,12 @@ test('hstack stack auth copy-from does not hit ReferenceError: runCapture is not
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(nvmDir, { recursive: true });
 
-  // Stub yarn to keep this test fast/deterministic. This is an external boundary.
+  // Stub pnpm to keep this test fast/deterministic. This is an external boundary.
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir)); // .../apps/stack -> repo root
 
@@ -108,8 +108,8 @@ test('hstack stack auth copy-from does not hit ReferenceError: runCapture is not
     `expected no ReferenceError about runCapture\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`
   );
   assert.ok(
-    !res.stdout.includes('spawn yarn ENOENT') && !res.stderr.includes('spawn yarn ENOENT'),
-    `expected yarn to be resolvable in light migrations step\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`
+    !res.stdout.includes('spawn pnpm ENOENT') && !res.stderr.includes('spawn pnpm ENOENT'),
+    `expected pnpm to be resolvable in light migrations step\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`
   );
 });
 
@@ -132,9 +132,9 @@ test('hstack stack auth copy-from fails closed when the source stack has no reus
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -205,9 +205,9 @@ test('hstack stack auth copy-from prefers source server-scoped credential over u
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -289,9 +289,9 @@ test('hstack stack auth copy-from prefers source stable-scope credential when so
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -392,9 +392,9 @@ test('hstack stack auth copy-from fails closed when source token subject is miss
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -479,9 +479,9 @@ test('hstack stack auth copy-from fails before copying credentials when a live s
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -606,9 +606,9 @@ test('hstack stack auth copy-from fails closed when source stack is not running 
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -686,9 +686,9 @@ test('hstack stack auth copy-from --no-secret does not overwrite target master s
 
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir));
   const sourceStack = 'dev-auth';
@@ -818,7 +818,7 @@ test('hstack stack auth copy-from reads source light sqlite db from the source s
 
   const migrateSqlite = async (dataDir) => {
     const { spawnSync } = await import('node:child_process');
-    const invocation = resolveYarnCommandInvocation(['-s', 'migrate:sqlite:deploy']);
+    const invocation = resolvePnpmCommandInvocation(['-s', 'migrate:sqlite:deploy']);
     const res = spawnSync(invocation.command, invocation.args, {
       cwd: serverDir,
       env: {
@@ -994,7 +994,7 @@ test('hstack stack auth copy-from reads a checksum-mismatched source sqlite data
 
   const migrateSqlite = async (dataDir) => {
     const { spawnSync } = await import('node:child_process');
-    const invocation = resolveYarnCommandInvocation(['-s', 'migrate:sqlite:deploy']);
+    const invocation = resolvePnpmCommandInvocation(['-s', 'migrate:sqlite:deploy']);
     const res = spawnSync(invocation.command, invocation.args, {
       cwd: serverDir,
       env: {

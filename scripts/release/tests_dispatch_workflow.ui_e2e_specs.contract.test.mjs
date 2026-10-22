@@ -13,7 +13,7 @@ test('manual tests dispatch can run an exact bounded UI E2E spec selection', asy
   assert.match(dispatch, /ui_e2e_specs:\s*\$\{\{\s*needs\.resolve\.outputs\.ui_e2e_specs\s*\}\}/, 'dispatch should pass only the admitted selection to the reusable workflow');
   assert.match(reusable, /UI_E2E_SPECS:\s*\$\{\{\s*inputs\.ui_e2e_specs\s*\}\}/, 'the UI E2E job should receive the selection only as environment data');
   assert.match(reusable, /packages\/tests\/suites\/ui-e2e\/\*\.spec\.ts/, 'targeted specs should be restricted to the canonical UI E2E directory');
-  assert.match(reusable, /yarn -s test:e2e:ui -- "\$\{specs\[@\]\}"/, 'validated specs should be passed as a quoted argument array');
+  assert.match(reusable, /pnpm run test:e2e:ui -- "\$\{specs\[@\]\}"/, 'validated specs should be passed as a quoted argument array');
   assert.match(reusable, /node scripts\/ci\/select-ui-e2e-shard\.mjs --shard "\$\{\{ matrix\.shard \}\}\/18"/, 'full runs should balance complete spec files through the canonical shard selector');
   assert.doesNotMatch(reusable, /test:e2e:ui -- --shard=/, 'the workflow should not use index-based Playwright sharding');
   assert.match(reusable, /\[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18\]/, 'an empty selection should preserve the complete eighteen-shard gate');

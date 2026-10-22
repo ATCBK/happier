@@ -67,20 +67,20 @@ const REPOSITORY_WORKSPACE_DIRECTORIES = [
 
 const ROOT_SCRIPTS = {
   test: 'apps/stack/bin/hstack-exec --script=test:local',
-  'test:local': 'yarn -s test:unit:local',
+  'test:local': 'pnpm --silent run test:unit:local',
   'test:unit:local': [
-    'yarn workspace @happier-dev/protocol test',
-    'yarn workspace @happier-dev/peer-mediation test',
-    'yarn workspace @happier-dev/channels-protocol test',
-    'yarn workspace @happier-dev/plugin-sdk test',
-    'yarn workspace @happier-dev/support test',
-    'yarn workspace @happier-dev/bootstrap test',
-    'yarn workspace @happier-dev/app test',
-    'yarn workspace @happier-dev/cli test:unit',
-    'yarn --cwd apps/server test:unit',
-    'yarn --cwd apps/stack test:unit',
+    'pnpm --filter @happier-dev/protocol --silent run test',
+    'pnpm --filter @happier-dev/peer-mediation --silent run test',
+    'pnpm --filter @happier-dev/channels-protocol --silent run test',
+    'pnpm --filter @happier-dev/plugin-sdk --silent run test',
+    'pnpm --filter @happier-dev/support --silent run test',
+    'pnpm --filter @happier-dev/bootstrap --silent run test',
+    'pnpm --filter @happier-dev/app --silent run test',
+    'pnpm --filter @happier-dev/cli --silent run test:unit',
+    'pnpm --dir apps/server --silent run test:unit',
+    'pnpm --dir apps/stack --silent run test:unit',
   ].join(' && '),
-  'test:workspace-sync:real': 'yarn workspace @happier-dev/cli test:workspace-sync:real',
+  'test:workspace-sync:real': 'pnpm --filter @happier-dev/cli --silent run test:workspace-sync:real',
 } satisfies Record<string, string>;
 
 const LANE_CONTEXT: TestLaneContext = buildTestLaneContext({
@@ -239,9 +239,9 @@ test('flags known lane naming violations', () => {
 });
 
 test('exposes the real workspace-sync lane through the canonical root scripts', () => {
-    assert.equal(LANE_ROOT_SCRIPTS['cli:test:workspace-sync:real'], 'yarn test:workspace-sync:real');
-    assert.equal(LANE_ROOT_SCRIPTS['test:e2e:desktop:native'], 'yarn test:e2e:desktop:native');
-    assert.equal(LANE_ROOT_SCRIPTS['test:plugin-workspaces'], 'yarn test:plugin-workspaces');
+    assert.equal(LANE_ROOT_SCRIPTS['cli:test:workspace-sync:real'], 'pnpm run test:workspace-sync:real');
+    assert.equal(LANE_ROOT_SCRIPTS['test:e2e:desktop:native'], 'pnpm run test:e2e:desktop:native');
+    assert.equal(LANE_ROOT_SCRIPTS['test:plugin-workspaces'], 'pnpm run test:plugin-workspaces');
 });
 
 test('derives non-bespoke workspace lanes from workspace metadata and the root unit executor', () => {
@@ -253,8 +253,8 @@ test('derives non-bespoke workspace lanes from workspace metadata and the root u
     ]),
     rootScripts: {
       test: 'apps/stack/bin/hstack-exec --script=test:local',
-      'test:local': 'yarn -s test:unit:local',
-      'test:unit:local': 'yarn workspace @happier-dev/wired-workspace test',
+      'test:local': 'pnpm --silent run test:unit:local',
+      'test:unit:local': 'pnpm --filter @happier-dev/wired-workspace --silent run test',
     },
   });
 
@@ -271,8 +271,8 @@ test('resolves the root unit lane through the Stack executor delegation chain', 
     workspaceManifests: workspaceManifests([{ directory: 'packages/only-via-cwd', name: '@happier-dev/only-via-cwd' }]),
     rootScripts: {
       test: 'apps/stack/bin/hstack-exec --script=test:local',
-      'test:local': 'yarn -s test:unit:local',
-      'test:unit:local': 'yarn --cwd packages/only-via-cwd test',
+      'test:local': 'pnpm --silent run test:unit:local',
+      'test:unit:local': 'pnpm --dir packages/only-via-cwd --silent run test',
     },
   });
 
@@ -285,7 +285,7 @@ test('prefers the deepest workspace when workspaces nest', () => {
       { directory: 'packages/plugins/channels', name: '@happier-dev/plugins-channels' },
       { directory: 'packages/host', name: '@happier-dev/host' },
     ]),
-    rootScripts: { test: 'yarn workspace @happier-dev/host test' },
+    rootScripts: { test: 'pnpm --filter @happier-dev/host --silent run test' },
   });
 
   assert.equal(classifyTestFile(context, 'packages/plugins/channels/src/a.test.ts'), 'test:plugin-workspaces');

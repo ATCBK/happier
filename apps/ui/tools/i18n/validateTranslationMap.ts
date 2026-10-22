@@ -6,7 +6,7 @@ import { extractLiterals, isDoNotTranslate, type LocaleLiteral } from './localeL
 /**
  * Check a filled translation map BEFORE it is written into a locale file.
  *
- *   yarn i18n:locale:verify -- --translations /tmp/fr.json
+ *   pnpm run i18n:locale:verify -- --translations /tmp/fr.json
  *
  * A translation can fail in ways neither the typecheck nor the integrity test will ever see,
  * because the file still compiles and still has the right keys:

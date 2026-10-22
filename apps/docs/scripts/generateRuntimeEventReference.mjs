@@ -19,7 +19,7 @@
  * `phase`, so it gets its own table rather than being flattened into the first
  * one, which would imply six kinds that do not exist.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

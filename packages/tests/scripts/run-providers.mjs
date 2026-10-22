@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveProviderRunPreset } from '../src/testkit/providers/presets/presets.mjs';
 import { terminateProcessTreeByPid } from './processTree.mjs';
 
 const KNOWN_FLAGS = new Set(['--update-baselines', '--strict-keys', '--flake-retry', '--no-flake-retry']);
 
-export function resolveProviderRunYarnInvocation(args, options = {}) {
-  return resolveYarnCommandInvocation(args, options);
+export function resolveProviderRunPnpmInvocation(args, options = {}) {
+  return resolvePnpmCommandInvocation(args, options);
 }
 
 export function resolveProvidersRunTimeoutFallbackMs({ presetId, tier }) {
@@ -71,18 +71,18 @@ function usage(exitCode, message) {
   console.error(
     [
       'Usage:',
-      '  yarn providers:run <preset> <tier> [--update-baselines] [--strict-keys] [--flake-retry|--no-flake-retry]',
+      '  pnpm providers:run <preset> <tier> [--update-baselines] [--strict-keys] [--flake-retry|--no-flake-retry]',
       '',
       'Presets: opencode | claude | codex | kilo | gemini | qwen | kimi | auggie | pi | grok | all',
       'Tiers:   smoke | extended',
       '',
       'Examples:',
-      '  yarn providers:opencode:smoke',
-      '  yarn providers:codex:smoke',
-      '  yarn providers:qwen:extended',
-      '  yarn providers:grok:smoke',
-      '  yarn providers:all:smoke --strict-keys',
-      '  yarn providers:opencode:smoke:update-baselines',
+      '  pnpm providers:opencode:smoke',
+      '  pnpm providers:codex:smoke',
+      '  pnpm providers:qwen:extended',
+      '  pnpm providers:grok:smoke',
+      '  pnpm providers:all:smoke --strict-keys',
+      '  pnpm providers:opencode:smoke:update-baselines',
     ].join('\n'),
   );
   return exitCode;
@@ -155,7 +155,7 @@ export async function main(argv = process.argv) {
     });
   }
 
-  const invocation = resolveProviderRunYarnInvocation(['-s', 'test:agents']);
+  const invocation = resolveProviderRunPnpmInvocation(['run', '--silent', 'test:agents']);
   const child = spawn(invocation.command, invocation.args, {
     stdio: 'inherit',
     env,

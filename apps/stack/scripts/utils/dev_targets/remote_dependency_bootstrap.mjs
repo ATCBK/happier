@@ -1,30 +1,30 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { execYarn } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
+import { execPnpm } from '../../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
 import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';
+import { isYarnWorkspace } from '../proc/workspace_package_manifests.mjs';
 
 export const REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS = [
   'install',
-  '--production=false',
-  '--ignore-engines',
+  '--prod=false',
   '--ignore-scripts',
-  '--pure-lockfile',
+  '--frozen-lockfile',
 ];
 
 function resolveInitialInstallEnv(env) {
   const resolved = {
     ...(env ?? process.env),
     NODE_ENV: 'development',
-    YARN_PRODUCTION: '0',
+    pnpm_config_production: 'false',
     npm_config_production: 'false',
     NPM_CONFIG_PRODUCTION: 'false',
-    COREPACK_ENABLE_AUTO_PIN: '0',
   };
   const cacheBaseDir = String(resolved.HAPPIER_STACK_PM_CACHE_BASE_DIR ?? '').trim();
   if (cacheBaseDir) {
@@ -37,27 +37,27 @@ async function installInitialDependencies({ repoDir, env }) {
   const installEnv = resolveInitialInstallEnv(env);
   for (const path of [
     installEnv.XDG_CACHE_HOME,
-    installEnv.YARN_CACHE_FOLDER,
+    installEnv.pnpm_config_store_dir,
+    installEnv.pnpm_config_cache_dir,
     installEnv.npm_config_cache,
-    installEnv.COREPACK_HOME,
   ]) {
     if (path) await mkdir(path, { recursive: true });
   }
-  execYarn(REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS, {
+  execPnpm(REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS, {
     cwd: repoDir,
     env: installEnv,
-    preferCorepack: true,
+    preferPath: true,
     stdio: 'inherit',
   });
 }
 
 async function prepareInitialUiOutputs({ repoDir, env, force }) {
   const installEnv = resolveInitialInstallEnv(env);
-  const runYarn = (args, postinstallEnv = installEnv) => execYarn(args, { cwd: repoDir, env: postinstallEnv, preferCorepack: true, stdio: 'inherit' });
+  const runPnpm = (args, postinstallEnv = installEnv) => execPnpm(args, { cwd: repoDir, env: postinstallEnv, preferPath: true, stdio: 'inherit' });
   await ensureUiPostinstallOutputs(join(repoDir, 'apps', 'ui'), repoDir, {
     force, env: installEnv,
-    runPostinstall: async (postinstallEnv) => runYarn(['-s', 'workspace', '@happier-dev/app', 'postinstall:real'], postinstallEnv),
-    restoreDependencies: async () => runYarn(['install', '--force', ...REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS.slice(1)]),
+    runPostinstall: async (postinstallEnv) => runPnpm(['--filter', '@happier-dev/app', 'run', '--silent', 'postinstall:real'], postinstallEnv),
+    restoreDependencies: async () => runPnpm(['install', '--force', ...REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS.slice(1)]),
   });
 }
 
@@ -200,6 +200,32 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
   const repo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
   const placement = process.argv.slice(2).find(value => value.startsWith('--execution-placement='));
   const buildMode = process.argv.slice(2).find(value => value.startsWith('--default-build-mode='));
+  if (placement === '--execution-placement=remote') {
+    const repoDir = repo ? resolve(repo.slice('--repo-dir='.length)) : process.cwd();
+    const manifest = JSON.parse(await readFile(join(repoDir, 'package.json'), 'utf8'));
+    if (isYarnWorkspace(manifest)) {
+      // The predecessor's executable owns Yarn installation and its admission
+      // format. The executor retains placement; it does not replace that owner.
+      const sourceBootstrap = join(repoDir, 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs');
+      if (sourceBootstrap === fileURLToPath(import.meta.url)) {
+        throw new Error('Yarn predecessor bootstrap requires its source-owned entrypoint');
+      }
+      try {
+        execFileSync(process.execPath, [sourceBootstrap, ...process.argv.slice(2)], {
+          cwd: repoDir, env: process.env, stdio: 'inherit',
+        });
+      } catch (error) {
+        if (typeof error.status === 'number') process.exit(error.status);
+        throw error;
+      }
+      process.exit(0);
+    }
+    // Cold bootstrap must load only dependency-free process boundaries. The
+    // containing SSH process group owns cancellation of this synchronous child.
+    execFileSync(process.execPath, [fileURLToPath(new URL('../../../../../scripts/ci/setup-pnpm.mjs', import.meta.url)), repoDir], {
+      cwd: repoDir, env: resolveInitialInstallEnv(process.env), stdio: 'inherit',
+    });
+  }
   await bootstrapRemoteDependencies({
     ...(repo ? { repoDir: resolve(repo.slice('--repo-dir='.length)) } : {}),
     toolsOnly: process.argv.includes('--tools-only'),

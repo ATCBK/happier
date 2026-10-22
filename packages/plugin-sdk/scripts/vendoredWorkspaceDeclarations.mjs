@@ -15,7 +15,7 @@ function isWorkspaceSyncStagingDirectory(name) {
 
 /**
  * Walks up from `startDir` to the repository root — the nearest ancestor that
- * owns both a `package.json` and the single `yarn.lock`. Returns `null` when
+ * owns `package.json`, `pnpm-workspace.yaml` and `pnpm-lock.yaml`. Returns `null` when
  * there is none, so a caller outside a monorepo checkout (an installed package,
  * a fixture tree) can tell that apart from a located root instead of acting on
  * a guessed ancestor.
@@ -23,7 +23,7 @@ function isWorkspaceSyncStagingDirectory(name) {
 export function findRepoRoot(startDir) {
   let dir = resolve(startDir);
   for (let depth = 0; depth < 10; depth += 1) {
-    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'yarn.lock'))) return dir;
+    if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'pnpm-lock.yaml')) && existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;

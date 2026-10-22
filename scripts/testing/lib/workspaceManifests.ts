@@ -6,7 +6,7 @@ import { collectWorkspacePackageJsonPaths } from '../../../apps/stack/scripts/ut
 /**
  * Canonical workspace metadata reader for the test-governance validators.
  *
- * The repository's workspace set is owned by the root `package.json` `workspaces.packages`
+ * The repository's workspace set is owned by the root `pnpm-workspace.yaml` `packages`
  * patterns and expanded by `collectWorkspacePackageJsonPaths`. Every governance validator that
  * needs "which workspaces exist / what can they run" reads it through this module so no second
  * hand-maintained workspace list can drift away from the real workspace set.

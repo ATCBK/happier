@@ -25,7 +25,7 @@ test('ui tauri workflows build the bootstrap sidecar before dev/build and cargo 
 
     assert.equal(
         String(bootstrapPackageJson?.scripts?.['build:binary'] ?? ''),
-        'yarn -s build:shared && yarn -s build && node scripts/buildBinary.mjs',
+        'pnpm --silent run build:shared && pnpm --silent run build && node scripts/buildBinary.mjs',
         'bootstrap build:binary should build its shared workspace dependencies first',
     );
     assert.equal(
@@ -41,7 +41,7 @@ test('ui tauri workflows build the bootstrap sidecar before dev/build and cargo 
 
     assert.match(
         String(uiPackageJson?.scripts?.start ?? ''),
-        /ensure:workspace:built/,
+        /^node \.\/scripts\/ensureWorkspacePackagesBuilt\.mjs --expo start$/,
         'ui start script should ensure internal workspace dist outputs exist before Metro/Tauri import them'
     );
     assert.match(

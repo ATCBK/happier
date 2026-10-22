@@ -5,36 +5,12 @@ import { parseArgs } from 'node:util';
 
 import { resolveChecksProfilePlan } from './lib/checks-profile.mjs';
 import { runCommandSuite } from '../../testing/lib/runCommandSuite.ts';
-import { resolveYarnInvocation } from '../tauri/resolve-yarn-invocation.mjs';
+import { execPnpm, resolvePnpmInvocation } from '../../workspaces/execPnpmCommand.mjs';
+import { execFileSyncPortable } from '../lib/exec-file-sync-portable.mjs';
 
 /** @param {string} message @returns {never} */
 function fail(message) {
   throw new Error(message);
-}
-
-/**
- * @param {string} cmd
- * @returns {boolean}
- */
-function commandExists(cmd) {
-  try {
-    if (process.platform === 'win32') {
-      execFileSync('cmd.exe', ['/D', '/S', '/C', `where ${cmd} >nul 2>&1`], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'ignore', 'ignore'],
-        timeout: 10_000,
-      });
-      return true;
-    }
-    execFileSync('sh', ['-lc', `command -v ${cmd} >/dev/null 2>&1`], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10_000,
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -82,18 +58,7 @@ function run(opts, cmd, args, extra) {
     console.log(`[dry-run] ${printable}`);
     return;
   }
-  let execCommand = cmd;
-  let execArgs = args;
-  if (process.platform === 'win32' && /\.cmd$/i.test(cmd)) {
-    const rendered = [cmd, ...args].map((part) => {
-      const text = String(part);
-      if (!text || /[\s"]/u.test(text)) return `"${text.replaceAll('"', '\\"')}"`;
-      return text;
-    }).join(' ');
-    execCommand = 'cmd.exe';
-    execArgs = ['/D', '/S', '/C', rendered];
-  }
-  execFileSync(execCommand, execArgs, {
+  execFileSyncPortable(cmd, args, {
     env: { ...process.env, ...(extra?.env ?? {}) },
     stdio: 'inherit',
     timeout: 4 * 60 * 60_000,
@@ -125,12 +90,20 @@ function runReleaseValidate(opts, args, extra) {
 
 /**
  * @param {{ dryRun: boolean }} opts
- * @param {{ cmd: string; prefixArgs: string[] }} yarnInvocation
  * @param {string[]} args
  * @param {{ env?: NodeJS.ProcessEnv }} [extra]
  */
-function runYarn(opts, yarnInvocation, args, extra) {
-  run(opts, yarnInvocation.cmd, [...yarnInvocation.prefixArgs, ...args], extra);
+function runPnpm(opts, args, extra) {
+  if (opts.dryRun) {
+    const invocation = resolvePnpmInvocation();
+    run(opts, invocation.command, [...invocation.args, ...args], extra);
+    return;
+  }
+  execPnpm(args, {
+    env: { ...process.env, ...(extra?.env ?? {}) },
+    stdio: 'inherit',
+    timeout: 4 * 60 * 60_000,
+  });
 }
 
 async function main() {
@@ -167,18 +140,11 @@ async function main() {
     return;
   }
 
-  const yarnInvocation = resolveYarnInvocation();
   if (installDeps) {
-    if (commandExists('corepack')) {
-      run({ dryRun }, 'corepack', ['enable']);
-      run({ dryRun }, 'corepack', ['prepare', 'yarn@1.22.22', '--activate']);
-    }
-    run(
-      { dryRun },
-      yarnInvocation.cmd,
-      [...yarnInvocation.prefixArgs, 'install', '--frozen-lockfile', '--ignore-engines'],
-      { env: { YARN_PRODUCTION: 'false', npm_config_production: 'false' } },
-    );
+    run({ dryRun }, process.execPath, ['scripts/ci/setup-pnpm.mjs']);
+    runPnpm({ dryRun }, ['install', '--frozen-lockfile', '--prod=false'], {
+      env: { NODE_ENV: 'development', pnpm_config_production: 'false', npm_config_production: 'false' },
+    });
   }
 
   /** @type {Array<{ id: string; args: string[]; execute: () => void }>} */
@@ -186,20 +152,20 @@ async function main() {
   /** @param {string} id @param {() => void} execute */
   const check = (id, execute) => commands.push({ id, args: [], execute });
 
-  if (plan.runUnit) check('unit', () => runYarn({ dryRun }, yarnInvocation, ['test']));
-  if (plan.runIntegration) check('integration', () => runYarn({ dryRun }, yarnInvocation, ['test:integration']));
-  if (plan.runTypecheck) check('typecheck', () => runYarn({ dryRun }, yarnInvocation, ['typecheck']));
-  if (plan.runUiE2e) check('ui_e2e', () => runYarn({ dryRun }, yarnInvocation, ['test:e2e:ui']));
+  if (plan.runUnit) check('unit', () => runPnpm({ dryRun }, ['run', 'test']));
+  if (plan.runIntegration) check('integration', () => runPnpm({ dryRun }, ['run', 'test:integration']));
+  if (plan.runTypecheck) check('typecheck', () => runPnpm({ dryRun }, ['run', 'typecheck']));
+  if (plan.runUiE2e) check('ui_e2e', () => runPnpm({ dryRun }, ['run', 'test:e2e:ui']));
   if (plan.runReleaseContracts) {
-    check('release_contracts', () => runYarn({ dryRun }, yarnInvocation, ['-s', 'test:release:contracts'], { env: { HAPPIER_FEATURE_POLICY_ENV: '' } }));
+    check('release_contracts', () => runPnpm({ dryRun }, ['run', '--silent', 'test:release:contracts'], { env: { HAPPIER_FEATURE_POLICY_ENV: '' } }));
     check('release_sync_installers', () => run({ dryRun }, process.execPath, ['scripts/pipeline/run.mjs', 'release-sync-installers', '--check']));
   }
-  if (plan.runE2eCore) check('e2e_core', () => runYarn({ dryRun }, yarnInvocation, ['test:e2e:core:fast']));
-  if (plan.runE2eCoreSlow) check('e2e_core_slow', () => runYarn({ dryRun }, yarnInvocation, ['test:e2e:core:slow']));
-  if (plan.runServerDbContract) check('server_db_contract', () => runYarn({ dryRun }, yarnInvocation, ['test:db-contract:docker']));
-  if (plan.runStress) check('stress', () => runYarn({ dryRun }, yarnInvocation, ['test:stress']));
-  if (plan.runBuildWebsite) check('build_website', () => runYarn({ dryRun }, yarnInvocation, ['website:build']));
-  if (plan.runBuildDocs) check('build_docs', () => runYarn({ dryRun }, yarnInvocation, ['docs:build']));
+  if (plan.runE2eCore) check('e2e_core', () => runPnpm({ dryRun }, ['run', 'test:e2e:core:fast']));
+  if (plan.runE2eCoreSlow) check('e2e_core_slow', () => runPnpm({ dryRun }, ['run', 'test:e2e:core:slow']));
+  if (plan.runServerDbContract) check('server_db_contract', () => runPnpm({ dryRun }, ['run', 'test:db-contract:docker']));
+  if (plan.runStress) check('stress', () => runPnpm({ dryRun }, ['run', 'test:stress']));
+  if (plan.runBuildWebsite) check('build_website', () => runPnpm({ dryRun }, ['run', 'website:build']));
+  if (plan.runBuildDocs) check('build_docs', () => runPnpm({ dryRun }, ['run', 'docs:build']));
   if (plan.runCliSmokeLinux) check('cli_smoke_linux', () => run({ dryRun }, process.execPath, ['scripts/pipeline/run.mjs', 'smoke-cli']));
 
   if (plan.runReleaseAssetsE2e) check('release_assets_e2e', () => {

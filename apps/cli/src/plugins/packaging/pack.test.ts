@@ -100,7 +100,8 @@ async function writeBundledFirstPartyPackFixture(repoRoot: string): Promise<Read
   await mkdir(join(packageRoot, 'dist'), { recursive: true });
   await Promise.all([
     writeFile(join(repoRoot, 'package.json'), JSON.stringify({ private: true }), 'utf8'),
-    writeFile(join(repoRoot, 'yarn.lock'), '', 'utf8'),
+    writeFile(join(repoRoot, 'pnpm-lock.yaml'), '', 'utf8'),
+    writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n'),
     writeFile(join(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
       name: '@happier-dev/cli',
       version: '0.0.0',
@@ -163,7 +164,8 @@ async function writeBundledFirstPartyDescriptorPackFixture(repoRoot: string): Pr
   await mkdir(join(packageRoot, 'dist'), { recursive: true });
   await Promise.all([
     writeFile(join(repoRoot, 'package.json'), JSON.stringify({ private: true }), 'utf8'),
-    writeFile(join(repoRoot, 'yarn.lock'), '', 'utf8'),
+    writeFile(join(repoRoot, 'pnpm-lock.yaml'), '', 'utf8'),
+    writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n'),
     writeFile(join(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({
       name: '@happier-dev/cli',
       version: '0.0.0',

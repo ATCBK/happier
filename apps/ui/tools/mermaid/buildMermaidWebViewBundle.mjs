@@ -45,7 +45,7 @@ export function assertMermaidWebViewBundleFresh({
     if (actualContents !== expectedContents) {
         throw new Error(
             `Mermaid WebView generated bundle is stale: ${generatedFilePath}. `
-            + 'Regenerate it with yarn --cwd apps/ui postinstall:real.',
+            + 'Regenerate it with pnpm --dir apps/ui run postinstall:real.',
         );
     }
 }

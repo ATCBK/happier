@@ -137,7 +137,6 @@ test('manual test dispatch can opt approved non-secret Linux lanes into Blacksmi
     'ui-integration',
     'shared-packages-unit',
     'plugin-workspaces-unit',
-    'server-db-contract',
     'workspace-sync-real',
     'cli',
     'e2e-core',
@@ -146,6 +145,12 @@ test('manual test dispatch can opt approved non-secret Linux lanes into Blacksmi
     assert.equal(tests.jobs[jobName]['runs-on'], '${{ needs.trusted_ref_guard.outputs.ubuntu_2204 }}');
     assert.ok(needs(tests.jobs[jobName]).includes('trusted_ref_guard'), `${jobName} must wait for runner admission`);
   }
+
+  assert.equal(
+    tests.jobs['server-db-contract']['runs-on'],
+    "${{ needs.trusted_ref_guard.outputs.ubuntu_2204 || 'ubuntu-22.04' }}",
+  );
+  assert.ok(needs(tests.jobs['server-db-contract']).includes('trusted_ref_guard'));
 
   for (const jobName of ['server', 'stack', 'binary-smoke', 'build-smoke', 'typecheck']) {
     assert.equal(tests.jobs[jobName]['runs-on'], '${{ needs.trusted_ref_guard.outputs.ubuntu_2404 }}');
@@ -188,7 +193,7 @@ test('manual test dispatch can opt approved non-secret Linux lanes into Blacksmi
   const schemaSyncIndex = serverDbSteps.findIndex((step) => step.name === 'Check provider schema synchronization');
   const providerTestIndex = serverDbSteps.findIndex((step) => step.name === 'Run db contract suite (Postgres)');
   assert.ok(schemaSyncIndex >= 0 && schemaSyncIndex < providerTestIndex);
-  assert.equal(serverDbSteps[schemaSyncIndex].run, 'yarn --cwd apps/server schema:sync:check');
+  assert.equal(serverDbSteps[schemaSyncIndex].run, 'pnpm --dir apps/server run schema:sync:check');
   assert.equal(
     serverDbSteps[providerTestIndex].env.HAPPIER_TEST_POSTGRES_DATABASE_URL,
     serverDbSteps[providerTestIndex].env.DATABASE_URL,

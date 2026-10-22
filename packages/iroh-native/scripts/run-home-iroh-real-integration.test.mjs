@@ -18,16 +18,16 @@ test('prepares the current-platform relay fixture and all real transport integra
   });
 
   assert.deepEqual(plan.builds, [
-    { args: ['-s', 'build'], cwd: 'C:\\repo\\packages\\iroh-native' },
+    { args: ['run', '--silent', 'build'], cwd: 'C:\\repo\\packages\\iroh-native' },
     { args: ['-s', 'build:native:test-relay'], cwd: 'C:\\repo\\packages\\iroh-native' },
     { args: ['-s', 'build:native'], cwd: 'C:\\repo\\packages\\iroh-native' },
   ]);
   assert.deepEqual(plan.workspacePreparation, {
-    args: ['-s', 'workspace', '@happier-dev/server', 'build:shared'],
+    args: ['-s', '--filter', '@happier-dev/server', 'run', 'build:shared'],
     cwd: 'C:\\repo',
   });
   assert.deepEqual(plan.cliWorkspacePreparation, {
-    args: ['-s', 'workspace', '@happier-dev/cli', 'build:shared', '--source-dev', 'protocol'],
+    args: ['-s', '--filter', '@happier-dev/cli', 'run', 'build:shared', '--source-dev', 'protocol'],
     cwd: 'C:\\repo',
   });
   assert.deepEqual(plan.tests.server.args, [
@@ -80,7 +80,7 @@ test('runs fixture journeys before rebuilding the ordinary addon immediately bef
   const events = [];
   runHomeIrohRealIntegration({
     env: { EXISTING_VALUE: 'preserved' },
-    execYarnImpl: (args, options) => {
+    execPnpmImpl: (args, options) => {
       calls.push({ args, options });
       events.push(`exec:${args[1] ?? args[0]}`);
     },
@@ -93,14 +93,14 @@ test('runs fixture journeys before rebuilding the ordinary addon immediately bef
   });
 
   assert.equal(calls.length, 10);
-  assert.deepEqual(calls[0].args, ['-s', 'build']);
+  assert.deepEqual(calls[0].args, ['run', '--silent', 'build']);
   assert.deepEqual(calls[1].args, ['-s', 'build:native:test-relay']);
   assert.match(calls[2].args.join(' '), /homeIrohEndpoint\.real\.integration\.test\.ts/u);
   assert.match(calls[3].args.join(' '), /workspaceMachineCarrierLane08\.real\.integration\.test\.ts/u);
   assert.match(calls[4].args.join(' '), /machineCarrierHttp\.real\.integration\.test\.ts/u);
   assert.match(calls[5].args.join(' '), /machineCarrierHttp\.real\.integration\.test\.ts/u);
-  assert.deepEqual(calls[6].args, ['-s', 'workspace', '@happier-dev/server', 'build:shared']);
-  assert.deepEqual(calls[7].args, ['-s', 'workspace', '@happier-dev/cli', 'build:shared', '--source-dev', 'protocol']);
+  assert.deepEqual(calls[6].args, ['-s', '--filter', '@happier-dev/server', 'run', 'build:shared']);
+  assert.deepEqual(calls[7].args, ['-s', '--filter', '@happier-dev/cli', 'run', 'build:shared', '--source-dev', 'protocol']);
   assert.deepEqual(calls[8].args, ['-s', 'build:native']);
   assert.match(calls[9].args.join(' '), /home\.iroh\.composedPersonalHome\.real\.e2e\.test\.ts/u);
   assert.equal(calls[2].options.env.EXISTING_VALUE, 'preserved');
@@ -143,7 +143,7 @@ test('Docker source journey runs Home HTTP and Socket.IO against the stock relay
   runHomeIrohRealIntegration({
     dockerOnly: true,
     env: { HAPPIER_TEST_IROH_EXTERNAL_RELAY_URL: 'http://127.0.0.1:49123' },
-    execYarnImpl: (args, options) => calls.push({ args, options }),
+    execPnpmImpl: (args, options) => calls.push({ args, options }),
     makeTempDirImpl: () => '/tmp/happier-iroh-docker-test-stable',
     copyFileImpl: () => {},
     removeDirImpl: () => {},
@@ -154,7 +154,7 @@ test('Docker source journey runs Home HTTP and Socket.IO against the stock relay
   assert.match(calls[3].args.join(' '), /machineCarrierHttp\.real\.integration\.test\.ts/u);
   assert.equal(calls[3].options.env.HAPPIER_MACHINE_TRANSFER_TEST_TOPOLOGY, 'relay');
   assert.equal(calls[3].options.env.HAPPIER_TEST_IROH_EXTERNAL_RELAY_URL, 'http://127.0.0.1:49123');
-  assert.deepEqual(calls[5].args, ['-s', 'workspace', '@happier-dev/cli', 'build:shared', '--source-dev', 'protocol']);
+  assert.deepEqual(calls[5].args, ['-s', '--filter', '@happier-dev/cli', 'run', 'build:shared', '--source-dev', 'protocol']);
   assert.match(calls[7].args.join(' '), /home\.iroh\.composedPersonalHome\.real\.e2e\.test\.ts/u);
   assert.equal(calls[7].options.env.HAPPIER_TEST_IROH_EXTERNAL_RELAY_URL, 'http://127.0.0.1:49123');
 });

@@ -1510,7 +1510,14 @@ not established by the scan runner's wiring or a released-runtime certification.
 [`scanIndex`](../apps/cli/src/storage/scan/scanIndex.ts) persists completed directory
 records through the existing protected SQLite owner. A volume has at most one
 current `storage/scans/<sha256(volumeId)>.sqlite` database and one
-`.previous.sqlite` database. During an incomplete replacement, the latest complete
+`.previous.sqlite` database under the daemon's persistent `activeServerDir`,
+independent of its install or source-runtime directory. Initialization reopens
+retained indexes and marks a running scan without a live invocation as interrupted,
+so finished folders remain readable and the same scan can resume. An unavailable
+or locked resources policy blocks scanning but preserves the indexes. Once policy
+is ready, disabling whole-disk scanning deletes every index; while enabled, a
+reported volume census removes indexes only for volumes established as absent.
+During an incomplete replacement, the latest complete
 baseline stays inside the current database; it does not advance the previous
 complete scan. Prior-size hints are streamed into a transient NDJSON projection
 for the helper and disposed after the invocation, not retained as a third index or
@@ -2667,6 +2674,15 @@ Local state lives under `~/.happier` (or `HAPPIER_HOME_DIR`):
 - `access.key`: local key material for encryption/auth.
 - `daemon.state.json`: daemon PID + control port + version.
 - `logs/`: CLI/daemon logs.
+
+In current development source, protected local files and MCP runtime
+configuration use the shared Windows ACL boundary in
+`packages/cli-common/src/fs/windowsProtectedAcl.ts`. It grants only the current
+user and SYSTEM access and verifies the resulting ACL. Its PowerShell children
+use the selected Windows PowerShell installation's own modules, with a
+child-only `PSModulePath`; the launching shell's environment stays unchanged.
+Both ACL scripts terminate on errors, and malformed inspection output retains
+bounded stderr diagnostics without including stdout.
 
 Configuration lives in `src/configuration.ts`:
 - `HAPPIER_SERVER_URL` and `HAPPIER_WEBAPP_URL` override defaults.
@@ -5171,7 +5187,7 @@ Canonical build tasks do not pass through or restore from Turbo's cache. The roo
 
 The repository typecheck reuses those canonical builds as the source-compilation evidence for buildable workspace packages. It then runs the six remaining source-only graphs (Terminal Native, Plugin UI, App, CLI, Server, and the cross-package Tests workspace) with `--noEmit`. Their Turbo hashes include the exact emitted declaration roots they consume, rather than every workspace source tree. This avoids immediately compiling the same package a second time, avoids pulling all first-party Plugin builds into a typecheck, and still invalidates a cached source check when a consumed declaration changes. Plugin SDK and the external SDK retain separate test-project typechecks after their public declaration checks.
 
-In the development checkout, run the public `yarn typecheck` entry point. The execution owner selects the host and marks dispatched children with `HAPPIER_TYPECHECK_DISPATCHED=1`, including explicit local execution. The shared TypeScript runner refuses unmarked `typecheck:finite` and `typecheck:source:finite` invocations before starting the compiler. Turbo forwards and hashes this marker so dispatched children keep the selected host and an authorized cached result cannot satisfy an unmarked invocation. CI's public `check:public-sdk:finite` entry point grants the same permission through the execution owner.
+In the development checkout, run the public `pnpm run typecheck` entry point. The execution owner selects the host and marks dispatched children with `HAPPIER_TYPECHECK_DISPATCHED=1`, including explicit local execution. The shared TypeScript runner refuses unmarked `typecheck:finite` and `typecheck:source:finite` invocations before starting the compiler. Turbo forwards and hashes this marker so dispatched children keep the selected host and an authorized cached result cannot satisfy an unmarked invocation. CI's public `check:public-sdk:finite` entry point grants the same permission through the execution owner.
 
 The shared TypeScript dist builder excludes test-only roots, including `.test-d.ts` and `.test-d.tsx`, through a build-only configuration extending the package project. It preserves package exclusions and leaves no-emit project selection unchanged. Root typecheck also runs the Protocol and Triage projects with `--noEmit`, in both ordinary and compiler-only modes, because their type tests previously relied on production compilation. Plugin UI's source check and Plugin SDK's test-project check continue to enforce their type tests.
 
@@ -5217,7 +5233,14 @@ authority, preparation refusals and explicit retirement retain their existing
 failure semantics. An already running supervisor must be relaunched through the
 Stack lifecycle owner to load this correction.
 
-Remote dependency bootstrap installs tools without general workspace lifecycle scripts before loading the package-manager owner. Every install that materializes the shared UI dependency tree, including source-test and stage-zero refreshes, completes the canonical UI postinstall under the existing dependency-refresh lock, before publishing the ready marker. Warm prerequisite repair uses the same lock and withdraws admission until repair succeeds. The dependency-free `utils/proc/ui_postinstall.mjs` owner serves both bootstrap and full package-manager preparation; the UI verifier also loads without compiled Stack packages. The mandatory password-worker asset producer compiles the canonical Protocol codec source directly, so cold UI postinstall does not require or consume stale Protocol dist. Scriptless admission still does not certify other runtime lifecycle prerequisites. UI patches and asset-generator sources participate through `apps/ui/package.json`'s `happier.installFreshnessInputs`; changing either reruns postinstall even when Yarn reuses installed packages. Postinstall failure leaves admission stale and fails preparation; an unchanged source-test preparation reuses completed outputs.
+Sibling command routing reads each checkout's declared workspace format. For
+the supported Yarn 0.2 predecessor, local validation consumes that checkout's
+existing dependency-freshness decision without rewriting its admission marker;
+remote bootstrap executes its existing Yarn bootstrap entrypoint. The 0.3
+executor owns command placement while the source checkout retains dependency
+installation and lifecycle ownership.
+
+Remote dependency bootstrap installs tools without general workspace lifecycle scripts before loading the package-manager owner. Every install that materializes the shared UI dependency tree, including source-test and stage-zero refreshes, completes the canonical UI postinstall under the existing dependency-refresh lock, before publishing the ready marker. Warm prerequisite repair uses the same lock and withdraws admission until repair succeeds. The dependency-free `utils/proc/ui_postinstall.mjs` owner serves both bootstrap and full package-manager preparation; the UI verifier also loads without compiled Stack packages. The mandatory password-worker asset producer compiles the canonical Protocol codec source directly, so cold UI postinstall does not require or consume stale Protocol dist. Scriptless admission still does not certify other runtime lifecycle prerequisites. UI patches and asset-generator sources participate through `apps/ui/package.json`'s `happier.installFreshnessInputs`; changing either reruns postinstall even when pnpm reuses installed packages. Postinstall failure leaves admission stale and fails preparation; an unchanged source-test preparation reuses completed outputs.
 
 In current 0.3 development, a dependency writer stops verified managed Metro consumers before changing their shared tree. Final Metro launch and existing PID-state publication acquire the same install lock; the existing Expo supervisor restarts only after complete dependency admission is available. The UI verifier prevents unchanged warm preparation from stopping a healthy Metro. A legacy running supervisor without this guarded restart capability causes dependency mutation to fail closed with a restart-required error; changing source does not retrofit an already-loaded supervisor. No new PID registry or suspended-process custody is introduced. Last-green launch requires a previously admitted coherent installed tree, not equality with newer source inputs: a successful no-install repair retains the old admission inputs, while the normal installer still sees those newer inputs as stale. Failed preparation never admits a replacement against a partial tree.
 

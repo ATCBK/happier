@@ -22,7 +22,8 @@ test('bundleWorkspaceDeps refreshes package-root imports targets through the rea
     mkdirSync(resolve(sourceDir, 'dist'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'runtime'), { recursive: true });
     writeJson(resolve(root, 'package.json'), { name: 'fixture-root', private: true });
-    writeFileSync(resolve(root, 'yarn.lock'), '');
+    writeFileSync(resolve(root, 'pnpm-lock.yaml'), '');
+    writeFileSync(resolve(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     writeJson(resolve(stackDir, 'package.json'), { bundledDependencies: ['@happier-dev/fixture'] });
     writeJson(resolve(commonDir, 'package.json'), { name: '@happier-dev/cli-common', type: 'module' });
     // Exercise the real current source owner, not the older internal copier stub.
@@ -86,7 +87,7 @@ function collectPackageJsonRelativeFileTargets(value, result = new Set()) {
 function findRepoRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
-    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'yarn.lock'))) return dir;
+    if (existsSync(resolve(dir, 'package.json')) && existsSync(resolve(dir, 'pnpm-lock.yaml')) && existsSync(resolve(dir, 'pnpm-workspace.yaml'))) return dir;
     const parent = resolve(dir, '..');
     if (parent === dir) break;
     dir = parent;
@@ -231,7 +232,8 @@ function createBundleFixture(prefix = 'happy-stack-bundle-workspace-deps-') {
   const protocolDir = resolve(repoRoot, 'packages', 'protocol');
   const releaseRuntimeDir = resolve(repoRoot, 'packages', 'release-runtime');
   writeJson(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-  writeFileSync(resolve(repoRoot, 'yarn.lock'), '# lock\n', 'utf8');
+  writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+  writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   mkdirSync(resolve(agentsDir, 'dist'), { recursive: true });
   mkdirSync(resolve(cliCommonDir, 'dist'), { recursive: true });
   mkdirSync(resolve(connectionSupervisorDir, 'dist'), { recursive: true });

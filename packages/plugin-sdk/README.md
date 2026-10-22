@@ -823,9 +823,9 @@ development consumes its generated cold manifest.
 From the Happier repository root:
 
 ```bash
-yarn workspace @happier-dev/plugin-sdk test
-yarn workspace @happier-dev/plugin-sdk typecheck
-yarn workspace @happier-dev/plugin-sdk build
+pnpm --filter @happier-dev/plugin-sdk run test
+pnpm --filter @happier-dev/plugin-sdk run typecheck
+pnpm --filter @happier-dev/plugin-sdk run build
 ```
 
 Feature QA validates the current source and loaded development stack. Release

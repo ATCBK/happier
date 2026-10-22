@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ensureTauriSigningKeyFile } from './ensure-signing-key-file.mjs';
 import { resolveTauriSigningPrivateKeyPassword } from './resolve-signing-key-password.mjs';
-import { resolveYarnInvocation } from './resolve-yarn-invocation.mjs';
+import { resolvePnpmInvocation } from '../../workspaces/execPnpmCommand.mjs';
 import { formatPublicReleaseChannelChoices, normalizePublicReleaseChannel } from '../release/lib/public-release-rings.mjs';
 import { execFileSyncPortable } from '../lib/exec-file-sync-portable.mjs';
 import { createTauriActoolEnvironment } from '../../../apps/ui/scripts/tauriActoolEnvironment.mjs';
@@ -367,9 +367,8 @@ function tempFile(dir, filename) {
 }
 
 /**
- * We avoid invoking Yarn/Corepack on Windows runners because Corepack shims can fail when Git-Bash
- * provides a POSIX-style PATH (Corepack tries to spawn `yarn` during validation). Instead, we use
- * Node + npm CLI to run `tauri:prepare:build` and call the Tauri CLI directly from node_modules.
+ * Use the same native/JavaScript pnpm decision as other source-workspace commands.
+ * The portable process owner encodes Windows batch shims when spawning.
  *
  * @param {{ platform: NodeJS.Platform; nodeExecPath: string; npmExecPath?: string }} opts
  */
@@ -378,14 +377,8 @@ export function resolveTauriPrepareBuildInvocation(opts) {
     throw new Error('resolveTauriPrepareBuildInvocation is Windows-only');
   }
 
-  const normalized = String(opts.npmExecPath ?? '').trim();
-  if (normalized) {
-    return { cmd: opts.nodeExecPath, args: [normalized, 'run', '-s', 'tauri:prepare:build'] };
-  }
-
-  const nodeDir = path.win32.dirname(opts.nodeExecPath);
-  const fallback = path.win32.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  return { cmd: opts.nodeExecPath, args: [fallback, 'run', '-s', 'tauri:prepare:build'] };
+  const invocation = resolvePnpmInvocation(opts.npmExecPath, { platform: opts.platform, processExecPath: opts.nodeExecPath });
+  return { cmd: invocation.command, args: [...invocation.args, 'run', '--silent', 'tauri:prepare:build'] };
 }
 
 /**
@@ -460,7 +453,7 @@ function main() {
       throw new Error('Linux AppImage packaging requires the pinned WebKit SDK. Prepare it with .github/actions/install-tauri-linux-dependencies (bundled-webkit: true) before bundling.', { cause: error });
     }
   }
-  const yarn = platform === 'win32' ? null : resolveYarnInvocation();
+  const pnpm = platform === 'win32' ? null : resolvePnpmInvocation();
   const targetArgs = tauriTarget ? ['--target', tauriTarget] : [];
   /** @type {string[]} */
   const configs = [];
@@ -523,8 +516,8 @@ function main() {
     fail('TAURI_SIGNING_PRIVATE_KEY is required for --bundle-only updater finalization');
   }
 
-  // Tauri `beforeBuildCommand` uses Corepack internally (`corepack yarn -s tauri:prepare:build`) which
-  // has proven flaky on Windows runners (Corepack tries to spawn `yarn` and fails). We avoid that
+  // Tauri `beforeBuildCommand` uses Corepack internally (`corepack pnpm -s tauri:prepare:build`) which
+  // has proven flaky on Windows runners (Corepack tries to spawn `pnpm` and fails). We avoid that
   // by running the frontend build ourselves and overriding the hook to a fast no-op.
   const beforeBuildOverridePath = tempFile(tmpRoot, 'tauri.beforeBuild.override.json');
   if (opts.dryRun) {
@@ -599,7 +592,7 @@ function main() {
     });
     run(opts, npm.cmd, npm.args, { cwd: absUiDir, env: baseTauriEnv });
   } else if (!bundleOnly) {
-    run(opts, yarn.cmd, [...yarn.prefixArgs, '-s', 'tauri:prepare:build'], { cwd: absUiDir, env: baseTauriEnv });
+    run(opts, pnpm.command, [...pnpm.args, 'run', '--silent', 'tauri:prepare:build'], { cwd: absUiDir, env: baseTauriEnv });
   }
 
   if (!bundleOnly && platform === 'linux' && shouldRunLinuxHsetupLddPreflight()) {
@@ -645,8 +638,8 @@ function main() {
         try {
           run(
             opts,
-            yarn.cmd,
-            [...yarn.prefixArgs, 'tauri', bundleOnly ? 'bundle' : 'build', '-v', '--config', configPath, '--config', versionOverride, ...configs, ...featureArgs, ...targetArgs, ...(noBundle ? ['--no-bundle'] : [])],
+            pnpm.command,
+            [...pnpm.args, 'exec', 'tauri', bundleOnly ? 'bundle' : 'build', '-v', '--config', configPath, '--config', versionOverride, ...configs, ...featureArgs, ...targetArgs, ...(noBundle ? ['--no-bundle'] : [])],
             {
               cwd: absUiDir,
               env: tauriEnv,
@@ -669,7 +662,7 @@ function main() {
       return;
     }
 
-    run(opts, yarn.cmd, [...yarn.prefixArgs, 'tauri', bundleOnly ? 'bundle' : 'build', '-v', ...configs, ...featureArgs, ...targetArgs, ...(noBundle ? ['--no-bundle'] : [])], {
+    run(opts, pnpm.command, [...pnpm.args, 'exec', 'tauri', bundleOnly ? 'bundle' : 'build', '-v', ...configs, ...featureArgs, ...targetArgs, ...(noBundle ? ['--no-bundle'] : [])], {
       cwd: absUiDir,
       env: tauriEnv,
     });

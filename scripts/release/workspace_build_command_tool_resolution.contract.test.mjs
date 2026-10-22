@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { collectWorkspacePackageJsonPaths } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -13,18 +14,8 @@ async function readJson(relativePath) {
 }
 
 async function readTypeScriptWorkspacePackages() {
-  const rootPackage = await readJson('package.json');
-  const patterns = rootPackage?.workspaces?.packages ?? [];
-  const packagePaths = [];
-  for (const pattern of patterns) {
-    if (pattern === 'packages/plugins/[a-z]*') {
-      const entries = await readdir(resolve(repoRoot, 'packages/plugins'), { withFileTypes: true });
-      packagePaths.push(...entries.filter((entry) => entry.isDirectory() && /^[a-z]/.test(entry.name))
-        .map((entry) => `packages/plugins/${entry.name}`));
-      continue;
-    }
-    packagePaths.push(pattern);
-  }
+  const packagePaths = (await collectWorkspacePackageJsonPaths(repoRoot))
+    .map((packageFile) => relative(repoRoot, dirname(packageFile)).replaceAll('\\', '/'));
   packagePaths.push('packages/plugins/_template');
 
   const packages = [];
@@ -85,7 +76,7 @@ test('compiler orchestration has one native TypeScript resolver with no TS5 fall
   }
 });
 
-test('declared yarn tsc and first-party compiler scripts use the shared native runner', async () => {
+test('declared pnpm tsc and first-party compiler scripts use the shared native runner', async () => {
   const rootPackage = await readJson('package.json');
   assert.equal(rootPackage?.scripts?.tsc, 'node scripts/workspaces/runTypeScriptCli.mjs');
 
@@ -94,7 +85,7 @@ test('declared yarn tsc and first-party compiler scripts use the shared native r
       ? 'node ../../../scripts/workspaces/runTypeScriptCli.mjs'
       : 'node ../../scripts/workspaces/runTypeScriptCli.mjs';
     if (pkg?.scripts?.tsc !== undefined) {
-      assert.equal(pkg.scripts.tsc, runner, `${packagePath} yarn tsc must use the shared native runner`);
+      assert.equal(pkg.scripts.tsc, runner, `${packagePath} pnpm tsc must use the shared native runner`);
     }
 
     for (const scriptName of ['build', 'build:esm', 'typecheck', 'types:check', 'typecheck:activity-surfaces']) {
@@ -123,7 +114,11 @@ test('dist-exporting TypeScript workspaces use the staged builder or one proven 
       continue;
     }
     const buildScript = [pkg?.scripts?.build, pkg?.scripts?.['build:esm']]
-      .map((value) => String(value ?? ''))
+      .map((value) => {
+        const body = String(value ?? '');
+        const delegatedScript = body.match(/hstack-exec --script=([\w:.-]+)$/u)?.[1];
+        return delegatedScript ? String(pkg.scripts[delegatedScript] ?? '') : body;
+      })
       .join('\n');
     assert.match(
       buildScript,
@@ -141,7 +136,7 @@ test('docs production builds run the native type gate before the Next bundle', a
   const nextConfig = await readFile(resolve(repoRoot, 'apps/docs/next.config.mjs'), 'utf8');
 
   assert.equal(pkg?.scripts?.build, 'node scripts/build.mjs');
-  assert.match(buildRunner, /execYarn(?:Impl)?\(\['-s', 'types:check'\]/);
+  assert.match(buildRunner, /execPnpm(?:Impl)?\(\['--silent', 'run', 'types:check'\]/);
   assert.match(buildRunner, /next\/dist\/bin\/next/);
   assert.match(nextConfig, /typescript\s*:\s*\{[\s\S]*?ignoreBuildErrors\s*:\s*true/);
 });

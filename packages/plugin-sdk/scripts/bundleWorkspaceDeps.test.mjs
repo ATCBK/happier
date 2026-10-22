@@ -45,7 +45,8 @@ async function createPreparedScriptAdmissionFixture(t) {
   const scriptPath = resolve(pluginSdkDir, 'scripts/bundleWorkspaceDeps.mjs');
   await mkdir(dirname(scriptPath), { recursive: true });
   await writeFile(resolve(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
-  await writeFile(resolve(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(resolve(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(resolve(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const name of ['cli', 'ui', 'server']) {
     await mkdir(resolve(root, 'apps', name), { recursive: true });
     await writeFile(resolve(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}` }));
@@ -419,7 +420,7 @@ test('plugin-sdk prepared readers preserve the caller environment until their sc
   const run = runPluginSdkPreparedScript('typecheck:tests:prepared', {
     pluginSdkDir: '/repo/packages/plugin-sdk',
     env: {
-      npm_execpath: '/tooling/yarn.js',
+      npm_execpath: '/tooling/pnpm',
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: 'held-by-reader',
     },
     spawnImpl(command, args, options) {
@@ -431,12 +432,12 @@ test('plugin-sdk prepared readers preserve the caller environment until their sc
   await run;
 
   assert.deepEqual(calls, [{
-    command: process.execPath,
-    args: ['/tooling/yarn.js', 'run', '-s', 'typecheck:tests:prepared'],
+    command: '/tooling/pnpm',
+    args: ['--silent', 'run', 'typecheck:tests:prepared'],
     options: {
       cwd: '/repo/packages/plugin-sdk',
       env: {
-        npm_execpath: '/tooling/yarn.js',
+        npm_execpath: '/tooling/pnpm',
         HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: 'held-by-reader',
       },
       stdio: 'inherit',
@@ -493,13 +494,13 @@ test('plugin-sdk keeps publication preparation separate from ordinary source val
     packageJson.scripts['check:api-governance:prepared'],
     'node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --check --source-prepared',
   );
-  assert.equal(packageJson.scripts['api-surface'], 'yarn -s api-governance');
-  assert.equal(packageJson.scripts['check:api-surface'], 'yarn -s check:api-governance');
+  assert.equal(packageJson.scripts['api-surface'], 'pnpm --silent run api-governance');
+  assert.equal(packageJson.scripts['check:api-surface'], 'pnpm --silent run check:api-governance');
   assert.equal(packageJson.scripts.prebuild, undefined);
   assert.equal(packageJson.scripts['pretypecheck:source'], undefined);
   assert.equal(packageJson.scripts['pretypecheck:tests'], undefined);
   assert.equal(packageJson.scripts['test:source'], 'vitest run --config vitest.source.config.ts');
-  assert.equal(packageJson.scripts['test:local'], 'yarn -s test:source && yarn -s test:local:adjacent');
+  assert.equal(packageJson.scripts['test:local'], 'pnpm --silent run test:source && pnpm --silent run test:local:adjacent');
   const adjacentScript = packageJson.scripts['test:local:adjacent'];
   assert.doesNotMatch(adjacentScript, /bundleWorkspaceDeps|prepare:declarations/u);
   assert.ok(
@@ -523,14 +524,14 @@ test('plugin-sdk keeps publication preparation separate from ordinary source val
     packageJson.scripts['typecheck:tests'],
     'node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json',
   );
-  assert.equal(packageJson.scripts['typecheck:local'], 'yarn -s typecheck:source && yarn -s typecheck:tests');
-  assert.equal(packageJson.scripts['generated:finite'], 'yarn -s check:action-type-map && yarn -s check:hosted-html-guest');
+  assert.equal(packageJson.scripts['typecheck:local'], 'pnpm --silent run typecheck:source && pnpm --silent run typecheck:tests');
+  assert.equal(packageJson.scripts['generated:finite'], 'pnpm --silent run check:action-type-map && pnpm --silent run check:hosted-html-guest');
   assert.ok(
     packageJson.scripts['test:prepared'].startsWith('vitest run --config vitest.config.ts && '),
     'the prepared test lane must use the authored-source collection boundary before adjacent tests',
   );
-  assert.equal(packageJson.scripts['test:finite'], 'yarn -s test:prepared');
-  assert.equal(packageJson.scripts['typecheck:finite'], 'yarn -s typecheck:tests:prepared');
+  assert.equal(packageJson.scripts['test:finite'], 'pnpm --silent run test:prepared');
+  assert.equal(packageJson.scripts['typecheck:finite'], 'pnpm --silent run typecheck:tests:prepared');
 });
 
 test('plugin-sdk runtime bundling admits the resolved artifact closure and publishes it once', async () => {

@@ -1,5 +1,6 @@
 // @ts-check
 
+import { resolvePnpmCommandInvocation } from '../../workspaces/execPnpmCommand.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -271,7 +272,7 @@ function run(opts, cmd, args, extra) {
 
   const stdio = extra?.stdio ?? 'inherit';
   const env = { ...process.env, ...(extra?.env ?? {}) };
-  const invocation = resolveWindowsCommandInvocation({
+  const invocation = cmd === 'pnpm' ? resolvePnpmCommandInvocation(args, { npmExecPath: env.npm_execpath }) : resolveWindowsCommandInvocation({
     command: cmd,
     args,
     env,
@@ -314,7 +315,7 @@ function mkTmpDir(prefix) {
  */
 function buildSmokePackage(opts, { absPkgDir, workspaceName, repoRoot }) {
   if (path.basename(absPkgDir) !== 'cli') {
-    run(opts, 'yarn', ['workspace', workspaceName, 'build'], { cwd: repoRoot });
+    run(opts, 'pnpm', ['--filter', workspaceName, 'run', 'build'], { cwd: repoRoot });
     return;
   }
   for (const step of resolveCliPublicationBuildSteps({ packageRoot: absPkgDir })) {

@@ -779,9 +779,9 @@ For a source package, run the repository-managed checks from the workspace
 root:
 
 ```sh
-yarn workspace @happier-dev/channels-protocol test
-yarn workspace @happier-dev/channels-protocol typecheck
-yarn workspace @happier-dev/channels-protocol build
+pnpm --filter @happier-dev/channels-protocol run test
+pnpm --filter @happier-dev/channels-protocol run typecheck
+pnpm --filter @happier-dev/channels-protocol run build
 ```
 
 For a provider plugin, run its normal managed source-author checks, the public

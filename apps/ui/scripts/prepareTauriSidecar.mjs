@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 import { ensureWorkspacePackagesBuiltForComponent as ensureWorkspacePackagesBuiltForComponentDefault } from '../../stack/scripts/utils/proc/pm.mjs';
 import { ensureUiWorkspacePackagesBuilt as ensureUiWorkspacePackagesBuiltDefault } from './ensureWorkspacePackagesBuilt.mjs';
@@ -191,14 +192,18 @@ export async function prepareTauriSidecar({
     ...(bunTarget ? { HAPPIER_BUN_TARGET: bunTarget } : {}),
   };
 
+  const invocation = resolvePnpmCommandInvocation(['--silent', '--filter', '@happier-dev/bootstrap', 'run', 'build:binary'], {
+    npmExecPath: String(nextEnv.npm_execpath ?? ''),
+    platform,
+  });
   const result = spawnSyncImpl(
-    'yarn',
-    ['-s', 'workspace', '@happier-dev/bootstrap', 'build:binary'],
+    invocation.command,
+    invocation.args,
     {
       stdio: 'inherit',
       env: nextEnv,
       cwd: repoRoot,
-      ...(platform === 'win32' ? { shell: true } : {}),
+      ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     },
   );
 

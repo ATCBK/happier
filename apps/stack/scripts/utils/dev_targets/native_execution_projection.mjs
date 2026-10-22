@@ -7,6 +7,7 @@ import { resolveRepoStackIdentity, resolveStacksStorageRoot } from '../stack/rep
 import { resolveDevTargetServicePlans } from './service_placement.mjs';
 import { resolveMutagenSessionName } from './mutagen_project.mjs';
 import { renderNativeCommandPolicy } from './remote_commands.mjs';
+import { isYarnWorkspace, readWorkspacePatterns } from '../proc/workspace_package_manifests.mjs';
 import { renderNativeSyncReadinessPolicy, resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
 import {
   EXECUTION_PROVENANCE_FILENAME,
@@ -107,8 +108,9 @@ export function renderNativeExecutionProjection(config, { repoRoot = '', executo
 export async function prepareCommandRepository({ configPath, repoRoot, executorRepoRoot, synchronize = true, env = process.env }) {
   const repository = resolve(repoRoot);
   // Source identity must be checked before creating a replica or state directory.
-  await readFile(join(repository, 'package.json'), 'utf8');
-  await readFile(join(repository, 'yarn.lock'), 'utf8');
+  const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
+  await readWorkspacePatterns(repository);
+  await readFile(join(repository, isYarnWorkspace(manifest) ? 'yarn.lock' : 'pnpm-lock.yaml'), 'utf8');
   const parentConfig = JSON.parse(await readFile(configPath, 'utf8'));
   // Keep Mutagen's Unix socket below the platform path limit just as the
   // producer stack does; an extra directory ladder can exceed it here.

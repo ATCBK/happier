@@ -15,7 +15,7 @@ import { runLoggedCommand } from '../../src/testkit/process/spawnProcess';
 import { createUserScopedSocketCollector } from '../../src/testkit/socketClient';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 import { fakeClaudeFixturePath, type FakeClaudeInvocation, waitForFakeClaudeInvocation } from '../../src/testkit/fakeClaude';
 import { postEncryptedUiTextMessage } from '../../src/testkit/uiMessages';
 import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
@@ -135,8 +135,8 @@ describe('core e2e: daemon tmux spawn → attach → Claude remote↔local switc
     const cliDistEntrypoint = resolve(repoRootDir(), 'apps/cli/dist/index.mjs');
     if (!existsSync(cliDistEntrypoint)) {
       await runLoggedCommand({
-        command: yarnCommand(),
-        args: ['-s', 'workspace', '@happier-dev/cli', 'build'],
+        command: pnpmCommand(),
+        args: ['--filter', '@happier-dev/cli', 'run', '--silent', 'build'],
         cwd: repoRootDir(),
         env: { ...process.env, CI: '1' },
         stdoutPath: resolve(join(testDir, 'cli.build.stdout.log')),

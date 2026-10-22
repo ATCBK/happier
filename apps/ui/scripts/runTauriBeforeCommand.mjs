@@ -2,12 +2,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 /**
- * Runs the `tauri:prepare:*` yarn script through a platform shell.
- *
- * We intentionally avoid `corepack yarn ...` here because Corepack's internal checks can attempt to
- * `spawn('yarn')` on Windows, which fails when Yarn is only available as `yarn.cmd`.
+ * Runs the `tauri:prepare:*` script through the repository package-manager owner.
  *
  * @param {{
  *   mode: 'dev' | 'build';
@@ -28,14 +26,15 @@ export function runTauriBeforeCommand(opts) {
     throw new Error(`mode must be 'dev' or 'build' (got: ${String(mode)})`);
   }
 
-  const yarnCmd = `yarn -s tauri:prepare:${mode}`;
-
-  if (platform === 'win32') {
-    execImpl('cmd', ['/D', '/S', '/C', yarnCmd], { cwd, env, stdio: 'inherit' });
-    return;
-  }
-
-  execImpl('bash', ['-lc', yarnCmd], { cwd, env, stdio: 'inherit' });
+  const invocation = resolvePnpmCommandInvocation(['--silent', 'run', `tauri:prepare:${mode}`], {
+    platform,
+    npmExecPath: String(env.npm_execpath ?? ''),
+    comspec: env.COMSPEC ?? env.ComSpec ?? env.comspec,
+  });
+  execImpl(invocation.command, invocation.args, {
+    cwd, env, stdio: 'inherit',
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
 }
 
 function main() {

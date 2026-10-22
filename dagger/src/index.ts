@@ -126,9 +126,7 @@ export class HappierPipeline {
           'case "$arch" in x86_64) node_arch="x64" ;; aarch64|arm64) node_arch="arm64" ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac',
           `curl -fsSL "https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-\${node_arch}.tar.xz" | tar -xJ -C /usr/local --strip-components=1`,
           "node --version",
-          "corepack enable",
-          "corepack prepare yarn@1.22.22 --activate",
-          "yarn --version",
+          "node scripts/ci/setup-pnpm.mjs",
         ].join(" && "),
       ])
       .withExec(["git", "init"])
@@ -146,17 +144,15 @@ export class HappierPipeline {
       .withEnvVariable("npm_config_registry", "https://registry.npmjs.org")
       .withEnvVariable("NPM_CONFIG_REGISTRY", "https://registry.npmjs.org")
       .withEnvVariable("ONNXRUNTIME_NODE_INSTALL_CUDA", "skip")
-      .withMountedCache("/root/.cache/yarn", dag.cacheVolume("happier-yarn-cache"))
+      .withMountedCache("/root/.local/share/pnpm/store", dag.cacheVolume("happier-pnpm-store"))
       .withMountedCache("/root/.gradle", dag.cacheVolume("happier-gradle-cache"))
       .withExec([
-        "bash",
-        "scripts/ci/yarn-install-with-retry.sh",
+        "pnpm",
+        "install",
         "--frozen-lockfile",
-        "--ignore-engines",
-        "--network-timeout",
-        "600000",
+        "--store-dir",
+        "/root/.local/share/pnpm/store",
         "--prefer-offline",
-        "--non-interactive",
       ])
 
     if (expoAppSlug) {

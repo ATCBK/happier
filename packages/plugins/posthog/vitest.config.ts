@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +9,8 @@ import {
     createWorkspacePackageSourcesPlugin,
     type WorkspacePackageSpec,
 } from '../../../scripts/testing/vitestWorkspacePackageResolution';
+
+const requireUiDependency = createRequire(new URL('../../../apps/ui/package.json', import.meta.url));
 
 const packageRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(packageRoot, '../../..');
@@ -47,14 +50,14 @@ const workspacePackages: readonly WorkspacePackageSpec[] = [
  * unchanged: the packed artifact still takes React from the host runtime.
  */
 const reactNativeWebAliases = [
-    { find: /^react$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react/index.js') },
-    { find: /^react\/jsx-runtime$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react/jsx-runtime.js') },
-    { find: /^react\/jsx-dev-runtime$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react/jsx-dev-runtime.js') },
-    { find: /^react-dom\/client$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/client.js') },
-    { find: /^react-dom$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-dom/index.js') },
-    { find: /^react-native$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-web/dist/index.js') },
+    { find: /^react$/u, replacement: requireUiDependency.resolve('react') },
+    { find: /^react\/jsx-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-runtime') },
+    { find: /^react\/jsx-dev-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-dev-runtime') },
+    { find: /^react-dom\/client$/u, replacement: requireUiDependency.resolve('react-dom/client') },
+    { find: /^react-dom$/u, replacement: requireUiDependency.resolve('react-dom') },
+    { find: /^react-native$/u, replacement: requireUiDependency.resolve('react-native-web/dist/index.js') },
     // Match the canonical plugin-ui RNW platform boundary; Vite does not select .web files.
-    { find: /^react-native-svg$/u, replacement: resolve(repoRoot, 'apps/ui/node_modules/react-native-svg/lib/module/elements.web.js') },
+    { find: /^react-native-svg$/u, replacement: requireUiDependency.resolve('react-native-svg/lib/module/elements.web.js') },
 ];
 
 /** Source-only PostHog checks run against this package's real parsers and mappers. */

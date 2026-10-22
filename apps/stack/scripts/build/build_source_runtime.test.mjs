@@ -31,6 +31,53 @@ import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs'
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+import { execPnpm } from '../../../../scripts/workspaces/execPnpmCommand.mjs';
+
+test('captured source workspaces run pnpm tasks with private real task state', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-pnpm-state-' });
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({
+    name: '@happier-dev/cli', type: 'module', exports: {},
+    scripts: { 'managed-runtime:build': 'node -e "require(\'fs\').appendFileSync(\'built.txt\', \'built\\n\')"' },
+  }));
+  const stateName = '.pnpm-task-run-state-v1';
+  // Both workspace and root installs can already contain pnpm's mutable state.
+  for (const directory of ['', 'apps/cli']) {
+    const modules = join(repoDir, directory, 'node_modules');
+    await mkdir(join(modules, stateName), { recursive: true });
+    await writeFile(join(modules, stateName, 'sentinel'), 'source state');
+  }
+  const tool = join(repoDir, 'node_modules/fixture-tool');
+  await mkdir(tool);
+  await writeFile(join(tool, 'index.js'), 'module.exports = 42;');
+  const outputDir = fixture.path('capture');
+  await captureSourceWebBuildInputs({ repoDir, outputDir, component: 'daemon' });
+  for (let run = 0; run < 2; run += 1) {
+    // Use the actual installed pnpm safety check, not a duplicate validator.
+    execPnpm(['--filter', '@happier-dev/cli', 'run', 'managed-runtime:build'], {
+      cwd: outputDir, encoding: 'utf8', stdio: 'pipe', preferPath: true,
+    });
+  }
+  assert.equal(await readFile(join(outputDir, 'apps/cli/built.txt'), 'utf8'), 'built\nbuilt\n');
+  assert.equal(existsSync(join(repoDir, 'apps/cli/built.txt')), false);
+  const capturedState = join(outputDir, 'node_modules', stateName);
+  assert.equal((await fs.promises.lstat(capturedState)).isDirectory(), true);
+  assert.equal((await fs.promises.lstat(capturedState)).isSymbolicLink(), false);
+  for (const directory of ['', 'apps/cli']) {
+    const source = join(repoDir, directory, 'node_modules', stateName);
+    const captured = join(outputDir, directory, 'node_modules', stateName);
+    assert.deepEqual(await readdir(source), ['sentinel']);
+    assert.equal(await readFile(join(source, 'sentinel'), 'utf8'), 'source state');
+    if (existsSync(captured)) {
+      assert.equal((await fs.promises.lstat(captured)).isSymbolicLink(), false);
+      assert.notEqual(await realpath(captured), await realpath(source));
+      assert.equal(existsSync(join(captured, 'sentinel')), false);
+    }
+  }
+  assert.equal(await realpath(join(outputDir, 'node_modules/fixture-tool')), await realpath(tool),
+    'installed dependency payloads remain linked rather than copied');
+});
 
 test('every component captures the projection path owner imported by source tooling', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-source-projection-owner-' });
@@ -75,6 +122,8 @@ test('component capture includes newly discovered bundled plugins and their work
   // The generated catalog has admitted a plugin absent from CLI dependencies.
   await writeFile(join(cliDir, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
   await writeFile(join(cliDir, 'src/index.ts'), 'export const cli = true;');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const [directory, manifest] of [
     ['packages/plugins/new-plugin', { name: '@happier-dev/plugins-new-plugin',
       exports: { '.': { 'happier-source': './src/index.ts' } },
@@ -99,6 +148,9 @@ test('component capture includes newly discovered bundled plugins and their work
 
   for (const component of ['daemon', 'expo']) {
     const inputs = await readSourceComponentBuildInputs({ repoDir, component });
+    assert.ok(inputs.files.includes('pnpm-lock.yaml'), 'capture includes dependency resolution');
+    assert.ok(inputs.files.includes('pnpm-workspace.yaml'), 'capture includes package-manager policy');
+    assert.ok(inputs.watchPaths.includes(join(repoDir, 'pnpm-workspace.yaml')), 'policy changes invalidate the source runtime');
     assert.ok(inputs.files.includes('packages/plugins/new-plugin/src/index.ts'), component);
     assert.ok(inputs.files.includes('packages/plugin-support/src/index.ts'), 'plugin dependency closure');
     assert.ok(inputs.watchPaths.includes(join(repoDir, 'packages/plugins/new-plugin/src')), 'watcher shares capture membership');
@@ -242,6 +294,9 @@ test('source edits refresh the inventory module consumed by a running Metro', as
   await import('../../../../packages/cli-common/registerSourceRuntime.mjs');
   const { CHANNEL_STATE_COLLECTION } = await import(pathToFileURL(join(repoRoot, 'packages/plugins/channels/src/collections.ts')));
   await cp(join(sourceRepo, 'apps/ui/tools'), join(repoRoot, 'apps/ui/tools'), { recursive: true });
+  // This fixture also runs interactive UI preparation, whose real dependency
+  // verifier reads the root patch inputs declared by pnpm-workspace.yaml.
+  await cp(join(sourceRepo, 'patches'), join(repoRoot, 'patches'), { recursive: true });
   await cp(join(sourceRepo, 'apps/stack/bin'), join(repoRoot, 'apps/stack/bin'), { recursive: true });
   const cliManifestPath = join(repoRoot, 'apps/cli/package.json');
   const cliManifest = JSON.parse(await readFile(cliManifestPath, 'utf8'));
@@ -1118,7 +1173,8 @@ async function installSourcePreparationInputs(repoDir, component) {
   // fixture roots must not replace the source failure each test exercises.
   await mkdir(join(repoDir, 'scripts/workspaces'), { recursive: true });
   await mkdir(join(repoDir, 'apps/stack/scripts/build'), { recursive: true });
-  if (!existsSync(join(repoDir, 'yarn.lock'))) await writeFile(join(repoDir, 'yarn.lock'), '');
+  if (!existsSync(join(repoDir, 'pnpm-lock.yaml'))) await writeFile(join(repoDir, 'pnpm-lock.yaml'), '');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   if (component !== 'daemon') return;
   const sdk = join(repoDir, 'packages/plugin-sdk/package.json');
   if (existsSync(sdk) && JSON.parse(await readFile(sdk, 'utf8')).happier?.publicSdkRelease) {
@@ -1702,6 +1758,7 @@ test('source daemon stages its bundled CPX executable from captured current sour
   const managedBuildScript = JSON.parse(await readFile(join(canonicalRepo, 'packages/plugins/cliproxyapi/package.json'), 'utf8'))
     .scripts['managed-runtime:build'];
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] }));
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n  - packages/plugins/*\n');
   await symlink(join(canonicalRepo, 'node_modules'), join(repoDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   const commonRoot = join(canonicalRepo, 'packages/cli-common');
   await captureBuildInputFiles({ sourceDir: commonRoot, captureDir: join(repoDir, 'packages/cli-common'),
@@ -1789,7 +1846,8 @@ test('shared source daemon preparation rejoins joint admission after a queued la
   await writeFile(join(cliDir, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module', exports: {} }));
   await writeFile(join(cliDir, 'tsconfig.json'), '{}');
   await writeFile(join(cliDir, 'src/index.ts'), 'export const ready = true;');
-  await writeFile(join(repoDir, 'yarn.lock'), '');
+  await writeFile(join(repoDir, 'pnpm-lock.yaml'), '');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const name of ['packages', 'node_modules']) await symlink(join(canonicalRepo, name), join(repoDir, name), 'dir');
   await cp(join(canonicalRepo, 'apps/cli/native/processcustody'), join(cliDir, 'native/processcustody'), { recursive: true });
   await installSourcePreparationInputs(repoDir, 'daemon');

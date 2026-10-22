@@ -20,7 +20,8 @@ describe('CLI test global setup', () => {
         const projectRoot = join(repoRoot, 'apps', 'cli');
         await mkdir(projectRoot, { recursive: true });
         await writeFile(join(repoRoot, 'package.json'), '{}');
-        await writeFile(join(repoRoot, 'yarn.lock'), '');
+        await writeFile(join(repoRoot, 'pnpm-lock.yaml'), '');
+        await writeFile(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
         const executablePath = join(projectRoot, 'tools', 'unpacked',
             `happier-process-custody${process.platform === 'win32' ? '.exe' : ''}`);
         // The Go process is the system boundary; setup, staging and publication

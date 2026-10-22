@@ -813,6 +813,18 @@ The host correlates it with the preceding tool-start event and requests approval
 through the canonical host handler; unrelated dialogs remain questions. Unknown,
 duplicate or retired call ids fail closed. Shutdown closes the connections and
 removes the private config. This does not introduce a daemon MCP proxy.
+The Pi extension registers original shared parameter documents, checking
+document-local JSON Pointer targets before either native-bridge or user-MCP
+catalog registration. Missing targets refuse registration. At Pi's supported
+`before_provider_request` hook, only non-strict Anthropic tool schemas are
+repaired from canonical `getAllTools()` parameters filtered by `getActiveTools()`
+before matching the serializer's tool names. Inactive definitions cannot shadow
+an active tool after OAuth casing changes. The complete document,
+including root constraints, `$defs`, `definitions` and recursive references,
+survives the serializer. OpenAI and Google retain the original shared schemas.
+Native OAuth tool names and request metadata are preserved. This is a Pi-owned
+presentation adapter; authoritative Action and external Tool input validation
+remains at its existing owner, and strict sampling is not forced.
 Every Happier Pi launch includes `--approve`, so the user-selected project also
 loads its native skills, extensions and settings. Live vendor and Windows checks
 remain separate from the source tests.
@@ -1087,6 +1099,17 @@ current-language cache or retained admission snapshot.
 
 ## Session current-Agent identity
 
+In 0.3 development source, Session chrome reads identity through
+`readSessionPresentationAgentId`: legacy metadata delegates to the shared Agent
+resolver, while privacy layout 1 uses only the shared `agentPresentation` fact.
+Compact list rows resolve legacy identity before discarding runtime descriptors
+and vendor resume keys, storing the result in their existing `flavor` field.
+A matching hydrated Session outranks an older compact cache even at the same
+metadata revision. Lists, header and lateral navigation retain that presentation
+identity; absent evidence stays neutral. Composer policy defaults do not brand
+an unknown existing Session, while an explicit new-session selection or armed
+continuation target supplies the outbound control's identity.
+
 A Session declares exactly one current Agent. Bundled Agents carry only that Agent's released flat
 vendor resume key; contributed Agents use the generic native-resume identity carrier. A view holding
 multiple bundled keys has no authoritative identity; before this rule had an owner, such a Session
@@ -1307,13 +1330,18 @@ Readiness consumes that registry projection's executable fact; it does not apply
 a second candidate-count rule to the Home-wide settings union.
 In development source, Account-scoped Connected accounts settings and registry
 rows compare declaration facts without machine-local runtime `occurrenceId` stamps.
-Equal declarations collapse across machines and restarts; genuinely divergent
-declarations remain non-executable conflicts. Raw machine publications retain their
-occurrences for exact-runtime admission. For Account-scoped add and configuration
+For an exact known first-party bundled Connected Account contribution, the generated
+bundled declaration supplies Account declaration facts; Machine publications supply
+availability and diagnostics. This exception requires `provenance: first_party`,
+`sourceKind: bundled` and the exact known plugin/contribution key. It does not apply
+to installed external plugins or unknown bundled keys. Other declarations must agree
+on their content: equal declarations collapse across machines and restarts, while
+genuinely divergent declarations remain non-executable conflicts. Raw machine
+publications retain their occurrences for exact-runtime admission. For Account-scoped add and configuration
 actions, one valid answering Machine can supply a service while the census is
 incomplete. The registry marks that entry ready only when the answering Machines
-agree on its exact identity; token/OAuth execution also requires its available
-descriptor. The Account snapshot remains loading or stale, with its existing
+agree on its exact identity under that declaration rule; token/OAuth execution also
+requires its available descriptor. The Account snapshot remains loading or stale, with its existing
 freshness and failure facts. Retained services without an answering supplier stay
 visible but non-executable, and an answering identity divergence blocks only that
 service. Partial reads refresh answered identities and their conflict facts while
@@ -1723,6 +1751,14 @@ contribution provides discovery, linking, and transcript source semantics; it
 does not own hosted runtime lifecycle, follow demand, materialization, or
 takeover admission.
 
+Connected-service snapshot recovery for a linked External Session requires a
+marker for the same Agent and exact native conversation identity. Sharing a
+working directory does not authorize borrowing another Session's credentials or
+materialization identity; an exact conversation match remains valid after a
+directory change. Linking retains historical stored identities: their shape does
+not identify a donor, so this recovery step does not blindly regenerate identities
+or move private Agent state.
+
 In 0.3 development, an optional `readAccounting` facet on that same contribution
 reads normalized numeric accounting with a source-owned cursor. Its strict result
 distinguishes unchanged, advanced, replacement, gap, unavailable and failure.
@@ -1838,6 +1874,19 @@ surface. Bundled and externally loaded plugins use the same contribution,
 invocation, and host-access contract. The six callback methods and the six
 `services.sessions.external` operations remain unchanged; `exec` is an
 invocation input, not a seventh method or service operation.
+
+In current 0.3 development source, Codex External Sessions paging and follow share
+one transcript-source selection in the plugin. Legacy rollout storage remains the
+first choice; missing or paginated rollout storage uses read-only native
+`thread/items/list` pagination through the invocation's existing `exec` service.
+Listing previews never become transcript rows. An empty native head alongside a
+paginated rollout is unavailable: Codex can recreate an empty SQL projection
+without its original history. Unavailable history, unsupported
+native item families and non-text user content fail explicitly, so materialization
+cannot report a partial transcript as complete. Native cursors retain the admitted
+home and provider item identities. Connected-account native reads pin SQLite to
+the admitted home: the current state-sharing declaration shares rollout entries,
+not ambient user SQLite storage. This adds no SDK service or host-side Codex policy.
 
 Three optional same-Agent siblings add narrower capabilities without creating another Agent or Provider catalog:
 
@@ -2015,15 +2064,15 @@ For External Sessions, keep Agent-native source parsing, cursor/revision semanti
 Repo-local:
 
 ```bash
-yarn typecheck
-yarn test
+pnpm run typecheck
+pnpm run test
 ```
 
 Scoped:
 
 ```bash
-yarn --cwd apps/cli typecheck
-yarn --cwd apps/ui typecheck
+pnpm --dir apps/cli run typecheck
+pnpm --dir apps/ui run typecheck
 ```
 
 If you’re running this repo via happy-stacks, prefer:

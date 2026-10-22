@@ -29,7 +29,7 @@ import * as tar from 'tar';
 import {
   CLI_BINARY_TARGETS,
   execOrThrow,
-  resolveYarnCommand,
+  resolvePnpmCommand,
   stageCliProxyApiManagedRuntime,
   stageProcessCustodyRuntime,
 } from '@happier-dev/cli-common/componentArtifacts';
@@ -93,7 +93,7 @@ export async function stageManagedRuntimeArchives({
   platformDirs,
   repoRoot = REPO_ROOT,
   runCommand = execOrThrow,
-  yarn = resolveYarnCommand({}),
+  yarn = resolvePnpmCommand({}),
   stageManagedRuntime = stageCliProxyApiManagedRuntime,
   stageProcessCustody = stageProcessCustodyRuntime,
 } = {}) {

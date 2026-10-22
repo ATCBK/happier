@@ -32,7 +32,7 @@ test('bootstrapExtensionPackage boots the canonical definePlugin authoring templ
     scripts: Record<string, string>;
   };
   assert.equal(pkgJson.name, '@happier-dev/plugins-codex');
-  assert.equal(pkgJson.scripts['build:finite'], 'yarn -s build');
+  assert.equal(pkgJson.scripts['build:finite'], 'pnpm --silent run build');
   assert.equal(
     pkgJson.scripts['project:finite'],
     'node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs',

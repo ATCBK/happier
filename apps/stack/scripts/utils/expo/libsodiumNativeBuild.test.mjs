@@ -33,7 +33,8 @@ test('ensureReactNativeLibsodiumNativeBuild repairs a partial XCFramework missin
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(root, 'apps', 'ui', 'node_modules', '@more-tech', 'react-native-libsodium');
   const libsodiumDir = join(packageDir, 'libsodium');

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 
-import { resolveNpmCommandInvocation, resolveYarnCommandInvocation, type CommandInvocation } from './commands';
+import { resolveNpmCommandInvocation, resolvePnpmCommandInvocation, type CommandInvocation } from './commands';
 import { collectDescendantPids, terminateProcessTreeByPid } from './processTree';
 
 export type SpawnedProcess = {
@@ -114,8 +114,8 @@ function waitForStreamDrain(stream: NodeJS.WritableStream, timeoutMs = 10_000): 
 
 function resolveSpawnCommandInvocation(command: string, args: readonly string[], env?: NodeJS.ProcessEnv): CommandInvocation {
   const normalized = command.trim().toLowerCase();
-  if (normalized === 'yarn' || normalized === 'yarn.cmd') {
-    return resolveYarnCommandInvocation(args, { npmExecPath: env?.npm_execpath });
+  if (normalized === 'pnpm' || normalized === 'pnpm.cmd') {
+    return resolvePnpmCommandInvocation(args, { npmExecPath: env?.npm_execpath });
   }
   if (normalized === 'npm' || normalized === 'npm.cmd') {
     return resolveNpmCommandInvocation(args, { npmExecPath: env?.npm_execpath });

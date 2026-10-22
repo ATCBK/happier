@@ -1,4 +1,5 @@
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -71,6 +72,33 @@ export async function installNativeAdmissionFixture({ root, admissionRoot = join
   await mkdir(footprint, { recursive: true });
   await writeFile(join(footprint, 'native-admission-disk-input.fixture'),
     'Owned filesystem bytes for native admission resource observations only.\n');
+  // npm's registry/archive process and the installed pnpm executable are external
+  // boundaries. Keep setup-pnpm's pin parsing, archive verification and readiness
+  // checks real, without network access or a global package installation.
+  const archive = 'native admission package-manager archive fixture\n';
+  const { packageManager: sourcePackageManager } = JSON.parse(await readFile(join(sourceRoot, 'package.json'), 'utf8'));
+  const version = /^pnpm@([^+]+)/u.exec(sourcePackageManager)[1];
+  const packageManager = `pnpm@${version}+sha512.${createHash('sha512').update(archive).digest('hex')}`;
+  const packageBin = join(checkout, '.fixture-pnpm/bin');
+  await mkdir(packageBin, { recursive: true });
+  await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, packageManager }));
+  await writeFile(join(checkout, 'pnpm-lock.yaml'), '# dependency-free native worker fixture\n');
+  await writeFile(join(checkout, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
+  writeFakeBin({ root: checkout, binDirName: '.fixture-pnpm/bin', name: 'npm', content: `#!/bin/sh
+[ "\${1-}" = pack ] || exit 97
+destination=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --pack-destination ]; then shift; destination=$1; fi
+  shift
+done
+[ -n "$destination" ] || exit 98
+printf '%s' '${archive}' > "$destination/pnpm-fixture.tgz"
+printf '[{"filename":"pnpm-fixture.tgz"}]\\n'
+` });
+  writeFakeBin({ root: checkout, binDirName: '.fixture-pnpm/bin', name: 'pnpm', content: `#!/bin/sh
+[ "$#:\${1-}" = '1:--version' ] || exit 97
+printf '%s\\n' '${version}'
+` });
   const launcher = join(bin, 'hstack-exec');
   await Promise.all([
     copyFile(join(sourceRoot, 'apps/stack/bin/hstack-exec'), launcher),
@@ -85,8 +113,12 @@ export async function installNativeAdmissionFixture({ root, admissionRoot = join
   // because Node resolves import.meta.url to the original module's real path.
   for (const entry of ['remote_dependency_bootstrap.mjs', 'remote_validation_preparation.mjs', 'native_execution_projection.mjs']) {
     const canonicalEntry = join(sourceRoot, 'apps/stack/scripts/utils/dev_targets', entry);
-    await writeFile(join(targets, entry), `process.argv[1] = ${JSON.stringify(canonicalEntry)}; await import(${JSON.stringify(pathToFileURL(canonicalEntry).href)});\n`);
+    const packageEnvironment = entry === 'remote_dependency_bootstrap.mjs'
+      ? `process.env.PATH = ${JSON.stringify(packageBin)} + ':' + process.env.PATH; delete process.env.npm_execpath;\n` : '';
+    await writeFile(join(targets, entry), `${packageEnvironment}process.argv[1] = ${JSON.stringify(canonicalEntry)}; await import(${JSON.stringify(pathToFileURL(canonicalEntry).href)});\n`);
   }
+  const dependencyRefresh = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/proc/dependency_refresh.mjs')).href;
+  await writeFile(join(proc, 'dependency_refresh.mjs'), `export * from ${JSON.stringify(dependencyRefresh)};\n`);
   const state = await readFile(join(sourceRoot, 'apps/stack/scripts/utils/proc/native_host_admission_state.sh'), 'utf8');
   const quoted = `'${admissionRoot.replaceAll("'", "'\\''")}'`;
   await writeFile(join(proc, 'native_host_admission_state.sh'), state.replace(/'\/tmp\/happier-heavyweight-admission-v\d+'/, quoted));
@@ -118,8 +150,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     // readiness/graph owners without reading or repairing the runner's tree.
     await mkdir(join(checkout, 'node_modules'), { recursive: true });
     await mkdir(join(checkout, 'scripts/workspaces'), { recursive: true });
-    await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'yarn@1.22.22' }));
-    await writeFile(join(checkout, 'yarn.lock'), '# dependency-free native worker fixture\n');
     for (const component of ['stack', 'cli', 'ui', 'server']) {
       await mkdir(join(checkout, 'apps', component), { recursive: true });
       await writeFile(join(checkout, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}`, private: true }));

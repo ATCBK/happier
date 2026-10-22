@@ -83,7 +83,6 @@
     "sources/__tests__/config/metro.reactNativeWebShim.test.ts",
     "sources/__tests__/config/syncLazyGraphBoundary.test.ts",
     "sources/__tests__/config/tauriConfig.microphoneAccess.test.ts",
-    "sources/__tests__/install/ensureNohoistPeerLinks.test.ts",
     "sources/__tests__/install/resolveUiPostinstallTasks.test.ts",
     "sources/__tests__/install/shouldRunPostinstall.test.ts",
     "sources/__tests__/routes/(app)/account.legacyRedirect.spec.tsx",

@@ -9,11 +9,11 @@ function getScriptPath(): string {
 }
 
 async function writeFakeYarn(params: Readonly<{ dir: string; logPath: string }>): Promise<string> {
-  const yarnPath = join(params.dir, 'yarn');
+  const yarnPath = join(params.dir, 'pnpm');
   const statePath = join(params.dir, 'yarn-state');
   const content = `#!/bin/sh
 set -e
-echo "YARN $@" >> "${params.logPath}"
+echo "PNPM $@" >> "${params.logPath}"
 echo "ENV DATABASE_URL=$DATABASE_URL" >> "${params.logPath}"
 if echo "$*" | grep -Eq "migrate:deploy"; then
   state_path="${statePath}"
@@ -104,8 +104,8 @@ describe('run-server.sh', () => {
     });
     expect(res.status).toBe(0);
     const lines = await readLogLines(logPath);
-    const yarnLines = lines.filter((l) => l.startsWith('YARN '));
-    expect(yarnLines.join('\n')).toContain('YARN --cwd apps/server start:light');
+    const yarnLines = lines.filter((l) => l.startsWith('PNPM '));
+    expect(yarnLines.join('\n')).toContain('PNPM --dir apps/server run start:light');
   });
 
   it('runs the canonical full migration deploy for postgres then starts full flavor by default', async () => {
@@ -123,9 +123,9 @@ describe('run-server.sh', () => {
     });
     expect(res.status).toBe(0);
     const lines = await readLogLines(logPath);
-    const yarnLines = lines.filter((l) => l.startsWith('YARN '));
-    expect(yarnLines[0]).toContain('YARN --cwd apps/server migrate:deploy');
-    expect(yarnLines[yarnLines.length - 1]).toContain('YARN --cwd apps/server start');
+    const yarnLines = lines.filter((l) => l.startsWith('PNPM '));
+    expect(yarnLines[0]).toContain('PNPM --dir apps/server run migrate:deploy');
+    expect(yarnLines[yarnLines.length - 1]).toContain('PNPM --dir apps/server run start');
   });
 
   it('retries transient postgres connectivity failures before starting', async () => {
@@ -145,9 +145,9 @@ describe('run-server.sh', () => {
     });
     expect(res.status).toBe(0);
     const lines = await readLogLines(logPath);
-    const yarnLines = lines.filter((l) => l.startsWith('YARN '));
+    const yarnLines = lines.filter((l) => l.startsWith('PNPM '));
     expect(yarnLines.filter((l) => l.includes('migrate:deploy'))).toHaveLength(2);
-    expect(yarnLines[yarnLines.length - 1]).toContain('YARN --cwd apps/server start');
+    expect(yarnLines[yarnLines.length - 1]).toContain('PNPM --dir apps/server run start');
   });
 
   it('runs migrate deploy with the mysql schema when HAPPIER_DB_PROVIDER=mysql', async () => {
@@ -165,8 +165,8 @@ describe('run-server.sh', () => {
     });
     expect(res.status).toBe(0);
     const lines = await readLogLines(logPath);
-    const yarnLines = lines.filter((l) => l.startsWith('YARN '));
-    expect(yarnLines[0]).toContain('YARN --cwd apps/server migrate:deploy');
+    const yarnLines = lines.filter((l) => l.startsWith('PNPM '));
+    expect(yarnLines[0]).toContain('PNPM --dir apps/server run migrate:deploy');
   });
 
   it('runs the canonical sqlite deploy owner and derives DATABASE_URL from HAPPIER_SERVER_LIGHT_DATA_DIR when missing', async () => {
@@ -188,10 +188,10 @@ describe('run-server.sh', () => {
     });
     expect(res.status).toBe(0);
     const lines = await readLogLines(logPath);
-    const yarnLines = lines.filter((l) => l.startsWith('YARN '));
-    expect(yarnLines[0]).toContain('YARN --cwd apps/server migrate:deploy');
+    const yarnLines = lines.filter((l) => l.startsWith('PNPM '));
+    expect(yarnLines[0]).toContain('PNPM --dir apps/server run migrate:deploy');
     expect(lines.join('\n')).toContain('ENV DATABASE_URL=file:///data/server-light/happier-server-light.sqlite?socket_timeout=30&connection_limit=4');
-    expect(yarnLines[yarnLines.length - 1]).toContain('YARN --cwd apps/server start:light');
+    expect(yarnLines[yarnLines.length - 1]).toContain('PNPM --dir apps/server run start:light');
   });
 
   it('runs the packaged postgres migration owner before either preset starts', async () => {

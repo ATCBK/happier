@@ -198,7 +198,7 @@ export function formatVendoredReanimatedPatchFailure(result) {
     lines.push('This usually means the patch was regenerated against a partially-reverted node_modules,');
     lines.push('or an upstream bump moved the code the fix lives in.');
     lines.push('Do NOT hand-edit the .patch file. Restore the behaviour in node_modules, then run:');
-    lines.push('  npx patch-package react-native-reanimated');
+    lines.push('  pnpm patch react-native-reanimated; pnpm patch-commit <edit-directory>');
     return lines.join('\n');
 }
 

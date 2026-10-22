@@ -111,7 +111,7 @@ function maybeLinkNodeModulesIntoStage({ repoRoot, stagedRepoDir, dryRun }) {
   for (const link of links) {
     if (fs.existsSync(link.dest)) continue;
     if (!fs.existsSync(link.src)) {
-      fail(`[pipeline] Missing node_modules at ${link.src}. Run 'yarn install' before running EAS local builds.`);
+      fail(`[pipeline] Missing node_modules at ${link.src}. Run 'pnpm install' before running EAS local builds.`);
     }
     if (dryRun) {
       console.log(`[dry-run] ln -s ${link.src} ${link.dest}`);

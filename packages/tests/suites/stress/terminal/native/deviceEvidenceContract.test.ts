@@ -1122,7 +1122,7 @@ describe('stress: TERM-7b evidence contract v2', () => {
   it('produces a canonical source-state inventory from a build root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'term-source-state-'));
     try {
-      for (const file of ['app.json', 'package.json', 'yarn.lock', 'apps/ui/index.ts', 'packages/example/index.ts', 'scripts/example.mjs']) {
+      for (const file of ['app.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/ui/index.ts', 'packages/example/index.ts', 'scripts/example.mjs']) {
         mkdirSync(dirname(join(root, file)), { recursive: true });
         writeFileSync(join(root, file), file);
       }
@@ -1131,7 +1131,7 @@ describe('stress: TERM-7b evidence contract v2', () => {
       const report = JSON.parse(readFileSync(output, 'utf8'));
       expect(report).toMatchObject({ schemaVersion: 1, kind: 'terminal-native-source-state', sourceCommit: COMMIT, sourceDirty: true });
       expect(report.inventory.map((entry: { path: string }) => entry.path)).toEqual([
-        'app.json', 'apps/ui/index.ts', 'package.json', 'packages/example/index.ts', 'scripts/example.mjs', 'yarn.lock',
+        'app.json', 'apps/ui/index.ts', 'package.json', 'packages/example/index.ts', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/example.mjs',
       ]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

@@ -47,7 +47,7 @@ test('root scripts own the shared workspace unit lane consumed by CI', async () 
     45,
     'the complete shared-package sweep measured 18m27s locally, so its hosted budget must include setup and runner variance',
   );
-  assert.match(commands, /yarn -s test:shared-packages --mode ci/);
+  assert.match(commands, /pnpm run test:shared-packages --mode ci/);
   assert.equal(packageJson.scripts['test:shared-packages'], 'apps/stack/bin/hstack-exec --script=test:shared-packages:local');
   assert.equal(sharedScript, 'node --experimental-strip-types scripts/testing/runSharedPackageTests.ts');
   for (const workspace of [
@@ -61,12 +61,12 @@ test('root scripts own the shared workspace unit lane consumed by CI', async () 
     '@happier-dev/website',
   ]) {
     assert.ok(sharedCommands.some(({ args }) =>
-      args[0] === 'workspace' && args[1] === workspace && args[2] === 'test'), `${workspace} must run through the canonical shared owner`);
+      args[0] === '--filter' && args[1] === workspace && args[2] === '--silent' && args[3] === 'run' && args[4] === 'test'), `${workspace} must run through the canonical shared owner`);
   }
   assert.ok(sharedCommands.some(({ args }) =>
-    args[0] === 'workspace' && args[1] === '@happier-dev/tests' && args[2] === 'test:scripts:self'));
-  assert.doesNotMatch(commands, /yarn[^\n]*test:shared-packages:local/);
-  assert.doesNotMatch(commands, /yarn workspace privacy-kit test\n/,
+    args[0] === '--filter' && args[1] === '@happier-dev/tests' && args[2] === '--silent' && args[3] === 'run' && args[4] === 'test:scripts:self'));
+  assert.doesNotMatch(commands, /pnpm[^\n]*test:shared-packages:local/);
+  assert.doesNotMatch(commands, /pnpm --filter privacy-kit run test\n/,
     'the workflow must consume the root-owned list instead of maintaining a second package list');
 });
 

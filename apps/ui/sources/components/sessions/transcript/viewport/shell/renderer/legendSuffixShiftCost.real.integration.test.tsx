@@ -149,7 +149,7 @@ function resolveInstalledWebBuild(): string {
             dirname(require.resolve('@legendapp/list/react-native')),
             'react-native.web.mjs',
         ),
-        (): string => resolvePath(process.cwd(), 'node_modules/@legendapp/list/react-native.web.mjs'),
+        (): string => resolvePath(process.cwd(), '../../node_modules/@legendapp/list/react-native.web.mjs'),
     ];
     for (const candidate of candidates) {
         try {

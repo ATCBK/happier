@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
 describe('server runtime TypeScript inputs', () => {
@@ -50,8 +50,8 @@ describe('server runtime TypeScript inputs', () => {
             );
             writeFileSync(generatedMarkerPath, 'ready\n', 'utf8');
 
-            const invocation = resolveYarnCommandInvocation(
-                ['-s', 'typecheck:runtime'],
+            const invocation = resolvePnpmCommandInvocation(
+                ['--silent', 'run', 'typecheck:runtime'],
                 { npmExecPath: process.env.npm_execpath },
             );
             const result = spawnSync(invocation.command, invocation.args, {

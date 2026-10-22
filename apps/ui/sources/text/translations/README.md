@@ -44,16 +44,16 @@ module a locale delegates to actually carries that locale.
 cd apps/ui
 
 # 1. Offer every translatable string — main tree AND shared modules.
-yarn i18n:locale:extract -- --locale fr --out /tmp/fr.todo.json
+pnpm run i18n:locale:extract --locale fr --out /tmp/fr.todo.json
 
 # 2. Fill in the translations: { "<key>": "<translation>" }.
 
 # 3. Check the map before it touches the repo.
-yarn i18n:locale:verify -- --translations /tmp/fr.json
+pnpm run i18n:locale:verify --translations /tmp/fr.json
 
 # 4. Preview, diff, then write. Without --out it also writes the shared modules.
-yarn i18n:locale:build -- --locale fr --translations /tmp/fr.json --out /tmp/fr.preview.ts
-yarn i18n:locale:build -- --locale fr --translations /tmp/fr.json
+pnpm run i18n:locale:build --locale fr --translations /tmp/fr.json --out /tmp/fr.preview.ts
+pnpm run i18n:locale:build --locale fr --translations /tmp/fr.json
 ```
 
 Building only writes translation files. Registering the locale is three edits, each a deliberate

@@ -32,8 +32,8 @@ test('stack migration dispatch uses the direct child connection while runtime st
     const env = { ...process.env, HAPPIER_DB_PROVIDER: 'postgres',
       DATABASE_URL: 'runtime-connection', DIRECT_URL: directUrl, npm_execpath: yarnBoundary };
     await applyHappyServerMigrations({ serverDir, env }, {
-      pmExecBinImpl: async input => {
-        assert.equal(input.bin, 'migrate:deploy');
+      pmExecScriptImpl: async input => {
+        assert.equal(input.script, 'migrate:deploy');
         const result = spawnSync(process.execPath, ['--import', 'tsx', resolve(serverDir, 'scripts/migrate.deploy.ts')], {
           cwd: serverDir, env: input.env, encoding: 'utf8',
         });
@@ -278,12 +278,12 @@ test('applyHappyServerMigrations delegates mysql to the canonical provider dispa
   await applyHappyServerMigrations(
     { serverDir: '/server', env, dbProvider: 'mysql', quiet: true },
     {
-      pmExecBinImpl: async (input) => calls.push(input),
+      pmExecScriptImpl: async (input) => calls.push(input),
     },
   );
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].bin, 'migrate:deploy');
+  assert.equal(calls[0].script, 'migrate:deploy');
   assert.deepEqual(calls[0].args, []);
   assert.equal(calls[0].dir, '/server');
   assert.deepEqual(calls[0].env, env);
@@ -295,21 +295,21 @@ test('applyHappyServerMigrations delegates every provider to one canonical dispa
   await applyHappyServerMigrations(
     { serverDir: '/server', env: { HAPPIER_DB_PROVIDER: 'postgres' }, dbProvider: 'postgres' },
     {
-      pmExecBinImpl: async (input) => calls.push(input),
+      pmExecScriptImpl: async (input) => calls.push(input),
     },
   );
-  assert.equal(calls[0].bin, 'migrate:deploy');
+  assert.equal(calls[0].script, 'migrate:deploy');
   assert.deepEqual(calls[0].args, []);
 
   await applyHappyServerMigrations(
     { serverDir: '/server', env: { HAPPIER_DB_PROVIDER: 'sqlite' }, dbProvider: 'sqlite' },
-    { pmExecBinImpl: async (input) => calls.push(input) },
+    { pmExecScriptImpl: async (input) => calls.push(input) },
   );
   await applyHappyServerMigrations(
     { serverDir: '/server', env: { HAPPIER_DB_PROVIDER: 'pglite' }, dbProvider: 'pglite' },
-    { pmExecBinImpl: async (input) => calls.push(input) },
+    { pmExecScriptImpl: async (input) => calls.push(input) },
   );
-  assert.equal(calls[1].bin, 'migrate:deploy');
-  assert.equal(calls[2].bin, 'migrate:deploy');
+  assert.equal(calls[1].script, 'migrate:deploy');
+  assert.equal(calls[2].script, 'migrate:deploy');
   assert.deepEqual(calls.map((call) => call.env.HAPPIER_DB_PROVIDER), ['postgres', 'sqlite', 'pglite']);
 });

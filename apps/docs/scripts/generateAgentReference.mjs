@@ -26,7 +26,7 @@
  * states the opposite of the truth. The mode columns below describe where an
  * agent's modes come from instead, which is the fact the flag was standing in for.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

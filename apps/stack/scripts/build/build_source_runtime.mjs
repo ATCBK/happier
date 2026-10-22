@@ -953,9 +953,9 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
           await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/commands.ts')],
             outfile: commandsPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
           const { stageCliProxyApiManagedRuntime } = await import(pathToFileURL(ownerPath).href);
-          const { resolveYarnCommand } = await import(pathToFileURL(commandsPath).href);
+          const { resolvePnpmCommand } = await import(pathToFileURL(commandsPath).href);
           const staged = await stageCliProxyApiManagedRuntime({ repoRoot: repoDir, payloadDir: runtimeDir,
-            target, yarn: resolveYarnCommand(), runCommand });
+            target, pnpm: resolvePnpmCommand(), runCommand });
           retainedCodeFiles.push(staged.executablePath, staged.licensePath, staged.thirdPartyNoticesPath);
         }
       } finally { await rm(preparationDir, { recursive: true, force: true }); }

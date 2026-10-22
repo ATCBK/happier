@@ -52,11 +52,11 @@ test('tauri onboarding wizard QA exposes a deterministic capture plan', async ()
     ],
   );
   assert.equal(payload.plan.steps.find((step) => step.id === 'welcome_back')?.screenshot, '04-welcome-back.png');
-  assert.equal(payload.plan.commandRunner.command, 'yarn');
-  assert.deepEqual(payload.plan.commandRunner.baseArgs, ['-s', 'tauri:mcp:cli']);
+  assert.equal(payload.plan.commandRunner.command, 'pnpm');
+  assert.deepEqual(payload.plan.commandRunner.baseArgs, ['--silent', 'run', 'tauri:mcp:cli']);
   assert.deepEqual(payload.plan.timeouts, { selectorWaitMs: 8000, cliSelectorWaitTimeoutMs: 20000, cliInteractTimeoutMs: 20000 });
-  assert.equal(payload.plan.driverSession.command, 'yarn');
-  assert.deepEqual(payload.plan.driverSession.baseArgs, ['-s', 'tauri:mcp:cli']);
+  assert.equal(payload.plan.driverSession.command, 'pnpm');
+  assert.deepEqual(payload.plan.driverSession.baseArgs, ['--silent', 'run', 'tauri:mcp:cli']);
   assert.deepEqual(payload.plan.driverSession.args, ['driver-session', 'start', '--port', '9225']);
 });
 

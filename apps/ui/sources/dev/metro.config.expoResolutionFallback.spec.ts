@@ -1,3 +1,4 @@
+import { resolveEnrichedMarkdownPackageFile } from '@/dev/testkit/harness/enrichedMarkdownPackage';
 import fs from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -137,10 +138,7 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
                 'react-native-enriched-markdown/lib/module/web/streamingReveal.js',
                 'windows',
             );
-            const expectedPath = path.resolve(
-                __dirname,
-                '../../node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js',
-            );
+            const expectedPath = resolveEnrichedMarkdownPackageFile('lib/module/web/streamingReveal.js');
 
             expect(result).toEqual({ type: 'sourceFile', filePath: expectedPath });
             expect(fs.existsSync(expectedPath)).toBe(true);

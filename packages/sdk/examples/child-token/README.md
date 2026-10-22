@@ -9,7 +9,7 @@ Provide `HAPPIER_API_ENDPOINT`, `HAPPIER_TOKEN`, `HAPPIER_SESSION_ID`,
 `HAPPIER_EMBED_ORIGIN` and `HAPPIER_CHILD_EXPIRES_AT`, then run from the checkout:
 
 ```bash
-yarn tsx packages/sdk/examples/child-token/index.ts
+pnpm exec tsx packages/sdk/examples/child-token/index.ts
 ```
 
 Choose the expiry yourself as a future ISO timestamp no later than the parent's

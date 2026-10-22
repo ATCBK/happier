@@ -252,7 +252,7 @@ async function main() {
   const argvWithoutDryRun = argvRaw.filter((a) => a !== '--dry-run');
 
   // Root script convenience:
-  // `yarn tui` should work from monorepo checkout without additional args.
+  // `pnpm run tui` should work from monorepo checkout without additional args.
   // Default to `hstack tui dev` while preserving explicit forwarded args.
   let argv = argvWithoutDryRun;
   if (argvWithoutDryRun[0] === 'tui') {
@@ -317,7 +317,7 @@ async function main() {
   ) ? runtimeServerPort : null;
 
   // Convenience:
-  // `yarn stop` should stop the repo-local stack without requiring users to know its generated name.
+  // `pnpm run stop` should stop the repo-local stack without requiring users to know its generated name.
   if (isStop) {
     const forwarded = argv.slice(1);
     argv = ['stack', 'stop', stacklessName, ...forwarded];
@@ -331,7 +331,7 @@ async function main() {
   }
 
   // Convenience:
-  // `yarn mobile:install` should install a local iOS build for the repo-local stack without requiring users
+  // `pnpm run mobile:install` should install a local iOS build for the repo-local stack without requiring users
   // to know the generated stack name, and should run the full stack install flow (prebuild, identity, etc).
   if (subcommand === 'mobile:install') {
     const forwarded = argv.slice(1);
@@ -375,7 +375,7 @@ async function main() {
           // Treat repo-local runs as an isolated, per-checkout stack by default.
           // This prevents collisions with the user's "main" stack (ports, daemon home, tailscale prefs, etc).
           HAPPIER_STACK_STACK: stacklessName,
-          // Default to source mode for repo-local dev flows (ensures `yarn tui:with-tauri` reflects local changes
+          // Default to source mode for repo-local dev flows (ensures `pnpm run tui:with-tauri` reflects local changes
           // even if the user previously enabled runtime snapshots). Users can override by setting this env var.
           HAPPIER_STACK_RUNTIME_MODE: runtimeModeRaw || 'source',
           // The repo-local wrapper owns the complete stack identity. Never inherit a runtime-state pointer from
@@ -463,8 +463,8 @@ async function main() {
 	    const expoRange = effectiveEnv.HAPPIER_STACK_EXPO_DEV_PORT_RANGE;
 
 	    // Persist a stable pinned server port early so repo-local "global-ish" commands like
-	    // `yarn tailscale enable` and `yarn service install` can resolve the correct internal URL
-	    // even before the first `yarn dev/start` run creates stack.runtime.json.
+	    // `pnpm run tailscale enable` and `pnpm run service install` can resolve the correct internal URL
+	    // even before the first `pnpm run dev` / `pnpm run start` run creates stack.runtime.json.
 	    let persistedServerPort = null;
 	    if (!existingPinnedServerPort) {
 	      if (retainedServerPort) {
@@ -500,7 +500,7 @@ async function main() {
     }
 
     // Treat the repo-local stack as managed by the wrapper: keep a small set of stack-owned keys in sync,
-    // but preserve any user-defined keys they set via `hstack env` / `yarn env`.
+    // but preserve any user-defined keys they set via `hstack env` / `pnpm run env`.
     const managedEnv = {
       HAPPIER_STACK_STACK: stacklessName,
       HAPPIER_STACK_REPO_DIR: repoRoot,
@@ -576,7 +576,7 @@ async function main() {
       });
     } catch (e) {
       process.stderr.write(`[repo-local] failed to install repo deps\n${String(e?.stack ?? e)}\n`);
-      process.stderr.write('\nFix:\n  corepack enable\n  yarn install\n');
+      process.stderr.write('\nFix:\n  node scripts/ci/setup-pnpm.mjs\n  pnpm install\n');
       process.exit(1);
     }
   }

@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ensureCliBuilt, ensureDepsInstalled, isCliDistFreshForInputs, pmExecBin, readUsableCliDistFreshness } from './pm.mjs';
-import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
+import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
 import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
 import { bootstrapRemoteDependencies } from '../dev_targets/remote_dependency_bootstrap.mjs';
 import { readHappyCliRuntimeInputFreshness } from './cli_runtime_inputs.mjs';
@@ -33,10 +33,11 @@ test('healthy stack startup verifies dependencies without requesting a refresh b
     await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
   }
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n");
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
     HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '' };
   delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
@@ -61,10 +62,11 @@ test('development startup automatically admits stale dependencies through the re
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'node_modules'));
   await writeFile(join(root, 'package.json'), '{"private":true}');
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
     HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
   await ensureDepsInstalled(root, 'fixture', { env });
@@ -232,22 +234,23 @@ function fakeCliDistManifestWriteLine(outputDirExpression, inputFingerprintExpre
   return `  HAPPIER_TEST_CLI_DIST_MANIFEST_MODULE=${shellSingleQuote(CLI_DIST_BUILD_MANIFEST_MODULE_PATH)} HAPPIER_TEST_CLI_DIST_DIR=${outputDirExpression}${capturedInputEnv} ${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(source)}`;
 }
 
-async function writeYarnEnvDumpStub({ binDir, outputPath }) {
+async function writePnpmEnvDumpStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const { writeFileSync } = require('node:fs');",
       "const out = {",
       '  XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? null,',
-      '  YARN_CACHE_FOLDER: process.env.YARN_CACHE_FOLDER ?? null,',
+      '  pnpm_config_store_dir: process.env.pnpm_config_store_dir ?? null,',
+      '  pnpm_config_cache_dir: process.env.pnpm_config_cache_dir ?? null,',
       '  npm_config_cache: process.env.npm_config_cache ?? null,',
       '  REDISMS_DISABLE_POSTINSTALL: process.env.REDISMS_DISABLE_POSTINSTALL ?? null,',
       '  HOME: process.env.HOME ?? null,',
       '  NODE_ENV: process.env.NODE_ENV ?? null,',
-      '  YARN_PRODUCTION: process.env.YARN_PRODUCTION ?? null,',
+      '  pnpm_config_production: process.env.pnpm_config_production ?? null,',
       '  npm_config_production: process.env.npm_config_production ?? null,',
       '  NPM_CONFIG_PRODUCTION: process.env.NPM_CONFIG_PRODUCTION ?? null,',
       '};',
@@ -256,15 +259,15 @@ async function writeYarnEnvDumpStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnRuntimeDumpStub({ binDir, outputPath }) {
+async function writePnpmRuntimeDumpStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const { writeFileSync } = require('node:fs');",
@@ -277,7 +280,7 @@ async function writeYarnRuntimeDumpStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
@@ -314,11 +317,11 @@ async function writeFailingNodeShim({ binDir }) {
   await chmod(nodePath, 0o755);
 }
 
-async function writeYarnArgDumpStub({ binDir, outputPath }) {
+async function writePnpmArgDumpStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
@@ -326,11 +329,11 @@ async function writeYarnArgDumpStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnUiPostinstallStub({
+async function writePnpmUiPostinstallStub({
   binDir,
   outputPath,
   requiredOutputPath,
@@ -342,9 +345,9 @@ async function writeYarnUiPostinstallStub({
   dependencyLockPath = null,
 }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
@@ -358,7 +361,7 @@ async function writeYarnUiPostinstallStub({
         `  printf '%s\n' 'repaired' > ${JSON.stringify(forcedRepairMarkerPath)}`,
         'fi',
       ] : []),
-      'if [[ "$*" == "-s workspace @happier-dev/app postinstall:real" ]]; then',
+      'if [[ "$*" == "--filter @happier-dev/app run --silent postinstall:real" ]]; then',
       ...(dependencyLockPath ? [
         `  [[ -f ${shellSingleQuote(dependencyLockPath)} ]] || { echo 'postinstall escaped dependency mutation lock' >&2; exit 44; }`,
       ] : []),
@@ -383,20 +386,20 @@ async function writeYarnUiPostinstallStub({
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeSlowYarnArgDumpStub({ binDir, outputPath }) {
+async function writeSlowPnpmArgDumpStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
@@ -410,7 +413,7 @@ async function writeSlowYarnArgDumpStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
@@ -430,24 +433,6 @@ async function writeNpmArgDumpStub({ binDir, outputPath }) {
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeCorepackYarnArgDumpStub({ binDir, outputPath }) {
-  await mkdir(binDir, { recursive: true });
-  const corepackPath = join(binDir, 'corepack');
-  await writeFile(
-    corepackPath,
-    [
-      '#!/bin/bash',
-      'set -euo pipefail',
-      `echo "$*" >> ${JSON.stringify(outputPath)}`,
-      'if [[ "${1:-}" == "yarn" && "${2:-}" == "--version" ]]; then',
-      '  echo "1.22.22"',
-      'fi',
-    ].join('\n') + '\n',
-    'utf-8',
-  );
-  await chmod(corepackPath, 0o755);
-  await writeFile(outputPath, '', 'utf-8');
-}
 
 function fakeAtomicCliDistBuildLines(writeOutputLines, beforeCompilationLines = null) {
   const captureSource = `(async()=>{const {readHappyCliRuntimeInputFreshness}=await import(${JSON.stringify(CLI_RUNTIME_INPUTS_MODULE_URL)});const {fingerprint}=await readHappyCliRuntimeInputFreshness(process.cwd());process.stdout.write(fingerprint);})().catch(error=>{console.error(error);process.exitCode=1});`;
@@ -474,20 +459,20 @@ function fakeAtomicCliDistBuildLines(writeOutputLines, beforeCompilationLines = 
   ];
 }
 
-async function writeYarnStagedBuildFailureStub({ binDir, outputPath }) {
+async function writePnpmStagedBuildFailureStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       '  out="${HAPPIER_CLI_BUILD_OUTPUT_DIR:-dist.staging.$$}"',
       '  rm -rf "$out"',
       '  mkdir -p "$out"',
@@ -502,22 +487,22 @@ async function writeYarnStagedBuildFailureStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnCanonicalCliInputChangeStub({ binDir, outputPath }) {
+async function writePnpmCanonicalCliInputChangeStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const { appendFileSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');",
       "const { dirname, join } = require('node:path');",
-      'const [command] = process.argv.slice(2);',
+      'const command = process.argv[2] === "run" ? process.argv[3] : process.argv[2];',
       'if (command === "--version") {',
-      '  console.log("1.22.22");',
+      '  console.log("12.14.0");',
       '  process.exit(0);',
       '}',
       'appendFileSync(process.env.OUTPUT_PATH, `${process.argv.slice(2).join(" ")}\\n`);',
@@ -558,24 +543,24 @@ async function writeYarnCanonicalCliInputChangeStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
+async function writePnpmBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       ...fakeAtomicCliDistBuildLines([
         '  if [ -n "${LOCK_OUTPUT_PATH:-}" ]; then',
         '    printf "%s\\n" "${HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD:-}" > "$LOCK_OUTPUT_PATH"',
@@ -588,21 +573,21 @@ async function writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput }) {
+async function writePnpmForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
       'if [ "${1:-}" = "install" ] && [ "${2:-}" = "--force" ]; then',
@@ -619,7 +604,7 @@ async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cl
       '  exit 0',
       'fi',
       ...(uiPatchOutput ? [
-        'if [[ "$*" == "-s workspace @happier-dev/app postinstall:real" ]]; then',
+        'if [[ "$*" == "--filter @happier-dev/app run --silent postinstall:real" ]]; then',
         `  [[ -f ${shellSingleQuote(join(cliDir, '../..', '.project/tmp/dependency-install.lock'))} ]] || exit 44`,
         `  [[ ! -f ${shellSingleQuote(join(cliDir, '../..', 'node_modules/.happier-stack-dependencies-ready'))} ]] || exit 45`,
         `  mkdir -p ${shellSingleQuote(dirname(uiPatchOutput))}`,
@@ -627,7 +612,7 @@ async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cl
         '  exit 0',
         'fi',
       ] : []),
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       ...fakeAtomicCliDistBuildLines([
         '  echo "export const built = true;" > "$out/index.mjs"',
       ]),
@@ -637,24 +622,24 @@ async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cl
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnBuildCreatesPartialDistWithMissingChunkStub({ binDir, outputPath, cliDir }) {
+async function writePnpmBuildCreatesPartialDistWithMissingChunkStub({ binDir, outputPath, cliDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       '  out="${HAPPIER_CLI_BUILD_OUTPUT_DIR:-dist.staging.$$}"',
       '  rm -rf "$out"',
       '  mkdir -p "$out"',
@@ -670,13 +655,13 @@ async function writeYarnBuildCreatesPartialDistWithMissingChunkStub({ binDir, ou
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, outputPath, agentsDir }) {
+async function writePnpmBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, outputPath, agentsDir }) {
   await mkdir(binDir, { recursive: true });
-  const stubPath = join(binDir, 'yarn-stub.cjs');
+  const stubPath = join(binDir, 'pnpm-stub.cjs');
   await writeFile(
     stubPath,
     [
@@ -684,15 +669,15 @@ async function writeYarnBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, ou
       "const { join } = require('node:path');",
       'const args = process.argv.slice(2);',
       "appendFileSync(process.env.OUTPUT_PATH, args.join(' ') + '\\n');",
-      "if (args[0] === '--version') { console.log('1.22.22'); process.exit(0); }",
-      "if (args[0] === '-s' && args[1] === 'build') {",
+      "if (args[0] === '--version') { console.log('12.14.0'); process.exit(0); }",
+      "if (args[0] === 'run' && args[1] === '--silent' && args[2] === 'build') {",
       `  const out = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR || ${JSON.stringify(join(agentsDir, 'dist'))};`,
       "  mkdirSync(join(out, 'session', 'state'), { recursive: true });",
       "  writeFileSync(join(out, 'session', 'state', 'index.js'), 'export const state = true;\\n');",
       "  writeFileSync(join(out, 'index.js'), 'export const agentsBuilt = true;\\n');",
       '  process.exit(0);',
       '}',
-      "if (args[0] === 'build:prepared') {",
+      "if (args[0] === 'run' && args[1] === 'build:prepared') {",
       "  const out = process.env.HAPPIER_CLI_BUILD_OUTPUT_DIR || `dist.staging.${process.pid}`;",
       "  const backup = `dist.__fake_backup__.${process.pid}`;",
       '  rmSync(out, { recursive: true, force: true });',
@@ -715,23 +700,23 @@ async function writeYarnBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, ou
     ].join('\n') + '\n',
     'utf-8'
   );
-  const yarnPath = join(binDir, process.platform === 'win32' ? 'yarn.cmd' : 'yarn');
+  const pnpmPath = join(binDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     process.platform === 'win32'
-      ? `@echo off\r\n"${process.execPath}" "%~dp0yarn-stub.cjs" %*\r\n`
-      : `#!/usr/bin/env sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/yarn-stub.cjs" "$@"\n`,
+      ? `@echo off\r\n"${process.execPath}" "%~dp0pnpm-stub.cjs" %*\r\n`
+      : `#!/usr/bin/env sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/pnpm-stub.cjs" "$@"\n`,
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnSlowBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
+async function writePnpmSlowBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
@@ -740,10 +725,10 @@ async function writeYarnSlowBuildCreatesDistStub({ binDir, outputPath, cliDir })
       '  if [ -n "${HAPPIER_TEST_WAIT_FOR_BUILD_MARKER:-}" ]; then',
       '    while [ ! -f "$HAPPIER_TEST_WAIT_FOR_BUILD_MARKER" ] || [ -e "${HAPPIER_TEST_WAIT_FOR_BUILD_LOCK:?}" ]; do sleep 0.05; done',
       '  fi',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       '  sleep "${HAPPIER_TEST_BUILD_SLEEP_SECONDS:-1}"',
       ...fakeAtomicCliDistBuildLines([
         '  echo "export const built = true;" > "$out/index.mjs"',
@@ -755,7 +740,7 @@ async function writeYarnSlowBuildCreatesDistStub({ binDir, outputPath, cliDir })
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
@@ -795,7 +780,8 @@ function expectedCacheEnv({ envPath }) {
   const base = join(dirname(envPath), 'cache');
   return {
     xdg: join(base, 'xdg'),
-    yarn: join(base, 'yarn'),
+    pnpm: join(base, 'pnpm', 'store'),
+    pnpmCache: join(base, 'pnpm', 'cache'),
     npm: join(base, 'npm'),
   };
 }
@@ -843,17 +829,18 @@ async function createStackCacheFixture(t, prefix) {
   const componentDir = join(root, 'component');
   await mkdir(componentDir, { recursive: true });
   await writeFile(join(componentDir, 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(componentDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   const binDir = join(root, 'bin');
   return { root, envPath, componentDir, binDir };
 }
 
-test('ensureDepsInstalled sets stack-scoped cache env vars for yarn installs', async (t) => {
+test('ensureDepsInstalled sets stack-scoped cache env vars for pnpm installs', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-stack-cache-install-');
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   const exp = expectedCacheEnv({ envPath });
   applyEnvOverrides(t, {
@@ -863,14 +850,16 @@ test('ensureDepsInstalled sets stack-scoped cache env vars for yarn installs', a
     HAPPIER_HOME_DIR: null,
     HAPPIER_STACK_PM_CACHE_BASE_DIR: null,
     XDG_CACHE_HOME: null,
-    YARN_CACHE_FOLDER: null,
+    pnpm_config_store_dir: null,
+    pnpm_config_cache_dir: null,
     npm_config_cache: null,
   });
 
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true });
   const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
   assert.equal(parsed.XDG_CACHE_HOME, exp.xdg);
-  assert.equal(parsed.YARN_CACHE_FOLDER, exp.yarn);
+  assert.equal(parsed.pnpm_config_store_dir, exp.pnpm);
+  assert.equal(parsed.pnpm_config_cache_dir, exp.pnpmCache);
   assert.equal(parsed.npm_config_cache, exp.npm);
 });
 
@@ -878,7 +867,7 @@ test('ensureDepsInstalled does not publish lockfile changes from a synchronized 
   const fixture = await createStackCacheFixture(t, 'hs-pm-dev-target-lockfile-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -889,7 +878,7 @@ test('ensureDepsInstalled does not publish lockfile changes from a synchronized 
 
   await ensureDepsInstalled(componentDir, 'remote workspace', { quiet: true });
 
-  assert.match(await readFile(outputPath, 'utf-8'), /^install .*--pure-lockfile\b/m);
+  assert.match(await readFile(outputPath, 'utf-8'), /^install .*--frozen-lockfile\b/m);
 });
 
 test('ensureDepsInstalled skips dependency refresh in service mode when node_modules already exists', async (t) => {
@@ -897,12 +886,13 @@ test('ensureDepsInstalled skips dependency refresh in service mode when node_mod
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
 
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   // Simulate existing node_modules + stale integrity so refresh would normally run.
   await mkdir(join(componentDir, 'node_modules'), { recursive: true });
-  await writeFile(join(componentDir, 'node_modules', '.yarn-integrity'), 'old\n', 'utf-8');
-  await writeFile(join(componentDir, 'yarn.lock'), '# new lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'node_modules', '.modules.yaml'), 'old\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# new lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -913,7 +903,7 @@ test('ensureDepsInstalled skips dependency refresh in service mode when node_mod
 
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true, env: process.env });
   const out = await readFile(outputPath, 'utf-8');
-  assert.ok(!out.includes('install'), `expected no yarn install in service mode, got:\n${out}`);
+  assert.ok(!out.includes('install'), `expected no pnpm install in service mode, got:\n${out}`);
 });
 
 test('ensureDepsInstalled skips dependency refresh when explicitly disabled in local mode', async (t) => {
@@ -921,11 +911,12 @@ test('ensureDepsInstalled skips dependency refresh when explicitly disabled in l
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
 
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   await mkdir(join(componentDir, 'node_modules'), { recursive: true });
-  await writeFile(join(componentDir, 'node_modules', '.yarn-integrity'), 'old\n', 'utf-8');
-  await writeFile(join(componentDir, 'yarn.lock'), '# new lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'node_modules', '.modules.yaml'), 'old\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# new lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -936,7 +927,7 @@ test('ensureDepsInstalled skips dependency refresh when explicitly disabled in l
 
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true, env: process.env });
   const out = await readFile(outputPath, 'utf-8');
-  assert.ok(!out.includes('install'), `expected no yarn install when refresh is disabled, got:\n${out}`);
+  assert.ok(!out.includes('install'), `expected no pnpm install when refresh is disabled, got:\n${out}`);
 });
 
 test('ensureDepsInstalled explicitly suppresses refresh of an existing dependency tree', async (t) => {
@@ -944,10 +935,11 @@ test('ensureDepsInstalled explicitly suppresses refresh of an existing dependenc
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
 
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   await mkdir(join(componentDir, 'node_modules'), { recursive: true });
-  await writeFile(join(componentDir, 'node_modules', '.yarn-integrity'), 'old\n', 'utf-8');
-  await writeFile(join(componentDir, 'yarn.lock'), '# changed lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'node_modules', '.modules.yaml'), 'old\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-lock.yaml'), '# changed lock\n', 'utf-8');
+  await writeFile(join(componentDir, 'pnpm-workspace.yaml'), "packages:\n");
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -971,7 +963,7 @@ test('ensureDepsInstalled still installs a missing dependency tree when existing
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
 
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
     OUTPUT_PATH: outputPath,
@@ -988,18 +980,18 @@ test('ensureDepsInstalled still installs a missing dependency tree when existing
   assert.match(out, /^install\b/m);
 });
 
-test('ensureDepsInstalled scrubs production-mode env for yarn installs', async (t) => {
+test('ensureDepsInstalled scrubs production-mode env for pnpm installs', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-stack-cache-prod-scrub-');
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: envPath,
     NODE_ENV: 'production',
-    YARN_PRODUCTION: '1',
+    pnpm_config_production: '1',
     npm_config_production: 'true',
     NPM_CONFIG_PRODUCTION: 'true',
   });
@@ -1007,7 +999,7 @@ test('ensureDepsInstalled scrubs production-mode env for yarn installs', async (
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true });
   const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
   assert.notEqual(parsed.NODE_ENV, 'production');
-  assert.notEqual(parsed.YARN_PRODUCTION, '1');
+  assert.notEqual(parsed.pnpm_config_production, '1');
   assert.notEqual(parsed.npm_config_production, 'true');
   assert.notEqual(parsed.NPM_CONFIG_PRODUCTION, 'true');
 });
@@ -1016,14 +1008,14 @@ test('ensureDepsInstalled scrubs production-mode env even without a stack env fi
   const fixture = await createStackCacheFixture(t, 'hs-pm-prod-scrub-no-env-file-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
     NODE_ENV: 'production',
-    YARN_PRODUCTION: '1',
+    pnpm_config_production: '1',
     npm_config_production: 'true',
     NPM_CONFIG_PRODUCTION: 'true',
   });
@@ -1031,7 +1023,7 @@ test('ensureDepsInstalled scrubs production-mode env even without a stack env fi
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true });
   const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
   assert.notEqual(parsed.NODE_ENV, 'production');
-  assert.notEqual(parsed.YARN_PRODUCTION, '1');
+  assert.notEqual(parsed.pnpm_config_production, '1');
   assert.notEqual(parsed.npm_config_production, 'true');
   assert.notEqual(parsed.NPM_CONFIG_PRODUCTION, 'true');
 });
@@ -1040,7 +1032,7 @@ test('ensureDepsInstalled disables redis-memory-server postinstall for stack-man
   const fixture = await createStackCacheFixture(t, 'hs-pm-redis-memory-server-postinstall-disable-');
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -1057,7 +1049,7 @@ test('ensureDepsInstalled honors HAPPIER_STACK_PM_CACHE_BASE_DIR when no stack e
   const fixture = await createStackCacheFixture(t, 'hs-pm-explicit-cache-base-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   const cacheBase = join(root, 'pm-cache');
 
@@ -1067,14 +1059,16 @@ test('ensureDepsInstalled honors HAPPIER_STACK_PM_CACHE_BASE_DIR when no stack e
     HAPPIER_STACK_ENV_FILE: null,
     HAPPIER_STACK_PM_CACHE_BASE_DIR: cacheBase,
     XDG_CACHE_HOME: null,
-    YARN_CACHE_FOLDER: null,
+    pnpm_config_store_dir: null,
+    pnpm_config_cache_dir: null,
     npm_config_cache: null,
   });
 
   await ensureDepsInstalled(componentDir, 'test-component', { quiet: true });
   const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
   assert.equal(parsed.XDG_CACHE_HOME, join(cacheBase, 'xdg'));
-  assert.equal(parsed.YARN_CACHE_FOLDER, join(cacheBase, 'yarn'));
+  assert.equal(parsed.pnpm_config_store_dir, join(cacheBase, 'pnpm', 'store'));
+  assert.equal(parsed.pnpm_config_cache_dir, join(cacheBase, 'pnpm', 'cache'));
   assert.equal(parsed.npm_config_cache, join(cacheBase, 'npm'));
   assert.equal(parsed.HOME, join(cacheBase, 'home'));
 });
@@ -1087,7 +1081,7 @@ test('stack package-manager preparation preserves installed bin symlinks for liv
   const installedBinDir = join(componentDir, 'node_modules', '.bin');
   const installedBinPath = join(installedBinDir, 'eslint');
 
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   await mkdir(join(eslintDir, 'bin'), { recursive: true });
   await mkdir(installedBinDir, { recursive: true });
   await writeFile(join(componentDir, 'package.json'), JSON.stringify({
@@ -1118,14 +1112,14 @@ test('stack package-manager preparation preserves installed bin symlinks for liv
   );
 });
 
-test('ensureDepsInstalled prefers the .nvmrc node runtime for yarn shebangs when available', async (t) => {
+test('ensureDepsInstalled prefers the .nvmrc node runtime for pnpm shebangs when available', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-nvm-node-runtime-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'runtime.json');
   const nvmDir = join(root, '.nvm');
   const version = 'v22.22.1';
 
-  await writeYarnRuntimeDumpStub({ binDir, outputPath });
+  await writePnpmRuntimeDumpStub({ binDir, outputPath });
   await writeNvmNodeShim({ nvmDir, version });
   await writeFile(join(componentDir, '.nvmrc'), `${version}\n`, 'utf-8');
 
@@ -1142,13 +1136,13 @@ test('ensureDepsInstalled prefers the .nvmrc node runtime for yarn shebangs when
   assert.match(parsed.execPath, /node$/);
 });
 
-test('ensureDepsInstalled runs yarn shebangs with the stack node before incompatible PATH nodes', async (t) => {
+test('ensureDepsInstalled runs pnpm shebangs with the stack node before incompatible PATH nodes', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-stack-node-runtime-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'runtime.json');
   const badNodeBinDir = join(root, 'bad-node-bin');
 
-  await writeYarnRuntimeDumpStub({ binDir, outputPath });
+  await writePnpmRuntimeDumpStub({ binDir, outputPath });
   await writeFailingNodeShim({ binDir: badNodeBinDir });
 
   applyEnvOverrides(t, {
@@ -1163,13 +1157,13 @@ test('ensureDepsInstalled runs yarn shebangs with the stack node before incompat
   assert.equal(parsed.execPath, process.execPath);
 });
 
-test('ensureDepsInstalled prefers yarn when component is inside the Happy monorepo (packages/ layout)', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-yarn-'));
+test('ensureDepsInstalled prefers pnpm when component is inside the Happy monorepo (packages/ layout)', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-pnpm-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  // Create the minimum monorepo markers (apps/ layout) + root yarn.lock.
+  // Create the minimum monorepo markers (apps/ layout) + root pnpm-lock.yaml.
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
@@ -1177,16 +1171,17 @@ test('ensureDepsInstalled prefers yarn when component is inside the Happy monore
   await writeFile(join(root, 'apps', 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
 
   const componentDir = join(root, 'apps', 'server');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
-    // Avoid leaking other package managers into PATH so the test fails loudly when a non-yarn fallback is attempted.
+    // Avoid leaking other package managers into PATH so the test fails loudly when a non-pnpm fallback is attempted.
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -1197,8 +1192,8 @@ test('ensureDepsInstalled prefers yarn when component is inside the Happy monore
   assert.ok(out.includes('install') || out.includes('--version'));
 });
 
-test('ensureDepsInstalled uses the canonical repository yarn install policy', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hs-pm-yarn-production-flag-'));
+test('ensureDepsInstalled uses the canonical repository pnpm install policy', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-pnpm-production-flag-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
   });
@@ -1210,12 +1205,13 @@ test('ensureDepsInstalled uses the canonical repository yarn install policy', as
   await writeFile(join(root, 'apps', 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
 
   const componentDir = join(root, 'apps', 'server');
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1227,9 +1223,8 @@ test('ensureDepsInstalled uses the canonical repository yarn install policy', as
   const out = await readFile(outputPath, 'utf-8');
   const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
   const installLine = lines.find((l) => l.startsWith('install'));
-  assert.ok(installLine, `expected yarn install to be invoked, got:\n${out}`);
-  assert.match(installLine, /--production=false\b/);
-  assert.match(installLine, /--ignore-engines\b/);
+  assert.ok(installLine, `expected pnpm install to be invoked, got:\n${out}`);
+  assert.match(installLine, /--prod=false\b/);
 });
 
 test('ensureDepsInstalled delegates Prisma output freshness to the server generator when Stack probe files already exist', async (t) => {
@@ -1251,18 +1246,19 @@ test('ensureDepsInstalled delegates Prisma output freshness to the server genera
   await writeFile(join(root, 'apps', 'server', 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'prisma', 'sqlite', 'schema.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
 
   await mkdir(join(root, 'node_modules', '.prisma', 'client'), { recursive: true });
   await writeFile(join(root, 'node_modules', '.prisma', 'client', 'default.js'), 'module.exports = {};\n'.padEnd(3_989, ' '), 'utf-8');
   await mkdir(join(root, 'apps', 'server', 'generated', 'sqlite-client'), { recursive: true });
   await writeFile(join(root, 'apps', 'server', 'generated', 'sqlite-client', 'index.js'), 'export class PrismaClient {}\n', 'utf-8');
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const componentDir = join(root, 'apps', 'server');
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1277,14 +1273,14 @@ test('ensureDepsInstalled delegates Prisma output freshness to the server genera
   });
   assert.doesNotMatch(
     await readFile(outputPath, 'utf-8'),
-    /\bworkspace @happier-dev\/server generate:providers\b/,
+    /--filter @happier-dev\/server run --silent generate:providers\b/,
     'last-known-good admission must not gate startup on regenerated provider outputs',
   );
 
   await writeFile(outputPath, '', 'utf-8');
   await ensureDepsInstalled(componentDir, 'happier-server-light', { quiet: true });
   const out = await readFile(outputPath, 'utf-8');
-  assert.match(out, /\bworkspace @happier-dev\/server generate:providers\b/, `expected provider generation, got:\n${out}`);
+  assert.match(out, /--filter @happier-dev\/server run --silent generate:providers\b/, `expected provider generation, got:\n${out}`);
 });
 
 test('remote runtime and source-test bootstrap complete UI postinstall under install freshness for every worker role', async (t) => {
@@ -1306,7 +1302,8 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
     happier: { installFreshnessInputs: ['patches', 'tools/postinstall'] },
   }));
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
-  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n");
   const patchPath = join(uiDir, 'patches/markdown.patch');
   const assetSourcePath = join(uiDir, 'tools/postinstall/worker.js');
   const requiredOutputPath = join(uiDir, 'node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
@@ -1315,14 +1312,11 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
   await writeFile(assetSourcePath, 'first worker\n');
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  // Yarn is the OS boundary: installation succeeds but skips workspace scripts,
+  // Pnpm is the OS boundary: installation succeeds but skips workspace scripts,
   // as an unchanged tree previously installed with --ignore-scripts can do.
-  await writeYarnUiPostinstallStub({ binDir, outputPath, requiredOutputPath,
+  await writePnpmUiPostinstallStub({ binDir, outputPath, requiredOutputPath,
     postinstallSourcePath: patchPath, assetSourcePath, assetOutputPath });
-  // Corepack/Yarn are the process boundary; both installer entry points use the same stub.
-  const corepackPath = join(binDir, 'corepack');
-  await writeFile(corepackPath, `#!/bin/sh\nshift\nexec ${shellSingleQuote(join(binDir, 'yarn'))} "$@"\n`);
-  await chmod(corepackPath, 0o755);
+  // Pnpm is the process boundary; installation and scripts use the same stub.
   const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
     HAPPIER_STACK_HOME_DIR: join(root, 'home'), HAPPIER_STACK_ENV_FILE: '' };
   await withDependencyRefresh({ installDir: root, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE },
@@ -1358,7 +1352,7 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
     executionPlacement: 'remote',
     env: { ...env, ...extraEnv },
   });
-  await writeFile(join(root, 'yarn.lock'), '# source-test refresh\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# source-test refresh\n');
   await sourcePrepare();
   assert.equal(await readFile(requiredOutputPath, 'utf8'), await readFile(patchPath, 'utf8'),
     'source-test re-extraction must not leave the running UI without its patch');
@@ -1368,7 +1362,7 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
   const warmCommands = await readFile(outputPath, 'utf8');
   await sourcePrepare();
   assert.equal(await readFile(outputPath, 'utf8'), warmCommands, 'unchanged source tests do not reinstall');
-  await writeFile(join(root, 'yarn.lock'), '# failed source-test refresh\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# failed source-test refresh\n');
   await assert.rejects(sourcePrepare({ HAPPIER_TEST_UI_POSTINSTALL_FAIL: '1' }));
   assert.equal((await inspectDependencyRefresh({ installDir: root,
     installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE })).required, true);
@@ -1403,9 +1397,10 @@ test('ensureDepsInstalled repairs missing UI postinstall outputs on a warm depen
     }) + '\n',
     'utf-8',
   );
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/ui\"\n  - \"apps/cli\"\n  - \"apps/server\"\n");
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const requiredOutputPath = join(
     componentDir,
@@ -1421,7 +1416,7 @@ test('ensureDepsInstalled repairs missing UI postinstall outputs on a warm depen
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnUiPostinstallStub({ binDir, outputPath, requiredOutputPath,
+  await writePnpmUiPostinstallStub({ binDir, outputPath, requiredOutputPath,
     dependencyLockPath: join(root, '.project', 'tmp', 'dependency-install.lock') });
   const env = {
     ...process.env,
@@ -1440,7 +1435,7 @@ test('ensureDepsInstalled repairs missing UI postinstall outputs on a warm depen
   const commands = (await readFile(outputPath, 'utf-8')).split('\n').filter(Boolean);
   assert.equal(commands.filter((line) => line.startsWith('install ')).length, 1);
   assert.equal(
-    commands.filter((line) => line === '-s workspace @happier-dev/app postinstall:real').length,
+    commands.filter((line) => line === '--filter @happier-dev/app run --silent postinstall:real').length,
     2,
   );
 });
@@ -1472,9 +1467,10 @@ test('ensureDepsInstalled repairs an invalid UI patch even when the legacy outpu
     }) + '\n',
     'utf-8',
   );
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/ui\"\n  - \"apps/cli\"\n  - \"apps/server\"\n");
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const requiredOutputPath = join(
     componentDir,
@@ -1503,7 +1499,7 @@ test('ensureDepsInstalled repairs an invalid UI patch even when the legacy outpu
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnUiPostinstallStub({
+  await writePnpmUiPostinstallStub({
     binDir,
     outputPath,
     requiredOutputPath,
@@ -1524,7 +1520,7 @@ test('ensureDepsInstalled repairs an invalid UI patch even when the legacy outpu
   assert.equal((await readFile(patchMarkerPath, 'utf-8')).trim(), 'patched');
   const commands = (await readFile(outputPath, 'utf-8')).split('\n').filter(Boolean);
   assert.equal(
-    commands.filter((line) => line === '-s workspace @happier-dev/app postinstall:real').length,
+    commands.filter((line) => line === '--filter @happier-dev/app run --silent postinstall:real').length,
     2,
   );
   assert.equal(
@@ -1533,7 +1529,7 @@ test('ensureDepsInstalled repairs an invalid UI patch even when the legacy outpu
   );
 });
 
-test('ensureDepsInstalled refreshes monorepo dependencies when root yarn.lock changes', async (t) => {
+test('ensureDepsInstalled refreshes monorepo dependencies when root pnpm-lock.yaml changes', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-refresh-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -1552,21 +1548,22 @@ test('ensureDepsInstalled refreshes monorepo dependencies when root yarn.lock ch
 
   // Simulate a previous monorepo install.
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
-  // Root yarn.lock is newer than the integrity file -> should trigger `yarn install`.
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  // Root pnpm-lock.yaml is newer than the integrity file -> should trigger `pnpm install`.
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   // Some filesystems (and CI runners) can create both files within the same timestamp quantum.
   // Make the "lock newer than integrity" ordering explicit to keep this test deterministic.
   const base = Date.now();
   const older = new Date(base - 10_000);
   const newer = new Date(base);
-  await utimes(join(root, 'node_modules', '.yarn-integrity'), older, older);
-  await utimes(join(root, 'yarn.lock'), newer, newer);
+  await utimes(join(root, 'node_modules', '.modules.yaml'), older, older);
+  await utimes(join(root, 'pnpm-lock.yaml'), newer, newer);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1604,27 +1601,28 @@ test('ensureDepsInstalled refreshes monorepo dependencies when a workspace packa
     }) + '\n',
     'utf-8',
   );
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/ui\"\n  - \"apps/cli\"\n  - \"apps/server\"\n  - \"packages/protocol\"\n");
 
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const base = Date.now();
   const older = new Date(base - 10_000);
   const newer = new Date(base);
   await Promise.all([
     utimes(join(root, 'package.json'), older, older),
-    utimes(join(root, 'yarn.lock'), older, older),
+    utimes(join(root, 'pnpm-lock.yaml'), older, older),
     utimes(join(root, 'apps', 'ui', 'package.json'), older, older),
     utimes(join(root, 'apps', 'cli', 'package.json'), older, older),
     utimes(join(root, 'apps', 'server', 'package.json'), older, older),
-    utimes(join(root, 'node_modules', '.yarn-integrity'), older, older),
+    utimes(join(root, 'node_modules', '.modules.yaml'), older, older),
     utimes(join(root, 'packages', 'protocol', 'package.json'), newer, newer),
   ]);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1637,7 +1635,7 @@ test('ensureDepsInstalled refreshes monorepo dependencies when a workspace packa
   assert.match(out, /\binstall\b/);
 });
 
-test('ensureDepsInstalled does not repeat a monorepo refresh after a successful no-op yarn install', async (t) => {
+test('ensureDepsInstalled does not repeat a monorepo refresh after a successful no-op pnpm install', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-refresh-stamp-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -1662,27 +1660,28 @@ test('ensureDepsInstalled does not repeat a monorepo refresh after a successful 
     }) + '\n',
     'utf-8',
   );
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/ui\"\n  - \"apps/cli\"\n  - \"apps/server\"\n  - \"packages/protocol\"\n");
 
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const base = Date.now() - 20_000;
   const older = new Date(base - 10_000);
   const newer = new Date(base);
   await Promise.all([
     utimes(join(root, 'package.json'), older, older),
-    utimes(join(root, 'yarn.lock'), older, older),
+    utimes(join(root, 'pnpm-lock.yaml'), older, older),
     utimes(join(root, 'apps', 'ui', 'package.json'), older, older),
     utimes(join(root, 'apps', 'cli', 'package.json'), older, older),
     utimes(join(root, 'apps', 'server', 'package.json'), older, older),
-    utimes(join(root, 'node_modules', '.yarn-integrity'), older, older),
+    utimes(join(root, 'node_modules', '.modules.yaml'), older, older),
     utimes(join(root, 'packages', 'protocol', 'package.json'), newer, newer),
   ]);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1696,10 +1695,10 @@ test('ensureDepsInstalled does not repeat a monorepo refresh after a successful 
   const installLines = (await readFile(outputPath, 'utf-8'))
     .split('\n')
     .filter((line) => /\binstall\b/.test(line));
-  assert.equal(installLines.length, 1, `expected one yarn install after a successful refresh, got:\n${installLines.join('\n')}`);
+  assert.equal(installLines.length, 1, `expected one pnpm install after a successful refresh, got:\n${installLines.join('\n')}`);
 });
 
-test('ensureDepsInstalled keeps dependency-only reads of a current tree outside dependency and CLI publication locks', async (t) => {
+test('ensureDepsInstalled keeps current dependency reads outside the CLI publication lock', { timeout: 10000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-current-deps-read-only-'));
   t.after(async () => rm(root, { recursive: true, force: true }));
 
@@ -1708,14 +1707,15 @@ test('ensureDepsInstalled keeps dependency-only reads of a current tree outside 
     await writeFile(join(root, 'apps', component, 'package.json'), '{}\n', 'utf-8');
   }
   await writeFile(join(root, 'package.json'), '{"name":"monorepo","private":true}\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'legacy\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'legacy\n', 'utf-8');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const stackHome = join(root, 'stack-home');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
@@ -1733,23 +1733,21 @@ test('ensureDepsInstalled keeps dependency-only reads of a current tree outside 
     ].join('\n'),
   ], { cwd: root, env: process.env });
 
-  // A warm admission must not need either mutation-lock path. Replacing both lock parents with
-  // ordinary files makes an accidental lock acquisition fail deterministically instead of wait.
-  await rm(join(stackHome, 'cache', 'dependencies'), { recursive: true, force: true });
-  await mkdir(join(stackHome, 'cache'), { recursive: true });
-  await writeFile(join(stackHome, 'cache', 'dependencies'), 'read-only-fast-path\n', 'utf-8');
-  await rm(join(root, '.project'), { recursive: true, force: true });
-  await writeFile(join(root, '.project'), 'read-only-fast-path\n', 'utf-8');
+  // Dependency read custody uses .project/tmp/dependency-install.lock. Only
+  // the unrelated CLI publication lock must remain outside this read path.
+  const cliLockPath = resolveCliDistBuildLockPath(root);
+  await mkdir(cliLockPath);
 
   await ensureDepsInstalled(componentDir, 'happier-ui', { quiet: true, env: process.env, prepareComponentOutputs: false });
-  const yarnInvocations = (await readFile(outputPath, 'utf-8')).split('\n');
-  const installs = yarnInvocations.filter((line) => /\binstall\b/.test(line));
-  const readinessProbes = yarnInvocations.filter((line) => line.trim() === '--version');
+  assert.equal((await stat(cliLockPath)).isDirectory(), true);
+  const pnpmInvocations = (await readFile(outputPath, 'utf-8')).split('\n');
+  const installs = pnpmInvocations.filter((line) => /\binstall\b/.test(line));
+  const readinessProbes = pnpmInvocations.filter((line) => line.trim() === '--version');
   assert.equal(installs.length, 1);
   assert.equal(
     readinessProbes.length,
     1,
-    'a current dependency tree must not re-run the Yarn/Corepack readiness probe',
+    'a current dependency tree must not re-run the pnpm readiness probe',
   );
 });
 
@@ -1757,7 +1755,7 @@ test('ensureDepsInstalled serializes concurrent refreshes and rechecks freshness
   const fixture = await createStackCacheFixture(t, 'hs-pm-concurrent-install-lock-');
   const { root, componentDir, binDir } = fixture;
   const outputPath = join(root, 'argv.txt');
-  await writeSlowYarnArgDumpStub({ binDir, outputPath });
+  await writeSlowPnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1802,24 +1800,25 @@ test('ensureDepsInstalled refreshes independently of the monorepo CLI bundle loc
     }) + '\n',
     'utf-8',
   );
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/ui\"\n  - \"apps/cli\"\n  - \"apps/server\"\n");
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'stale\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'stale\n', 'utf-8');
 
   const base = Date.now();
   const older = new Date(base - 10_000);
   const newer = new Date(base);
   await Promise.all([
-    utimes(join(root, 'node_modules', '.yarn-integrity'), older, older),
+    utimes(join(root, 'node_modules', '.modules.yaml'), older, older),
     utimes(join(root, 'package.json'), newer, newer),
-    utimes(join(root, 'yarn.lock'), newer, newer),
+    utimes(join(root, 'pnpm-lock.yaml'), newer, newer),
     utimes(join(componentDir, 'package.json'), newer, newer),
   ]);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const heldLockOutputPath = join(root, 'held-cli-lock.txt');
-  await writeSlowYarnArgDumpStub({ binDir, outputPath });
+  await writeSlowPnpmArgDumpStub({ binDir, outputPath });
   const env = withoutInheritedPackageManagerHints({
     ...process.env,
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1877,7 +1876,7 @@ test('ensureDepsInstalled refreshes independently of the monorepo CLI bundle loc
   await assert.rejects(() => stat(dependencyLockPath), { code: 'ENOENT' });
 });
 
-test('ensureDepsInstalled retries a failed refresh even when yarn touched node_modules', async (t) => {
+test('ensureDepsInstalled retries a failed refresh even when pnpm touched node_modules', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-refresh-retry-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -1890,7 +1889,8 @@ test('ensureDepsInstalled retries a failed refresh even when yarn touched node_m
   await writeFile(join(root, 'apps', 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   await mkdir(join(root, 'node_modules'), { recursive: true });
 
   const base = Date.now();
@@ -1899,21 +1899,21 @@ test('ensureDepsInstalled retries a failed refresh even when yarn touched node_m
   await Promise.all([
     utimes(join(root, 'node_modules'), older, older),
     utimes(join(root, 'package.json'), newer, newer),
-    utimes(join(root, 'yarn.lock'), newer, newer),
+    utimes(join(root, 'pnpm-lock.yaml'), newer, newer),
   ]);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const statePath = join(root, 'failed-once');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
       'if [ "${1:-}" = "install" ]; then',
@@ -1928,7 +1928,7 @@ test('ensureDepsInstalled retries a failed refresh even when yarn touched node_m
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   applyEnvOverrides(t, {
@@ -1941,7 +1941,7 @@ test('ensureDepsInstalled retries a failed refresh even when yarn touched node_m
 
   await assert.rejects(
     () => ensureDepsInstalled(join(root, 'apps', 'ui'), 'happier-ui', { quiet: true }),
-    /yarn failed \(code=2,/,
+    /pnpm failed \(code=2,/,
   );
   await ensureDepsInstalled(join(root, 'apps', 'ui'), 'happier-ui', { quiet: true });
 
@@ -1964,7 +1964,8 @@ test('ensureDepsInstalled refreshes once when node_modules has no successful ins
   await writeFile(join(root, 'apps', 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
 
   await mkdir(join(root, 'node_modules', '@scope', 'pkg'), { recursive: true });
   await writeFile(join(root, 'node_modules', '.placeholder'), 'ok\n', 'utf-8');
@@ -1975,7 +1976,7 @@ test('ensureDepsInstalled refreshes once when node_modules has no successful ins
   const newer = new Date(base);
   await Promise.all([
     utimes(join(root, 'package.json'), older, older),
-    utimes(join(root, 'yarn.lock'), older, older),
+    utimes(join(root, 'pnpm-lock.yaml'), older, older),
     utimes(join(root, 'apps', 'ui', 'package.json'), older, older),
     utimes(join(root, 'apps', 'cli', 'package.json'), older, older),
     utimes(join(root, 'apps', 'server', 'package.json'), older, older),
@@ -1984,7 +1985,7 @@ test('ensureDepsInstalled refreshes once when node_modules has no successful ins
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2001,7 +2002,7 @@ test('ensureDepsInstalled refreshes once when node_modules has no successful ins
   assert.equal(installLines.length, 1, `expected one install to establish a success marker, got:\n${installLines.join('\n')}`);
 });
 
-test('ensureDepsInstalled falls back to npm in binary mode when yarn is unavailable', async (t) => {
+test('ensureDepsInstalled falls back to npm in binary mode when pnpm is unavailable', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-binary-mode-npm-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -2033,8 +2034,9 @@ test('ensureDepsInstalled falls back to npm in binary mode when yarn is unavaila
   assert.match(out, /install/);
 });
 
-test('ensureDepsInstalled uses Corepack Yarn when a global Yarn shim is unavailable', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hs-pm-corepack-yarn-'));
+
+test('ensureDepsInstalled preserves a Windows-style Path key while preparing pnpm', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-pnpm-windows-path-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
   });
@@ -2045,35 +2047,7 @@ test('ensureDepsInstalled uses Corepack Yarn when a global Yarn shim is unavaila
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeCorepackYarnArgDumpStub({ binDir, outputPath });
-
-  await ensureDepsInstalled(componentDir, 'corepack-component', {
-    quiet: true,
-    env: withoutInheritedPackageManagerHints({
-      ...process.env,
-      PATH: binDir,
-      OUTPUT_PATH: outputPath,
-      HAPPIER_STACK_BINARY_MODE: '0',
-      HAPPIER_STACK_ENV_FILE: '',
-    }),
-  });
-
-  assert.match(await readFile(outputPath, 'utf-8'), /^yarn --version\nyarn install\b/m);
-});
-
-test('ensureDepsInstalled preserves a Windows-style Path key while preparing Corepack Yarn', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hs-pm-corepack-windows-path-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  const componentDir = join(root, 'component');
-  await mkdir(componentDir, { recursive: true });
-  await writeFile(join(componentDir, 'package.json'), '{}\n', 'utf-8');
-
-  const binDir = join(root, 'bin');
-  const outputPath = join(root, 'argv.txt');
-  await writeCorepackYarnArgDumpStub({ binDir, outputPath });
+  await writePnpmArgDumpStub({ binDir, outputPath });
 
   const env = withoutInheritedPackageManagerHints({
     ...process.env,
@@ -2084,15 +2058,15 @@ test('ensureDepsInstalled preserves a Windows-style Path key while preparing Cor
   });
   delete env.PATH;
 
-  await ensureDepsInstalled(componentDir, 'corepack-component', { quiet: true, env });
-  assert.match(await readFile(outputPath, 'utf-8'), /^yarn --version\nyarn install\b/m);
+  await ensureDepsInstalled(componentDir, 'pnpm-component', { quiet: true, env });
+  assert.match(await readFile(outputPath, 'utf-8'), /^--version\ninstall\b/m);
 });
 
-test('pmExecBin sets stack-scoped cache env vars for yarn runs', async (t) => {
+test('pmExecBin sets stack-scoped cache env vars for pnpm runs', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-stack-cache-exec-');
   const { root, envPath, componentDir, binDir } = fixture;
   const outputPath = join(root, 'env.json');
-  await writeYarnEnvDumpStub({ binDir, outputPath });
+  await writePnpmEnvDumpStub({ binDir, outputPath });
 
   const exp = expectedCacheEnv({ envPath });
   applyEnvOverrides(t, {
@@ -2102,14 +2076,16 @@ test('pmExecBin sets stack-scoped cache env vars for yarn runs', async (t) => {
     HAPPIER_HOME_DIR: null,
     HAPPIER_STACK_PM_CACHE_BASE_DIR: null,
     XDG_CACHE_HOME: null,
-    YARN_CACHE_FOLDER: null,
+    pnpm_config_store_dir: null,
+    pnpm_config_cache_dir: null,
     npm_config_cache: null,
   });
 
   await pmExecBin({ dir: componentDir, bin: 'prisma', args: ['generate'], env: process.env, quiet: true });
   const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
   assert.equal(parsed.XDG_CACHE_HOME, exp.xdg);
-  assert.equal(parsed.YARN_CACHE_FOLDER, exp.yarn);
+  assert.equal(parsed.pnpm_config_store_dir, exp.pnpm);
+  assert.equal(parsed.pnpm_config_cache_dir, exp.pnpmCache);
   assert.equal(parsed.npm_config_cache, exp.npm);
 });
 
@@ -2122,10 +2098,11 @@ test('ensureCliBuilt preserves previous dist output when a staged build fails', 
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await writeFile(join(cliDir, '.gitignore'), 'dist/\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   await mkdir(dirname(distIndex), { recursive: true });
@@ -2133,7 +2110,7 @@ test('ensureCliBuilt preserves previous dist output when a staged build fails', 
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnStagedBuildFailureStub({ binDir, outputPath });
+  await writePnpmStagedBuildFailureStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2157,11 +2134,12 @@ test('ensureCliBuilt rebuilds when the same dirty tracked file changes content i
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(join(cliDir, 'src'), { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await writeFile(join(cliDir, '.gitignore'), 'dist/\npackage-dist/\ndist.staging.*\n', 'utf-8');
   await writeFile(join(cliDir, 'src', 'tracked.txt'), 'clean\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   execFileSync('git', ['init'], { cwd: cliDir, stdio: 'ignore' });
   execFileSync('git', ['config', 'user.email', 'hstack-test@example.test'], { cwd: cliDir, stdio: 'ignore' });
@@ -2172,18 +2150,18 @@ test('ensureCliBuilt rebuilds when the same dirty tracked file changes content i
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       '  mkdir -p dist',
       '  if [ -f src/tracked.txt ]; then value="$(tr -d \'\\n\' < src/tracked.txt)"; else value="deleted"; fi',
       '  printf "export const tracked = \\"%s\\";\\n" "$value" > dist/index.mjs',
@@ -2194,7 +2172,7 @@ test('ensureCliBuilt rebuilds when the same dirty tracked file changes content i
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   applyEnvOverrides(t, {
@@ -2229,7 +2207,7 @@ test('ensureCliBuilt rebuilds when the same dirty tracked file changes content i
   const buildInvocations = argv
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => line === 'build:prepared');
+    .filter((line) => line === 'run build:prepared');
   assert.equal(buildInvocations.length, 6);
   assert.equal(await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8'), 'export const tracked = "deleted";\n');
   await assert.rejects(
@@ -2248,10 +2226,11 @@ test('ensureCliBuilt preserves previous dist when staged import validation fails
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await writeFile(join(cliDir, '.gitignore'), 'dist/\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   await mkdir(dirname(distIndex), { recursive: true });
@@ -2259,7 +2238,7 @@ test('ensureCliBuilt preserves previous dist when staged import validation fails
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnBuildCreatesPartialDistWithMissingChunkStub({ binDir, outputPath, cliDir });
+  await writePnpmBuildCreatesPartialDistWithMissingChunkStub({ binDir, outputPath, cliDir });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2270,7 +2249,7 @@ test('ensureCliBuilt preserves previous dist when staged import validation fails
 
   await assert.rejects(
     () => ensureCliBuilt(cliDir, { buildCli: true, quiet: true }),
-    /yarn failed \(code=2,/,
+    /pnpm failed \(code=2,/,
   );
   const restored = await readFile(distIndex, 'utf-8');
   assert.equal(restored, 'export const stable = true;\n');
@@ -2289,23 +2268,24 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
   await mkdir(dirname(pkgrollCliPath), { recursive: true });
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(root, 'package.json'), '{ "name": "repo", "private": true }\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   await writeFile(join(root, 'apps', 'ui', 'package.json'), JSON.stringify({ name: '@happier-dev/app', scripts: { 'postinstall:real': 'node tools/postinstall.mjs' } }));
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{ "name": "@happier-dev/server", "private": true }\n', 'utf-8');
   await writeFile(join(cliDir, 'package.json'), '{ "name": "@happier-dev/cli", "private": true }\n', 'utf-8');
   await writeFile(pkgrollCliPath, '#!/bin/sh\nexec node "$0" "$@"\n', 'utf-8');
   await mkdir(join(root, 'node_modules'), { recursive: true });
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const newer = new Date(Date.now() + 5_000);
-  await utimes(join(root, 'node_modules', '.yarn-integrity'), newer, newer);
+  await utimes(join(root, 'node_modules', '.modules.yaml'), newer, newer);
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const uiPatchOutput = join(root, 'apps/ui/node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
   await mkdir(dirname(uiPatchOutput), { recursive: true });
   await writeFile(uiPatchOutput, 'patched module\n');
-  await writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput });
+  await writePnpmForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2318,8 +2298,8 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
   await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: native.env });
 
   const argv = await readFile(outputPath, 'utf-8');
-  assert.match(argv, /\binstall --force --production=false\b/, `expected forced yarn reinstall, got:\n${argv}`);
-  assert.match(argv, /(^|\n)build:prepared(\n|$)/, `expected prepared yarn build after repair, got:\n${argv}`);
+  assert.match(argv, /\binstall --force --prod=false\b/, `expected forced pnpm reinstall, got:\n${argv}`);
+  assert.match(argv, /(^|\n)run build:prepared(\n|$)/, `expected prepared pnpm build after repair, got:\n${argv}`);
   assert.match(await readFile(pkgrollCliPath, 'utf-8'), /pkgroll repaired/);
   assert.equal(await readFile(uiPatchOutput, 'utf8'), 'patched module\n', 'forced package repair must complete UI postinstall before returning');
   assert.equal(await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8'), 'export const built = true;\n');
@@ -2337,9 +2317,10 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   await runCapture('git', ['init'], { cwd: cliDir });
   await runCapture('git', ['config', 'user.email', 'hstack-test@example.test'], { cwd: cliDir });
@@ -2355,7 +2336,7 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
   const outputPath = join(root, 'argv.txt');
   const buildCompleteMarkerPath = join(root, 'build-complete.marker');
   const buildLockPath = join(cliDir, '.dist.hstack-build.lock');
-  await writeYarnSlowBuildCreatesDistStub({ binDir, outputPath, cliDir });
+  await writePnpmSlowBuildCreatesDistStub({ binDir, outputPath, cliDir });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2376,7 +2357,7 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
   })];
   void builds[0].catch(() => {});
   try {
-    await waitForFileText(outputPath, /^build:prepared$/m);
+    await waitForFileText(outputPath, /^run build:prepared$/m);
     builds.push(ensureCliBuilt(cliDir, {
       buildCli: true,
       quiet: true,
@@ -2396,7 +2377,7 @@ test('ensureCliBuilt serializes concurrent rebuilds so a fresh dist is built onc
   const buildInvocations = argv
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => line === 'build:prepared');
+    .filter((line) => line === 'run build:prepared');
   assert.equal(buildInvocations.length, 1);
   assert.equal(await readFile(distIndex, 'utf-8'), 'export const built = true;\n');
 });
@@ -2410,9 +2391,10 @@ test('ensureCliBuilt rebuilds an atomic publication when runtime inputs changed 
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(join(cliDir, 'src'), { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   await writeFile(join(cliDir, 'src', 'tracked.txt'), 'initial\n', 'utf-8');
 
   await runCapture('git', ['init'], { cwd: cliDir });
@@ -2424,18 +2406,18 @@ test('ensureCliBuilt rebuilds an atomic publication when runtime inputs changed 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       ...fakeAtomicCliDistBuildLines([
         '  printf \'export const tracked = "%s";\\n\' "$tracked" > "$out/index.mjs"',
       ], [
@@ -2449,7 +2431,7 @@ test('ensureCliBuilt rebuilds an atomic publication when runtime inputs changed 
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   applyEnvOverrides(t, {
@@ -2480,7 +2462,7 @@ test('ensureCliBuilt rebuilds an atomic publication when runtime inputs changed 
   const buildInvocations = argv
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => line === 'build:prepared');
+    .filter((line) => line === 'run build:prepared');
   assert.equal(buildInvocations.length, 2);
   assert.equal(await readFile(distIndex, 'utf-8'), 'export const tracked = "changed during build";\n');
 });
@@ -2494,9 +2476,10 @@ test('ensureCliBuilt detects a runtime input changed during build when another i
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(join(cliDir, 'src'), { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   const changedInputPath = join(cliDir, 'src', 'changed-during-build.txt');
   const newerInputPath = join(cliDir, 'src', 'unrelated-newer-input.txt');
   await writeFile(changedInputPath, 'initial\n', 'utf-8');
@@ -2507,18 +2490,18 @@ test('ensureCliBuilt detects a runtime input changed during build when another i
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       ...fakeAtomicCliDistBuildLines([
         '  echo "export const built = true;" > "$out/index.mjs"',
       ], [
@@ -2531,7 +2514,7 @@ test('ensureCliBuilt detects a runtime input changed during build when another i
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   applyEnvOverrides(t, {
@@ -2562,9 +2545,10 @@ test('ensureCliBuilt admits a canonical prebuild source publication without sche
   await mkdir(join(cliDir, 'src'), { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
   await writeFile(join(cliDir, 'src', 'index.ts'), 'export const initial = true;\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   // The release artifact builder moves the manifest-valid live dist here before rebuilding.
   // Simulate abnormal termination in that window, followed by a stack-requested rebuild failure.
@@ -2595,7 +2579,7 @@ test('ensureCliBuilt admits a canonical prebuild source publication without sche
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnCanonicalCliInputChangeStub({ binDir, outputPath });
+  await writePnpmCanonicalCliInputChangeStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2615,7 +2599,7 @@ test('ensureCliBuilt admits a canonical prebuild source publication without sche
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   assert.equal(await readFile(distIndex, 'utf-8'), 'export const mixed = true;\n');
   const argv = await readFile(outputPath, 'utf-8');
-  assert.match(argv, /(^|\n)build:prepared(\n|$)/);
+  assert.match(argv, /(^|\n)run build:prepared(\n|$)/);
   await assert.rejects(() => stat(distBackupDir));
   const selectedSnapshot = resolveValidRuntimeSnapshot(cliDir, 'index.mjs');
   assert.equal(selectedSnapshot?.outputDir, join(cliDir, 'dist'));
@@ -2632,9 +2616,10 @@ test('ensureCliBuilt discards an incomplete release backup instead of making it 
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const distBackupDir = join(cliDir, '.dist.hstack-backup');
   const backupIndex = join(distBackupDir, 'index.mjs');
@@ -2648,7 +2633,7 @@ test('ensureCliBuilt discards an incomplete release backup instead of making it 
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir });
+  await writePnpmBuildCreatesDistStub({ binDir, outputPath, cliDir });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2662,7 +2647,7 @@ test('ensureCliBuilt discards an incomplete release backup instead of making it 
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   assert.equal(await readFile(distIndex, 'utf-8'), 'export const built = true;\n');
   const argv = await readFile(outputPath, 'utf-8');
-  assert.match(argv, /(^|\n)build:prepared(\n|$)/);
+  assert.match(argv, /(^|\n)run build:prepared(\n|$)/);
   await assert.rejects(() => stat(distBackupDir));
 });
 
@@ -2675,14 +2660,15 @@ test('ensureCliBuilt passes its exact dist lock ownership to the child build', a
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const lockOutputPath = join(root, 'held-lock.txt');
-  await writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir });
+  await writePnpmBuildCreatesDistStub({ binDir, outputPath, cliDir });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2709,9 +2695,10 @@ test('ensureCliBuilt preserves existing dist and reports a staged build failure'
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   await mkdir(dirname(distIndex), { recursive: true });
@@ -2719,7 +2706,7 @@ test('ensureCliBuilt preserves existing dist and reports a staged build failure'
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnStagedBuildFailureStub({ binDir, outputPath });
+  await writePnpmStagedBuildFailureStub({ binDir, outputPath });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2736,12 +2723,12 @@ test('ensureCliBuilt preserves existing dist and reports a staged build failure'
   } catch (error) {
     failure = error;
   }
-  assert.match(failure.message, /yarn failed \(code=2,/);
+  assert.match(failure.message, /pnpm failed \(code=2,/);
   assert.match(failure.message, /simulated build failure/);
   assert.doesNotMatch(failure.message, /must-not-escape/);
 
   const argv = await readFile(outputPath, 'utf-8');
-  assert.match(argv, /(^|\n)build:prepared(\n|$)/);
+  assert.match(argv, /(^|\n)run build:prepared(\n|$)/);
   assert.equal(await readFile(distIndex, 'utf-8'), 'export const stable = true;\n');
 });
 
@@ -2767,7 +2754,8 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   }, null, 2) + '\n', 'utf-8');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/*\"\n");
   await writeFile(join(root, 'node_modules', 'tweetnacl', 'package.json'), JSON.stringify({
     name: 'tweetnacl',
     version: '1.0.3',
@@ -2806,7 +2794,7 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
     ].join('\n'),
     'utf-8',
   );
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   await writeFile(join(cliDir, 'dist', 'index.mjs'), 'export const cached = true;\n', 'utf-8');
 
   await writeFile(join(agentsDir, 'package.json'), JSON.stringify({
@@ -2814,7 +2802,7 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
     version: '0.0.0',
     type: 'module',
     scripts: {
-      build: 'yarn build',
+      build: 'pnpm build',
     },
     main: './dist/index.js',
     exports: {
@@ -2854,11 +2842,11 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, outputPath, agentsDir });
+  await writePnpmBuildRefreshesAgentsAndPreservesCliDistStub({ binDir, outputPath, agentsDir });
 
   applyEnvOverrides(t, {
     PATH: [binDir, process.env.PATH].filter(Boolean).join(delimiter),
-    npm_execpath: join(binDir, 'yarn-stub.cjs'),
+    npm_execpath: join(binDir, 'pnpm-stub.cjs'),
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_CLI_BUILD_MODE: 'auto',
     HAPPIER_STACK_ENV_FILE: null,
@@ -2869,8 +2857,8 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
   const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: native.env, platform: 'darwin' });
 
   const argv = await readFile(outputPath, 'utf-8');
-  assert.match(argv, /(^|\n)-s build(\n|$)/);
-  assert.match(argv, /(^|\n)build:prepared(\n|$)/);
+  assert.match(argv, /(^|\n)run --silent build(\n|$)/);
+  assert.match(argv, /(^|\n)run build:prepared(\n|$)/);
   assert.deepEqual(result, { built: true, current: true, reason: 'changed' });
   assert.equal(await readFile(join(agentsDir, 'dist', 'session', 'state', 'index.js'), 'utf-8'), 'export const state = true;\n');
   assert.equal(await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8'), 'export const cliBuilt = true;\n');
@@ -2905,7 +2893,8 @@ test('ensureCliBuilt delegates workspace preparation only to the canonical sourc
     private: true,
     workspaces: ['apps/*', 'packages/plugins/*'],
   }, null, 2) + '\n');
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# pnpm\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - \"apps/*\"\n  - \"packages/plugins/*\"\n");
   await writeFile(join(root, 'apps', 'ui', 'package.json'), '{ "name": "@happier-dev/ui" }\n');
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{ "name": "@happier-dev/server" }\n');
   await writeFile(join(cliDir, 'package.json'), JSON.stringify({
@@ -2916,7 +2905,7 @@ test('ensureCliBuilt delegates workspace preparation only to the canonical sourc
     },
     bundledDependencies: ['@happier-dev/plugins-broken'],
   }, null, 2) + '\n');
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n');
   await mkdir(join(cliDir, 'node_modules', '@happier-dev'), { recursive: true });
   await symlink(
     pluginDir,
@@ -2965,6 +2954,10 @@ test('ensureCliBuilt delegates workspace preparation only to the canonical sourc
   await utimes(join(pluginDir, 'dist', 'index.d.ts'), oldTime, oldTime);
   await utimes(join(pluginDir, 'src', 'index.ts'), changedTime, changedTime);
 
+  await withDependencyRefresh({ installDir: root, componentDir: cliDir, env: process.env }, async () => {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+  });
+
   const result = await ensureCliBuilt(cliDir, {
     buildCli: false,
     quiet: true,
@@ -2988,9 +2981,10 @@ test('ensureCliBuilt defaults to no rebuild in service mode even when runtime in
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
   const distIndex = join(cliDir, 'dist', 'index.mjs');
   await mkdir(dirname(distIndex), { recursive: true });
   await writeFile(distIndex, 'export const stable = true;\n', 'utf-8');
@@ -3004,7 +2998,7 @@ test('ensureCliBuilt defaults to no rebuild in service mode even when runtime in
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir });
+  await writePnpmBuildCreatesDistStub({ binDir, outputPath, cliDir });
 
   // 1) Force an initial build so a build state is written.
   applyEnvOverrides(t, {
@@ -3040,11 +3034,12 @@ test('ensureCliBuilt keeps auto rebuilds for an orphaned watcher that was not st
   const cliDir = join(root, 'apps', 'cli');
   await mkdir(join(cliDir, 'src'), { recursive: true });
   await writeFile(join(cliDir, 'package.json'), '{ "name": "cli-test" }\n', 'utf-8');
-  await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# pnpm\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), "packages:\n");
   await writeFile(join(cliDir, '.gitignore'), 'dist/\npackage-dist/\ndist.staging.*\n', 'utf-8');
   await writeFile(join(cliDir, 'src', 'tracked.txt'), 'clean\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'ok\n', 'utf-8');
 
   execFileSync('git', ['init'], { cwd: cliDir, stdio: 'ignore' });
   execFileSync('git', ['config', 'user.email', 'hstack-test@example.test'], { cwd: cliDir, stdio: 'ignore' });
@@ -3055,18 +3050,18 @@ test('ensureCliBuilt keeps auto rebuilds for an orphaned watcher that was not st
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$*" >> "${OUTPUT_PATH:?}"',
       'if [ "${1:-}" = "--version" ]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
-      'if [ "${1:-}" = "build:prepared" ]; then',
+      'if [ "${1:-}" = "run" ] && [ "${2:-}" = "build:prepared" ]; then',
       '  mkdir -p dist',
       '  if [ -f src/tracked.txt ]; then value="$(tr -d \'\\n\' < src/tracked.txt)"; else value="deleted"; fi',
       '  printf "export const tracked = \\"%s\\";\\n" "$value" > dist/index.mjs',
@@ -3077,7 +3072,7 @@ test('ensureCliBuilt keeps auto rebuilds for an orphaned watcher that was not st
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
   // The live watcher already runs a usable dist; build one first so `never` cannot fall
   // through to its missing-dist build.

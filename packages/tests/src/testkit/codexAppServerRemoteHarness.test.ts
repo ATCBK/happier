@@ -105,7 +105,7 @@ vi.mock('./process/spawnProcess', () => ({
 }));
 
 vi.mock('./process/commands', () => ({
-  yarnCommand: () => 'yarn',
+  pnpmCommand: () => 'pnpm',
 }));
 
 vi.mock('./sessions', () => ({

@@ -4,10 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
-function resolveYarnCommand(): string {
-    return process.platform === "win32" ? "yarn.cmd" : "yarn";
-}
+import { resolveServerScriptCommandInvocation } from "../../scripts/runCommand";
 
 describe("migrate:light:deploy (db contract)", () => {
     it("applies the full Prisma migration chain deterministically on a fresh embedded pglite DB", async () => {
@@ -23,11 +20,13 @@ describe("migrate:light:deploy (db contract)", () => {
                 HAPPIER_SERVER_LIGHT_DATA_DIR: dataDir,
             };
 
-            const res = spawnSync(resolveYarnCommand(), ["-s", "run", "migrate:light:deploy"], {
+            const invocation = resolveServerScriptCommandInvocation("pnpm", ["--silent", "run", "migrate:light:deploy"], env);
+            const res = spawnSync(invocation.command, invocation.args, {
                 cwd: serverRoot,
                 env: env as Record<string, string>,
                 encoding: "utf8",
                 stdio: ["ignore", "pipe", "pipe"],
+                ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
 
             if (res.status !== 0) {

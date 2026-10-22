@@ -36,7 +36,7 @@ async function hostFixture(t) {
   *) exit 79 ;;
 esac`,
     node: 'case "$1" in -p) echo /usr/bin/node ;; --version) echo v24.0.0 ;; *) exit 79 ;; esac',
-    corepack: 'echo 0.34.0',
+    npm: 'echo 11.0.0',
     sudo: 'exit 79',
     getent: `[ "$1" = passwd ] || exit 79
 [ -f "$HOST_FIXTURE/passwd" ] || exit 2
@@ -119,7 +119,7 @@ esac`,
       let remoteHome = '/root';
       if (user !== 'root') remoteHome = (await readFile(join(root, 'passwd'), 'utf8')).trim().split('\n')
         .map(line => line.split(':')).find(fields => fields[0] === user)?.[5];
-      return { ok: true, out: `__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=${remoteHome}\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_COREPACK__=/usr/bin/corepack\n__HAPPIER_TAILNET__=100.84.248.35\n`, err: '' };
+      return { ok: true, out: `__HAPPIER_UNAME__=Linux\n__HAPPIER_HOME__=${remoteHome}\n__HAPPIER_PATH__=/usr/bin:/bin\n__HAPPIER_NODE__=/usr/bin/node\n__HAPPIER_NODE_VERSION__=v24.0.0\n__HAPPIER_NPM__=/usr/bin/npm\n__HAPPIER_TAILNET__=100.84.248.35\n`, err: '' };
     },
   };
   return { root, etc, config, log, target, env, publicKey, boundary, run, transportRequests, outputs,
@@ -212,15 +212,13 @@ for (const entry of JSON.parse(parsed.stdout).User_Specs ?? []) {
   }
 }
 if (!allowed) { console.error('restricted sudo policy denied installer argv'); process.exit(1); }
-delete process.env.COREPACK_ENABLE_PROJECT_SPEC;
 const result = spawnSync(command, args.slice(1), { stdio: 'inherit' });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);
 ` });
   const installed = join(host.root, 'browser-installed');
-  writeFakeBin({ root: host.root, name: 'corepack', content: `#!${process.execPath}
-require('node:assert/strict').equal(process.env.COREPACK_ENABLE_PROJECT_SPEC, '0');
-require('node:assert/strict').deepEqual(process.argv.slice(2), ['npm', 'install', '--global', '--no-audit', '--no-fund', '--allow-scripts=agent-browser', 'agent-browser@0.34.0']);
+  writeFakeBin({ root: host.root, name: 'npm', content: `#!${process.execPath}
+require('node:assert/strict').deepEqual(process.argv.slice(2), ['install', '--global', '--no-audit', '--no-fund', '--allow-scripts=agent-browser', 'agent-browser@0.34.0']);
 require('node:fs').writeFileSync(process.env.HOST_BROWSER_INSTALLED, 'ready');
 ` });
   writeFakeBin({ root: host.root, name: 'uname', content: '#!/bin/sh\necho x86_64\n' });
@@ -231,9 +229,9 @@ require('node:fs').writeFileSync(process.env.HOST_BROWSER_INSTALLED, 'ready');
   const result = spawnSync('/bin/bash', [script, '--profile=qa'], { env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(await readFile(installed, 'utf8'), 'ready');
-  const installer = [nodeEntry, join(binDir, 'corepack'), 'npm', 'install', '--global', '--no-audit', '--no-fund',
+  const installer = [nodeEntry, join(binDir, 'npm'), 'install', '--global', '--no-audit', '--no-fund',
     '--allow-scripts=agent-browser', 'agent-browser@0.34.0'];
-  for (const assignment of [['COREPACK_ENABLE_PROJECT_SPEC=1'], ['COREPACK_ENABLE_PROJECT_SPEC=0', 'NODE_OPTIONS=--inspect']]) {
+  for (const assignment of [['NPM_CONFIG_PREFIX=/tmp/untrusted'], ['NODE_OPTIONS=--inspect']]) {
     const refused = spawnSync(join(binDir, 'sudo'), ['-n', '/usr/bin/env', ...assignment, ...installer], { env, encoding: 'utf8' });
     assert.equal(refused.status, 1, refused.stderr);
     assert.match(refused.stderr, /restricted sudo policy denied/);
@@ -243,10 +241,10 @@ require('node:fs').writeFileSync(process.env.HOST_BROWSER_INSTALLED, 'ready');
   await symlink(process.execPath, neighboringNode);
   for (const unsafeInstaller of [
     [neighboringNode, ...installer.slice(1)],
-    [nodeEntry, `${join(binDir, 'corepack')}-other`, ...installer.slice(2)],
+    [nodeEntry, `${join(binDir, 'npm')}-other`, ...installer.slice(2)],
     [...installer, '--force'],
   ]) {
-    const refused = spawnSync(join(binDir, 'sudo'), ['-n', '/usr/bin/env', 'COREPACK_ENABLE_PROJECT_SPEC=0', ...unsafeInstaller],
+    const refused = spawnSync(join(binDir, 'sudo'), ['-n', '/usr/bin/env', ...unsafeInstaller],
       { env, encoding: 'utf8' });
     assert.equal(refused.status, 1, refused.stderr);
     assert.match(refused.stderr, /restricted sudo policy denied/);

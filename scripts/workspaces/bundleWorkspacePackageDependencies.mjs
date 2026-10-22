@@ -16,7 +16,7 @@ const WORKSPACE_DIST_BUILD_LOCK_HELD_ENV_VAR = 'HAPPIER_WORKSPACE_DIST_BUILD_LOC
 export function findWorkspaceRepositoryRoot(startDir) {
   let directory = resolve(startDir);
   for (let depth = 0; depth < 10; depth += 1) {
-    if (existsSync(resolve(directory, 'package.json')) && existsSync(resolve(directory, 'yarn.lock'))) {
+    if (existsSync(resolve(directory, 'package.json')) && existsSync(resolve(directory, 'pnpm-lock.yaml')) && existsSync(resolve(directory, 'pnpm-workspace.yaml'))) {
       return directory;
     }
     const parent = resolve(directory, '..');

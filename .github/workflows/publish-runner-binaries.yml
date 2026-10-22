@@ -199,8 +199,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Resolve channel metadata
         id: channel_meta
@@ -265,11 +263,6 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
-      - name: Enable Corepack (Yarn)
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -278,14 +271,13 @@ jobs:
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           # Runner binary publishing does not require UI web-only vendored assets.
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
           HAPPIER_EMBEDDED_POLICY_ENV: ${{ steps.channel_meta.outputs.embedded_policy_env }}
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Allocate immutable version
         id: version
@@ -332,12 +324,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
@@ -392,13 +378,12 @@ jobs:
           done
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
           HAPPIER_EMBEDDED_POLICY_ENV: ${{ needs.prepare.outputs.embedded_policy_env }}
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
       - name: Build unsigned Runner archives
         env:
           MINISIGN_SECRET_KEY: ""
@@ -447,20 +432,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign
       - name: Install dependencies
         env:
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
       - name: Download unsigned candidate matrix
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -524,18 +503,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: corepack enable
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign
       - name: Install dependencies
         env:
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
       - name: Create scoped release token
         id: app_token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547

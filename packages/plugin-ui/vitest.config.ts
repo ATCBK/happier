@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { resolveVitestWorkers } from '../../scripts/testing/vitestWorkers';
 import { resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,9 @@ import {
   createWorkspacePackageSourcesPlugin,
   type WorkspacePackageSpec,
 } from '../../scripts/testing/vitestWorkspacePackageResolution';
+
+const requireUiDependency = createRequire(new URL('../../apps/ui/package.json', import.meta.url));
+const requirePackageDependency = createRequire(new URL('./package.json', import.meta.url));
 
 const packageRoot = fileURLToPath(new URL('.', import.meta.url));
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths);
@@ -52,10 +56,10 @@ const sharedExclude = [
  * preference — is why this package runs two projects out of one config.
  */
 const packageLocalReactAliases = [
-  { find: /^react$/u, replacement: resolve('node_modules/react/index.js') },
-  { find: /^react\/jsx-runtime$/u, replacement: resolve('node_modules/react/jsx-runtime.js') },
-  { find: /^react\/jsx-dev-runtime$/u, replacement: resolve('node_modules/react/jsx-dev-runtime.js') },
-  { find: /^react-test-renderer$/u, replacement: resolve('node_modules/react-test-renderer/index.js') },
+  { find: /^react$/u, replacement: requirePackageDependency.resolve('react') },
+  { find: /^react\/jsx-runtime$/u, replacement: requirePackageDependency.resolve('react/jsx-runtime') },
+  { find: /^react\/jsx-dev-runtime$/u, replacement: requirePackageDependency.resolve('react/jsx-dev-runtime') },
+  { find: /^react-test-renderer$/u, replacement: requirePackageDependency.resolve('react-test-renderer') },
 ];
 
 /**
@@ -69,14 +73,14 @@ const packageLocalReactAliases = [
  * package's own RED/GREEN loop instead of only in a multi-minute packed lane.
  */
 const reactNativeWebAliases = [
-  { find: /^react$/u, replacement: resolve('../../apps/ui/node_modules/react/index.js') },
-  { find: /^react\/jsx-runtime$/u, replacement: resolve('../../apps/ui/node_modules/react/jsx-runtime.js') },
-  { find: /^react\/jsx-dev-runtime$/u, replacement: resolve('../../apps/ui/node_modules/react/jsx-dev-runtime.js') },
-  { find: /^react-dom\/client$/u, replacement: resolve('../../apps/ui/node_modules/react-dom/client.js') },
-  { find: /^react-dom$/u, replacement: resolve('../../apps/ui/node_modules/react-dom/index.js') },
-  { find: /^react-native$/u, replacement: resolve('../../apps/ui/node_modules/react-native-web/dist/index.js') },
+  { find: /^react$/u, replacement: requireUiDependency.resolve('react') },
+  { find: /^react\/jsx-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-runtime') },
+  { find: /^react\/jsx-dev-runtime$/u, replacement: requireUiDependency.resolve('react/jsx-dev-runtime') },
+  { find: /^react-dom\/client$/u, replacement: requireUiDependency.resolve('react-dom/client') },
+  { find: /^react-dom$/u, replacement: requireUiDependency.resolve('react-dom') },
+  { find: /^react-native$/u, replacement: requireUiDependency.resolve('react-native-web/dist/index.js') },
   // Native/Metro chooses this web implementation by platform extension; Vite does not.
-  { find: /^react-native-svg$/u, replacement: resolve('../../apps/ui/node_modules/react-native-svg/lib/module/elements.web.js') },
+  { find: /^react-native-svg$/u, replacement: requireUiDependency.resolve('react-native-svg/lib/module/elements.web.js') },
   // The same external author proof also has a source-only inner loop; package preparation
   // and loaded-platform certification remain owned by their integrated lanes.
   { find: '@external-authoring/plugin', replacement: resolve('fixtures/external-authoring/src/index.ts') },

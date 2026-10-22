@@ -1,0 +1,16 @@
+diff --git a/dist/adapter.js b/dist/adapter.js
+index be235b4213ce5ed6ac20fa1903cbe113f9bfd504..490b78528946595c3a4bd2449e5d2d8a3563bd26 100644
+--- a/dist/adapter.js
++++ b/dist/adapter.js
+@@ -123,7 +123,10 @@ function computeStreamName(namespaceName, opts) {
+ function isEphemeral(message) {
+     const isBroadcastWithAck = message.type === socket_io_adapter_1.MessageType.BROADCAST &&
+         message.data.requestId !== undefined;
+-    return (isBroadcastWithAck ||
++    // Keep opt-in ACK retirement ordered behind its request on the same
++    // publisher/subscriber channel, including cancellation before client counts.
++    const isAckCancellation = message.type === socket_io_adapter_1.MessageType.BROADCAST_ACK && message.data.cancel === true;
++    return (isBroadcastWithAck || isAckCancellation ||
+         [socket_io_adapter_1.MessageType.SERVER_SIDE_EMIT, socket_io_adapter_1.MessageType.FETCH_SOCKETS].includes(message.type));
+ }
+ class RedisStreamsAdapter extends socket_io_adapter_1.ClusterAdapter {

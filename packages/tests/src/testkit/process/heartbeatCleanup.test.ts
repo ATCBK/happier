@@ -26,14 +26,14 @@ const WRAPPER_CASES: WrapperCase[] = [
   {
     name: 'run-vitest-with-heartbeat',
     scriptPath: 'packages/tests/scripts/run-vitest-with-heartbeat.mjs',
-    toolCommandName: 'yarn',
+    toolCommandName: 'pnpm',
     configName: 'vitest.config.ts',
     buildArgs: (configPath) => ['--config', configPath],
   },
   {
     name: 'run-playwright-with-heartbeat',
     scriptPath: 'packages/tests/scripts/run-playwright-with-heartbeat.mjs',
-    toolCommandName: 'yarn',
+    toolCommandName: 'pnpm',
     configName: 'playwright.config.mjs',
     buildArgs: (configPath) => ['--config', configPath],
   },
@@ -86,7 +86,7 @@ async function createFakeToolchain(
   markerPath: string,
   opts?: Readonly<{ exitAfterSpawn?: boolean; signalAfterSpawn?: NodeJS.Signals }>,
 ): Promise<string> {
-  const sharedScriptPath = join(toolDir, 'fake-yarn.cjs');
+  const sharedScriptPath = join(toolDir, 'fake-pnpm.cjs');
   const exitAfterSpawn = opts?.exitAfterSpawn === true;
   const signalAfterSpawn = opts?.signalAfterSpawn;
 
@@ -117,13 +117,13 @@ async function createFakeToolchain(
     'utf8',
   );
 
-  // Heartbeat wrappers use the canonical Corepack invocation rather than bare Yarn.
-  for (const shim of commandName === 'yarn' ? ['yarn', 'corepack'] : [commandName]) {
+  // Heartbeat wrappers use the canonical Corepack invocation rather than bare Pnpm.
+  for (const shim of commandName === 'pnpm' ? ['pnpm', 'corepack'] : [commandName]) {
     const commandPath = join(toolDir, process.platform === 'win32' ? `${shim}.cmd` : shim);
     if (process.platform === 'win32') {
       await writeFile(commandPath, `@echo off\r\nnode "${sharedScriptPath}" %*\r\n`, 'utf8');
     } else {
-      await writeFile(commandPath, "#!/usr/bin/env node\nrequire('./fake-yarn.cjs');\n", 'utf8');
+      await writeFile(commandPath, "#!/usr/bin/env node\nrequire('./fake-pnpm.cjs');\n", 'utf8');
       await chmod(commandPath, 0o755);
     }
   }
@@ -147,7 +147,7 @@ async function resolveWrapperFixturePath(caseItem: WrapperCase, toolDir: string,
     'scripts/testing/vitestShardCollection.mjs',
     'scripts/testing/vitestShardOutcomes.mjs',
     'scripts/testing/vitestWorkers.ts',
-    'scripts/workspaces/execYarnCommand.mjs',
+    'scripts/workspaces/execPnpmCommand.mjs',
     'packages/cli-common/windowsCommandInvocation.mjs',
   ];
   await Promise.all(sources.map(async (source) => {
@@ -214,7 +214,7 @@ async function runWrapperCleanupScenario(
           }
           return false;
         }
-      }, { timeoutMs: 20_000, intervalMs: 100, failFast: true, context: `${caseItem.name} fake yarn startup` });
+      }, { timeoutMs: 20_000, intervalMs: 100, failFast: true, context: `${caseItem.name} fake pnpm startup` });
 
       const raw = await readFile(markerPath, 'utf8');
       const marker = JSON.parse(raw) as { childPid: number; grandchildPid: number };
@@ -362,7 +362,7 @@ async function runWrapperParentExitCleanupScenario(caseItem: WrapperCase): Promi
         } catch {
           return false;
         }
-      }, { timeoutMs: 20_000, intervalMs: 100, context: `${caseItem.name} fake yarn startup before parent exit` });
+      }, { timeoutMs: 20_000, intervalMs: 100, context: `${caseItem.name} fake pnpm startup before parent exit` });
 
       marker = JSON.parse(await readFile(markerPath, 'utf8')) as { childPid: number; grandchildPid: number };
       expect(marker.childPid).toBeGreaterThan(0);

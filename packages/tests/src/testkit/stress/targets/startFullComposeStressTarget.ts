@@ -106,27 +106,27 @@ function writeJsonFile(path: string, value: unknown): void {
 }
 
 function renderGeneratedStressServerDockerfile(): string {
-    return `FROM node:22 AS server-stress
+    return `# syntax=docker/dockerfile:1
+FROM node:22 AS server-stress
 RUN apt-get update && apt-get install -y python3 ffmpeg make g++ build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
-RUN corepack enable && corepack prepare yarn@1.22.22 --activate
 ENV HAPPIER_INSTALL_SCOPE=server,protocol,agents,cli-common,release-runtime
-COPY package.json yarn.lock ./
-RUN node -e "const fs=require('fs');const packageJson=require('./package.json');delete packageJson.dependencies?.['@happier-dev/cli'];fs.writeFileSync('package.json',JSON.stringify(packageJson));"
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 RUN mkdir -p apps/cli apps/server apps/ui packages/agents packages/cli-common packages/plugin-sdk packages/plugins/review-coderabbit packages/plugins/review-deepsec packages/protocol packages/release-runtime scripts/pipeline/expo scripts/workspaces
-COPY apps/server/package.json apps/server/
-COPY packages/agents/package.json packages/agents/
-COPY packages/cli-common/package.json packages/cli-common/
-COPY packages/plugin-sdk/package.json packages/plugin-sdk/
-COPY packages/plugins/review-coderabbit/package.json packages/plugins/review-coderabbit/
-COPY packages/plugins/review-deepsec/package.json packages/plugins/review-deepsec/
-COPY packages/protocol/package.json packages/protocol/
-COPY packages/release-runtime/package.json packages/release-runtime/
+COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./
+COPY apps/ui/tools/postinstall ./apps/ui/tools/postinstall
 COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
 COPY scripts/workspaces ./scripts/workspaces
-RUN yarn install --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
-COPY apps/cli/package.json apps/cli/
-COPY apps/ui/package.json apps/ui/
+COPY scripts/ci/setup-pnpm.mjs ./scripts/ci/
+COPY packages/cli-common/windowsCommandInvocation.mjs ./packages/cli-common/
+RUN node scripts/ci/setup-pnpm.mjs
+RUN --mount=type=cache,target=/pnpm/store,sharing=locked pnpm install --frozen-lockfile --store-dir /pnpm/store --prefer-offline
+COPY apps/cli/scripts/build-owned/bundledPluginMembership.ts ./apps/cli/scripts/build-owned/bundledPluginMembership.ts
+COPY apps/cli/scripts/buildPublication.mjs ./apps/cli/scripts/buildPublication.mjs
+COPY apps/stack/bin/hstack-exec ./apps/stack/bin/hstack-exec
+COPY apps/stack/scripts/build/sourceWebExportArgs.mjs ./apps/stack/scripts/build/sourceWebExportArgs.mjs
+COPY apps/stack/scripts/provision/linux-inotify.mjs ./apps/stack/scripts/provision/linux-inotify.mjs
 COPY .github/feature-policy ./.github/feature-policy
 COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
 COPY apps/server ./apps/server
@@ -137,8 +137,8 @@ COPY packages/plugins/review-coderabbit ./packages/plugins/review-coderabbit
 COPY packages/plugins/review-deepsec ./packages/plugins/review-deepsec
 COPY packages/protocol ./packages/protocol
 COPY packages/release-runtime ./packages/release-runtime
-RUN node --input-type=module -e "import { readFileSync } from 'node:fs'; import { spawnSync } from 'node:child_process'; const { resolveWorkspaceDependencyBuildOrder } = await import('./scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs'); const serverPackageJson = JSON.parse(readFileSync('./apps/server/package.json', 'utf8')); const seedPackageNames = ['dependencies', 'optionalDependencies', 'devDependencies'].flatMap((field) => Object.keys(serverPackageJson[field] ?? {})).filter((name) => name.startsWith('@happier-dev/')); const workspaceNames = resolveWorkspaceDependencyBuildOrder({ repoRoot: '/repo', seedPackageNames }); for (const workspaceName of workspaceNames) { const result = spawnSync('yarn', ['-s', 'workspace', '@happier-dev/' + workspaceName, 'build'], { cwd: '/repo', stdio: 'inherit', env: process.env }); if (result.error) throw result.error; if (result.status !== 0) process.exit(result.status ?? 1); }"
-RUN yarn workspace @happier-dev/server generate:providers
+RUN node --input-type=module -e "import { readFileSync } from 'node:fs'; import { spawnSync } from 'node:child_process'; const { resolveWorkspaceDependencyBuildOrder } = await import('./scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs'); const serverPackageJson = JSON.parse(readFileSync('./apps/server/package.json', 'utf8')); const seedPackageNames = ['dependencies', 'optionalDependencies', 'devDependencies'].flatMap((field) => Object.keys(serverPackageJson[field] ?? {})).filter((name) => name.startsWith('@happier-dev/')); const workspaceNames = resolveWorkspaceDependencyBuildOrder({ repoRoot: '/repo', seedPackageNames }); for (const workspaceName of workspaceNames) { const result = spawnSync('pnpm', ['--filter', '@happier-dev/' + workspaceName, 'run', 'build'], { cwd: '/repo', stdio: 'inherit', env: process.env }); if (result.error) throw result.error; if (result.status !== 0) process.exit(result.status ?? 1); }"
+RUN pnpm --filter @happier-dev/server run generate:providers
 ENV NODE_ENV=production
 ENV PORT=3005
 ENV RUN_MIGRATIONS=1

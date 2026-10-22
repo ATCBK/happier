@@ -26,13 +26,16 @@ test('ensureServerLightSchemaReady runs the canonical migration dispatcher by de
 });
 
 test('ensureServerLightSchemaReady builds source server internal workspace dependencies before migration', async (t) => {
-  const { binDir, markerPath, root, yarnPath } = await createServerLightFixture(t, {
+  const { binDir, markerPath, root, pnpmPath } = await createServerLightFixture(t, {
     prefix: 'hs-startup-light-build-workspaces-',
     serverDirRelative: join('apps', 'server'),
     socketPort: 54326,
   });
   const serverDir = join(root, 'apps', 'server');
   const buildMarkerPath = join(root, 'called-cli-common-build.txt');
+  await writeJson(join(root, 'package.json'), { private: true });
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
 
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
@@ -67,14 +70,14 @@ test('ensureServerLightSchemaReady builds source server internal workspace depen
   });
 
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const fs = require('node:fs');",
       "const path = require('node:path');",
       'const args = process.argv.slice(2);',
-      "if (args.includes('--version')) { console.log('1.22.22'); process.exit(0); }",
-      `if (args[0] === '-s' && args[1] === 'build' && process.cwd().endsWith(path.join('packages', 'cli-common'))) {`,
+      "if (args.includes('--version')) { console.log('12.14.0'); process.exit(0); }",
+      `if (args[0] === 'run' && args[1] === '--silent' && args[2] === 'build' && process.cwd().endsWith(path.join('packages', 'cli-common'))) {`,
       "  const out = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR || path.join(process.cwd(), 'dist');",
       '  fs.mkdirSync(out, { recursive: true });',
       "  fs.writeFileSync(path.join(out, 'index.js'), 'export const ok = true;\\n', 'utf-8');",
@@ -82,12 +85,12 @@ test('ensureServerLightSchemaReady builds source server internal workspace depen
       `  fs.writeFileSync(${JSON.stringify(buildMarkerPath)}, 'ok\\n', 'utf-8');`,
       '  process.exit(0);',
       '}',
-      `if ((args[0] === '-s' && args[1] === 'migrate:deploy') || (args[0] === 'run' && args[1] === 'migrate:deploy')) { fs.writeFileSync(${JSON.stringify(markerPath)}, 'ok\\n', 'utf-8'); process.exit(0); }`,
+      `if (args[0] === 'run' && args[1] === '--silent' && args[2] === 'migrate:deploy') { fs.writeFileSync(${JSON.stringify(markerPath)}, 'ok\\n', 'utf-8'); process.exit(0); }`,
       'process.exit(0);',
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 
   const { env } = await installWorkspaceAdmissionProcessFixture(t, root, { env: buildServerLightEnv({ binDir, root }) });
   const res = await ensureServerLightSchemaReady({ serverDir, env });

@@ -9,9 +9,10 @@ import { ensureMinimalMonorepoLayout } from '../scripts/testkit/core/minimal_mon
 import { runNodeCapture } from '../scripts/testkit/core/run_node_capture.mjs';
 import { createTempFixture } from '../scripts/testkit/core/temp_fixture.mjs';
 
-async function writeYarnOkPackage({ dir, name, scriptOutput }) {
+async function writePnpmOkPackage({ dir, name, scriptOutput }) {
   await mkdir(join(dir, 'node_modules'), { recursive: true });
-  await writeFile(join(dir, 'yarn.lock'), '# stub lock\n', 'utf-8');
+  await writeFile(join(dir, 'pnpm-lock.yaml'), '# stub lock\n', 'utf-8');
+  await writeFile(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   await writeFile(join(dir, 'test-script.mjs'), `process.stdout.write(${JSON.stringify(scriptOutput)});\n`, 'utf-8');
   await writeFile(
     join(dir, 'package.json'),
@@ -19,7 +20,7 @@ async function writeYarnOkPackage({ dir, name, scriptOutput }) {
       {
         name,
         private: true,
-        packageManager: 'yarn@1.22.22',
+        packageManager: 'pnpm@12.14.0',
         scripts: {
           test: 'node ./test-script.mjs',
         },
@@ -29,19 +30,20 @@ async function writeYarnOkPackage({ dir, name, scriptOutput }) {
     ),
     'utf-8'
   );
-  await writeFile(join(dir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
 }
 
-async function makeFakeYarn({ sandboxDir }) {
-  const logPath = join(sandboxDir, 'fake-yarn.log');
+async function makeFakePnpm({ sandboxDir }) {
+  const logPath = join(sandboxDir, 'fake-pnpm.log');
   const { binDir } = writeFakeBin({
     root: sandboxDir,
-    name: 'yarn',
+    name: 'pnpm',
     content: [
       '#!/bin/sh',
       'set -eu',
-      'if [ -n "${HSTACK_FAKE_YARN_LOG:-}" ]; then',
-      '  printf "%s\\n" "$*" >> "${HSTACK_FAKE_YARN_LOG}"',
+      'if [ "${1-}" = "--version" ]; then echo 12.14.0; exit 0; fi',
+      'if [ "${1-}" != "run" ]; then exit 0; fi',
+      'if [ -n "${HSTACK_FAKE_PNPM_LOG:-}" ]; then',
+      '  printf "%s\\n" "$*" >> "${HSTACK_FAKE_PNPM_LOG}"',
       'fi',
       'if [ -f "./test-script.mjs" ]; then',
       '  node ./test-script.mjs',
@@ -56,22 +58,22 @@ async function makeFakeYarn({ sandboxDir }) {
 async function runStackTestWrapperScenario({ expectedTarget, expectedTestOutput, repoRoot, sandbox, targetArg }) {
   const monoRoot = join(sandbox, 'mono');
   const { uiDir, cliDir, serverDir } = await ensureMinimalMonorepoLayout(monoRoot);
-  await writeYarnOkPackage({ dir: monoRoot, name: 'monorepo', scriptOutput: 'ROOT_TEST_RUN' });
-  await writeYarnOkPackage({ dir: uiDir, name: 'happier-ui', scriptOutput: 'UI_TEST_RUN' });
-  await writeYarnOkPackage({ dir: cliDir, name: 'happier-cli', scriptOutput: 'CLI_TEST_RUN' });
-  await writeYarnOkPackage({ dir: serverDir, name: 'happier-server', scriptOutput: 'SERVER_TEST_RUN' });
-  const fakeYarn = await makeFakeYarn({ sandboxDir: sandbox });
+  await writePnpmOkPackage({ dir: monoRoot, name: 'monorepo', scriptOutput: 'ROOT_TEST_RUN' });
+  await writePnpmOkPackage({ dir: uiDir, name: 'happier-ui', scriptOutput: 'UI_TEST_RUN' });
+  await writePnpmOkPackage({ dir: cliDir, name: 'happier-cli', scriptOutput: 'CLI_TEST_RUN' });
+  await writePnpmOkPackage({ dir: serverDir, name: 'happier-server', scriptOutput: 'SERVER_TEST_RUN' });
+  const fakePnpm = await makeFakePnpm({ sandboxDir: sandbox });
 
   const stackEnvPath = join(sandbox, 'storage', 'main', 'env');
   await mkdir(dirname(stackEnvPath), { recursive: true });
   await writeFile(stackEnvPath, `HAPPIER_STACK_REPO_DIR=${monoRoot}\n`, 'utf-8');
 
   const env = buildStackHarnessEnv({
-    binDirs: [fakeYarn.binDir],
+    binDirs: [fakePnpm.binDir],
     extraEnv: {
       HAPPIER_STACK_CLI_ROOT_DISABLE: '1',
       HAPPIER_STACK_UPDATE_CHECK: '0',
-      HSTACK_FAKE_YARN_LOG: fakeYarn.logPath,
+      HSTACK_FAKE_PNPM_LOG: fakePnpm.logPath,
     },
   });
   const args = [targetArg].filter(Boolean);
@@ -87,8 +89,8 @@ async function runStackTestWrapperScenario({ expectedTarget, expectedTestOutput,
   assert.equal(parsed?.ok, true, `expected ok=true, got:\n${JSON.stringify(parsed, null, 2)}\n\nstderr:\n${res.stderr}`);
   assert.equal(parsed?.results?.[0]?.target, expectedTarget);
   assert.ok(res.stderr.includes(expectedTestOutput), `expected ${expectedTestOutput} on stderr, got:\n${res.stderr}`);
-  const fakeYarnLog = await readFile(fakeYarn.logPath, 'utf-8');
-  assert.match(fakeYarnLog, /\btest\b/, `expected fake yarn invocation log, got:\n${fakeYarnLog}`);
+  const fakePnpmLog = await readFile(fakePnpm.logPath, 'utf-8');
+  assert.match(fakePnpmLog, /\btest\b/, `expected fake pnpm invocation log, got:\n${fakePnpmLog}`);
 }
 
 function hstackBinPath(repoRoot) {

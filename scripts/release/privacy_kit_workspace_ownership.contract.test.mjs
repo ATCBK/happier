@@ -3,21 +3,23 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { classifyChangedPaths, deriveVersionedComponentChanges } from '../pipeline/release/component-registry.mjs';
+import { readWorkspacePatterns } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
+import { fileURLToPath } from 'node:url';
 
 async function readJson(relativePath) {
   return JSON.parse(await readFile(new URL(`../../${relativePath}`, import.meta.url), 'utf8'));
 }
 
 test('privacy-kit is an attributed private workspace consumed by server and compatibility tests', async () => {
-  const [rootPackage, privacyKitPackage, serverPackage, testsPackage, upstreamNotice] = await Promise.all([
-    readJson('package.json'),
+  const [workspacePatterns, privacyKitPackage, serverPackage, testsPackage, upstreamNotice] = await Promise.all([
+    readWorkspacePatterns(fileURLToPath(new URL('../../', import.meta.url))),
     readJson('packages/privacy-kit/package.json'),
     readJson('apps/server/package.json'),
     readJson('packages/tests/package.json'),
     readFile(new URL('../../packages/privacy-kit/UPSTREAM.md', import.meta.url), 'utf8'),
   ]);
 
-  assert.ok(rootPackage.workspaces.packages.includes('packages/privacy-kit'));
+  assert.ok(workspacePatterns.includes('packages/privacy-kit'));
   assert.equal(privacyKitPackage.name, 'privacy-kit');
   assert.equal(privacyKitPackage.private, true);
   assert.equal(privacyKitPackage.license, 'MIT');

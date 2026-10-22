@@ -43,7 +43,7 @@
     "probe:ios": "node scripts/probeIos.mjs",
     "size:budget": "node scripts/sizeBudget.mjs",
     "test": "../../apps/stack/bin/hstack-exec --script=test:local",
-    "test:local": "yarn -s test:src && yarn -s test:probes",
+    "test:local": "pnpm --silent run test:src && pnpm --silent run test:probes",
     "test:probes": "node --test scripts/probes.test.mjs",
     "test:src": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts src",
     "typecheck": "../../apps/stack/bin/hstack-exec --script=typecheck:local",

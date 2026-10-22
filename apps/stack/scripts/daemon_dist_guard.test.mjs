@@ -165,7 +165,8 @@ async function writeHappyMonorepoMarkers(rootDir) {
 
 async function prepareCurrentSourceCliFixture(rootDir, cliDir) {
   await writeFile(join(rootDir, 'package.json'), '{ "private": true }\n', 'utf-8');
-  await writeFile(join(rootDir, 'yarn.lock'), '# test lock\n', 'utf-8');
+  await writeFile(join(rootDir, 'pnpm-lock.yaml'), '# test lock\n', 'utf-8');
+  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(rootDir, 'node_modules'), { recursive: true });
   await writeFile(join(rootDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
@@ -1823,7 +1824,8 @@ async function assertRunnablePriorSourceDaemonAdmission(t, sourceProvenanceEnv) 
   const cliBin = await writeStubHappyCli({ cliDir });
   await writeHappyMonorepoMarkers(tmp);
   await writeFile(join(tmp, 'package.json'), '{ "private": true }\n', 'utf-8');
-  await writeFile(join(tmp, 'yarn.lock'), '# root yarn\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-lock.yaml'), '# root yarn\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(tmp, 'node_modules'), { recursive: true });
   await writeFile(join(tmp, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
@@ -1896,7 +1898,8 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
   const cliBin = await writeStubHappyCli({ cliDir });
   await writeHappyMonorepoMarkers(tmp);
   await writeFile(join(tmp, 'package.json'), '{ "private": true }\n', 'utf-8');
-  await writeFile(join(tmp, 'yarn.lock'), '# root yarn\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-lock.yaml'), '# root yarn\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
   await mkdir(join(tmp, 'node_modules'), { recursive: true });
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
   await writeFile(
@@ -2202,7 +2205,8 @@ test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish b
     await writeFile(join(tmp, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
     await mkdir(join(cliDir, 'node_modules'), { recursive: true });
     await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
-    await writeFile(join(cliDir, 'yarn.lock'), '# yarn\n', 'utf-8');
+    await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# yarn\n', 'utf-8');
+    await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(join(tmp, 'package.json'), '{}\n', 'utf-8');
 
     const cliHomeDir = join(tmp, 'stack', 'cli');

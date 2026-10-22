@@ -293,17 +293,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: |
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
       - name: Install candidate dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: bash scripts/ci/yarn-install-with-retry.sh --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+        uses: ./.github/actions/install-pnpm-dependencies
       # The build is unconditional: deploy_cloudflare publishes exactly these
       # bytes, so `run_build: false` must not be able to produce a promotion
       # with nothing to upload. The build itself is the gate — it runs
@@ -317,7 +310,7 @@ jobs:
           # rather than quietly shipping an unmeasured build; set it to the
           # empty string to publish an intentionally blind one.
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
-        run: yarn workspace @happier-dev/website build
+        run: pnpm --filter @happier-dev/website run build
       - name: Upload built site across the trust boundary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

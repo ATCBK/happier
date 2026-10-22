@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 
 import { resolveServerWorkspaceRoot, runPrismaCli } from "./prismaCli";
 import { runCommand } from "./runCommand";
+
+const requireFromHere = createRequire(import.meta.url);
 
 export type BuildDbProvider = "postgres" | "mysql" | "sqlite";
 
@@ -153,7 +156,7 @@ export async function areRequestedPrismaOutputsCurrent(params: OutputStatusParam
     const fileExists = params.fileExists ?? defaultFileExists;
     const readText = params.readText ?? ((path: string) => readFile(path, "utf8"));
 
-    const checks: Array<Readonly<{ sourcePath: string; generatedClientDir: string }>> = [
+    const checks: Array<Readonly<{ sourcePath: string; generatedClientDir: string; copiesRuntime?: boolean }>> = [
         {
             sourcePath: join(serverRoot, "prisma", "schema.prisma"),
             generatedClientDir: join(repoRoot, "node_modules", ".prisma", "client"),
@@ -163,12 +166,14 @@ export async function areRequestedPrismaOutputsCurrent(params: OutputStatusParam
         checks.push({
             sourcePath: join(serverRoot, "prisma", "sqlite", "schema.prisma"),
             generatedClientDir: join(serverRoot, "generated", "sqlite-client"),
+            copiesRuntime: true,
         });
     }
     if (params.providers.has("mysql")) {
         checks.push({
             sourcePath: join(serverRoot, "prisma", "mysql", "schema.prisma"),
             generatedClientDir: join(serverRoot, "generated", "mysql-client"),
+            copiesRuntime: true,
         });
     }
 
@@ -198,6 +203,17 @@ export async function areRequestedPrismaOutputsCurrent(params: OutputStatusParam
             }
         } else if (normalizePrismaSchemaText(sourceSchema) !== normalizePrismaSchemaText(generatedSchema)) {
             return false;
+        }
+        if (check.copiesRuntime) {
+            const copiedRuntimePath = join(check.generatedClientDir, "runtime", "library.js");
+            if (!(await fileExists(copiedRuntimePath))) return false;
+            const [sourceRuntime, copiedRuntime] = await Promise.all([
+                readText(requireFromHere.resolve("@prisma/client/runtime/library.js")),
+                readText(copiedRuntimePath),
+            ]);
+            // Prisma prepends its generated-file notice to the copied runtime.
+            // Schema equality alone misses dependency patches at the same version.
+            if (!sourceRuntime || !copiedRuntime.endsWith(sourceRuntime)) return false;
         }
     }
 
@@ -265,7 +281,7 @@ async function main(): Promise<void> {
     }
     if (checkOnly) {
         throw new Error(
-            "Generated Prisma clients are stale. Run `yarn --cwd apps/server generate:providers` before typechecking the runtime.",
+            "Generated Prisma clients are stale. Run `pnpm --dir apps/server run generate:providers` before typechecking the runtime.",
         );
     }
 

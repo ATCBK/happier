@@ -134,7 +134,8 @@ test('best-effort account count reuses the existing runtime probe without depend
       JSON.stringify({ name: '@test/runtime-server', private: true, type: 'module' }) + '\n',
       'utf-8',
     );
-    await writeFile(join(serverDir, 'yarn.lock'), '# intentionally not installed\n', 'utf-8');
+    await writeFile(join(serverDir, 'pnpm-lock.yaml'), '# intentionally not installed\n', 'utf-8');
+    await writeFile(join(serverDir, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(generatedDir, 'index.js'),
       [

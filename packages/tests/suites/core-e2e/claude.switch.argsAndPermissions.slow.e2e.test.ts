@@ -14,7 +14,7 @@ import { decryptLegacyBase64, encryptLegacyBase64 } from '../../src/testkit/mess
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 import { fakeClaudeFixturePath, type FakeClaudeInvocation, waitForFakeClaudeInvocation } from '../../src/testkit/fakeClaude';
 import { postEncryptedUiTextMessage } from '../../src/testkit/uiMessages';
 import { requestSessionSwitchRpc } from '../../src/testkit/sessionSwitchRpc';
@@ -128,7 +128,7 @@ describe('core e2e: Claude switching preserves args + permissions', () => {
     };
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: [
         '-s',
         'workspace',
@@ -286,7 +286,7 @@ describe('core e2e: Claude switching preserves args + permissions', () => {
     };
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: [
         '-s',
         'workspace',
@@ -445,7 +445,7 @@ describe('core e2e: Claude switching preserves args + permissions', () => {
     };
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: [
         '-s',
         'workspace',

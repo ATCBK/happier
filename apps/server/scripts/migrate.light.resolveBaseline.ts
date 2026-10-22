@@ -22,12 +22,12 @@ async function main() {
     const dataDir = env.HAPPY_SERVER_LIGHT_DATA_DIR ?? env.HAPPIER_SERVER_LIGHT_DATA_DIR!;
     await mkdir(dataDir, { recursive: true });
 
-    await runCommand('yarn', ['-s', 'schema:sync', '--quiet'], env);
+    await runCommand('pnpm', ['--silent', 'run', 'schema:sync', '--quiet'], env);
 
     const baseline = await findBaselineMigrationDir();
     await runCommand(
-        'yarn',
-        ['-s', 'prisma', 'migrate', 'resolve', '--schema', 'prisma/sqlite/schema.prisma', '--applied', baseline],
+        'pnpm',
+        ['--silent', 'exec', 'prisma', 'migrate', 'resolve', '--schema', 'prisma/sqlite/schema.prisma', '--applied', baseline],
         env
     );
 }

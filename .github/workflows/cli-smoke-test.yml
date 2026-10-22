@@ -25,18 +25,15 @@ jobs:
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: 22.x
-        cache: 'yarn'
-        cache-dependency-path: yarn.lock
 
     - name: Install dependencies
       env:
-        YARN_PRODUCTION: "false"
         npm_config_production: "false"
         # Speed up installs: CLI smoke tests do not require UI web-only vendored assets.
         HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-      uses: ./.github/actions/install-yarn-dependencies
+      uses: ./.github/actions/install-pnpm-dependencies
       with:
-        args: --frozen-lockfile --ignore-engines
+        args: --frozen-lockfile
 
     - name: CLI smoke (pipeline)
       run: node scripts/pipeline/run.mjs smoke-cli
@@ -52,25 +49,19 @@ jobs:
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: 22.x
-        cache: 'yarn'
-        cache-dependency-path: yarn.lock
 
     - name: Install dependencies
       env:
-        YARN_PRODUCTION: "false"
         npm_config_production: "false"
         # Speed up installs: CLI smoke tests do not require UI web-only vendored assets.
         HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-      uses: ./.github/actions/install-yarn-dependencies
+      uses: ./.github/actions/install-pnpm-dependencies
       with:
-        args: --frozen-lockfile --ignore-engines
+        args: --frozen-lockfile
 
     - name: Transfer filesystem contracts (Windows)
-      run: >-
-        yarn workspace @happier-dev/cli vitest run --config vitest.config.ts
-        src/machines/transfer/transferPayloadFileSink.test.ts
-        src/machines/transfer/directTransferImportSession.test.ts
-        src/transfers/core/transferSessionStore.test.ts
+      run: |
+        pnpm --filter @happier-dev/cli exec vitest run --config vitest.config.ts src/machines/transfer/transferPayloadFileSink.test.ts src/machines/transfer/directTransferImportSession.test.ts src/transfers/core/transferSessionStore.test.ts
 
     - name: CLI smoke (pipeline)
       run: node scripts/pipeline/run.mjs smoke-cli

@@ -522,7 +522,7 @@ native_try_admission_payload() {
 }
 resolve_native_command_policy() {
   [ "${1-}" = -- ] && shift
-  case "${1-}" in --script=*) native_script=${1#--script=}; shift; [ "${1-}" = -- ] && shift; set -- corepack yarn -s "$native_script" "$@" ;; esac
+  case "${1-}" in --script=*) native_script=${1#--script=}; shift; [ "${1-}" = -- ] && shift; set -- pnpm run --silent "$native_script" "$@" ;; esac
   native_command_basename "${1-}"; policy_command=$native_basename
   if [ "$policy_command" = hstack-exec ] && [ "${2-}" = --heavyweight-admission ]; then
     if native_try_admission_payload "$@"; then return
@@ -635,9 +635,12 @@ resolve_native_command_policy() {
     [ "$#" -gt 0 ] && shift
     while [ "$#" -gt 0 ]; do
       case "$1" in
-        run|-s|--silent) shift ;;
-        --cwd|-C) shift; native_manager_cwd=${1-.}; [ "$#" -gt 0 ] && shift ;;
+        run|exec|-s|--silent) shift ;;
+        --cwd|--dir|-C) shift; native_manager_cwd=${1-.}; [ "$#" -gt 0 ] && shift ;;
         --cwd=*) native_manager_cwd=${1#--cwd=}; shift ;;
+        --dir=*) native_manager_cwd=${1#--dir=}; shift ;;
+        --filter|-F) if [ "$native_manager" = pnpm ]; then shift; policy_workspace=${1-}; [ "$#" -gt 0 ] && shift; else shift; fi ;;
+        --filter=*) if [ "$native_manager" = pnpm ]; then policy_workspace=${1#--filter=}; fi; shift ;;
         workspace) if [ "$native_manager" = yarn ]; then shift; policy_workspace=${1-}; [ "$#" -gt 0 ] && shift; else policy_script=$1; break; fi ;;
         -*) shift ;;
         *) policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; break ;;

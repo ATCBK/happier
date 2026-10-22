@@ -20,7 +20,7 @@ import { callLegacyEncryptedSessionRpc } from '../../src/testkit/sessionRpc';
 import { createUserScopedSocketCollector, type SocketCollector } from '../../src/testkit/socketClient';
 import { waitFor } from '../../src/testkit/timing';
 import { repoRootDir } from '../../src/testkit/paths';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 import { runLoggedCommand } from '../../src/testkit/process/spawnProcess';
 
 const run = createRunDirs({ runLabel: 'core' });
@@ -114,7 +114,7 @@ async function runCliSessionAction(params: Readonly<{
   label: string;
 }>): Promise<void> {
   await runLoggedCommand({
-    command: yarnCommand(),
+    command: pnpmCommand(),
     args: [
       '-s',
       'workspace',

@@ -2,6 +2,7 @@ import { dirname, relative, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { spawnForegroundCommand } from '../../../apps/stack/scripts/utils/proc/proc.mjs';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 import { findRepoRoot } from './vendoredWorkspaceDeclarations.mjs';
 import { ensureWorkspacePackagesBuiltForComponent as ensureWorkspacePackagesBuiltForComponentDefault } from '../../../apps/stack/scripts/utils/proc/pm.mjs';
@@ -128,18 +129,15 @@ async function runPreparedWorkspace(scriptName, { signal } = {}) {
 export async function runPluginSdkPreparedScript(scriptName, opts = {}) {
   const env = opts.env ?? process.env;
   const pluginSdkDir = opts.pluginSdkDir ?? resolve(opts.repoRoot ?? pluginSdkRepoRoot(), 'packages', 'plugin-sdk');
-  const npmExecPath = String(env.npm_execpath ?? '').trim();
-  const command = npmExecPath ? process.execPath : (process.platform === 'win32' ? 'yarn.cmd' : 'yarn');
-  const args = npmExecPath
-    ? [npmExecPath, 'run', '-s', scriptName]
-    : ['run', '-s', scriptName];
+  const invocation = resolvePnpmCommandInvocation(['--silent', 'run', scriptName], { npmExecPath: String(env.npm_execpath ?? '') });
   const spawnImpl = opts.spawnImpl ?? spawnForegroundCommand;
   await new Promise((resolveRun, rejectRun) => {
-    const child = spawnImpl(command, args, {
+    const child = spawnImpl(invocation.command, invocation.args, {
       cwd: pluginSdkDir,
       env,
       stdio: 'inherit',
       ownedProcessGroup: true,
+      ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     child.once('error', rejectRun);

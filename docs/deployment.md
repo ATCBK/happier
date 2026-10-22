@@ -512,7 +512,7 @@ against the selected Redis URL. It is an ordinary-fanout smoke check, not a prob
 of deployed API nodes or certification of Pub/Sub/restart recovery. Use isolated
 Redis: the script uses the same fixed Stream/channel names as the application.
 
-From a development checkout, run `yarn --cwd apps/server validate:redis-adapter`. Set
+From a development checkout, run `pnpm --dir apps/server run validate:redis-adapter`. Set
 `REDIS_URL` to use an existing isolated Redis instance, or let the development
 dependency acquire and start a temporary local instance. Root package configuration
 defers acquisition until validation runs, so ordinary dependency installation does
@@ -550,11 +550,11 @@ Keep `Recreate` for a multi-replica Redis API transition across adapter `0.2` an
 
 ## Local dev helpers
 The server package includes scripts for local infrastructure:
-- `yarn workspace @happier-dev/server db` (Postgres in Docker)
-- `yarn workspace @happier-dev/server redis`
-- `yarn workspace @happier-dev/server s3` + `s3:init`
+- `pnpm --filter @happier-dev/server run db` (Postgres in Docker)
+- `pnpm --filter @happier-dev/server run redis`
+- `pnpm --filter @happier-dev/server run s3` + `s3:init`
 
-Use `.env`/`.env.dev` to load local settings when running `yarn workspace @happier-dev/server dev`.
+Use `.env`/`.env.dev` to load local settings when running `pnpm --filter @happier-dev/server run dev`.
 
 ## Implementation references
 - Entrypoint: `apps/server/sources/main.ts`

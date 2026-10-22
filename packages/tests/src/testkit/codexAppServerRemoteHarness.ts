@@ -12,7 +12,7 @@ import { encryptLegacyBase64 } from './messageCrypto';
 import { repoRootDir } from './paths';
 import { startServerLight, type StartedServer } from './process/serverLight';
 import { spawnLoggedProcess, type SpawnedProcess } from './process/spawnProcess';
-import { yarnCommand } from './process/commands';
+import { pnpmCommand } from './process/commands';
 import { createSessionWithCiphertexts, fetchSessionV2, type SessionV2 } from './sessions';
 
 export type FakeCodexAppServerRequest = Readonly<{
@@ -519,7 +519,7 @@ export async function startCodexAppServerRemoteHarness(params: Readonly<{
   };
 
   const proc: SpawnedProcess = spawnLoggedProcess({
-    command: yarnCommand(),
+    command: pnpmCommand(),
     args: [
       '-s',
       'workspace',

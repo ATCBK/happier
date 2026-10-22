@@ -31,7 +31,8 @@ async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) 
     packageManager: 'yarn@1.22.22',
     workspaces: ['apps/*', 'packages/*'],
   }) + '\n', 'utf-8');
-  await writeFile(join(tmp, 'yarn.lock'), '# fixture lockfile\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-lock.yaml'), '# fixture lockfile\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(join(tmp, 'retained-inventory.js'), 'export const inventory = [];\n', 'utf-8');
   await writeFile(join(uiDir, 'package.json'), JSON.stringify({
     name: 'happier-ui',

@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import {
   buildDbContainerPlan,
   buildDatabaseUrlForContainer,
@@ -12,7 +12,7 @@ import {
 } from './extended-db-docker.plan.mjs';
 
 function usage() {
-  // Keep this short; the yarn scripts are the primary UX.
+  // Keep this short; the pnpm scripts are the primary UX.
   console.log(`
 Run Happier extended DB tests with an auto-provisioned Docker database.
 
@@ -25,8 +25,8 @@ Examples:
 `.trim());
 }
 
-export function resolveExtendedDbYarnInvocation(args, options = {}) {
-  return resolveYarnCommandInvocation(args, options);
+export function resolveExtendedDbPnpmInvocation(args, options = {}) {
+  return resolvePnpmCommandInvocation(args, options);
 }
 
 export function resolveExtendedDbCommandTimeoutMs(raw, fallbackMs) {
@@ -239,7 +239,7 @@ export async function main(argv = process.argv) {
 
     const steps = buildExtendedDbCommandPlan({ db, mode, databaseUrl, contractFile: parsed['contract-file'] });
     for (const step of steps) {
-      const invocation = resolveExtendedDbYarnInvocation(step.args);
+      const invocation = resolveExtendedDbPnpmInvocation(step.args);
       const env = { ...process.env, ...step.env };
       console.log(`[extended-db] Running: ${step.kind}`);
       runOrThrow(invocation.command, invocation.args, {

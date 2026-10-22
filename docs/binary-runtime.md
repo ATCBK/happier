@@ -196,6 +196,16 @@ the shared Agent resolver; the vendor launcher owns its pinned Pi release and
 JavaScript runtime environment.
 
 
+In current 0.3 development, Codex's plugin manifest already allows 384 MiB per
+archive file and 512 MiB in total. The digest-verified Windows x64 `rust-v0.163.0`
+archive expands to 465,689,987 bytes, within that allowance; this does not change
+the plugin's separately qualified release pin. Shared extraction still accounts
+for all members and retains its path, link, count, digest, and decompression
+protections. A total-size refusal is carried from the extractor through the
+installer and typed daemon job as `archive_expanded_byte_limit`. The existing
+install-job presenter supplies localized upgrade guidance to Agent and Updates
+surfaces. A refused archive never replaces the previous managed runtime.
+
 In 0.3 development, Agent install/update jobs wrap the canonical managed installer
 in the daemon; browser, phone, and dedicated CLI callers submit to that same owner.
 Vendor recipes stay inside this abstraction and require explicit consent. Managed
@@ -386,8 +396,10 @@ In 0.3 development, `dev-targets host prepare NAME --toolchain` also prepares
 user-local Rust through `packages/iroh-native/scripts/ensure-rust-toolchain.mjs`.
 Its streamed Ubuntu toolchain profile installs `build-essential` and `pkg-config`
 when native prerequisites are absent, and verifies `cc`, `c++`, `make`, `ar`, and
-`pkg-config` before reporting readiness. The profile also verifies Node/Corepack/Yarn,
-Go and ripgrep; already ready hosts skip installation.
+`pkg-config` before reporting readiness. The profile also verifies Node/npm,
+Go and ripgrep; already ready hosts skip installation. Source dependency bootstrap
+installs the exact, integrity-checked pnpm version from the root `packageManager`
+pin after synchronization through `scripts/ci/setup-pnpm.mjs`.
 The controller streams that installer and the package's `rust-toolchain.toml`
 pin to the selected SSH account, including after `--create-user`; Rust installation
 runs without elevation and adds no mobile or WASM targets. A ready pinned compiler
@@ -1267,7 +1279,7 @@ through the shared source owner instead.
 Fix by building the workspace, for example:
 
 ```bash
-yarn workspace @happier-dev/protocol build
+pnpm --filter @happier-dev/protocol run build
 ```
 
 Public package preparation must build missing internal workspace outputs through

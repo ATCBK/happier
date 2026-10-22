@@ -82,7 +82,7 @@ See: [Server flavors](/hstack/server-flavors).
 ## Non‑negotiables (discipline that keeps stacks safe)
 
 - **Use `hstack` as the entrypoint**
-  - Don’t run raw `yarn dev`, `expo`, `docker compose`, etc. when you intend stack-scoped behavior.
+  - Don’t run raw `pnpm run dev`, `expo`, `docker compose`, etc. when you intend stack-scoped behavior.
   - hstack needs stack-scoped env + runtime bookkeeping to keep things isolated.
 - **Develop in worktrees**
   - Use `dev/` or `hstack wt ...` worktrees; don’t edit `main/`.

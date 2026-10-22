@@ -10,13 +10,13 @@ One file per locale, named for the locale code: `zh-Hans.json`, `es.json`, …
 ```
 
 The keys are the ids in [`../../generated/en.json`](../../generated/en.json), which
-`yarn i18n:extract` regenerates on every build. An id that is not in this file
+`pnpm run i18n:extract` regenerates on every build. An id that is not in this file
 renders in English — that is the designed behaviour, not a gap, and it is why a
 locale can be shipped one page at a time.
 
 Three things that will bite otherwise:
 
-- **An id that no longer exists is silently ignored.** Re-run `yarn i18n:extract`
+- **An id that no longer exists is silently ignored.** Re-run `pnpm run i18n:extract`
   after re-wording English and diff `en.json` to find what moved.
 - **The tokens in `../../generated/dnt.json` must survive byte-identical.**
   Those are inline code spans, `happier <subcommand>` invocations, paths and

@@ -9,7 +9,7 @@ import {
   formatUnresolvedVitestPathArgs,
 } from './vitestPathArgs.mjs';
 
-import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 const testsPackageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -94,7 +94,7 @@ if (unresolvedPathArgs.length > 0) {
 }
 
 const childArgs = [
-  '-s',
+  'exec',
   'vitest',
   'run',
   '--no-file-parallelism',
@@ -104,7 +104,7 @@ const childArgs = [
   `--reporter=${reporterPath}`,
   ...normalizedPassThrough,
 ];
-const invocation = resolveYarnCommandInvocation(childArgs, { npmExecPath: '' });
+const invocation = resolvePnpmCommandInvocation(childArgs, { npmExecPath: '' });
 
 await runHeartbeatWrappedCommand({
   toolName: 'vitest',

@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 
 import { getComponentDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { pmExecBin } from './utils/proc/pm.mjs';
+import { pmExecScript } from './utils/proc/pm.mjs';
 import { spawnProc } from './utils/proc/proc.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
@@ -391,15 +391,15 @@ async function main() {
       throw new Error(
         [
           `[tauri-dev] Expo dev server was not reachable on port ${expoPort}.`,
-          'Start the UI dev server first (`yarn ui`, `yarn --cwd apps/ui start`, or `yarn tui:with-tauri`) and retry.',
+          'Start the UI dev server first (`pnpm run ui`, `pnpm --dir apps/ui run start`, or `pnpm run tui:with-tauri`) and retry.',
         ].join(' ')
       );
     }
   }
 
-  await pmExecBin({
+  await pmExecScript({
     dir: uiDir,
-    bin: 'tauri:prepare:sidecar',
+    script: 'tauri:prepare:sidecar',
     env: envWithStackDefaults,
   });
 

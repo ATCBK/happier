@@ -15,20 +15,21 @@ function runChecks(profile, customChecks = '') {
     // Real subprocesses stand in for the expensive package-manager and pipeline boundaries.
     const command = `import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-if (args[0] === '--version') { console.log('1.22.22'); } else {
+if (args[0] === '--version') { console.log('12.14.0'); } else {
   appendFileSync(process.env.CHECK_LOG, JSON.stringify(args) + '\\n');
-  if (args[0] === 'test' || args[0] === 'test:integration') process.exitCode = 1;
+  if (args[0] === 'run' && (args[1] === 'test' || args[1] === 'test:integration')) process.exitCode = 1;
 }`;
     writeFileSync(join(root, 'command.mjs'), command);
     writeFileSync(join(root, 'scripts/pipeline/run.mjs'), command);
-    writeFileSync(join(root, 'yarn'), `#!${process.execPath}\n${command}`, { mode: 0o755 });
-    writeFileSync(join(root, 'yarn.cmd'), `@"${process.execPath}" "${join(root, 'command.mjs')}" %*\r\n`);
+    writeFileSync(join(root, 'pnpm'), `#!${process.execPath}\n${command}`, { mode: 0o755 });
+    writeFileSync(join(root, 'pnpm.cmd'), `@"${process.execPath}" "${join(root, 'command.mjs')}" %*\r\n`);
     const log = join(root, 'commands.jsonl');
     writeFileSync(log, '');
     const result = spawnSync(process.execPath, ['--experimental-strip-types', runner, '--profile', profile, '--custom-checks', customChecks, '--install-deps', 'false'], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH}`, CHECK_LOG: log, GITHUB_ACTIONS: '' },
+      env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH}`, CHECK_LOG: log, GITHUB_ACTIONS: '',
+        npm_execpath: process.platform === 'win32' ? join(root, 'pnpm.cmd') : join(root, 'pnpm') },
     });
     return { result, commands: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) };
   } finally {
@@ -40,9 +41,9 @@ test('full local checks attempt every independent lane and report all failures',
   const { result, commands } = runChecks('full');
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(commands.map((args) => args.join(' ')), [
-    'test', 'test:integration', 'typecheck', 'test:e2e:ui', '-s test:release:contracts',
-    'release-sync-installers --check', 'test:e2e:core:fast', 'test:e2e:core:slow',
-    'test:db-contract:docker', 'website:build', 'docs:build', 'smoke-cli',
+    'run test', 'run test:integration', 'run typecheck', 'run test:e2e:ui', 'run --silent test:release:contracts',
+    'release-sync-installers --check', 'run test:e2e:core:fast', 'run test:e2e:core:slow',
+    'run test:db-contract:docker', 'run website:build', 'run docs:build', 'smoke-cli',
   ]);
   assert.match(result.stderr, /unit/);
   assert.match(result.stderr, /integration/);
@@ -51,7 +52,7 @@ test('full local checks attempt every independent lane and report all failures',
 test('custom local checks execute one optional lane without baseline suites', () => {
   const { result, commands } = runChecks('custom', 'build_docs');
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(commands, [['docs:build']]);
+  assert.deepEqual(commands, [['run', 'docs:build']]);
 });
 
 test('invalid custom selection launches no commands', () => {

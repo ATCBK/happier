@@ -27,7 +27,7 @@ workload in place.
 
 ## Prerequisites
 
-On the computer running `yarn dev` or `yarn tui`:
+On the computer running `pnpm run dev` or `pnpm run tui`:
 
 - install Mutagen and make `mutagen` available on `PATH`;
 - configure non-interactive OpenSSH access to every target;
@@ -36,13 +36,13 @@ On the computer running `yarn dev` or `yarn tui`:
 On every target:
 
 - run an OpenSSH server;
-- install Node.js 22 or newer and Corepack before running development commands; a fresh Linux
+- install Node.js 22.13 or newer and npm before running development commands; a fresh Linux
   host can be enrolled first and prepared with `host prepare --toolchain`;
 - install any native developer tools remote commands will use, such as ripgrep (`rg`);
 - allow enough disk space for a source mirror, target-local dependencies, and build output.
 
 Stack requires an existing SSH server. Explicit Linux `--toolchain` preparation installs Node.js
-and Corepack; macOS and Windows toolchain setup remains a machine prerequisite. Mutagen
+and npm; macOS and Windows toolchain setup remains a machine prerequisite. Mutagen
 automatically installs its own small synchronization agent over SSH when a project starts.
 
 The PATH-provided `mutagen` process and its `MUTAGEN_DATA_DIRECTORY` belong only to Stack's
@@ -56,7 +56,7 @@ Verify a target without changing it:
 hstack dev-targets doctor linux --stack=repo-dev
 ```
 
-`doctor` checks the local Mutagen CLI, passwordless SSH, and remote Node.js/Corepack availability.
+`doctor` checks the local Mutagen CLI, passwordless SSH, and remote Node.js/npm availability.
 It does not provision or inventory optional developer tools. Omit the target name to check every
 target configured for the stack.
 
@@ -94,7 +94,7 @@ The command:
   account password can be entered once;
 - verifies non-interactive dedicated-key authentication through a fresh connection, with
   `ControlMaster=no` and `ControlPath=none`;
-- discovers the remote home, operating system, login-shell `PATH`, Node.js, and Corepack;
+- discovers the remote home, operating system, login-shell `PATH`, Node.js, and npm;
 - rewrites the target config from first-contact `accept-new` to strict host-key checking, proves the
   strict connection, and registers the target only after those checks pass.
 
@@ -111,13 +111,13 @@ node ./apps/stack/scripts/repo_local.mjs dev-targets add mac \
 
 The discovered PATH is persisted with the target, so non-interactive commands can use installations
 managed by tools such as NVM or Volta even when the SSH daemon's default PATH cannot see them. If a
-version-manager shim exposes Node but omits `corepack`, provisioning also discovers the Corepack
-binary beside Node's actual `process.execPath`. Rerunning the
+version-manager shim exposes Node but omits npm, provisioning also discovers npm
+beside Node's actual `process.execPath`. Rerunning the
 same command reuses the target-specific key and refreshes the connection facts. This provisioning
 shortcut currently supports macOS and Linux targets; configure Windows targets explicitly as below.
 
 The local machine needs `ssh`, `ssh-keygen`, and `ssh-copy-id`. Enrollment accepts a host without
-Node.js or Corepack and prints the exact `hstack dev-targets host prepare NAME --toolchain`
+Node.js or npm and prints the exact `hstack dev-targets host prepare NAME --toolchain`
 next step. Development commands still require that toolchain. Unmanaged `--host` enrollment does
 not install packages or change system services; explicit managed enrollment provisions its VM.
 
@@ -194,12 +194,14 @@ hstack dev-targets qa setup nl1
 ```
 
 In the 0.3 development checkout, `--toolchain` reuses the Ubuntu worker provisioning profile:
-NodeSource Node.js 24, Corepack, pinned Yarn, Go (used by CLI test setup), ripgrep,
+NodeSource Node.js 24, npm, Go (used by CLI test setup), ripgrep,
 and `build-essential` plus `pkg-config` for native Rust/Iroh builds. Preparation verifies
 the C/C++ compilers, make, archiver, and package discovery alongside the other tools,
 then prepares the package-pinned Rust compiler under the selected SSH account.
 It checks the installed toolchain first. Use an Ubuntu host supported by that profile rather than
-assuming every Linux distribution has the same package setup.
+assuming every Linux distribution has the same package setup. After source synchronization,
+dependency bootstrap installs the exact, integrity-checked pnpm version from the root
+`packageManager` pin through `scripts/ci/setup-pnpm.mjs`.
 
 `--create-user=happier` creates the non-root account, installs this target's dedicated public key,
 enables passwordless sudo for that account, and switches the target's SSH configuration to it.
@@ -401,16 +403,15 @@ hstack dev-targets host prepare linux1 --no-sleep --passwordless-sudo --password
 ```
 
 `--passwordless-provisioning` requires `--passwordless-sudo` and is effectively
-root access: package installation runs privileged code, and Corepack can reside
+root access: package installation runs privileged code, and npm can reside
 in a worker-writable tool directory. It adds only the browser owners' command
 forms: `apt-get update` (with or without `-y`), `apt-get install --simulate`,
 `apt-get install -y` (with or without `--no-install-recommends`), Playwright's
 `sh -c` recipe containing only apt update followed by dependency installation,
-and Corepack's global agent-browser installation with its existing flags,
-invoked through the discovered absolute Node executable and Corepack entry via
-`env COREPACK_ENABLE_PROJECT_SPEC=0` inside sudo. This bypasses the checkout's
-Yarn `packageManager` for the global install; the grant permits only that exact
-environment assignment, not arbitrary elevated environment variables.
+and npm's global agent-browser installation with its existing flags,
+invoked through the discovered absolute Node executable and npm CLI entry inside
+sudo. The grant restricts the installation flags and the agent-browser package/version;
+it does not grant arbitrary elevated environment variables.
 Package-name and version arguments are constrained; arbitrary shell commands
 are not granted. The full `happier` toolchain provisioner still runs interactively.
 After this preparation, `qa setup` browser installation and `power no-sleep` can
@@ -914,17 +915,17 @@ builds:
 ```bash
 node ./apps/stack/scripts/repo_local.mjs dev-targets status linux
 node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux -- rg -n "RunnerAgentExecutionGrant" apps packages .project/plans
-node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --cwd=apps/cli -- corepack yarn test
-node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --env=CI=1 -- corepack yarn typecheck
+node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --cwd=apps/cli -- pnpm run test
+node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --env=CI=1 -- pnpm run typecheck
 ```
 
 For ordinary work, internal workspace scripts choose among configured healthy targets automatically:
 
 ```bash
-corepack yarn -s typecheck
-corepack yarn --cwd apps/cli -s test
-corepack yarn --cwd packages/plugins/claude -s typecheck
-corepack yarn --cwd apps/server -s vitest run sources/example.spec.ts
+pnpm run typecheck
+pnpm --dir apps/cli run test
+pnpm --dir packages/plugins/claude run typecheck
+pnpm --dir apps/server run vitest run sources/example.spec.ts
 ```
 
 For a focused Vitest file, use that package's routed `vitest` command. Do not
@@ -1140,7 +1141,7 @@ configure the slice; targets without that prepared boundary run the same admitte
 
 In current 0.3 development, Linux worker admission checks available bytes on the command's known
 write filesystems and refuses an already-exhausted filesystem. Cleanup tries stale
-staging across stacks, Yarn entries absent from protected lockfiles, then lane scratch older than
+staging across stacks, pnpm entries absent from protected lockfiles, then lane scratch older than
 24 hours. Unknown UID or same-UID holder visibility preserves data; processes whose status identifies
 only foreign UIDs do not block this user's reclamation. AUTO selects another worker for that command
 class if space is still insufficient; an explicit target reports the failure. `dev-targets status`
@@ -1153,11 +1154,11 @@ live measurements before claiming protection against every `ENOSPC` failure.
 
 On POSIX, the checkout-local launcher first performs a conservative filesystem check. If no
 repository target configuration can exist, it replaces itself with the requested command without
-starting Node, Yarn, Mutagen, SSH, or a load probe. Node validates configuration and publishes a
+starting Node, pnpm, Mutagen, SSH, or a load probe. Node validates configuration and publishes a
 private shell-safe execution projection only when target configuration changes. Steady-state sync
 health checks, cached load probes, host selection, SSH execution, cancellation, and fallback are
-native shell operations. A `--script` invocation starts Yarn only on the selected execution host
-because Yarn owns package-script semantics. Windows deliberately executes locally for this
+native shell operations. A `--script` invocation starts pnpm only on the selected execution host
+because pnpm owns package-script semantics. Windows deliberately executes locally for this
 POSIX-only routing feature.
 
 A running Stack is not required when the independent synchronization service owns a healthy mirror.
@@ -1187,7 +1188,7 @@ same single pre-launch barrier; it does not add a second flush:
 
 ```bash
 node ./apps/stack/scripts/repo_local.mjs dev-targets sync linux
-node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --flush -- corepack yarn test
+node ./apps/stack/scripts/repo_local.mjs dev-targets exec linux --flush -- pnpm run test
 ```
 
 A flush is a point-in-time launch barrier, not a snapshot. Commands that require an immutable source
@@ -1274,7 +1275,7 @@ and releases that independent project so a later Stack generation can own its li
 
 ## What starts automatically
 
-`yarn dev` and `yarn tui` resolve one service plan for the Stack generation. Version 1 configuration
+`pnpm run dev` and `pnpm run tui` resolve one service plan for the Stack generation. Version 1 configuration
 keeps all local services and adds remote daemons. Version 2 starts each requested service at its
 configured placement, after the best-effort target preflight described above. Remote preparation
 runs independently by target:
@@ -1324,8 +1325,8 @@ execution; an idle unwatched first cycle enters through the mandatory dispatch f
 To run only the local Stack:
 
 ```bash
-yarn dev --no-dev-targets
-yarn tui --no-dev-targets
+pnpm run dev --no-dev-targets
+pnpm run tui --no-dev-targets
 ```
 
 ## Synchronization policy
@@ -1359,7 +1360,7 @@ changes are incremental and every remote daemon watches and builds its own targe
 ### Lima
 
 Use Lima's generated SSH config with `--ssh-config-file`. Add `--lima-instance` and `--lima-home`
-when Stack should start that instance automatically. The VM still needs Node.js and Corepack;
+when Stack should start that instance automatically. The VM still needs Node.js and npm;
 `hstack dev-targets doctor` verifies them before the full TUI starts.
 
 ### Windows
@@ -1376,7 +1377,7 @@ ssh -o BatchMode=yes happier-stack-windows "echo ok"
 ```
 
 Mutagen documents possible slow or stalled streams with Windows OpenSSH Server. Validate the real
-target with `doctor` and one complete `yarn tui` synchronization before relying on it for unattended
+target with `doctor` and one complete `pnpm run tui` synchronization before relying on it for unattended
 QA.
 
 ## Troubleshooting
@@ -1384,7 +1385,7 @@ QA.
 - **Mutagen not found:** install Mutagen locally and confirm `mutagen version`.
 - **SSH authentication fails:** make the configured alias work with `BatchMode=yes`; the TUI cannot
   answer password or host-key prompts.
-- **Node.js/Corepack check fails:** install them on the target, then rerun `doctor`.
+- **Node.js/npm check fails:** install them on the target, then rerun `doctor`.
 - **A target should not start today:** use `--no-dev-targets`, or remove it from this stack's config.
 - **Synchronization diagnostics:** inspect the `mutagen sync` TUI pane, run
   `hstack dev-targets status <name>`, and use the normal `mutagen` CLI when deeper inspection is

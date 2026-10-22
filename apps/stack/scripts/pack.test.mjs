@@ -82,7 +82,8 @@ async function createHoistedRuntimePackFixture({
     name: 'monorepo',
     workspaces: ['apps/*', 'packages/*'],
   }));
-  await writeFile(join(monorepoRoot, 'yarn.lock'), '# lock');
+  await writeFile(join(monorepoRoot, 'pnpm-lock.yaml'), '# lock');
+  await writeFile(join(monorepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeFile(
     join(monorepoRoot, 'apps', 'cli', 'package.json'),
     JSON.stringify({ name: '@happier-dev/cli' }),
@@ -1595,7 +1596,8 @@ test('resolvePackSandboxWorkspaceRelDirs derives plugin and internal workspace d
     const packDir = join(root, 'apps', 'cli');
     await mkdir(packDir, { recursive: true });
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await mkdir(join(root, 'apps', 'ui'), { recursive: true });
     await mkdir(join(root, 'apps', 'server'), { recursive: true });
     await writeFile(join(root, 'apps', 'ui', 'package.json'), JSON.stringify({ name: '@happier-dev/app' }));
@@ -1635,7 +1637,8 @@ test('resolvePackSandboxWorkspaceRelDirs derives and validates transitive intern
     const packDir = join(root, 'apps', 'stack');
     await mkdir(packDir, { recursive: true });
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(packDir, 'package.json'),
       JSON.stringify({
@@ -1697,7 +1700,8 @@ test('resolvePackSandboxWorkspaceRelDirs fails when bundledDependencies omit tra
     const packDir = join(root, 'apps', 'stack');
     await mkdir(packDir, { recursive: true });
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(packDir, 'package.json'),
       JSON.stringify({
@@ -1761,7 +1765,8 @@ test('createPackSandbox copies every internal workspace required by the packed p
       name: 'monorepo',
       workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
     }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const [appDir, packageName] of [
       ['ui', '@happier-dev/app'],
       ['server', '@happier-dev/server'],
@@ -3128,7 +3133,7 @@ for (const [
   outsideContents,
 ] of [
   ['package.json', JSON.stringify({ name: 'monorepo' })],
-  ['yarn.lock', '# outside lock\n'],
+  ['pnpm-lock.yaml', '# outside lock\n'],
 ]) {
   test(`createPackSandbox rejects a symlinked root ${relativePath} before copying outside bytes`, async () => {
   const root = await mkdtemp(join(tmpdir(), 'pack-test-root-file-symlink-'));
@@ -3166,7 +3171,8 @@ test('createPackSandbox ignores inherited package bin links outside the declared
       await mkdir(join(monorepoRoot, 'scripts', 'testing', 'process'), { recursive: true });
       await mkdir(join(monorepoRoot, 'node_modules', '.bin'), { recursive: true });
       await writeFile(join(monorepoRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-      await writeFile(join(monorepoRoot, 'yarn.lock'), '# lock');
+      await writeFile(join(monorepoRoot, 'pnpm-lock.yaml'), '# lock');
+      await writeFile(join(monorepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       await writeFile(
         join(monorepoRoot, 'apps', 'cli', 'package.json'),
         JSON.stringify({ name: '@happier-dev/cli' }),
@@ -3205,7 +3211,8 @@ test('createPackSandbox removes its allocated sandbox when construction fails', 
   try {
     await mkdir(join(root, 'apps', 'cli'), { recursive: true });
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(join(root, 'apps', 'cli', 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
     await mkdir(sandboxRoot, { recursive: true });
 
@@ -3280,7 +3287,8 @@ test('createPackSandbox rejects dependency-derived workspace traversal without r
       await mkdir(join(monorepoRoot, relDir), { recursive: true });
     }
     await writeFile(join(monorepoRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(monorepoRoot, 'yarn.lock'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(monorepoRoot, 'apps', 'cli', 'package.json'),
       JSON.stringify({
@@ -3337,7 +3345,8 @@ test('createPackSandbox rejects a symlinked dependency workspace without copying
       await mkdir(join(monorepoRoot, relDir), { recursive: true });
     }
     await writeFile(join(monorepoRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(monorepoRoot, 'yarn.lock'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(monorepoRoot, 'apps', 'cli', 'package.json'),
       JSON.stringify({
@@ -3402,7 +3411,8 @@ test('createPackSandbox rejects external dependency traversal before node_module
       await mkdir(join(monorepoRoot, relDir), { recursive: true });
     }
     await writeFile(join(monorepoRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(monorepoRoot, 'yarn.lock'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(monorepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     await writeFile(
       join(monorepoRoot, 'apps', 'cli', 'package.json'),
       JSON.stringify({
@@ -3447,11 +3457,12 @@ test('createPackSandbox rejects external dependency traversal before node_module
   }
 });
 
-test('findMonorepoRoot finds nearest package.json + yarn.lock', async () => {
+test('findMonorepoRoot finds nearest package.json + pnpm-lock.yaml', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pack-test-'));
   try {
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await mkdir(join(root, 'packages', 'happy-cli'), { recursive: true });
 
     const nested = join(root, 'packages', 'happy-cli');
@@ -3466,7 +3477,8 @@ test('resolvePackDirForComponent maps monorepo root to apps/cli', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pack-test-'));
   try {
     await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await writeFile(join(root, 'pnpm-lock.yaml'), '# lock');
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     await mkdir(join(root, 'apps', 'cli'), { recursive: true });
 
     const resolved = await resolvePackDirForComponent({
@@ -3487,12 +3499,14 @@ test('resolvePackDirForComponent keeps a repo-local hstack pack in its own monor
     const inheritedStackRoot = join(root, 'remote-dev');
     await mkdir(localRoot, { recursive: true });
     await writeFile(join(localRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(localRoot, 'yarn.lock'), '# local lock');
+    await writeFile(join(localRoot, 'pnpm-lock.yaml'), '# local lock');
+    await writeFile(join(localRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     await mkdir(join(localRoot, 'apps', 'stack'), { recursive: true });
     await mkdir(join(localRoot, 'apps', 'cli'), { recursive: true });
     await mkdir(inheritedStackRoot, { recursive: true });
     await writeFile(join(inheritedStackRoot, 'package.json'), JSON.stringify({ name: 'monorepo' }));
-    await writeFile(join(inheritedStackRoot, 'yarn.lock'), '# inherited lock');
+    await writeFile(join(inheritedStackRoot, 'pnpm-lock.yaml'), '# inherited lock');
+    await writeFile(join(inheritedStackRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     await mkdir(join(inheritedStackRoot, 'apps', 'cli'), { recursive: true });
 
     const resolved = await resolvePackDirForComponent({

@@ -36,7 +36,7 @@ import {
   assertInventoryMatchesPreparedDeclarationSurface,
   projectPreparedDeclarationSurface,
 } from '../../../scripts/api-governance/emittedDeclarationSurface.mjs';
-import { assertVendoredWorkspaceDeclarationsAreCurrent } from './vendoredWorkspaceDeclarations.mjs';
+import { assertVendoredWorkspaceDeclarationsAreCurrent, findRepoRoot } from './vendoredWorkspaceDeclarations.mjs';
 import { renderDeclarationDiffSample, summarizeDeclarationDiff } from '../../../scripts/api-governance/declarationDiff.mjs';
 import { planGovernanceOutputs } from '../../../scripts/api-governance/apiGovernance.mjs';
 import { parseStructuredDeprecationTags } from '../../../scripts/api-governance/structuredDeprecation.mjs';
@@ -723,30 +723,18 @@ function runtimeSourceCandidates(packageRoot, runtimeTarget, { preferWorkspaceSo
 }
 
 async function findWorkspaceContext(packageRoot) {
-  let candidateRoot = packageRoot;
-  while (true) {
-    const packageJsonPath = join(candidateRoot, 'package.json');
-    const packageJsonStat = await optionalLstat(packageJsonPath);
-    if (packageJsonStat?.isFile()) {
-      try {
-        const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
-        if (packageJson.workspaces) {
-          const physicalRoot = await realpath(candidateRoot);
-          return Object.freeze({
-            physicalRoot,
-          });
-        }
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          throw new Error(`Workspace package.json is not valid JSON at ${packageJsonPath}: ${error.message}`);
-        }
-        throw error;
-      }
+  const root = findRepoRoot(packageRoot);
+  if (!root) return null;
+  const packageJsonPath = join(root, 'package.json');
+  try {
+    JSON.parse(await readFile(packageJsonPath, 'utf8'));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Workspace package.json is not valid JSON at ${packageJsonPath}: ${error.message}`);
     }
-    const parentRoot = dirname(candidateRoot);
-    if (parentRoot === candidateRoot) return null;
-    candidateRoot = parentRoot;
+    throw error;
   }
+  return Object.freeze({ physicalRoot: await realpath(root) });
 }
 
 async function readResolvedSourceModule({

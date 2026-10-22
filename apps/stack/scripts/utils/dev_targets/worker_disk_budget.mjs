@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { reapHistoricalTempRoots } from './historical_temp_roots.mjs';
-import { pruneWorkerYarnCache } from '../proc/package_manager_cache.mjs';
 import { getHappierTempRootForUid, prepareHappierTempDirOwnerCleanup, readHappierTempDirOwnerForDirectory,
   readHappierTempDirOwnerLiveness } from '../../../../../packages/cli-common/tempDirOwnership.mjs';
 
@@ -32,19 +31,6 @@ export function observeWorkerFilesystem(path) {
   if (result.error || result.status !== 0 || !Number.isSafeInteger(totalBytes) || !Number.isSafeInteger(availableBytes)
     || totalBytes <= 0 || availableBytes < 0) throw new Error(`worker free-space observation unavailable for ${path}`);
   return { device: String(statSync(parent).dev), totalBytes, availableBytes };
-}
-
-function protectedRepositories(repoDir) {
-  // Released/predecessor mirrors can use the same worker cache. Preserve the
-  // existing sibling lockfile frontier.
-  const repositories = [repoDir];
-  for (const sibling of ['0.2', '0.3']) {
-    const candidate = join(dirname(repoDir), sibling);
-    if (candidate === repoDir) continue;
-    try { if (lstatSync(join(candidate, 'yarn.lock')).isFile()) repositories.push(candidate); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  return repositories;
 }
 
 function reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid) {
@@ -125,7 +111,6 @@ export async function admitWorkerDiskBudget({ repoDir, cacheBaseDir, commandClas
   if ((!initial.admitted || maintenance) && process.platform === 'linux') {
     const steps = [
       ['runtime-build', () => reapRuntimeBuildStaging(cacheBaseDir, scratchRoot, procRoot, ownerUid)],
-      ['packages', () => pruneWorkerYarnCache({ cacheBaseDir, repositoryDirectories: protectedRepositories(repoDir), procRoot, ownerUid })],
       ['scratch', () => directory(scratchRoot) ? reapHistoricalTempRoots(scratchRoot, procRoot, { ownerUid }) : { reclaimedBytes: 0, reclaimedRoots: 0 }],
     ];
     for (const [kind, run] of steps) {

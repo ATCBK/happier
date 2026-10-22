@@ -19,7 +19,7 @@ import { run } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { collectWorkspacePackageJsonPaths } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
 import { resolveWorkspaceToolBinDirs } from '../../apps/stack/scripts/utils/proc/workspace_tool_bins.mjs';
 import { assertNoMissingLocalImports } from './distLocalImports.mjs';
-import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
+import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
 import { withWorkspaceOutputScriptArgs } from './workspaceOutputScriptArgs.mjs';
 import { resolveTypeScriptCliInvocation, requiresTypeScriptAdmission } from './resolveTypeScriptCliInvocation.mjs';
 import {
@@ -462,7 +462,9 @@ export function readWorkspacePackageInputFingerprint({
   // executable and launcher helpers. Its launcher alone is not tool identity.
   const compilerInstallationDir = dirname(dirname(dirname(compilerPath)));
   const dependencyLockRepoDir = coerceHappyMonorepoRootFromPath(packageDir) || identitySourceRepoDir;
-  const dependencyLockPath = dependencyLockRepoDir && join(dependencyLockRepoDir, 'yarn.lock');
+  const dependencyPolicyPaths = dependencyLockRepoDir
+    ? ['pnpm-lock.yaml', 'pnpm-workspace.yaml'].map(name => join(dependencyLockRepoDir, name))
+    : [];
   const buildOwnerPaths = ['buildTypeScriptPackageDist.mjs', 'workspaceOutputScriptArgs.mjs'].map(name => {
     const capturedPath = identitySourceRepoDir && join(identitySourceRepoDir, 'scripts/workspaces', name);
     return capturedPath && existsSync(capturedPath) ? capturedPath : fileURLToPath(new URL(`./${name}`, import.meta.url));
@@ -481,7 +483,7 @@ export function readWorkspacePackageInputFingerprint({
     compilerPath,
     compilerPackageJson,
     ...buildOwnerPaths,
-    ...(dependencyLockPath && existsSync(dependencyLockPath) ? [dependencyLockPath] : []),
+    ...dependencyPolicyPaths.filter(path => existsSync(path)),
   ])].sort((a, b) => identityPathFor(a) < identityPathFor(b) ? -1 : identityPathFor(a) > identityPathFor(b) ? 1 : 0);
   for (const path of paths) {
     const identityPath = identityPathFor(path);
@@ -778,7 +780,7 @@ async function prepareWorkspaceBuildEnv(packageDir, envIn) {
   return env;
 }
 
-async function runYarn(args, {
+async function runPnpm(args, {
   cwd,
   env,
   quiet,
@@ -786,7 +788,7 @@ async function runYarn(args, {
   timeoutMs = null,
   captureFailureDiagnostic = false,
 }) {
-  const invocation = resolveYarnCommandInvocation(args, { npmExecPath: env?.npm_execpath });
+  const invocation = resolvePnpmCommandInvocation(args, { npmExecPath: env?.npm_execpath });
   const outputMode = quiet ? 'ignore' : 'inherit';
   const stdio = input === null ? outputMode : ['pipe', outputMode, outputMode];
   await run(invocation.command, invocation.args, {
@@ -805,7 +807,7 @@ async function runYarn(args, {
 
 async function runWorkspacePackageBuild(packageDir, { env, quiet, timeoutMs, captureFailureDiagnostic = quiet }) {
   try {
-    await runYarn(['-s', 'build'], {
+    await runPnpm(['run', '--silent', 'build'], {
       cwd: packageDir,
       env,
       quiet,
@@ -815,7 +817,7 @@ async function runWorkspacePackageBuild(packageDir, { env, quiet, timeoutMs, cap
   } catch (error) {
     if (error?.code === 'ENOENT') {
       throw new Error(
-        `[local] yarn is required for component at ${packageDir}. Install it via Corepack: \`corepack enable\``,
+        `[local] pnpm is required for component at ${packageDir}. Run \`node scripts/ci/setup-pnpm.mjs\` from the repository.`,
         { cause: error },
       );
     }
@@ -830,7 +832,7 @@ export const defaultWorkspaceBuildBoundary = {
   runPackageBuild: runWorkspacePackageBuild,
   runPackageScript: (packageDir, script, options) => withWorkspaceOutputScriptArgs(
     { packageDir, scriptName: script, env: options.env },
-    args => runYarn(args, { cwd: packageDir, ...options }),
+    args => runPnpm(args, { cwd: packageDir, ...options }),
   ),
 };
 

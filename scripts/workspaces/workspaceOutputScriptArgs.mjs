@@ -12,7 +12,7 @@ import {
 /** Both complete builds and output-only refreshes consume the freshly staged
  * definePlugin projection, never an unrelated packaged-manifest generation. */
 export async function withWorkspaceOutputScriptArgs({ packageDir, scriptName, env = process.env }, operation) {
-  const args = ['-s', scriptName];
+  const args = ['run', '--silent', scriptName];
   const outputDir = env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR?.trim();
   if (scriptName !== 'build:ui' || !outputDir) return await operation(args);
   const packageJson = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));

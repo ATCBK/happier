@@ -56,7 +56,7 @@ export default defineConfig({
         alias: [
             {
                 find: '@legendapp/list/react-native',
-                replacement: resolve('./node_modules/@legendapp/list/react-native.mjs'),
+                replacement: resolve('../../node_modules/@legendapp/list/react-native.mjs'),
             },
             ...(integration.resolve?.alias ?? []),
         ],

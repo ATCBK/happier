@@ -182,7 +182,8 @@ test('expoExec delegates Happier UI preparation to the app-owned canonical prefl
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await mkdir(join(root, 'node_modules', '.bin'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeJson(join(uiDir, 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
@@ -225,7 +226,8 @@ test('expoSpawn can launch last-green workspace bytes without refreshing changed
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await mkdir(join(root, 'node_modules', '.bin'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# changed lockfile\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# changed lockfile\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await writeJson(join(uiDir, 'package.json'), {
     name: '@happier-dev/app',
     private: true,
@@ -261,9 +263,11 @@ test('expoSpawn can launch last-green workspace bytes without refreshing changed
   };
   // Last-green means a previously admitted dependency tree. The source can
   // advance while explicit workspacePrepared startup retains those bytes.
-  await writeFile(join(root, 'yarn.lock'), '# admitted lockfile\n', 'utf8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# admitted lockfile\n', 'utf8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   await withDependencyRefresh({ installDir: root, env }, async () => {});
-  await writeFile(join(root, 'yarn.lock'), '# changed lockfile\n', 'utf8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# changed lockfile\n', 'utf8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
   const child = await expoSpawn({
     label: 'expo-last-green',
     dir: uiDir,
@@ -295,7 +299,8 @@ test('expoExec builds workspace dist deps for the projectDir (not the runnerDir)
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   // Root does NOT depend on protocol; only apps/ui does.
   await writeJson(join(root, 'apps', 'ui', 'package.json'), {
@@ -366,7 +371,8 @@ test('expoExec falls back to the monorepo root expo bin when runnerDir lacks nod
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   await writeJson(join(root, 'apps', 'ui', 'package.json'), {
     name: '@happier-dev/app',
@@ -473,7 +479,8 @@ test('expoExec repairs Yarn shell shims inside Expo package bin files before inv
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
@@ -554,7 +561,8 @@ test('expoExec restores missing React Native Skia iOS binaries before Expo iOS r
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
@@ -628,7 +636,8 @@ test('expoExec restores missing React Native Skia Android binaries before Expo A
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
@@ -703,7 +712,8 @@ test('expoExec restores missing React Native libsodium native build before Expo 
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');

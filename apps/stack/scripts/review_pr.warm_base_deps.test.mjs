@@ -31,7 +31,7 @@ async function parseJsonl(p) {
     .map((l) => JSON.parse(l));
 }
 
-test('review-pr warms cached workspace deps when shouldRunYarnInstall returns true', async (t) => {
+test('review-pr warms cached workspace deps when shouldRunPnpmInstall returns true', async (t) => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-review-pr-warm-deps-'));
@@ -44,7 +44,7 @@ test('review-pr warms cached workspace deps when shouldRunYarnInstall returns tr
   const mainDir = join(wsDir, 'main');
   await mkdir(join(mainDir, '.git'), { recursive: true });
   await writeFile(join(mainDir, 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(mainDir, 'yarn.lock'), '#\n', 'utf-8');
+  await writeFile(join(mainDir, 'pnpm-lock.yaml'), '#\n', 'utf-8');
 
   const markerPath = join(tmp, 'calls.jsonl');
   const loaderPath = join(tmp, 'loader.mjs');
@@ -87,9 +87,9 @@ export async function resolveDefaultRemoteBranch() {
   return 'main';
 }
 `),
-    './utils/worktrees/yarn_install_guard.mjs': toDataUrl(`
-export async function shouldRunYarnInstall() { return true; }
-export async function withYarnInstallGuard(options, install) { return await install({ env: options.env }); }
+    './utils/worktrees/pnpm_install_guard.mjs': toDataUrl(`
+export async function shouldRunPnpmInstall() { return true; }
+export async function withPnpmInstallGuard(options, install) { return await install({ env: options.env }); }
 `),
     './utils/proc/pm.mjs': toDataUrl(`
 export async function applyStackCacheEnv(env) { return env; }
@@ -135,9 +135,9 @@ export async function resolve(specifier, context, defaultResolve) {
   assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
 
   const calls = await parseJsonl(markerPath);
-  const yarnRun = calls.find((c) => c.kind === 'run' && c.cmd === 'yarn' && Array.isArray(c.args) && c.args[0] === 'install');
-  assert.ok(yarnRun, `expected a yarn install run call\n${JSON.stringify(calls, null, 2)}`);
-  assert.equal(resolve(String(yarnRun.options.cwd)), resolve(mainDir));
+  const pnpmRun = calls.find((c) => c.kind === 'run' && c.cmd === 'pnpm' && Array.isArray(c.args) && c.args[0] === 'install');
+  assert.ok(pnpmRun, `expected a pnpm install run call\n${JSON.stringify(calls, null, 2)}`);
+  assert.equal(resolve(String(pnpmRun.options.cwd)), resolve(mainDir));
   const pmCacheBase = join(homeDir, 'cache', 'sandbox', 'pm');
-  assert.equal(resolve(String(yarnRun.options.env.HAPPIER_STACK_PM_CACHE_BASE_DIR)), resolve(pmCacheBase));
+  assert.equal(resolve(String(pnpmRun.options.env.HAPPIER_STACK_PM_CACHE_BASE_DIR)), resolve(pmCacheBase));
 });

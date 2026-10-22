@@ -32,11 +32,20 @@ function writeExecutable(filePath, content) {
 function createStubBin(root) {
   const binDir = path.join(root, 'bin');
   const logPath = path.join(root, 'commands.log');
+  const sourceSha = 'a'.repeat(40);
   fs.mkdirSync(binDir, { recursive: true });
-  writeExecutable(path.join(binDir, 'yarn'), [
+  // Remote source mirrors omit .git; model only the Git process boundary.
+  writeExecutable(path.join(binDir, 'git'), [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
-    `printf 'yarn token=%q args=' "\${EXPO_TOKEN:-}" >> ${JSON.stringify(logPath)}`,
+    '[[ "$*" == "rev-parse HEAD" ]] || exit 1',
+    `printf '%s\\n' '${sourceSha}'`,
+    '',
+  ].join('\n'));
+  writeExecutable(path.join(binDir, 'pnpm'), [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `printf 'pnpm token=%q args=' "\${EXPO_TOKEN:-}" >> ${JSON.stringify(logPath)}`,
     `printf '%q ' "$@" >> ${JSON.stringify(logPath)}`,
     `printf '\n' >> ${JSON.stringify(logPath)}`,
     'if [[ " $* " == *" expo export "* ]]; then',
@@ -58,7 +67,7 @@ function createStubBin(root) {
     `printf '\n' >> ${JSON.stringify(logPath)}`,
     '',
   ].join('\n'));
-  return { binDir, logPath };
+  return { binDir, logPath, sourceSha };
 }
 
 function run(args, env) {
@@ -76,14 +85,23 @@ test('prepared OTA publication never executes candidate commands with EXPO_TOKEN
   try {
     const stub = createStubBin(root);
     const preparedDir = path.join(root, 'prepared');
-    const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const sourceSha = stub.sourceSha;
     const prepareEnv = {
       ...process.env,
       PATH: `${stub.binDir}:${process.env.PATH ?? ''}`,
+      npm_execpath: path.join(stub.binDir, 'pnpm'),
       CI: 'true',
       EXPO_TOKEN: '',
       SENTRY_AUTH_TOKEN: '',
     };
+
+    assert.throws(() => run([
+      '--phase', 'prepare',
+      '--environment', 'preview',
+      '--platform', 'android',
+      '--source-sha', 'b'.repeat(40),
+      '--input-dir', preparedDir,
+    ], prepareEnv), /Prepared OTA source SHA does not match the checked-out candidate/);
 
     run([
       '--phase', 'prepare',
@@ -116,7 +134,7 @@ test('prepared OTA publication never executes candidate commands with EXPO_TOKEN
     ], publishEnv);
 
     const log = fs.readFileSync(stub.logPath, 'utf8');
-    assert.match(log, /yarn token='' args=.*expo export/);
+    assert.match(log, /pnpm token='' args=.*expo export/);
     assert.match(log, /npx token=must-not-reach-candidate args=.*eas-cli@18\.0\.1 update/);
     assert.match(log, /--skip-bundler/);
     assert.match(log, /--input-dir/);

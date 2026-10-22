@@ -115,7 +115,7 @@ function usage(json) {
       '  hstack dev-vm skills sync [--json]',
       '  hstack dev-vm shell [--guest-cwd=/absolute/path] [-- COMMAND...]',
       '  hstack dev-vm exec [--guest-cwd=/absolute/path] -- COMMAND [ARG...]',
-      '  yarn -s dev-vm -- exec --guest-cwd=/absolute/path -- COMMAND [ARG...]',
+      '  pnpm --silent run dev-vm exec --guest-cwd=/absolute/path -- COMMAND [ARG...]',
       '',
       'Setup always writes activation=candidate. Ordinary hstack commands remain on macOS until the cutover owner activates it.',
     ].join('\n'),

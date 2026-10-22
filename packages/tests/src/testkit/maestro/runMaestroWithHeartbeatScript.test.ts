@@ -205,8 +205,8 @@ describe('scripts/run-maestro-with-heartbeat.mjs', () => {
             join(fakeProcessDir, 'processTree.mjs'),
         );
         await cp(
-            join(repoRoot, 'scripts', 'workspaces', 'execYarnCommand.mjs'),
-            join(fakeWorkspacesDir, 'execYarnCommand.mjs'),
+            join(repoRoot, 'scripts', 'workspaces', 'execPnpmCommand.mjs'),
+            join(fakeWorkspacesDir, 'execPnpmCommand.mjs'),
         );
 
         const fakeNodeModulesDir = join(fakeRepoRoot, 'node_modules');

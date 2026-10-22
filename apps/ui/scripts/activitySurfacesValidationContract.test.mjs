@@ -59,7 +59,7 @@ test('apps/ui exposes a rollout-local activity-surfaces typecheck and certificat
   );
   assert.equal(
     scripts['test:native-e2e:activity-surfaces'],
-    'yarn -s ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --activity-surfaces',
+    'pnpm --silent run ensure:workspace:built && node ./scripts/tauriMcpQa.mjs --activity-surfaces',
   );
 
   const focusedSuitePath = join(packageRoot, 'scripts/runActivitySurfacesVitestSuite.mjs');

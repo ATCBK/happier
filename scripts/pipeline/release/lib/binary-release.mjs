@@ -29,7 +29,7 @@ const {
   execOrThrow,
   prepareUiWebDist,
   refreshCliBinaryArtifactRuntimeAssetBuildManifest,
-  resolveYarnCommand,
+  resolvePnpmCommand,
 } = await import('@happier-dev/cli-common/componentArtifacts');
 
 export {
@@ -42,7 +42,7 @@ export {
   execOrThrow,
   prepareUiWebDist,
   refreshCliBinaryArtifactRuntimeAssetBuildManifest,
-  resolveYarnCommand,
+  resolvePnpmCommand,
   SERVER_BINARY_DEFAULT_EXTERNALS,
 };
 export { fileSha256 } from './artifact-checksums.mjs';

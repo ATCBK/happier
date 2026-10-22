@@ -41,7 +41,8 @@ describe('bundleWorkspaceDeps', () => {
       const happyCliDir = join(repoRoot, 'apps/cli');
       mkdirSync(happyCliDir, { recursive: true });
       writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
-      writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+      writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+      writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       for (const app of ['ui', 'server']) {
         mkdirSync(join(repoRoot, 'apps', app), { recursive: true });
         writeFileSync(join(repoRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));

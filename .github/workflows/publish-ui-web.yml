@@ -204,8 +204,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
       - name: Resolve channel metadata
         id: channel_meta
@@ -318,31 +316,23 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack (Yarn)
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
           APP_ENV: ${{ needs.prepare.outputs.app_env }}
           EXPO_UPDATES_CHANNEL: ${{ needs.prepare.outputs.expo_updates_channel }}
           EXPO_APP_SCHEME: ${{ needs.prepare.outputs.app_scheme }}
           HAPPIER_EMBEDDED_POLICY_ENV: ${{ needs.prepare.outputs.embedded_policy_env }}
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Generate release notes manifest
         run: |
           set -euo pipefail
-          yarn --cwd apps/ui tsx sources/scripts/parseReleaseNotes.ts
+          pnpm --dir apps/ui exec tsx sources/scripts/parseReleaseNotes.ts
 
       # The UI-web bundle build materializes the browser Iroh carrier: it
       # compiles the Rust endpoint for `wasm32-unknown-unknown` and generates
@@ -419,25 +409,17 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
 
-      - name: Enable Corepack (Yarn)
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare yarn@1.22.22 --activate
 
       - name: Install minisign (signing + verification)
         uses: ./.github/actions/bootstrap-minisign
 
       - name: Install trusted workflow control dependencies
         env:
-          YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
 
       - name: Download exact opaque UI-web candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -535,16 +517,12 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
-          cache-dependency-path: yarn.lock
-      - name: Enable Corepack
-        run: corepack enable
       - name: Install minisign
         uses: ./.github/actions/bootstrap-minisign
       - name: Install dependencies
-        uses: ./.github/actions/install-yarn-dependencies
+        uses: ./.github/actions/install-pnpm-dependencies
         with:
-          args: --frozen-lockfile --ignore-engines
+          args: --frozen-lockfile
       - name: Create scoped release token
         id: app_token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547

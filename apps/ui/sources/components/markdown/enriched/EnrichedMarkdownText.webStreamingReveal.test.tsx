@@ -1,3 +1,4 @@
+import { enrichedMarkdownPackageFileUrl, resolveEnrichedMarkdownPackageFile } from '@/dev/testkit/harness/enrichedMarkdownPackage';
 import { readFileSync } from 'node:fs';
 
 import React from 'react';
@@ -101,56 +102,38 @@ type RevealSpanProps = Readonly<{
 }>;
 
 async function loadPatchedStreamingReveal(): Promise<StreamingRevealModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('lib/module/web/streamingReveal.js');
     return import(/* @vite-ignore */ moduleUrl) as Promise<StreamingRevealModule>;
 }
 
 async function loadPatchedWebEnrichedMarkdownText(): Promise<WebEnrichedMarkdownTextModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText.tsx',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('src/web/EnrichedMarkdownText.tsx');
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebEnrichedMarkdownTextModule>;
 }
 
 async function loadPatchedWebParseMarkdown(): Promise<WebParseMarkdownModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('lib/module/web/parseMarkdown.js');
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebParseMarkdownModule>;
 }
 
 async function loadPatchedWebSourceParseMarkdown(): Promise<WebParseMarkdownModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown.ts',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('src/web/parseMarkdown.ts');
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebParseMarkdownModule>;
 }
 
 async function loadPatchedInlineRenderers(): Promise<InlineRenderersModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/src/web/renderers/InlineRenderers.tsx',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('src/web/renderers/InlineRenderers.tsx');
     return import(/* @vite-ignore */ moduleUrl) as Promise<InlineRenderersModule>;
 }
 
 async function loadPatchedWebRenderers(): Promise<WebRenderersModule> {
-    const moduleUrl = new URL(
-        '../../../../node_modules/react-native-enriched-markdown/src/web/renderers/index.tsx',
-        import.meta.url,
-    ).href;
+    const moduleUrl = enrichedMarkdownPackageFileUrl('src/web/renderers/index.tsx');
     return import(/* @vite-ignore */ moduleUrl) as Promise<WebRenderersModule>;
 }
 
 function readPatchedPackageFile(relativePath: string): string {
     return readFileSync(
-        new URL(`../../../../node_modules/react-native-enriched-markdown/${relativePath}`, import.meta.url),
+        resolveEnrichedMarkdownPackageFile(relativePath),
         'utf8',
     );
 }

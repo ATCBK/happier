@@ -695,7 +695,8 @@ describe('spawnHappyCLI fallback invocation', () => {
   it('pins bundled workspace dependencies with the admitted source-development closure', async () => {
     await withTempDir('happier-source-dev-workspace-closure-', async (repoRoot) => {
       writeFileSync(join(repoRoot, 'package.json'), '{}\n', 'utf8');
-      writeFileSync(join(repoRoot, 'yarn.lock'), '', 'utf8');
+      writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '', 'utf8');
+      writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
       const cliRoot = join(repoRoot, 'apps', 'cli');
       mkdirSync(cliRoot, { recursive: true });
@@ -854,7 +855,8 @@ describe('spawnHappyCLI fallback invocation', () => {
       const liveCliRoot = join(liveRepoRoot, 'apps', 'cli');
       mkdirSync(liveCliRoot, { recursive: true });
       writeFileSync(join(liveRepoRoot, 'package.json'), '{}\n', 'utf8');
-      writeFileSync(join(liveRepoRoot, 'yarn.lock'), '', 'utf8');
+      writeFileSync(join(liveRepoRoot, 'pnpm-lock.yaml'), '', 'utf8');
+      writeFileSync(join(liveRepoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
       writeFileSync(join(liveCliRoot, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli',
         dependencies: { [workspacePackageName]: 'workspace:*' },
@@ -898,7 +900,8 @@ describe('spawnHappyCLI fallback invocation', () => {
   it('pins last-green CLI code with the current coherent source workspace runtime', async () => {
     await withTempDir('happier-source-dev-workspace-mismatch-', async (repoRoot) => {
       writeFileSync(join(repoRoot, 'package.json'), '{}\n', 'utf8');
-      writeFileSync(join(repoRoot, 'yarn.lock'), '', 'utf8');
+      writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '', 'utf8');
+      writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
       const cliRoot = join(repoRoot, 'apps', 'cli');
       mkdirSync(cliRoot, { recursive: true });

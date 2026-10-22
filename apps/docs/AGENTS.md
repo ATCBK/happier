@@ -81,7 +81,7 @@ These pages are generated. Do not hand-edit the output — change the generator 
 | `/plugins/api/host-actions` | the Protocol Action registry through `packages/protocol/scripts/generate-plugin-action-reference.ts` |
 | `/development/architecture/runtime/runtime-events` | the protocol's `agentSessionV1` runtime schema (built form) |
 
-Regenerate with `yarn --cwd apps/docs generate:reference`. A generator whose source is not built in this checkout is skipped, not failed — a docs-only build is legitimate.
+Regenerate with `pnpm --dir apps/docs run generate:reference`. A generator whose source is not built in this checkout is skipped, not failed — a docs-only build is legitimate.
 
 Two related rules, both learned the hard way:
 
@@ -146,9 +146,9 @@ Published product pages avoid repository paths and implementation trivia unless 
 
 ## Documentation application and validation
 
-- Use yarn and the package scripts; do not substitute npm or pnpm commands in repository instructions.
-- Run `yarn --cwd apps/docs types:check` after content-schema, MDX, TypeScript, or generated-content changes.
-- Run `yarn --cwd apps/docs build` when routing, navigation, generation, rendering, or the production build can be affected.
+- Use pnpm and the package scripts; do not substitute npm or Yarn commands in repository instructions.
+- Run `pnpm --dir apps/docs run types:check` after content-schema, MDX, TypeScript, or generated-content changes.
+- Run `pnpm --dir apps/docs run build` when routing, navigation, generation, rendering, or the production build can be affected.
 - Check every materially changed command and internal link through the narrowest reliable path.
 - Use a small number of current, non-sensitive screenshots only when they materially improve a UI-heavy workflow.
 - Changes to the documentation site's own UI, navigation, accessibility, responsive behavior, or meaningful loading/error states are user-facing web changes. Read `../../DESIGN.md` when the experience is materially affected and apply the relevant live-validation rules.
@@ -220,7 +220,7 @@ when they are learning something.
 | agent page coverage | an agent the app ships with no page under `/agents` |
 | generated drift | a published generated page that differs from a fresh render |
 
-Run them with `yarn --cwd apps/docs check:content`.
+Run them with `pnpm --dir apps/docs run check:content`.
 
 Every one of these exists because the defect shipped and then stayed shipped.
 The UI-label check exists because sixteen pages spent months sending readers to

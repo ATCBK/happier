@@ -14,7 +14,7 @@ import {
   mergeTokenLedgersFromPaths,
 } from '../../scripts/run-providers-parallel.mjs';
 
-type YarnInvocationResolver = (
+type PnpmInvocationResolver = (
   args: readonly string[],
   options?: Readonly<{ platform?: NodeJS.Platform; npmExecPath?: string; comspec?: string }>,
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
@@ -87,15 +87,15 @@ describe('providers parallel run script args', () => {
     ).toThrow(/Conflicting flags/);
   });
 
-  it('wraps the Windows Yarn shim through cmd.exe', () => {
-    const resolveProviderRunYarnInvocation = (runProvidersParallelScript as {
-      resolveProviderRunYarnInvocation?: YarnInvocationResolver;
-    }).resolveProviderRunYarnInvocation;
+  it('wraps the Windows Pnpm shim through cmd.exe', () => {
+    const resolveProviderRunPnpmInvocation = (runProvidersParallelScript as {
+      resolveProviderRunPnpmInvocation?: PnpmInvocationResolver;
+    }).resolveProviderRunPnpmInvocation;
 
-    expect(resolveProviderRunYarnInvocation).toBeTypeOf('function');
-    if (!resolveProviderRunYarnInvocation) throw new Error('missing provider run Yarn invocation resolver');
+    expect(resolveProviderRunPnpmInvocation).toBeTypeOf('function');
+    if (!resolveProviderRunPnpmInvocation) throw new Error('missing provider run Pnpm invocation resolver');
 
-    const invocation = resolveProviderRunYarnInvocation(['-s', 'workspace', '@happier-dev/server', 'generate:providers'], {
+    const invocation = resolveProviderRunPnpmInvocation(['-s', 'workspace', '@happier-dev/server', 'generate:providers'], {
       platform: 'win32',
       npmExecPath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js',
       comspec: 'C:\\Windows\\System32\\cmd.exe',
@@ -103,7 +103,7 @@ describe('providers parallel run script args', () => {
 
     expect(invocation.command).toBe('C:\\Windows\\System32\\cmd.exe');
     expect(invocation.windowsVerbatimArguments).toBe(true);
-    expect(invocation.args.join(' ')).toContain('yarn.cmd');
+    expect(invocation.args.join(' ')).toContain('pnpm.cmd');
     expect(invocation.args.join(' ')).not.toContain('npm-cli.js');
   });
 });

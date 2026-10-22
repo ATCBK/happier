@@ -12,7 +12,7 @@ test('the Home Iroh native gate runs by default and is selectable through manual
     workflow,
     /home-iroh-real:\n\s+if: \$\{\{ !inputs\.select_jobs_explicitly \|\| inputs\.run_home_iroh_real \}\}/u,
   );
-  assert.match(workflow, /yarn workspace @happier-dev\/iroh-native test:home-iroh:real/u);
+  assert.match(workflow, /pnpm --filter @happier-dev\/iroh-native run test:home-iroh:real/u);
   assert.match(workflow, /ci_summary:[\s\S]*needs: \[[^\]]*home-iroh-real/u);
   assert.match(dispatch, /custom_checks:[\s\S]*home_iroh_real/u);
   assert.match(dispatch, /outputs:[\s\S]*run_home_iroh_real: \$\{\{ steps\.flags\.outputs\.run_home_iroh_real \}\}/u);
@@ -28,7 +28,7 @@ test('the managed Iroh relay deployment contract runs in the release-contracts g
   const workflow = readFileSync(new URL('.github/workflows/tests.yml', repository), 'utf8');
   assert.match(rootPackage.scripts['test:release:contracts'] ?? '', /deploy\/iroh-relay\/\*\.test\.mjs/u);
   assert.match(workflow, /release-contracts:\n\s+if: \$\{\{ !inputs\.select_jobs_explicitly \|\| inputs\.run_release_contracts \}\}/u);
-  assert.match(workflow, /yarn -s test:release:contracts/u);
+  assert.match(workflow, /pnpm run test:release:contracts/u);
   assert.match(workflow, /ci_summary:[\s\S]*needs: \[[^\]]*release-contracts/u);
 });
 

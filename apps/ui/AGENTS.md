@@ -12,13 +12,13 @@ Package-specific instructions for `apps/ui`. These supplement the root constitut
 
 ## Commands and validation
 
-Use yarn:
+Use pnpm and the package scripts:
 
-- `yarn start` — Expo development server.
-- `yarn ios` / `yarn android` / `yarn web` — platform targets.
-- `yarn typecheck` — required after TypeScript changes.
-- `yarn test` — Vitest tests.
-- `yarn tauri:dev` / `yarn tauri:build:*` — desktop flows.
+- `pnpm run start` — Expo development server.
+- `pnpm run ios` / `pnpm run android` / `pnpm run web` — platform targets.
+- `pnpm run typecheck` — required after TypeScript changes.
+- `pnpm run test` — Vitest tests.
+- `pnpm run tauri:dev` / `pnpm run tauri:build:*` — desktop flows.
 
 Use the smallest relevant test slice while iterating, then run the UI typecheck/build-enforcing and broader relevant lanes before handoff.
 

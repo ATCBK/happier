@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 
 import {
     REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
@@ -12,10 +12,8 @@ import {
     verifyReactNativeEnrichedMarkdownWebStreamingPatch,
     verifyUiPatchedDependencies,
 } from './verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
-import { repairReactNativeEnrichedMarkdownWebStreamingPatch } from './repairReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 
-const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const INSTALLED_PACKAGE_DIR = path.join(UI_DIR, 'node_modules', 'react-native-enriched-markdown');
+const INSTALLED_PACKAGE_DIR = path.dirname(createRequire(import.meta.url).resolve('react-native-enriched-markdown/package.json'));
 
 const STREAMING_REVEAL_ARTIFACTS = [
     'lib/module/web/streamingReveal.js',
@@ -35,6 +33,22 @@ const VISIBILITY_MARKERS = [
     ['lib/module/web/streamingReveal.js', '.start <= start'],
 ];
 
+test('dependency preflight rejects a native renderer retaining its factory', () => {
+    const fixtureDir = createPatchedPackageFixture();
+    try {
+        const relativePath = 'ios/renderer/StrongRenderer.m';
+        const filePath = path.join(fixtureDir, relativePath);
+        const original = fs.readFileSync(filePath, 'utf8');
+        assert.ok(original.includes('__weak RendererFactory *_rendererFactory;'));
+        fs.writeFileSync(filePath, original.replace('__weak RendererFactory *_rendererFactory;', 'RendererFactory *_rendererFactory;'));
+        const result = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir: fixtureDir });
+        assert.equal(result.status, 'failed');
+        assert.ok(result.missingMarkers.some(([file]) => file === relativePath));
+    } finally {
+        fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+});
+
 test('UI dependency preflight verifies both app-local and hoisted patched copies', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-patched-copy-preflight-'));
     const fixture = createPatchedPackageFixture();
@@ -44,6 +58,7 @@ test('UI dependency preflight verifies both app-local and hoisted patched copies
     try {
         fs.cpSync(fixture, appCopy, { recursive: true });
         fs.cpSync(fixture, hoistedCopy, { recursive: true });
+        fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), 'patchedDependencies: {}\n');
         assert.doesNotThrow(() => verifyUiPatchedDependencies({ uiPackageDir }));
         fs.unlinkSync(path.join(hoistedCopy, 'lib/module/web/streamingReveal.js'));
         assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }));
@@ -62,13 +77,15 @@ test('UI dependency preflight verifies other patches even when enriched-markdown
     const uiPackageDir = path.join(root, 'apps', 'ui');
     try {
         fs.cpSync(fixture, path.join(uiPackageDir, 'node_modules/react-native-enriched-markdown'), { recursive: true });
-        fs.mkdirSync(path.join(uiPackageDir, 'patches'), { recursive: true });
-        fs.writeFileSync(path.join(uiPackageDir, 'patches', 'fixture-dependency+1.0.0.patch'),
-            'diff --git a/node_modules/fixture-dependency/index.js b/node_modules/fixture-dependency/index.js\n'
-            + '--- a/node_modules/fixture-dependency/index.js\n+++ b/node_modules/fixture-dependency/index.js\n'
+        fs.mkdirSync(path.join(root, 'patches'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'),
+            'patchedDependencies:\n  fixture-dependency@1.0.0: patches/fixture-dependency@1.0.0.patch\n');
+        fs.writeFileSync(path.join(root, 'patches', 'fixture-dependency@1.0.0.patch'),
+            'diff --git a/index.js b/index.js\n'
+            + '--- a/index.js\n+++ b/index.js\n'
             + '@@ -1 +1 @@\n-export const patched = false;\n+export const patched = true;\n'
-            + 'diff --git a/node_modules/fixture-dependency/feature.js b/node_modules/fixture-dependency/feature.js\n'
-            + 'new file mode 100644\n--- /dev/null\n+++ b/node_modules/fixture-dependency/feature.js\n'
+            + 'diff --git a/feature.js b/feature.js\n'
+            + 'new file mode 100644\n--- /dev/null\n+++ b/feature.js\n'
             + '@@ -0,0 +1 @@\n+export const feature = true;\n');
         for (const packageDir of [path.join(root, 'node_modules/fixture-dependency'), path.join(uiPackageDir, 'node_modules/fixture-dependency')]) {
             fs.mkdirSync(packageDir, { recursive: true });
@@ -120,7 +137,6 @@ test('dependency preflight rejects an installed eager math loader', () => {
         fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
 });
-
 test('installed app-local enriched-markdown materializes every patch-owned streaming-reveal artifact', () => {
     const missing = STREAMING_REVEAL_ARTIFACTS.filter(
         (relativePath) => !fs.existsSync(path.join(INSTALLED_PACKAGE_DIR, relativePath)),
@@ -243,65 +259,3 @@ test('rejects stale visibility behavior independently in every consumed source a
         fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
 });
-
-for (const scenario of ['missing module', 'stale overlapping implementation', 'stale native renderer ownership']) {
-test(`partial repair handles ${scenario} without certifying an incompatible dependency`, () => {
-    const installedResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir: INSTALLED_PACKAGE_DIR });
-    assert.equal(installedResult.status, 'ok', formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(installedResult));
-
-    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enriched-markdown-partial-repair-'));
-    try {
-        const packageDir = path.join(fixtureDir, 'node_modules', 'react-native-enriched-markdown');
-        const fixturePatchDir = path.join(fixtureDir, 'patches');
-        fs.mkdirSync(path.dirname(packageDir), { recursive: true });
-        fs.mkdirSync(fixturePatchDir, { recursive: true });
-        fs.cpSync(INSTALLED_PACKAGE_DIR, packageDir, { recursive: true });
-        fs.copyFileSync(
-            path.join(UI_DIR, 'patches', 'react-native-enriched-markdown+0.5.0.patch'),
-            path.join(fixturePatchDir, 'react-native-enriched-markdown+0.5.0.patch'),
-        );
-        fs.writeFileSync(path.join(fixtureDir, 'package.json'), '{"name":"partial-repair-fixture","private":true}\n');
-        if (scenario === 'missing module') {
-            fs.rmSync(path.join(packageDir, 'lib', 'module', 'web', 'streamingReveal.js'));
-        } else if (scenario === 'stale native renderer ownership') {
-            const rendererPath = path.join(packageDir, 'ios', 'renderer', 'StrongRenderer.m');
-            const current = fs.readFileSync(rendererPath, 'utf8');
-            assert.match(current, /(?:__weak )?RendererFactory \*_rendererFactory;/);
-            fs.writeFileSync(rendererPath, current.replace('__weak RendererFactory *_rendererFactory;', 'RendererFactory *_rendererFactory;'));
-        } else {
-            for (const [relativePath, marker] of VISIBILITY_MARKERS) {
-                const filePath = path.join(packageDir, relativePath);
-                const original = fs.readFileSync(filePath, 'utf8');
-                const stale = original.replaceAll(marker, marker.includes('syncAst') ? '' : '.start < end');
-                assert.notEqual(stale, original);
-                fs.writeFileSync(filePath, stale, 'utf8');
-            }
-        }
-
-        const brokenResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
-        assert.equal(brokenResult.status, 'failed');
-        const observationPath = path.join(fixtureDir, 'repair-cwd.json');
-        const patchPackageWrapper = path.join(fixtureDir, 'patch-package.mjs');
-        fs.writeFileSync(patchPackageWrapper, [
-            "import fs from 'node:fs';",
-            `fs.writeFileSync(${JSON.stringify(observationPath)}, JSON.stringify({ cwd: process.cwd(), nodeModules: fs.realpathSync('node_modules') }));`,
-            `await import(${JSON.stringify(pathToFileURL(path.join(UI_DIR, '..', '..', 'node_modules', 'patch-package', 'dist', 'index.js')).href)});`,
-        ].join('\n'));
-        const repairedResult = repairReactNativeEnrichedMarkdownWebStreamingPatch({
-            packageDir,
-            patchDir: fixturePatchDir,
-            patchPackageCliPath: patchPackageWrapper,
-            label: 'test',
-        });
-        const observation = JSON.parse(fs.readFileSync(observationPath, 'utf8'));
-        assert.equal(fs.realpathSync(path.dirname(observation.cwd)), fs.realpathSync(os.tmpdir()), 'repair scratch must stay outside the synchronized app root');
-        assert.equal(observation.nodeModules, fs.realpathSync(path.dirname(packageDir)));
-        assert.equal(fs.existsSync(observation.cwd), false, 'repair must clean its scratch directory');
-        // --partial can restore a missing added file, but cannot rebase overlapping
-        // previously patched implementation hunks. The verifier must fail closed.
-        assert.equal(repairedResult.status, scenario === 'stale overlapping implementation' ? 'failed' : 'ok');
-    } finally {
-        fs.rmSync(fixtureDir, { recursive: true, force: true });
-    }
-});
-}

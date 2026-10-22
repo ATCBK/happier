@@ -89,7 +89,8 @@ function createFixtureRepo(prefix) {
   mkdirSync(cliCommonWorkspacesDir, { recursive: true });
 
   writeJson(resolve(repoRoot, 'package.json'), { name: 'repo', private: true });
-  writeFileSync(resolve(repoRoot, 'yarn.lock'), '# lock\n', 'utf8');
+  writeFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+  writeFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeJson(resolve(repoRoot, 'apps', 'ui', 'package.json'), { name: '@happier-dev/ui', private: true });
   writeJson(resolve(repoRoot, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   writeJson(resolve(repoRoot, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });

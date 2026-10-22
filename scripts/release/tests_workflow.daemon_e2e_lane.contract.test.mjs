@@ -12,7 +12,7 @@ test('tests workflow runs daemon integration suite on the integration lane', asy
 
   assert.match(
     raw,
-    /yarn\s+--cwd\s+apps\/cli\s+-s\s+vitest\s+run\s+--config\s+vitest\.integration\.config\.ts\s+src\/daemon\/daemon\.integration\.test\.ts/,
+    /pnpm\s+--dir\s+apps\/cli\s+exec\s+vitest\s+run\s+--config\s+vitest\.integration\.config\.ts\s+src\/daemon\/daemon\.integration\.test\.ts/,
     'tests.yml daemon e2e step should execute daemon.integration.test.ts with vitest.integration.config.ts',
   );
 });
@@ -20,11 +20,11 @@ test('tests workflow runs daemon integration suite on the integration lane', asy
 test('tests workflow runs daemon spawn/stop stress only with the local server lane', async () => {
   const raw = await readFile(join(repoRoot, '.github', 'workflows', 'tests.yml'), 'utf8');
   const optInOccurrences = raw.match(/HAPPIER_CLI_DAEMON_SPAWN_STOP_STRESS_INTEGRATION/g) ?? [];
-  const genericSlowStep = raw.match(/- name: Run slow tests[\s\S]*?run: yarn workspace @happier-dev\/cli test:slow/)?.[0] ?? '';
+  const genericSlowStep = raw.match(/- name: Run slow tests[\s\S]*?run: pnpm --filter @happier-dev\/cli run test:slow/)?.[0] ?? '';
 
   assert.match(
     raw,
-    /HAPPIER_CLI_DAEMON_SPAWN_STOP_STRESS_INTEGRATION:\s*["']1["'][\s\S]*yarn\s+--cwd\s+apps\/cli\s+-s\s+vitest\s+run\s+--config\s+vitest\.slow\.config\.ts\s+src\/daemon\/daemon\.spawnStop\.stress\.slow\.test\.ts/,
+    /HAPPIER_CLI_DAEMON_SPAWN_STOP_STRESS_INTEGRATION:\s*["']1["'][\s\S]*pnpm\s+--dir\s+apps\/cli\s+exec\s+vitest\s+run\s+--config\s+vitest\.slow\.config\.ts\s+src\/daemon\/daemon\.spawnStop\.stress\.slow\.test\.ts/,
     'tests.yml daemon e2e step should explicitly enable and run daemon spawn/stop stress while its local server is alive',
   );
   assert.equal(optInOccurrences.length, 1, 'only the local-server daemon lane should enable daemon spawn/stop stress');

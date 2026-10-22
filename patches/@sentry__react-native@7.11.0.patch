@@ -1,0 +1,16 @@
+diff --git a/ios/RNSentry.mm b/ios/RNSentry.mm
+index 3461af87af4fb2456cff3ffd809e2337e5404e9c..78373e234fdfa3a757adaa5e3842ed9d7eb14ffd 100644
+--- a/ios/RNSentry.mm
++++ b/ios/RNSentry.mm
+@@ -177,7 +177,10 @@ RCT_EXPORT_METHOD(initNativeSdk : (NSDictionary *_Nonnull)options resolve : (
+     }
+ 
+ #if SENTRY_TARGET_REPLAY_SUPPORTED
+-    [RNSentryReplay postInit];
++    // HAPPIER PATCH(sentry-native-replay-postinit-guard): keep replay postInit behind runtime enablement.
++    if (isSessionReplayEnabled) {
++        [RNSentryReplay postInit];
++    }
+ #endif
+ 
+     resolve(@YES);

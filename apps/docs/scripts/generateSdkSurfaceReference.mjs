@@ -23,7 +23,7 @@
  *   at runtime, not at build time, so the realm column prevents a class of bug
  *   that typechecking will not catch.
  *
- * Regenerate with `yarn --cwd apps/docs generate:reference`.
+ * Regenerate with `pnpm --dir apps/docs run generate:reference`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

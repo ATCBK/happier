@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 

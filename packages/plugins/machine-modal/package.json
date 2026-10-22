@@ -7,9 +7,9 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
-    "build:finite": "yarn -s build",
+    "build:finite": "pnpm --silent run build",
     "test": "../../../apps/stack/bin/hstack-exec --script=test:local",
-    "test:local": "yarn -s test:unit:prepare && node ../../../node_modules/vitest/vitest.mjs run",
+    "test:local": "pnpm --silent run test:unit:prepare && node ../../../node_modules/vitest/vitest.mjs run",
     "test:unit:prepare": "node --input-type=module -e \"import { ensureWorkspacePackagesBuiltByName } from '../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs'; await ensureWorkspacePackagesBuiltByName('../../..', ['@happier-dev/plugins-machine-modal']);\"",
     "typecheck": "../../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json"

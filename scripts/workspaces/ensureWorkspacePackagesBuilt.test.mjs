@@ -80,7 +80,8 @@ for (const preparation of ['named', 'remote-validation']) test(`${preparation} w
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root });
   const repoRoot = join(root, 'native-owner');
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['ui', 'cli', 'server']) {
     mkdirSync(join(repoRoot, 'apps', app), { recursive: true });
     writeFileSync(join(repoRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}`,
@@ -1060,7 +1061,8 @@ test('declaration admission refreshes embedded runtime bytes without recompiling
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-declaration-admission-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -1165,7 +1167,8 @@ test('declaration-only packages require a current build record instead of bypass
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-declaration-only-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -1241,7 +1244,8 @@ test('component publication retains a valid plugin when another plugin has a mis
     private: true,
     workspaces: ['apps/*', 'packages/plugins/*'],
   }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   const uiDir = join(repoRoot, 'apps', 'ui');
   mkdirSync(uiDir, { recursive: true });
   for (const name of ['cli', 'server']) {
@@ -1319,7 +1323,8 @@ test('component builds remain strict unless a caller opts in to plugin failure p
   }
   mkdirSync(join(pluginDir, 'src'), { recursive: true });
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/plugins/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(join(componentDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/ui',
     dependencies: { '@happier-dev/plugins-broken': '0.0.0' },
@@ -1362,7 +1367,8 @@ test('component admission can defer bundled copies until shared preparation comp
     JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1453,7 +1459,8 @@ test('source-dev runtime preparation admits SDK outputs without deriving Action 
     }));
   }
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   const sdkScripts = JSON.parse(readFileSync(new URL('../../packages/plugin-sdk/package.json', import.meta.url))).scripts;
   mkdirSync(join(packageDir, 'src'), { recursive: true });
   mkdirSync(join(packageDir, 'scripts'), { recursive: true });
@@ -1507,7 +1514,8 @@ test('source-dev refresh observes root UI config inputs through workspace build 
     writeFileSync(join(repoRoot, 'apps', appName, 'package.json'), JSON.stringify({ name: `@fixture/${appName}` }));
   }
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(join(cliDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/cli', bundledDependencies: ['@happier-dev/ui-component'],
   }));
@@ -1565,7 +1573,8 @@ test('workspace build admission includes dev dependencies by default and exclude
       }),
       'utf8',
     );
-    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -1703,7 +1712,8 @@ test('workspace build admission rebuilds a consumer after a dependency output ch
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1772,7 +1782,8 @@ test('workspace build admission publishes an admitted peer before its dependent 
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1870,7 +1881,8 @@ test('workspace build admission overlaps independent packages within a bounded s
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1950,7 +1962,8 @@ test('workspace build admission queues bundled siblings before they enter the sh
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2075,7 +2088,8 @@ test('unchanged workspace package admission preserves the published dist directo
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2131,7 +2145,8 @@ test('package admission follows source content and membership rather than timest
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-content-currentness-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2515,7 +2530,8 @@ test('continuing concurrent source edits preserve the last coherent output and i
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-moving-inputs-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2560,7 +2576,8 @@ test('a recorded build remains valid after source edits but not after a dependen
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-built-dependencies-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -2607,7 +2624,8 @@ test('package input fingerprint changes with the selected compiler bytes', async
   const compilerHelper = join(repoRoot, 'node_modules', '@typescript', 'native', 'lib', 'getExePath.js');
   mkdirSync(join(compilerHelper, '..'), { recursive: true });
   writeFileSync(compilerHelper, 'native resolution helper one\n');
-  writeFileSync(join(repoRoot, 'yarn.lock'), 'external-types@1:\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), 'external-types@1:\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   const outputScriptOwner = join(repoRoot, 'scripts/workspaces/workspaceOutputScriptArgs.mjs');
   mkdirSync(join(outputScriptOwner, '..'), { recursive: true });
   writeFileSync(outputScriptOwner, 'export const stagedManifest = 1;\n');
@@ -2622,7 +2640,8 @@ test('package input fingerprint changes with the selected compiler bytes', async
   for (const [path, contents, contract] of [
     [nativeExecutable, 'native compiler two\n', 'native compiler replacement'],
     [compilerHelper, 'native resolution helper two\n', 'executable-resolution helper replacement'],
-    [join(repoRoot, 'yarn.lock'), 'external-types@2:\n', 'external declaration dependency-lock change'],
+    [join(repoRoot, 'pnpm-lock.yaml'), 'external-types@2:\n', 'external declaration dependency-lock change'],
+    [join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\nnodeLinker: hoisted\n', 'package-manager policy change'],
     [outputScriptOwner, 'export const stagedManifest = 2;\n', 'staged manifest preparation owner replacement'],
   ]) await t.test(contract, () => {
     const before = fingerprint();
@@ -2681,7 +2700,8 @@ test('live publication refreshes declared output currentness when source changes
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2750,7 +2770,8 @@ test('concurrent workspace package build waiters reuse the one published result'
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2823,7 +2844,8 @@ test('workspace build reuses an inherited bundle publication lease', async (t) =
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2897,7 +2919,8 @@ test('workspace build preserves an inherited bundle lease through an unbundled p
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2971,7 +2994,8 @@ test('first-party plugin UI siblings prepare their manifests inside joint public
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({
     private: true, workspaces: ['apps/*', 'packages/plugins/*'],
   }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3037,7 +3061,8 @@ test('plugin UI runtime build uses only its package lock', async (t) => {
     private: true,
     workspaces: ['packages/*'],
   }));
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3081,7 +3106,8 @@ test('workspace build refreshes a consumer bundled dependency after the dependen
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3197,7 +3223,8 @@ test('workspace build refreshes a stale private bundled dependency published by 
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3348,7 +3375,8 @@ test('workspace build leaves non-bundled packages under only their package build
     JSON.stringify({ private: true, workspaces: ['packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3411,7 +3439,8 @@ test('declared plugin UI artifacts participate in atomic workspace build admissi
       JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
       'utf8',
     );
-    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3569,7 +3598,8 @@ test('a newer dist directory does not hide stale declared workspace outputs', as
       JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
       'utf8',
     );
-    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3701,7 +3731,8 @@ test('CLI artifact preparation rebuilds bundled outputs recreated after current 
       }),
       'utf8',
     );
-    writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3942,7 +3973,8 @@ test('workspace build timeout kills descendant writers before releasing the pack
     JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'timeout-tree');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
@@ -4045,7 +4077,8 @@ test('quiet workspace builds retain bounded child diagnostics when the build fai
     JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'quiet-diagnostic');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
@@ -4121,7 +4154,8 @@ test('Stack workspace build boundary propagates timeoutMs to the package-manager
     JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
     'utf8',
   );
-  writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'stack-timeout');
   mkdirSync(join(packageDir, 'src'), { recursive: true });

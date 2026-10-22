@@ -24,9 +24,9 @@ export function buildLightDevPlan(env: NodeJS.ProcessEnv): LightDevPlan {
         provider,
         migrateMode,
         migrateDeployArgs: shouldRunMigrateDeploy
-            ? ["-s", "migrate:deploy"]
+            ? ["--silent", "run", "migrate:deploy"]
             : null,
         shouldRunMigrateDeploy,
-        startLightArgs: ["-s", "start:light"],
+        startLightArgs: ["--silent", "run", "start:light"],
     };
 }

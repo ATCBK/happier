@@ -22,8 +22,8 @@ function printHelp() {
 ghops: run GitHub operations as the Happier bot
 
 Usage:
-  yarn ghops <gh-subcommand> [...args]
-  yarn ghops git push --repo OWNER/REPO --source REVISION --target refs/heads/BRANCH [--force-with-lease EXPECTED_SHA]
+  pnpm run ghops <gh-subcommand> [...args]
+  pnpm run ghops git push --repo OWNER/REPO --source REVISION --target refs/heads/BRANCH [--force-with-lease EXPECTED_SHA]
 
 Required:
   Bot token from HAPPIER_GITHUB_BOT_TOKEN, or macOS Keychain after auth store.
@@ -44,16 +44,16 @@ Behavior:
   - Disables repository hooks for bot-authenticated pushes so they cannot inherit the temporary credential header
 
 Authentication:
-  yarn ghops auth store      Validate and store the happier-bot token in macOS Keychain
-  yarn ghops auth status     Validate the resolved bot identity and show its source
-  yarn ghops auth clear      Remove the stored macOS Keychain token
+  pnpm run ghops auth store      Validate and store the happier-bot token in macOS Keychain
+  pnpm run ghops auth status     Validate the resolved bot identity and show its source
+  pnpm run ghops auth clear      Remove the stored macOS Keychain token
 
 Examples:
-  yarn ghops api user
-  yarn ghops api repos/happier-dev/happier/issues -f title="Bug" -f body="..."
-  yarn ghops issue create --repo happier-dev/happier --title "Bug" --body "..."
-  yarn ghops project item-add 1 --owner happier-dev --url https://github.com/happier-dev/happier/issues/43
-  yarn ghops git push --repo happier-dev/happier --source HEAD --target refs/heads/my-branch
+  pnpm run ghops api user
+  pnpm run ghops api repos/happier-dev/happier/issues -f title="Bug" -f body="..."
+  pnpm run ghops issue create --repo happier-dev/happier --title "Bug" --body "..."
+  pnpm run ghops project item-add 1 --owner happier-dev --url https://github.com/happier-dev/happier/issues/43
+  pnpm run ghops git push --repo happier-dev/happier --source HEAD --target refs/heads/my-branch
 `.trimStart());
 }
 
@@ -392,7 +392,7 @@ async function main() {
 
   const resolved = await resolveBotToken(repoRoot);
   if (!resolved.token) {
-    const keychainHint = process.platform === 'darwin' ? ' or run `yarn ghops auth store`' : '';
+    const keychainHint = process.platform === 'darwin' ? ' or run `pnpm run ghops auth store`' : '';
     process.stderr.write(`[ghops] missing ${BOT_TOKEN_ENV_KEY}; set it${keychainHint}.\n`);
     return 2;
   }

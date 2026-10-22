@@ -20,9 +20,10 @@ import { banner } from './utils/ui/layout.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { fastForwardBranchToRemote } from './utils/git/fast_forward_to_remote.mjs';
 import { resolveDefaultRemoteBranch } from './utils/git/default_branch.mjs';
-import { withYarnInstallGuard } from './utils/worktrees/yarn_install_guard.mjs';
+import { withPnpmInstallGuard } from './utils/worktrees/pnpm_install_guard.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { applyStackCacheEnv } from './utils/proc/pm.mjs';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
  
 function usage() {
   return [
@@ -243,7 +244,7 @@ async function main() {
     return;
   }
  
-  await assertCliPrereqs({ git: true, yarn: true });
+  await assertCliPrereqs({ git: true, pnpm: true });
 
   // Determine a stable base stack name from PR inputs (used for sandbox discovery),
   // and a per-run unique stack name by default (prevents browser storage collisions across deleted sandboxes).
@@ -467,7 +468,7 @@ async function main() {
 
           // Warm base dependencies in the cached workspace so new PR worktrees can seed node_modules quickly.
           // Best-effort: if it fails, PR worktrees will fall back to installing their own deps.
-          const depsLabel = 'warm cached workspace deps (yarn)';
+          const depsLabel = 'warm cached workspace deps (pnpm)';
           updateSteps.start(depsLabel);
           try {
             const pmCacheBaseDir = resolvePmCacheBaseDirFromWorkspaceDir(workspaceCache.workspaceDir);
@@ -477,14 +478,17 @@ async function main() {
               HAPPIER_STACK_PM_ISOLATE_HOME: '1',
             });
             const quiet = verbosity === 0 && !json;
-            await withYarnInstallGuard({ installDir: mainDir, componentDir: mainDir, env, quiet: quiet || json }, async ({ env: installEnv }) => {
+            await withPnpmInstallGuard({ installDir: mainDir, componentDir: mainDir, env, quiet: quiet || json }, async ({ env: installEnv }) => {
+              const invocation = resolvePnpmCommandInvocation(['install', '--frozen-lockfile'], { npmExecPath: installEnv.npm_execpath });
+              const options = { cwd: mainDir, env: installEnv,
+                ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) };
               try {
-                await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env: installEnv, stdio: quiet ? 'ignore' : 'inherit' });
+                await run(invocation.command, invocation.args, { ...options, stdio: quiet ? 'ignore' : 'inherit' });
               } catch (e) {
                 // Re-run once with logs for diagnosis, then warn and continue.
                 if (quiet) {
                   try {
-                    await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env: installEnv, stdio: 'inherit' });
+                    await run(invocation.command, invocation.args, { ...options, stdio: 'inherit' });
                     return;
                   } catch (retryError) {
                     throw retryError;

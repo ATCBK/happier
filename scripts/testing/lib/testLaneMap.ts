@@ -39,36 +39,36 @@ export interface TestLaneDefinition {
 }
 
 export const TEST_LANE_DEFINITIONS: readonly TestLaneDefinition[] = Object.freeze([
-  { id: 'test', category: 'unit', rootScriptName: 'test', rootCommand: 'yarn test', packageLocalOnly: false },
+  { id: 'test', category: 'unit', rootScriptName: 'test', rootCommand: 'pnpm run test', packageLocalOnly: false },
   {
     id: 'test:plugin-workspaces',
     category: 'unit',
     rootScriptName: 'test:plugin-workspaces',
-    rootCommand: 'yarn test:plugin-workspaces',
+    rootCommand: 'pnpm run test:plugin-workspaces',
     packageLocalOnly: false,
   },
   {
     id: 'test:plugin-platform:source',
     category: 'unit',
     rootScriptName: 'test:plugin-platform:source',
-    rootCommand: 'yarn test:plugin-platform:source',
+    rootCommand: 'pnpm run test:plugin-platform:source',
     packageLocalOnly: false,
   },
   { id: 'workspace:test', category: 'unit', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
-  { id: 'test:integration', category: 'integration', rootScriptName: 'test:integration', rootCommand: 'yarn test:integration', packageLocalOnly: false },
+  { id: 'test:integration', category: 'integration', rootScriptName: 'test:integration', rootCommand: 'pnpm run test:integration', packageLocalOnly: false },
   { id: 'test:home-iroh:real', category: 'integration', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
   {
     id: 'cli:test:workspace-sync:real',
     category: 'integration',
     rootScriptName: 'test:workspace-sync:real',
-    rootCommand: 'yarn test:workspace-sync:real',
+    rootCommand: 'pnpm run test:workspace-sync:real',
     packageLocalOnly: false,
   },
   {
     id: 'test:e2e:desktop:native',
     category: 'e2e',
     rootScriptName: 'test:e2e:desktop:native',
-    rootCommand: 'yarn test:e2e:desktop:native',
+    rootCommand: 'pnpm run test:e2e:desktop:native',
     packageLocalOnly: false,
   },
   { id: 'cli:test:slow', category: 'integration', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
@@ -78,27 +78,27 @@ export const TEST_LANE_DEFINITIONS: readonly TestLaneDefinition[] = Object.freez
     id: 'test:db-contract:docker',
     category: 'db-contract',
     rootScriptName: 'test:db-contract:docker',
-    rootCommand: 'yarn test:db-contract:docker',
+    rootCommand: 'pnpm run test:db-contract:docker',
     packageLocalOnly: false,
   },
   {
     id: 'test:e2e:core:fast',
     category: 'e2e',
     rootScriptName: 'test:e2e:core:fast',
-    rootCommand: 'yarn test:e2e:core:fast',
+    rootCommand: 'pnpm run test:e2e:core:fast',
     packageLocalOnly: false,
   },
   {
     id: 'test:e2e:core:slow',
     category: 'e2e',
     rootScriptName: 'test:e2e:core:slow',
-    rootCommand: 'yarn test:e2e:core:slow',
+    rootCommand: 'pnpm run test:e2e:core:slow',
     packageLocalOnly: false,
   },
-  { id: 'test:e2e:ui', category: 'e2e', rootScriptName: 'test:e2e:ui', rootCommand: 'yarn test:e2e:ui', packageLocalOnly: false },
-  { id: 'test:e2e:mobile', category: 'e2e', rootScriptName: 'test:e2e:mobile', rootCommand: 'yarn test:e2e:mobile', packageLocalOnly: false },
-  { id: 'test:agents', category: 'provider', rootScriptName: 'test:agents', rootCommand: 'yarn test:agents', packageLocalOnly: false },
-  { id: 'test:stress', category: 'stress', rootScriptName: 'test:stress', rootCommand: 'yarn test:stress', packageLocalOnly: false },
+  { id: 'test:e2e:ui', category: 'e2e', rootScriptName: 'test:e2e:ui', rootCommand: 'pnpm run test:e2e:ui', packageLocalOnly: false },
+  { id: 'test:e2e:mobile', category: 'e2e', rootScriptName: 'test:e2e:mobile', rootCommand: 'pnpm run test:e2e:mobile', packageLocalOnly: false },
+  { id: 'test:agents', category: 'provider', rootScriptName: 'test:agents', rootCommand: 'pnpm run test:agents', packageLocalOnly: false },
+  { id: 'test:stress', category: 'stress', rootScriptName: 'test:stress', rootCommand: 'pnpm run test:stress', packageLocalOnly: false },
   { id: 'stack:test:unit', category: 'unit', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
   { id: 'stack:test:integration', category: 'integration', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
   { id: 'stack:test:real-integration', category: 'integration', rootScriptName: null, rootCommand: null, packageLocalOnly: true },
@@ -316,7 +316,7 @@ export const DECLARED_UNWIRED_TEST_FILES: Readonly<Record<string, string>> = Obj
   'apps/ui/scripts/qa/tauriOnboardingWizardMcpQa.test.mjs':
     'Red at current bytes (17 pass / 2 fail); wiring it would land a failing lane.',
 
-  // Executed only by `yarn --cwd apps/ui certify:activity-surfaces`, whose file list lives in
+  // Executed only by `pnpm --dir apps/ui --silent run certify:activity-surfaces`, whose file list lives in
   // `scripts/runActivitySurfacesCertification.mjs`
   // (`ACTIVITY_SURFACES_VALIDATION_NODE_TEST_FILES`). That command is a manual certification gate:
   // no workflow step in `.github/workflows/**` invokes it. Naming them in the package `test` chain

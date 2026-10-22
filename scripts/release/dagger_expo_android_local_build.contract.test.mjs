@@ -23,7 +23,7 @@ test('Dagger module exposes expo-android-local-build function', () => {
   assert.match(src, /"git"\s*,\s*"init"/);
   assert.match(
     src,
-    /\byarn\b[\s\S]*\binstall\b/,
+    /"pnpm",\s*"install",\s*"--frozen-lockfile"/,
     'expected expoAndroidLocalBuild to install workspace deps in-container',
   );
   assert.match(
@@ -60,5 +60,5 @@ test('Dagger module exposes expo-android-local-build function', () => {
   assert.match(src, /\buname\s+-m\b/, 'expected Node arch detection via uname -m');
   assert.match(src, /node_arch="arm64"/, 'expected arm64 Node tarball selection');
   assert.match(src, /linux-\\\$\{node_arch\}\.tar\.xz/, 'expected Node download to reference ${node_arch}');
-  assert.match(src, /registry\.npmjs\.org/, 'expected Yarn install to pin npm registry (avoid transient yarnpkg outages)');
+  assert.match(src, /registry\.npmjs\.org/, 'expected pnpm install to use the npm registry');
 });

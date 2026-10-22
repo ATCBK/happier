@@ -117,7 +117,8 @@ describe('resolveRuntimeEntrypoint', () => {
     mkdirSync(backupDir, { recursive: true });
     mkdirSync(join(root, '.project', 'tmp'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{}\n', 'utf8');
-    writeFileSync(join(root, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     writeFileSync(join(distDir, 'index.mjs'), 'export {};\n', 'utf8');
     writeFileSync(join(backupDir, 'index.mjs'), 'export {};\n', 'utf8');
     writeFileSync(buildLockPath, JSON.stringify({ pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() }), 'utf8');
@@ -167,7 +168,8 @@ describe('resolveRuntimeEntrypoint', () => {
     mkdirSync(packageDistDir, { recursive: true });
     mkdirSync(join(root, '.project', 'tmp'), { recursive: true });
     writeFileSync(join(root, 'package.json'), '{}\n', 'utf8');
-    writeFileSync(join(root, 'yarn.lock'), '# lock\n', 'utf8');
+    writeFileSync(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf8');
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
     writeFileSync(join(distDir, 'index.mjs'), 'export {};\n', 'utf8');
     writeFileSync(join(packageDistDir, 'index.mjs'), 'export {};\n', 'utf8');
     writeFileSync(buildLockPath, JSON.stringify({ pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() }), 'utf8');

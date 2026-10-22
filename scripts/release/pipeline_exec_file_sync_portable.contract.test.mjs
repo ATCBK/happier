@@ -7,7 +7,7 @@ test('execFileSyncPortable preserves Windows cmd shim argument boundaries', () =
   /** @type {{ cmd: string; args: string[]; opts: any } | null} */
   let seen = null;
   const out = execFileSyncPortable(
-    'C:\\npm\\prefix\\yarn.cmd',
+    'C:\\npm\\prefix\\pnpm.cmd',
     [
       '--silent',
       'tauri',
@@ -40,7 +40,7 @@ test('execFileSyncPortable does not override an explicit shell option', () => {
   let seenOpts = null;
   execFileSyncPortable(
     'C:\\hostedtoolcache\\windows\\node\\22.22.1\\x64\\corepack.cmd',
-    ['yarn', '--version'],
+    ['pnpm', '--version'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false },
     {
       execFileSync: (cmd, args, opts) => {
