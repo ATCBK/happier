@@ -63,6 +63,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {

@@ -251,11 +251,11 @@
                     },
                     "required": [
                       "v",
-                      "binding",
                       "localInstanceKey",
                       "keyStability",
                       "configuration",
-                      "locator"
+                      "locator",
+                      "binding"
                     ],
                     "type": "object"
                   },
@@ -697,11 +697,11 @@
                     },
                     "required": [
                       "v",
-                      "binding",
                       "localInstanceKey",
                       "keyStability",
                       "configuration",
-                      "locator"
+                      "locator",
+                      "binding"
                     ],
                     "type": "object"
                   },
@@ -1073,6 +1073,31 @@
             {
               "additionalProperties": false,
               "properties": {
+                "completed": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kindIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "sinceMs": {
+                      "maximum": 8640000000000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kindIds",
+                    "sinceMs"
+                  ],
+                  "type": "object"
+                },
                 "instance": {
                   "additionalProperties": false,
                   "properties": {
@@ -1289,6 +1314,31 @@
             {
               "additionalProperties": false,
               "properties": {
+                "completed": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kindIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "sinceMs": {
+                      "maximum": 8640000000000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kindIds",
+                    "sinceMs"
+                  ],
+                  "type": "object"
+                },
                 "instance": {
                   "additionalProperties": false,
                   "properties": {
@@ -1733,12 +1783,23 @@
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
                               },
+                              "completedAtMs": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
                               "createdAtMs": {
                                 "maximum": 9007199254740991,
                                 "minimum": -9007199254740991,
                                 "type": "integer"
                               },
                               "designation": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 512
+                              },
+                              "dueDate": {
                                 "minLength": 1,
                                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                                 "type": "string",
@@ -2170,6 +2231,12 @@
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
                               },
+                              "scopeUnitId": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 1024
+                              },
                               "state": {
                                 "additionalProperties": false,
                                 "properties": {
@@ -2236,6 +2303,15 @@
                               "taskCapabilities": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "completedScan": {
+                                    "const": true
+                                  },
+                                  "completingTransitionId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
                                   "createFields": {
                                     "items": {
                                       "anyOf": [
@@ -2893,12 +2969,23 @@
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
                               },
+                              "completedAtMs": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
                               "createdAtMs": {
                                 "maximum": 9007199254740991,
                                 "minimum": -9007199254740991,
                                 "type": "integer"
                               },
                               "designation": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 512
+                              },
+                              "dueDate": {
                                 "minLength": 1,
                                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                                 "type": "string",
@@ -3330,6 +3417,12 @@
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
                               },
+                              "scopeUnitId": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 1024
+                              },
                               "state": {
                                 "additionalProperties": false,
                                 "properties": {
@@ -3396,6 +3489,15 @@
                               "taskCapabilities": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "completedScan": {
+                                    "const": true
+                                  },
+                                  "completingTransitionId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
                                   "createFields": {
                                     "items": {
                                       "anyOf": [
@@ -4558,12 +4660,23 @@
                       "type": "string",
                       "x-happier-max-utf8-bytes": 512
                     },
+                    "completedAtMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
                     "createdAtMs": {
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer"
                     },
                     "designation": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string",
+                      "x-happier-max-utf8-bytes": 512
+                    },
+                    "dueDate": {
                       "minLength": 1,
                       "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                       "type": "string",
@@ -4995,6 +5108,12 @@
                       "type": "string",
                       "x-happier-max-utf8-bytes": 512
                     },
+                    "scopeUnitId": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string",
+                      "x-happier-max-utf8-bytes": 1024
+                    },
                     "state": {
                       "additionalProperties": false,
                       "properties": {
@@ -5061,6 +5180,15 @@
                     "taskCapabilities": {
                       "additionalProperties": false,
                       "properties": {
+                        "completedScan": {
+                          "const": true
+                        },
+                        "completingTransitionId": {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
                         "createFields": {
                           "items": {
                             "anyOf": [
@@ -9767,12 +9895,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -10204,6 +10343,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -10270,6 +10415,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -10908,12 +11062,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -11345,6 +11510,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -11411,6 +11582,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -12046,12 +12226,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -12483,6 +12674,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -12549,6 +12746,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -13206,12 +13412,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -13643,6 +13860,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -13709,6 +13932,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -14472,12 +14704,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -14909,6 +15152,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -14975,6 +15224,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -15893,12 +16151,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -16330,6 +16599,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -16396,6 +16671,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -17034,12 +17318,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -17471,6 +17766,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -17537,6 +17838,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -18172,12 +18482,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -18609,6 +18930,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -18675,6 +19002,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -19332,12 +19668,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -19769,6 +20116,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -19835,6 +20188,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -20598,12 +20960,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -21035,6 +21408,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -21101,6 +21480,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -22019,12 +22407,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -22456,6 +22855,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -22522,6 +22927,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -23160,12 +23574,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -23597,6 +24022,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -23663,6 +24094,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -24298,12 +24738,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -24735,6 +25186,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -24801,6 +25258,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -25458,12 +25924,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -25895,6 +26372,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -25961,6 +26444,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -26724,12 +27216,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -27161,6 +27664,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -27227,6 +27736,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -28162,12 +28680,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -28599,6 +29128,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -28665,6 +29200,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -29303,12 +29847,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -29740,6 +30295,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -29806,6 +30367,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -30441,12 +31011,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -30878,6 +31459,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -30944,6 +31531,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -31601,12 +32197,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -32038,6 +32645,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -32104,6 +32717,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -32867,12 +33489,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -33304,6 +33937,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -33370,6 +34009,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -36769,12 +37417,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -37206,6 +37865,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -37272,6 +37937,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -38162,12 +38836,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -38599,6 +39284,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -38665,6 +39356,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -40553,12 +41253,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -40990,6 +41701,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -41056,6 +41773,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -41946,12 +42672,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -42383,6 +43120,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -42449,6 +43192,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -44345,12 +45097,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -44782,6 +45545,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -44848,6 +45617,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -45738,12 +46516,23 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "completedAtMs": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
                             "createdAtMs": {
                               "maximum": 9007199254740991,
                               "minimum": -9007199254740991,
                               "type": "integer"
                             },
                             "designation": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 512
+                            },
+                            "dueDate": {
                               "minLength": 1,
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
@@ -46175,6 +46964,12 @@
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
                             },
+                            "scopeUnitId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 1024
+                            },
                             "state": {
                               "additionalProperties": false,
                               "properties": {
@@ -46241,6 +47036,15 @@
                             "taskCapabilities": {
                               "additionalProperties": false,
                               "properties": {
+                                "completedScan": {
+                                  "const": true
+                                },
+                                "completingTransitionId": {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
                                 "createFields": {
                                   "items": {
                                     "anyOf": [
@@ -46881,6 +47685,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
