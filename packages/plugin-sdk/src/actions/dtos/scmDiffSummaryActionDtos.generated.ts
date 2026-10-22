@@ -733,6 +733,7 @@ export type ScmDiffSummaryActionResultById = {
             contentConfidence?: 'exact' | 'unavailable' | undefined;
             attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
         };
+        admission?: 'outcomeUnknown' | undefined;
         comparison?: {
             id: string;
             source: ScmComparisonSource;
@@ -935,6 +936,7 @@ export type ScmDiffSummaryActionResultById = {
         success: false;
         error: string;
         errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+        admission?: 'outcomeUnknown' | undefined;
         comparison?: {
             id: string;
             source: ScmComparisonSource;
@@ -1146,6 +1148,7 @@ export type ScmDiffSummaryActionResultById = {
             contentConfidence?: 'exact' | 'unavailable' | undefined;
             attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
         };
+        admission?: 'outcomeUnknown' | undefined;
         comparison?: {
             id: string;
             source: ScmComparisonSource;
@@ -1348,6 +1351,7 @@ export type ScmDiffSummaryActionResultById = {
         success: false;
         error: string;
         errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+        admission?: 'outcomeUnknown' | undefined;
         comparison?: {
             id: string;
             source: ScmComparisonSource;
@@ -1618,6 +1622,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -1820,6 +1825,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2166,6 +2172,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2368,6 +2375,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2714,6 +2722,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2916,6 +2925,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -3262,6 +3272,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -3464,6 +3475,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -3810,6 +3822,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4012,6 +4025,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4396,6 +4410,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4598,6 +4613,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4944,6 +4960,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -5146,6 +5163,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -5492,6 +5510,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -5694,6 +5713,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -6050,6 +6070,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -6252,6 +6273,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -6598,6 +6620,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -6800,6 +6823,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -7146,6 +7170,7 @@ export type ScmDiffSummaryActionResultById = {
                     contentConfidence?: 'exact' | 'unavailable' | undefined;
                     attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
                 };
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -7348,6 +7373,7 @@ export type ScmDiffSummaryActionResultById = {
                 success: false;
                 error: string;
                 errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                admission?: 'outcomeUnknown' | undefined;
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
