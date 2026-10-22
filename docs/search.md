@@ -231,7 +231,10 @@ and Session sets. Older daemons omit these diagnostics. Status reads do not crea
 can read the WAL snapshot while another connection owns the writer. Native
 error rows carry `errorCode` and an allowlisted, content-free `errorReason` from
 the bounded reader. Vendor exception text, paths and transcript content are
-excluded from that diagnostic; a successful retry clears it. The deep
+excluded from that diagnostic; a successful retry clears it. The native
+indexing batch records a failed conversation independently and continues its
+other selected conversations; that source failure does not reject the worker
+tick. Cancellation still stops the batch. The deep
 index retains native reader progress after eviction and records incomplete
 searchable coverage in that same source state; unchanged tails or new appends
 do not restore evicted history. Clear/rebuild or source replacement restores
@@ -248,6 +251,11 @@ or a native `{source, sourceItemId, cursor?}` locator. Native windows return
 `externalSnippets` through the same authenticated, exact-machine RPC. Native and
 Session identities cannot be combined. Credentialless Session-bound MCP does
 not gain native transcript authority.
+
+An explicit older-page native locator is validated before use. If its page ends
+at the target, the same window traversal used for an implicit locator recovers
+the newer padding from the indexed neighbour or native head. An invalid explicit
+locator keeps its discontinuity result.
 
 `memory.clear_index` is a danger Action and requires approval by default,
 including when invoked by the present user without an explicit confirmation
@@ -688,7 +696,16 @@ The standalone History scan is machine/source-local. Universal Search has the
 explicit All-machines scope above; typing queries indexes, never standard scans.
 
 The shared helper's content producers cooperatively yield within the existing
-host invocation deadline, including while reading or decoding a file. A yielded
+host invocation deadline, including while reading or decoding a file. Coverage
+is per query: `partial` means a match for this query may have been missed.
+The shared ripgrep prefilter can exclude files, and Claude also uses its
+candidate byte offsets to admit individual lines before decoding. Excluded
+files or rows cannot contain a match under those admission patterns; skipped
+malformed, undecodable or unsupported rows therefore do not make this query
+partial. Admitted damaged or unsupported rows still make coverage partial.
+Decoded hits go through Claude's full scan for branch ancestry, title and exact
+ordinal; unresolved ancestry remains partial. Unsafe or transformed queries
+retain exact decoded fallback when admission cannot prove exclusion. A yielded
 page retains completed hits, marks coverage partial and returns a continuation
 that keeps the unfinished candidate. Both presenters show incomplete coverage
 even for a settled empty partial page, and offer **Search more conversations**
