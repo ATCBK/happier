@@ -203,8 +203,13 @@ describe("plugin collection quota census — measurement", () => {
             .toBeLessThanOrEqual(maximumCensusPagesFor(liveRows));
         expect(measured.activationCounts.get("pluginCollectionRow.findMany"))
             .toBeLessThanOrEqual(maximumCensusPagesFor(liveRows));
-        // The census must not reach any other model: quota policy comes from
-        // the contract columns joined onto each live row.
-        expect([...measured.mutationCounts.keys()]).toEqual(["pluginCollectionRow.findMany"]);
+        // Only stored rows and their immutable policies participate. Policies
+        // are fetched by distinct identity, not joined repeatedly per row.
+        expect([...measured.mutationCounts.keys()].sort())
+            .toEqual(["pluginCollectionContract.findMany", "pluginCollectionRow.findMany"]);
+        expect(measured.mutationCounts.get("pluginCollectionContract.findMany"))
+            .toBeLessThanOrEqual(COLLECTION_IDS.length);
+        expect(measured.activationCounts.get("pluginCollectionContract.findMany"))
+            .toBeLessThanOrEqual(COLLECTION_IDS.length);
     }, 300_000);
 });

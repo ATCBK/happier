@@ -41,11 +41,14 @@ function censusTx(input: Readonly<{ rows: number; bodyBytes: number }>): Readonl
         collectionId: CONTRACT.collectionId,
         rowId: `r-${index}`,
         contentEnvelope: { t: 'plain', v: { body } },
-        contract: CONTRACT,
+        contractId: CONTRACT.id,
         projections: [] as readonly Readonly<{ fieldId: string; typedEncodedValue: string }>[],
     }));
     const calls: FindManyArgs[] = [];
     const tx = {
+        pluginCollectionContract: {
+            findMany: async () => [CONTRACT],
+        },
         pluginCollectionRow: {
             findMany: async (args: FindManyArgs) => {
                 calls.push(args);

@@ -94,7 +94,7 @@ export class PluginCollectionQuotaCensusInconsistencyError extends Error {
     }
 }
 
-/** Immutable contract columns attached to a live row during the one quota census. */
+/** Immutable contract columns retained once by the live-row quota census. */
 export type PluginCollectionPersistedContractForQuota = Readonly<{
     id: string;
     pluginId: string;
@@ -113,7 +113,7 @@ type PluginCollectionQuotaCensusRow = Readonly<{
     collectionId: string;
     rowId: string;
     contentEnvelope: unknown;
-    contract: PluginCollectionPersistedContractForQuota;
+    contractId: string;
     projections: readonly Readonly<{ fieldId: string; typedEncodedValue: string }>[];
 }>;
 
@@ -344,6 +344,7 @@ async function forEachLivePluginCollectionQuotaCensusRowInTx(input: Readonly<{
     tx: Tx;
     accountId: string;
     deployment: PluginDataCollectionsCapabilities;
+    contracts: Map<string, PluginCollectionPersistedContractForQuota>;
     visit: (visited: Readonly<{ row: PluginCollectionQuotaCensusRow; encodedBytes: number }>) => void;
 }>): Promise<void> {
     let largestRowEncodedBytes = input.deployment.maxRowEncodedBytes;
@@ -372,26 +373,30 @@ async function forEachLivePluginCollectionQuotaCensusRowInTx(input: Readonly<{
                 collectionId: true,
                 rowId: true,
                 contentEnvelope: true,
-                contract: {
-                    select: {
-                        id: true,
-                        pluginId: true,
-                        collectionId: true,
-                        schemaVersion: true,
-                        contractDigest: true,
-                        normalizedSchema: true,
-                        indexes: true,
-                        relations: true,
-                        privacyProjection: true,
-                    },
-                },
+                contractId: true,
                 projections: {
                     select: { fieldId: true, typedEncodedValue: true },
                 },
             },
         });
+        // Immutable policy is shared by every row referencing its contract.
+        // Reuse the census's existing result map instead of transferring and
+        // decoding the same normalized schema/indexes once per live row.
+        const missingContractIds = [...new Set(rows.map(row => row.contractId))]
+            .filter(id => !input.contracts.has(id));
+        if (missingContractIds.length > 0) {
+            const contracts = await input.tx.pluginCollectionContract.findMany({
+                where: { id: { in: missingContractIds } },
+                select: { id: true, pluginId: true, collectionId: true, schemaVersion: true,
+                    contractDigest: true, normalizedSchema: true, indexes: true, relations: true, privacyProjection: true },
+            });
+            for (const contract of contracts) recordPluginCollectionQuotaCensusContract({ contracts: input.contracts, contract });
+        }
         let largestObservedRowEncodedBytes = 0;
         for (const row of rows) {
+            if (!input.contracts.has(row.contractId)) {
+                throw new PluginCollectionQuotaCensusInconsistencyError('Collection quota census is missing a referenced contract.');
+            }
             const encodedBytes = measurePluginCollectionStoredRowEncodedBytes({
                 rowId: row.rowId,
                 contentEnvelope: row.contentEnvelope,
@@ -444,8 +449,8 @@ export async function readPluginCollectionAccountUsageInTx(input: Readonly<{
     let accountEncodedBytes = 0;
     await forEachLivePluginCollectionQuotaCensusRowInTx({
         ...input,
+        contracts,
         visit: ({ row, encodedBytes }) => {
-            recordPluginCollectionQuotaCensusContract({ contracts, contract: row.contract });
             const key = collectionKey(row.pluginId, row.collectionId);
             let collection = mutableCollections.get(key);
             if (!collection) {
@@ -490,8 +495,8 @@ export async function readPluginCollectionAccountActivationUsageInTx(input: Read
     let accountEncodedBytes = 0;
     await forEachLivePluginCollectionQuotaCensusRowInTx({
         ...input,
+        contracts,
         visit: ({ row, encodedBytes }) => {
-            recordPluginCollectionQuotaCensusContract({ contracts, contract: row.contract });
             const key = collectionKey(row.pluginId, row.collectionId);
             let collection = mutableCollections.get(key);
             if (!collection) {
