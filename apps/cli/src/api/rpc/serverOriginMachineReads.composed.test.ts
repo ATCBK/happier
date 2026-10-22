@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+// This composed CLI/UI seam needs the UI harness's canonical native boundaries.
+import '../../../../ui/sources/dev/vitestSetup';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +10,12 @@ import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createCliProviderActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliProviderActionDeps';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import codexManifest from '../../../assets/bundled-plugin-manifests/codex.json';
 import gatewayManifest from '../../../assets/bundled-plugin-manifests/cliproxyapi.json';
 import { CODEX_PROVIDER_BINDING_ADAPTER_V1 } from '../../../../../packages/plugins/codex/src/agent/providerBinding/adapter';
@@ -31,6 +40,24 @@ import type { RpcRequest } from './types';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary,
+    installProviderConnectionsCatalogHttpBoundary } from '../../../../ui/sources/dev/testkit/harness/providerSettingsHarness';
+import { loadSyncSingletonForTests } from '../../../../ui/sources/dev/testkit/harness/syncSingletonLoader';
+
+vi.mock('socket.io-client', async importOriginal => {
+    const { createSocketIoClientBoundary } = await import('../../../../ui/sources/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
+});
+// Keep Account admission and the registered CLI handler real while replacing
+// the selected Machine's network delivery, as in the owning UI hook harness.
+vi.mock('../../../../ui/sources/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (request: import('../../../../ui/sources/dev/testkit/harness/providerSettingsHarness').ProviderRpcRequest) => recipientRpc.machineRpc(request),
+}));
+
+const recipientRpc = createProviderSettingsHarness({ machines: [] });
+installProviderSettingsRpcBoundary(recipientRpc);
+const recipientAccount = createProviderSettingsAccountHarness();
+await loadSyncSingletonForTests();
 
 // The CLI harness resolves each host's source aliases from its importing file.
 const forwarderPath = '../../../../server/sources/app/api/socket/serverRpcForwarder';
@@ -48,7 +75,7 @@ const input = { machineId, teamId: 'team-1', resourceId: 'resource-1', expectedR
         connectionSecurityFingerprint: 'fingerprint-1', credentialSlotId: 'slot-1' }, scope: 'source_any' as const };
 const eligible = { status: 'eligible' as const };
 
-afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+afterEach(() => { resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks(); });
 
 function createDaemon() {
     let executions = 0;
@@ -158,34 +185,96 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             expect(offered.status).toBe('success');
             const teamModel = offered.models[0]!;
             expect(teamModel.sourceFacts?.endpoint.protocol).toBe(application.protocol);
-            const recipientSnapshot = { ...worker.snapshot };
+            const custodianSnapshot = { ...worker.snapshot };
             const recipientRuntime = createRuntimeProviderModelManagementServices({ machineId: worker.machineId,
-                happyHomeDir: home, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => recipientSnapshot,
+                happyHomeDir: home, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => custodianSnapshot,
                 acquireRuntimeLease: async () => ({ registry: worker.lease.registry, source: 'active', durableRevision: -1, release: async () => {} }),
                 modelSettingsMutation: unused,
             });
             const workerRequest = { machineId: worker.machineId, agentTargetKey: worker.agentTargetKey,
                 teamCredentialModel: teamModel, refreshPolicy: 'current_only' as const };
-            const before = await recipientRuntime.projectModels(workerRequest);
-            expect(before).toMatchObject({ status: 'success', groups: [{ rows: [{
+            const manager = new RpcHandlerManager({ scopePrefix: worker.machineId, localMachineId: worker.machineId,
+                encryptionKey: new Uint8Array(32).fill(43), encryptionVariant: 'dataKey', logger: () => {} });
+            registerMachineProviderRpcHandlers({ rpcHandlerManager: manager, machineId: worker.machineId,
+                featureGate: { isEnabled: () => true }, services: { ...recipientRuntime,
+                    prepareProfileMigrationSource: unused, describeConnections: unused, mutateConnection: unused,
+                    previewProfileMigration: unused, confirmProfileMigration: unused, confirmProfileMigrationConflict: unused } });
+            // Only Home HTTP and Socket delivery are substituted. B's captured
+            // Account Action and C's registered worker projector are both real.
+            const emptyCatalog = splitProviderSettingsV1(ProviderSettingsV1Schema.parse(DEFAULT_PROVIDER_SETTINGS_V1)).catalog;
+            const { serverId } = await recipientAccount.restore({ accountId: 'requester-B', catalog: emptyCatalog,
+                waivedActions: ['providers.models.experimental.confirm'] });
+            const recipientRow = installProviderConnectionsCatalogHttpBoundary({ home: recipientAccount.home, serverId, catalog: emptyCatalog });
+            // CLI/MCP use their real Account catalog transport, independently
+            // of the UI adapter, against the same B-owned persisted row.
+            const credentials = { token: 'requester-B', encryption: null };
+            const serverHttpBaseUrl = 'https://requester-b.invalid';
+            const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl,
+                snapshot: { ...worker.snapshot, scopeKey: resolveAccountSettingsScopeKey(credentials) }, isCurrent: async () => true });
+            let cliCatalog = () => recipientRow.catalog;
+            vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+                expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
+                expect(options?.headers).toMatchObject({ Authorization: 'Bearer requester-B' });
+                const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+                    mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+                if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+                    status: 'present', revision: 1, content: { t: 'plain', v: cliCatalog() } } };
+                throw new Error(`Unexpected requester catalog read: ${path}`);
+            });
+            const cliExecutor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+                providerActionExecute: createCliProviderActionExecuteV1({ credentials, serverId, serverHttpBaseUrl, operationContext,
+                    callMachineAction: request => manager.invokeLocal(request.method, request.request) }) });
+            const { refreshPolicy, ...refreshRequest } = workerRequest;
+            const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+                approvalWaivedSurfaces: { 'providers.models.refresh': ['cli', 'mcp'] } });
+            const readCli = (surface: 'cli' | 'mcp', actionId: 'providers.models.projection' | 'providers.models.refresh') =>
+                cliExecutor.execute(actionId, { ...refreshRequest,
+                    ...(actionId === 'providers.models.refresh' ? { forceRefresh: true } : { refreshPolicy }) },
+                    { surface, serverId, authority: 'present_user', actionCaller: { kind: 'host' }, actionsSettings });
+            recipientRpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request => {
+                expect(request.accountId).toBe('requester-B');
+                return manager.invokeLocal(request.method, request.payload);
+            });
+            const { describeProviderModels, mutateProviderModelSettings } = await import('../../../../ui/sources/providers/actions/client');
+            const read = () => describeProviderModels({ ...workerRequest, serverId });
+            const before = await read();
+            expect(before, JSON.stringify(before)).toMatchObject({ status: 'success', groups: [{ rows: [{
                 ref: { modelId: teamModel.descriptor.id }, compatibility: { result: { status: 'experimental' }, confirmed: false },
             }] }] });
             if (before.status !== 'success') throw new Error('Expected worker admission projection');
             const compatibility = before.groups[0]!.rows[0]!.compatibility;
             if (compatibility.result.status !== 'experimental') throw new Error('Expected actual worker compatibility');
-            const confirm = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 2,
-                readCatalog: async () => recipientSnapshot.providerConnectionsCatalog!, readDefinitions: async () => [],
-                writeCatalog: async value => { recipientSnapshot.providerConnectionsCatalog = {
-                    status: 'ready', revision: value.expectedRevision + 1, catalog: value.catalog }; return { status: 'updated' }; },
-            });
-            expect(await confirm(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+            expect(await mutateProviderModelSettings({ serverId, request: {
                 action: 'confirmExperimental', ...teamModel.confirmationSource, expectedConnectionRevision: 0,
                 agentTargetKey: worker.agentTargetKey, modelId: compatibility.result.confirmationScope.kind === 'model' ? teamModel.descriptor.id : null,
                 compatibilityFingerprint: compatibility.compatibilityFingerprint,
-            }), {})).toMatchObject({ ok: true });
-            expect(await recipientRuntime.projectModels(workerRequest)).toMatchObject({ status: 'success', groups: [{ rows: [{
+            } })).toMatchObject({ status: 'success' });
+            expect(recipientRow.catalog.experimentalBindingConfirmations).toHaveLength(1);
+            expect(custodianSnapshot.providerConnectionsCatalog?.catalog.experimentalBindingConfirmations ?? []).toEqual([]);
+            expect(await read()).toMatchObject({ status: 'success', groups: [{ rows: [{
                 ref: { modelId: teamModel.descriptor.id }, compatibility: { confirmed: true },
             }] }] });
+            for (const surface of ['cli', 'mcp'] as const) {
+                for (const actionId of ['providers.models.projection', 'providers.models.refresh'] as const) {
+                    const projected = await readCli(surface, actionId);
+                    expect(projected, JSON.stringify(projected)).toMatchObject({ ok: true, result: {
+                        status: 'success', groups: [{ rows: [{ compatibility: { confirmed: true } }] }],
+                    } });
+                }
+            }
+            // C's confirmation alone must not authorize B, even when the worker
+            // itself returns confirmed. This also detects dropped Account composition.
+            custodianSnapshot.providerConnectionsCatalog = { status: 'ready', revision: 1, catalog: recipientRow.catalog };
+            installProviderConnectionsCatalogHttpBoundary({ home: recipientAccount.home, serverId, catalog: emptyCatalog });
+            cliCatalog = () => emptyCatalog;
+            expect(await recipientRuntime.projectModels(workerRequest)).toMatchObject({ status: 'success', groups: [{ rows: [{ compatibility: { confirmed: true } }] }] });
+            expect(await read()).toMatchObject({ status: 'success', groups: [{ rows: [{ compatibility: { confirmed: false } }] }] });
+            for (const surface of ['cli', 'mcp'] as const) {
+                expect(await readCli(surface, 'providers.models.projection')).toMatchObject({ ok: true, result: {
+                    status: 'success', groups: [{ rows: [{ compatibility: { confirmed: false } }] }],
+                } });
+            }
             return;
             }
             // A saved Provider source must also describe its catalog without
@@ -228,6 +317,8 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                     connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, credentialSlotId: 'apiKey' },
             })).resolves.toEqual({ status: 'eligible' });
         } finally {
+            recipientRpc.reset();
+            await recipientAccount.reset();
             await worker.cleanup();
             await rm(home, { recursive: true, force: true });
         }
