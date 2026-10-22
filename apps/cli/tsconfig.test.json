@@ -2555,7 +2555,6 @@
     "src/lsp/diagnosticsPull.test.ts",
     "src/lsp/documentText.test.ts",
     "src/lsp/languageServerDefinitions.test.ts",
-    "src/lsp/languageServerHost.test.ts",
     "src/lsp/managedProtocol.test.ts",
     "src/lsp/processOwner.test.ts",
     "src/lsp/serverSession.behavior.test.ts",

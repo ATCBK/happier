@@ -32,6 +32,7 @@
     "src/daemon/local/services/launch/projectDeclarations.test.ts",
     "src/daemon/machine/metadata.test.ts",
     "src/daemon/workflows/composedWorkflowHarness.test.ts",
+    "src/lsp/languageServerHost.test.ts",
     "src/mcp/runtime/resolveRunnerMcpServers.test.ts",
     "src/plugins/projection/registry/projection/v2.agentUiBehavior.test.ts",
     "src/plugins/projection/registry/projection/v2.test.ts",
