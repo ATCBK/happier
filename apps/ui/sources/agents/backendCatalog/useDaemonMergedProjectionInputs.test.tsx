@@ -622,17 +622,20 @@ describe('useDaemonMergedProjectionInputs', () => {
         await act(async () => publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId }));
         await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'error', failureReason: 'transport-unavailable', inputs: { pluginProjectionV2: { generation: 1 } } }));
     });
-    it('exposes a cold transport failure without empty projection facts and clears it after recovery', async () => {
+    it('exposes a cold transport failure and recovers through the explicit Retry refresh key', async () => {
         daemonDescribe.mockRejectedValueOnce(new RpcError('Private transport details', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE));
-        const hook = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId }));
+        const hook = await renderHook(({ refreshKey }: { refreshKey: number }) => (
+            useDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId, refreshKey })
+        ), { initialProps: { refreshKey: 0 } });
         await vi.waitFor(() => expect(hook.getCurrent()).toEqual({
             phase: 'error', inputs: null, failureReason: 'transport-unavailable',
         }));
 
-        await act(async () => publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId }));
+        await hook.rerender({ refreshKey: 1 });
         await vi.waitFor(() => expect(hook.getCurrent().phase).toBe('ready'));
         expect(hook.getCurrent().failureReason).toBeUndefined();
         expect(hook.getCurrent().inputs?.pluginProjectionV2?.generation).toBe(1);
+        expect(daemonDescribe).toHaveBeenCalledTimes(2);
     });
     it('serves only the cached projection and never asks the machine when loading is off', async () => {
         await primeCache(4);
