@@ -322,6 +322,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             loadFailed: "無法讀取此機器。請重試以查看最新狀態。",
             controllerRequestFailed: "管理此機器的電腦無法確認此請求。請先檢查機器的目前狀態，再重試。",
             cancelDescription: "如果資源已存在，可能仍需要清理。",
+            cancelDescriptionBound: "取消會刪除此機器及其磁碟。",
             recipeTitle: "規格、映像檔和位置",
             recipeDescription: "在建立時設定。編輯預設組合以用於新機器；這台機器保留建立時的設定。",
             madeFromPreset: ({ preset }: { preset: string }) => `由預設組合「${preset}」建立。`,

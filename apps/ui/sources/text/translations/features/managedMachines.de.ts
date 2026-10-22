@@ -322,6 +322,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             loadFailed: "Dieser Rechner konnte nicht gelesen werden. Versuche es erneut, um seinen Zustand zu prüfen.",
             controllerRequestFailed: "Der verwaltende Rechner konnte diese Anfrage nicht bestätigen. Prüfe den aktuellen Zustand des Rechners, bevor du es erneut versuchst.",
             cancelDescription: "Wenn die Ressource bereits existiert, muss sie möglicherweise noch entfernt werden.",
+            cancelDescriptionBound: "Abbrechen löscht diesen Rechner und seine Festplatte.",
             recipeTitle: "Größe, Image und Standort",
             recipeDescription: "Beim Erstellen festgelegt. Bearbeite die Vorlage für neue Rechner; dieser Rechner behält, womit er erstellt wurde.",
             madeFromPreset: ({ preset }: { preset: string }) => `Aus der Vorlage ${preset} erstellt.`,

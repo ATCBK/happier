@@ -322,6 +322,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             loadFailed: "Не удалось прочитать эту машину. Повторите попытку, чтобы проверить её состояние.",
             controllerRequestFailed: "Управляющий компьютер не смог подтвердить этот запрос. Проверьте текущее состояние машины перед повторной попыткой.",
             cancelDescription: "Если ресурс уже существует, может потребоваться его удаление.",
+            cancelDescriptionBound: "Отмена удаляет эту машину и её диск.",
             recipeTitle: "Размер, образ и расположение",
             recipeDescription: "Задано при создании. Измените пресет для новых машин; эта машина сохраняет то, с чем была создана.",
             madeFromPreset: ({ preset }: { preset: string }) => `Создана из пресета ${preset}.`,

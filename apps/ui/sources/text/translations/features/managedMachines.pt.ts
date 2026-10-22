@@ -322,6 +322,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             loadFailed: "Não foi possível ler esta máquina. Tente novamente para verificar seu estado.",
             controllerRequestFailed: "O computador que a gerencia não conseguiu confirmar esta solicitação. Verifique o estado atual da máquina antes de tentar novamente.",
             cancelDescription: "Se o recurso já existir, ainda poderá precisar de limpeza.",
+            cancelDescriptionBound: "Cancelar elimina esta máquina e o seu disco.",
             recipeTitle: "Tamanho, imagem e local",
             recipeDescription: "Definido na criação. Edite a predefinição para novas máquinas; esta máquina mantém o que tinha ao ser criada.",
             madeFromPreset: ({ preset }: { preset: string }) => `Criada a partir da predefinição ${preset}.`,

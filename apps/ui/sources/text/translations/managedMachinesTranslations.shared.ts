@@ -328,6 +328,7 @@ export const managedMachinesEn = {
             loadFailed: "This machine couldn’t be read. Retry to check its latest state.",
             controllerRequestFailed: "The managing computer couldn’t confirm this request. Check the machine’s current state before trying again.",
             cancelDescription: "If a resource already exists, cleanup may still be needed.",
+            cancelDescriptionBound: "Canceling deletes this machine and its disk.",
             recipeTitle: "Size, image and place",
             recipeDescription: "Set when it was created. Edit the preset for new machines; this machine keeps what it was made with.",
             madeFromPreset: ({ preset }: { preset: string }) => `Made from the ${preset} preset.`,

@@ -10,9 +10,10 @@ import {
   managedMachineDestination,
   managedCreationSetup,
   managedPowerExplainsOffline,
+  managedReceiptPowerIntents,
 } from './managedCreationPresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
-import { ProviderObservationV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
+import { ProviderObservationV1Schema, type RetentionCapabilitiesV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 
 const machine: ManagedMachineV1 = {
   id: 'managed',
@@ -40,6 +41,19 @@ const machine: ManagedMachineV1 = {
 };
 
 describe('managed creation presentation', () => {
+  it('offers only the power actions the observed state allows, and none while an unenrolled resource has no observed power', () => {
+    const intents: RetentionCapabilitiesV1['supportedIntents'] = ['start', 'suspend', 'resume', 'delete'];
+    const observed = (power: 'running' | 'suspended') => ({ ...machine,
+      observation: ProviderObservationV1Schema.parse({ availability: 'present', power, observedAt: 1 }) });
+    // Installing or failed install: Happier has not seen its power, so Start beside Suspend would contradict itself.
+    expect(managedReceiptPowerIntents(machine, intents)).toEqual([]);
+    expect(managedReceiptPowerIntents(observed('running'), intents)).toEqual(['suspend']);
+    expect(managedReceiptPowerIntents(observed('suspended'), intents)).toEqual(['resume']);
+    // An observed resource whose provider reports no power, or an enrolled machine, keeps its explicit controls.
+    const powerless = { ...machine, observation: ProviderObservationV1Schema.parse({ availability: 'present', observedAt: 1 }) };
+    expect(managedReceiptPowerIntents(powerless, ['start', 'stop', 'delete'])).toEqual(['start', 'stop']);
+    expect(managedReceiptPowerIntents({ ...machine, enrolledMachineId: 'guest' }, ['start', 'stop', 'delete'])).toEqual(['start', 'stop']);
+  });
   it('reads a submitted creation whose acquire still runs as creating, not as a resource that may already exist', () => {
     const submitted: ManagedMachineV1 = { ...machine, allocation: 'may-exist', resource: undefined };
     const acquiring: ActionOperationProjection = {

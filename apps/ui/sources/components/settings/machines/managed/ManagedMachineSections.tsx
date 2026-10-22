@@ -5,7 +5,7 @@ import { StoredMachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol
 import type { DevcontainerEffectReviewV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { ManagedMachineActionOutputSchemasV1, type ManagedMachineActionIdV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { MachineRetentionPolicyV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
-import { isMachineRetainedWakeEligibleV1, isRedundantManagedWakeIntentV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
+import { isMachineRetainedWakeEligibleV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { readInputPath } from '@happier-dev/protocol/inputs';
@@ -58,7 +58,7 @@ import { buildManagedConfigurationReceipt, managedCredentialReceiptTargets, mana
 import { useQualifiedConnectedAccountTargetPresentations } from '@/hooks/server/connectedServices/useQualifiedConnectedAccountTargetPresentations';
 import { describeRetention, describeRetentionConsequence, formatRetentionDuration, retentionParking } from './managedRetentionPresentation';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
-import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedCreation, managedCreationSetup, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
+import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedCreation, managedCreationSetup, managedReceiptPowerIntents, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
 import { useManagedMachineActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import { publishActionOperationObservation, reconcileActionOperationsOnce } from '@/sync/domains/actionOperations/actionOperationRuntime';
 import { readManagedMachinePolicyParent, readManagedMachineRebuildReview, type ManagedMachinePolicyParent } from './managedMachinePolicyParent';
@@ -274,8 +274,6 @@ export function ManagedMachineSections(props: SectionProps) {
         return () => { current = false; retirement.dispose(); };
     }, [props.binding, props.current, props.serverId, currentControllerAvailable, machine.id,
         machine.controller.machineId, machine.controller.installationId, machine.enrolledMachineId, operationReadRevision]);
-    const powerIntents = supportedIntents.filter((intent): intent is 'start' | 'stop' | 'suspend' | 'resume' =>
-        intent === 'start' || intent === 'stop' || intent === 'suspend' || intent === 'resume');
 
     const run = async (actionId: ManagedMachineActionIdV1, input: unknown, onSucceeded?: (result: unknown) => void,
         onFailed?: () => void): Promise<boolean> => {
@@ -467,7 +465,6 @@ export function ManagedMachineSections(props: SectionProps) {
             }
         }
     };
-    const observedPower = machine.observation?.power;
     const resourceGone = machine.observation?.availability === 'absent' || machine.observation?.storage === 'lost';
     const canRebuild = canMutate && bound && machine.creationState === 'active' && !resourceGone
         && requiredController !== null && controllerPresence?.online === true && supportedIntents.includes('rebuild');
@@ -493,10 +490,7 @@ export function ManagedMachineSections(props: SectionProps) {
     })(), { tag: 'ManagedMachineSections.rebuildReview' });
     // Native controls sit at the receipt's foot, where its cost and recipe state the consequence.
     const receiptActions: NonNullable<ManagedReceiptModel['secondary']> = bound && machine.creationState === 'active' && machine.archivedAt === undefined ? [
-        // Stop also retracts a retained Start that has not reached native power.
-        ...powerIntents.filter(intent => !(intent === 'stop' ? observedPower === 'stopped' && machine.desired === 'stop' : intent === 'suspend'
-            ? observedPower === 'suspended' : observedPower === 'running')
-            && !((intent === 'start' || intent === 'resume') && isRedundantManagedWakeIntentV1(intent, observedPower, supportedIntents))).map(intent => {
+        ...managedReceiptPowerIntents(machine, supportedIntents).map(intent => {
             return { label: t(`managedMachines.actions.${intent}`), testID: `managed-machine.${intent}`, tone: 'bordered' as const,
                 ...(intent === 'stop' ? { icon: <Icon name="stop" size={14} color={theme.colors.text.primary} /> } : {}),
                 disabled: !canMutate || resourceGone, loading: pending === 'machines.managed.power.set',
@@ -716,7 +710,9 @@ export function ManagedMachineSections(props: SectionProps) {
                 loading: pending === 'machines.managed.retire', onPress: () => { if (canRemove) fireAndForget(run('machines.managed.retire', { ...target,
                     expectedIntentRevision: machine.intentRevision, manualResponsibility: true }), { tag: 'ManagedMachineSections.remove' }); } }} /> : null}
         {/* An offline controller's banner already carries Cancel; the closing row would say it twice. */}
-        {canCancelCreationRow ? <ManagedDecisionRow testID="managed-machine.cancel-decision" footnote={t('managedMachines.detail.cancelDescription')}
+        {/* A bound resource exists: canceling deletes it. Only a submitted, unbound create may or may not need cleanup. */}
+        {canCancelCreationRow ? <ManagedDecisionRow testID="managed-machine.cancel-decision" footnote={machine.allocation === 'bound'
+            ? t('managedMachines.detail.cancelDescriptionBound') : t('managedMachines.detail.cancelDescription')}
             confirm={{ label: t('managedMachines.actions.cancelCreation'), testID: 'managed-machine.cancel', disabled: !canMutate,
                 loading: pending === 'machines.managed.cancel', onPress: cancelCreation }} /> : null}
         {error ? <SurfaceStateCard kind="error" size="line" title={error === 'intent_changed'

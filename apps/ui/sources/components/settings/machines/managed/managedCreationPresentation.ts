@@ -1,8 +1,10 @@
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import type { RetentionCapabilitiesV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { t } from '@/text';
 import { describeManagedLifecycleState, type ManagedLifecycleState } from './managedLifecyclePresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { isRedundantManagedWakeIntentV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
 import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 
@@ -106,6 +108,23 @@ export function managedPowerExplainsOffline(machine: Pick<ManagedMachineV1, 'cre
 /** Enrolled healthy resources use the observation row instead of repeating their creation state. */
 export function isManagedCreationStateRowVisible(machine: Pick<ManagedMachineV1, 'enrolledMachineId'>, state: ManagedLifecycleState): boolean {
     return !machine.enrolledMachineId || state.kind !== 'resourceReady';
+}
+
+/**
+ * The power actions a created machine's receipt offers: what its observed power allows. Stop also retracts
+ * a retained Start that has not reached native power. An unenrolled resource Happier has not observed yet
+ * (installing, failed install) offers none: Start beside Suspend would contradict itself. A provider that
+ * observes a resource without reporting power keeps its explicit controls.
+ */
+export function managedReceiptPowerIntents(machine: Pick<ManagedMachineV1, 'observation' | 'desired' | 'enrolledMachineId'>,
+    supportedIntents: RetentionCapabilitiesV1['supportedIntents']): ('start' | 'stop' | 'suspend' | 'resume')[] {
+    const power = machine.observation?.power;
+    if (!machine.enrolledMachineId && !machine.observation) return [];
+    return supportedIntents.filter((intent): intent is 'start' | 'stop' | 'suspend' | 'resume' =>
+        intent === 'start' || intent === 'stop' || intent === 'suspend' || intent === 'resume')
+        .filter(intent => !(intent === 'stop' ? power === 'stopped' && machine.desired === 'stop'
+            : intent === 'suspend' ? power === 'suspended' : power === 'running')
+            && !((intent === 'start' || intent === 'resume') && isRedundantManagedWakeIntentV1(intent, power, supportedIntents)));
 }
 
 /** Retained unenrolled resources remain recoverable when controller history is lost. */

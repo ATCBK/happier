@@ -322,6 +322,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             loadFailed: "Nie można odczytać tej maszyny. Spróbuj ponownie, aby sprawdzić jej stan.",
             controllerRequestFailed: "Komputer zarządzający nie mógł potwierdzić tego żądania. Sprawdź aktualny stan maszyny przed ponowną próbą.",
             cancelDescription: "Jeśli zasób już istnieje, może nadal wymagać usunięcia.",
+            cancelDescriptionBound: "Anulowanie usuwa tę maszynę i jej dysk.",
             recipeTitle: "Rozmiar, obraz i lokalizacja",
             recipeDescription: "Ustawione przy tworzeniu. Edytuj ustawienie dla nowych maszyn; ta maszyna zachowuje to, z czym została utworzona.",
             madeFromPreset: ({ preset }: { preset: string }) => `Utworzona z presetu ${preset}.`,
