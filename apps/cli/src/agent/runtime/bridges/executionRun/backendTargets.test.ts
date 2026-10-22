@@ -1,21 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol';
-
-const catalog = vi.hoisted(() => ({
-  agentDefinitionsById: new Map<string, Readonly<{
-    id: string;
-    identity: Readonly<{ pluginId: string; localId: string }>;
-  }>>(),
-}));
-
-vi.mock('@/agent/catalog/snapshot', () => ({
-  readAgentCatalogSnapshot: () => ({
-    agentDefinitionsById: catalog.agentDefinitionsById,
-    catalogEntriesById: {},
-    executionRunProfiles: [],
-  }),
-}));
 
 import {
   areExecutionRunBackendTargetsEqual,
@@ -28,14 +13,6 @@ const canonicalOpenCodeTargetKey = buildBackendTargetKeyV2({
 });
 
 describe('areExecutionRunBackendTargetsEqual', () => {
-  beforeEach(() => {
-    catalog.agentDefinitionsById.clear();
-    catalog.agentDefinitionsById.set('opencode', {
-      id: 'opencode',
-      identity: { pluginId: 'happier.agent.opencode', localId: 'opencode' },
-    });
-  });
-
   it('equates the canonical contributed-Agent key with its executable built-in target', () => {
     expect(areExecutionRunBackendTargetsEqual(
       canonicalOpenCodeTargetKey,
@@ -62,18 +39,6 @@ describe('areExecutionRunBackendTargetsEqual', () => {
 });
 
 describe('resolveExecutionRunRuntimeBackendTarget', () => {
-  beforeEach(() => {
-    catalog.agentDefinitionsById.clear();
-    catalog.agentDefinitionsById.set('opencode', {
-      id: 'opencode',
-      identity: { pluginId: 'happier.agent.opencode', localId: 'opencode' },
-    });
-    catalog.agentDefinitionsById.set('acme-runtime-routing-id', {
-      id: 'acme-runtime-routing-id',
-      identity: { pluginId: 'acme.review-plugin', localId: 'review-agent' },
-    });
-  });
-
   it('resolves a canonical installed Agent identity to the retained runtime target', () => {
     expect(resolveExecutionRunRuntimeBackendTarget({
       kind: 'agent',
@@ -81,20 +46,17 @@ describe('resolveExecutionRunRuntimeBackendTarget', () => {
     })).toEqual({ kind: 'builtInAgent', agentId: 'opencode' });
   });
 
-  it('fails closed for a canonical Agent identity absent from the current catalog', () => {
-    expect(resolveExecutionRunRuntimeBackendTarget({
-      kind: 'agent',
-      identity: { pluginId: 'missing.plugin', localId: 'missing-agent' },
-    })).toBeNull();
+  it('rejects a malformed target rather than inventing an executable identity', () => {
+    expect(resolveExecutionRunRuntimeBackendTarget('not-a-target-key')).toBeNull();
   });
 
-  it('gives a trusted external Agent the same catalog-based runtime resolution', () => {
+  it('lowers an authored Agent without a runner-local installed catalog; snapshot admission remains separate', () => {
     expect(resolveExecutionRunRuntimeBackendTarget({
       kind: 'agent',
       identity: { pluginId: 'acme.review-plugin', localId: 'review-agent' },
     })).toEqual({
       kind: 'builtInAgent',
-      agentId: 'acme-runtime-routing-id',
+      agentId: 'acme.review-plugin/review-agent',
     });
   });
 });

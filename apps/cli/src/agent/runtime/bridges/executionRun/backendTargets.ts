@@ -5,6 +5,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { BackendTargetRefV1, BackendTargetRefV2Input } from '@happier-dev/protocol';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { resolveContributedAgentRoutingId } from '@/plugins/projection/registry/agentRoutingIdentity';
 
 type ExecutionRunAgentCatalog = ReturnType<typeof readAgentCatalogSnapshot>;
 
@@ -19,19 +20,6 @@ function readRequestedAgentTarget(
   if (!keyedTarget.success) return null;
   const parsedTarget = parseBackendTargetKeyV2(keyedTarget.data);
   return parsedTarget.kind === 'agent' ? parsedTarget : null;
-}
-
-function resolveExecutionRunAgentRoutingId(
-  identity: Readonly<{ pluginId: string; localId: string }>,
-  catalog: ExecutionRunAgentCatalog,
-): string | null {
-  for (const [routingId, contribution] of catalog.agentDefinitionsById) {
-    if (
-      contribution.identity?.pluginId === identity.pluginId
-      && contribution.identity.localId === identity.localId
-    ) return routingId;
-  }
-  return null;
 }
 
 function resolveExecutionRunCanonicalBackendTargetKey(
@@ -61,23 +49,25 @@ function resolveExecutionRunCanonicalBackendTargetKey(
 }
 
 /**
- * Resolves the stable public Agent identity against the one current plugin
- * catalog, then lowers it to the execution-run runtime's retained V1 target.
- * A missing identity fails closed instead of being guessed from localId.
+ * Lowers public identity to the runtime routing spelling, not executable
+ * admission. The retained daemon snapshot admits the actual contribution;
+ * a Session runner need not own an installed-plugin catalog to name it.
  */
 export function resolveExecutionRunRuntimeBackendTarget(
   backendTarget: BackendTargetRefV1 | BackendTargetRefV2Input,
 ): BackendTargetRefV1 | null {
   const requestedAgentTarget = readRequestedAgentTarget(backendTarget);
   if (requestedAgentTarget) {
-    const routingId = resolveExecutionRunAgentRoutingId(
-      requestedAgentTarget.identity,
-      readAgentCatalogSnapshot(),
-    );
-    if (!routingId) return null;
-    return requestedAgentTarget.definitionId === undefined
-      ? { kind: 'builtInAgent', agentId: routingId }
-      : { kind: 'configuredAcpBackend', backendId: requestedAgentTarget.definitionId };
+    try {
+      // The Protocol compatibility owner knows bundled and configured refs.
+      return convertBackendTargetRefV2ToV1(readBackendTargetRefV2(requestedAgentTarget));
+    } catch {
+      // External Agents use exactly the projection owner's qualified spelling;
+      // a bare localId is never an executable alias or an authority grant.
+      return { kind: 'builtInAgent', agentId: resolveContributedAgentRoutingId({
+        ...requestedAgentTarget.identity, provenance: 'external',
+      }) };
+    }
   }
 
   try {
