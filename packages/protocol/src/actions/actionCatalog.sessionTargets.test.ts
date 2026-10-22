@@ -12,6 +12,16 @@ describe('Session target declaration discovery', () => {
       ['session.message.send', 'many', { message: 'Review the change', wait: true }],
       ['session.status.get', 'many', {}],
       ['session.open', 'one', {}],
+      ['session.stop', 'many', {}],
+      ['session.turn.cancel', 'many', {}],
+      ['session.messages.recent.get', 'many', {}],
+      ['session.archive', 'one', {}],
+      ['session.unarchive', 'one', {}],
+      ['session.goal.get', 'one', {}],
+      ['session.goal.set', 'one', { objective: 'Ship the fix' }],
+      ['session.goal.clear', 'one', {}],
+      ['session.manager.set', 'one', { managerSessionId: 'new-manager', expectedManagerSessionId: null }],
+      ['session.coordinator.enable', 'one', { roleId: 'orchestrator', keep: 'none', ruleSuggestions: [] }],
     ] as const) {
       const spec = getActionSpec(id);
       const input = { sessionId: { selector: 'workers', of: 'manager-id' }, ...extraInput };

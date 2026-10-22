@@ -1481,8 +1481,12 @@ const SessionIdRequiredInputSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.string().check(z.minLength(1)),
 }));
 
+const SessionTargetRequiredInputSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: SessionTargetV1Schema,
+}));
+
 const SessionTurnCancelInputSchema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
 }));
 
 const SessionPermissionModeSetInputSchema = lazyZodSchema(() => z.strictObject({
@@ -1757,7 +1761,7 @@ export const SessionWaitIdleResultSchema = lazyZodSchema(() => z.union([
 ]));
 
 const SessionGoalSetInputSchema = lazyZodSchema(() => z.looseObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   objective: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(4000))),
   status: z.optional(SessionWorkStateStatusV1Schema),
   tokenBudget: z.optional(z.nullable(z.number().check(z.positive()))),
@@ -2105,7 +2109,7 @@ const SessionRollbackInputSchema = lazyZodSchema(() => z.looseObject({
  * caller can neither name nor pin them here.
  */
 const SessionHandoffInputFieldsSchema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.optional(z.string().check(z.minLength(1))),
+  sessionId: z.optional(SessionTargetV1Schema),
   sourceMachineId: z.optional(z.string().check(z.minLength(1))),
   targetMachineId: z.optional(z.string().check(z.minLength(1))),
   targetPath: z.optional(z.string().check(z.minLength(1))),
@@ -2924,7 +2928,7 @@ const SessionActivityInputSchema = lazyZodSchema(() => z.strictObject({
 })));
 
 const SessionRecentMessagesInputSchema = lazyZodSchema(() => z.looseObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(50))),
   cursor: z.optional(z.nullable(z.string().check(z.minLength(1)))),
   includeUser: z.optional(z.boolean()),
@@ -7448,6 +7452,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
   },
   {
     id: 'session.handoff', originalExecution: { accountRoot: 'allowed' }, approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     sideEffectClass: 'write',
     operation: {
       version: 1,
@@ -8868,6 +8873,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'session.turn.cancel', approval: {result: 'none'},
+    sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Stop current turn',
     description: 'Request cancellation of the current turn while keeping the session process available.',
     safety: 'safe',
@@ -8907,6 +8913,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'session.stop', approval: {result: 'none'},
+    sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Stop session',
     description: 'Request that the local daemon stops the specified session.',
     safety: 'safe',
@@ -8930,7 +8937,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionIdRequiredInputSchema,
+    inputSchema: SessionTargetRequiredInputSchema,
     cli: SESSION_STOP_CLI_PROJECTION,
   },
   {
@@ -9810,7 +9817,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       { path: 'managedBy', title: 'Manager and reviewed current manager', widget: 'json' },
       { path: 'ruleSuggestions', title: 'Selected rule intents', widget: 'json', required: true },
     ] },
-    inputSchema: SessionCoordinatorEnableInputV1Schema, outputSchema: SessionCoordinatorEnableResultV1Schema,
+    inputSchema: lazyZodSchema(() => z.extend(SessionCoordinatorEnableInputV1Schema, { sessionId: SessionTargetV1Schema })),
+    outputSchema: SessionCoordinatorEnableResultV1Schema,
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'coordinator', 'enable'], visibility: 'canonical' }] },
   },
   {
@@ -10013,6 +10021,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.archive', approval: {result: 'none'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Archive session',
     description: 'Archive the specified session, optionally also archiving its unarchived direct reports. Each report retains its own rights and approval requirements; results include partial outcomes.',
     safety: 'safe',
@@ -10038,7 +10047,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       ],
     },
     outputSchema: lazyZodSchema(() => SessionArchiveActionResultV1Schema),
-    inputSchema: lazyZodSchema(() => SessionArchiveActionInputV1Schema),
+    inputSchema: lazyZodSchema(() => z.extend(SessionArchiveActionInputV1Schema, { sessionId: SessionTargetV1Schema })),
     cli: SESSION_ARCHIVE_CLI_PROJECTION,
   },
   {
@@ -10088,6 +10097,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.unarchive', approval: {result: 'none'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Unarchive session',
     description: 'Unarchive the specified session.',
     safety: 'safe',
@@ -10110,7 +10120,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionIdRequiredInputSchema,
+    inputSchema: SessionTargetRequiredInputSchema,
     cli: SESSION_UNARCHIVE_CLI_PROJECTION,
   },
   {
@@ -10190,6 +10200,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.goal.get', sideEffectClass: 'read', approval: {result: 'required'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Get session goal',
     description: 'Get the editable session goal when the provider supports native goals.',
     safety: 'safe',
@@ -10213,10 +10224,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionIdRequiredInputSchema,
+    inputSchema: SessionTargetRequiredInputSchema,
   },
   {
     id: 'session.goal.set', approval: {result: 'none'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Set session goal',
     description: 'Set or update the native session goal.',
     safety: 'safe',
@@ -10250,6 +10262,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.goal.clear', approval: {result: 'required'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Clear session goal',
     description: 'Clear the native session goal.',
     safety: 'safe',
@@ -10273,7 +10286,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }],
     },
     outputSchema: StrictJsonValueSchema,
-    inputSchema: SessionIdRequiredInputSchema,
+    inputSchema: SessionTargetRequiredInputSchema,
   },
   {
     id: 'session.access.grants.list', approval: {result: 'none'},
@@ -10341,6 +10354,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.manager.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     title: 'Set Session manager',
     safety: 'danger',
     requiredAuthority: 'account_automation',
@@ -10356,7 +10370,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
       { path: 'managerSessionId', title: 'Manager session', description: 'Leave empty to detach it from its manager.', widget: 'text' },
       { path: 'expectedManagerSessionId', title: 'Expected current manager', widget: 'text' },
     ] },
-    inputSchema: SessionManagerSetActionInputV1Schema,
+    inputSchema: lazyZodSchema(() => z.extend(SessionManagerSetActionInputV1Schema, { sessionId: SessionTargetV1Schema })),
     outputSchema: SessionManagerSetResultV1Schema,
     serverTransport: { method: 'POST', path: '/v1/sessions/:sessionId/manager' },
   },
@@ -11670,6 +11684,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.messages.recent.get', sideEffectClass: 'read', approval: {result: 'required'},
+    sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Get recent messages',
     description: 'DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.',
     safety: 'safe',

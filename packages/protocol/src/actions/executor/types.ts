@@ -1957,6 +1957,8 @@ export type ActionExecutorDeps = Readonly<{
   sessionFollowPreview?: (args: Readonly<{
     context: ActionExecutorContext;
     input: import('../../sessions/follow/actions.js').FollowPreviewActionInputV1;
+    /** Inverse Follow membership evaluates only this authorized source, never the corpus. */
+    sourceSessionId?: string;
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;

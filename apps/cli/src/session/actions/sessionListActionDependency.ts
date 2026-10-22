@@ -192,7 +192,7 @@ export function createSessionListActionDeps(params: Readonly<{
     includeLastMessagePreview,
     signal,
   }: Parameters<ActionExecutorDeps['sessionList']>[0], filterCandidates?: Parameters<typeof listSessions>[0]['filterCandidates'],
-  workspaceRefs?: readonly WorkspaceRefV1[]) => {
+  workspaceRefs?: readonly WorkspaceRefV1[], sourceSessionId?: string) => {
     const normalizedActiveOnly = activeOnly === true;
     const normalizedArchivedOnly = archivedOnly === true;
     if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
@@ -204,7 +204,8 @@ export function createSessionListActionDeps(params: Readonly<{
     if (normalizedActiveOnly && normalizedArchivedOnly) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
-    const allowedSessionIds = context?.sessionListAccess === 'current_session'
+    const allowedSessionIds = sourceSessionId ? context?.sessionListAccess === 'current_session'
+      && context.defaultSessionId !== sourceSessionId ? [] : [sourceSessionId] : context?.sessionListAccess === 'current_session'
       && typeof context?.defaultSessionId === 'string'
       && context.defaultSessionId.trim().length > 0
       ? [context.defaultSessionId.trim()]
@@ -290,7 +291,7 @@ export function createSessionListActionDeps(params: Readonly<{
   };
   return {
     sessionList: read,
-    sessionFollowPreview: async ({ context, input, serverId: requestedServerId, signal }) => {
+    sessionFollowPreview: async ({ context, input, sourceSessionId, serverId: requestedServerId, signal }) => {
       if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
         || (context.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       const homeServerId = await resolveServerProfileHomeIdentityId(serverId) ?? serverId;
@@ -319,7 +320,7 @@ export function createSessionListActionDeps(params: Readonly<{
       const viewerAccountId = readAccountIdFromToken(credentials.token) ?? undefined;
       const queries = projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
         mountedHomeServerIds: [homeServerId], limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false });
-      const unservedHome = filter.homeServerIds.some(home => home !== homeServerId);
+      const unservedHome = !sourceSessionId && filter.homeServerIds.some(home => home !== homeServerId);
       let coverage: 'complete' | 'partial' | 'unavailable' = unservedHome || filter.show !== 'sessions'
         || context.sessionListAccess === 'current_session' ? 'partial' : 'complete';
       if (filter.show === 'runs') return evaluateFollowRulePreviewV1({ filter, candidates, coverage: 'unavailable' });
@@ -327,6 +328,19 @@ export function createSessionListActionDeps(params: Readonly<{
       if (filter.projects && params.readWorkspaceRefs) {
         try { workspaceRefs = await params.readWorkspaceRefs({ context, signal }); }
         catch (error) { signal?.throwIfAborted(); coverage = 'partial'; }
+      }
+      if (sourceSessionId) {
+        // Reuse the listing owner's admitted exact-row reader and fact projector.
+        // No structural query has run, so every facet stays with the tri-state predicate.
+        const page = await read({ context, includeSystem: false, signal, query: { v: 1, storage: 'active', includeInactive: true,
+          scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [], includeAttention: false } },
+          { serverId: homeServerId, viewerAccountId, filters: [filter], collect: candidate => candidates.push(candidate) },
+          workspaceRefs, sourceSessionId);
+        if ('ok' in page && page.ok === false) return page;
+        if (!await isAccountCurrent()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+        signal?.throwIfAborted();
+        return evaluateFollowRulePreviewV1({ filter, candidates, coverage: context.sessionListAccess === 'current_session'
+          && context.defaultSessionId !== sourceSessionId ? 'unavailable' : 'complete' });
       }
       for (const home of queries) {
         const page = await read({ context, query: home.query, includeSystem: false, signal },

@@ -4041,37 +4041,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ? classifyExecutionRunStartFailure(bound, 'noRunCreated')
         : bound;
     }
-    const parsed = existingAdmission
-      ? { success: true as const, data: existingAdmission.input }
-      : spec.inputSchema.safeParse(bound.input ?? {});
-    if (!parsed.success) {
-      const invalid = actionInputValidationFailure(parsed.error);
-      return actionId === 'execution.run.start'
-        ? classifyExecutionRunStartFailure(invalid, 'noRunCreated')
-        : invalid;
-    }
-    const discussionParticipantLaunch = existingAdmission?.discussionParticipantLaunch
-      ?? (actionId === 'session.spawn_new' && readRecord(parsed.data).discussionParticipant !== undefined
-        ? projectDiscussionModelParticipantLaunchV1(SessionSpawnNewInputV2Schema.parse(parsed.data)) : undefined);
-    let admittedInput = redactMemoryActionInput(actionId, parsed.data);
-    if (isPublicProfilePreparationActionIdV1(actionId)) {
-      if (ctx.publicProfilePreparedAction && ctx.publicProfilePreparedAction.actionId !== actionId) {
-        return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
-      }
-      if (!ctx.publicProfilePreparedAction && !ctx.publicProfilePreviewResult) {
-        if (options?.approvalReplay) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
-        let prepared: Awaited<ReturnType<typeof preparePublicProfileAction>>;
-        try { prepared = await preparePublicProfileAction(actionId, admittedInput, deps.publicProfileActions, ctx); }
-        catch (error) {
-          if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
-          return { ok: false, ...normalizeActionExecutorThrownError(error) };
-        }
-        if (prepared.kind === 'settled') {
-          if (!prepared.result.ok) return prepared.result;
-          ctx = { ...ctx, publicProfilePreviewResult: prepared.result };
-        } else ctx = { ...ctx, publicProfilePreparedAction: prepared.effect };
-      }
-    }
+    // Resolve declared operands before exact domain schemas parse them. The
+    // snapshot is also the sole selection used by preparation and replay.
+    let admittedInput: unknown = bound.input ?? {};
     if (spec.sessionTarget && !options?.sessionTargetLeaf) {
       if (ctx.sessionTargetsV1) {
         const snapshot = ActionResolvedSessionTargetsV1Schema.safeParse(ctx.sessionTargetsV1);
@@ -4105,8 +4077,39 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const bound = bindActionSessionTargetOperands(readRecord(admittedInput), snapshot, options?.approvalReplay === true);
         if (!bound) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         admittedInput = bound;
-      } else if (snapshot && actionId === 'discussion.invite') {
+      } else if (snapshot && spec.sessionTarget.cardinality === 'one') {
         admittedInput = replaceActionSessionTargetField(readRecord(admittedInput), snapshot.field, snapshot.targets[0].sessionId);
+      }
+    }
+    const parsed = existingAdmission
+      ? { success: true as const, data: existingAdmission.input }
+      : spec.inputSchema.safeParse(admittedInput);
+    if (!parsed.success) {
+      const invalid = actionInputValidationFailure(parsed.error);
+      return actionId === 'execution.run.start'
+        ? classifyExecutionRunStartFailure(invalid, 'noRunCreated')
+        : invalid;
+    }
+    const discussionParticipantLaunch = existingAdmission?.discussionParticipantLaunch
+      ?? (actionId === 'session.spawn_new' && readRecord(parsed.data).discussionParticipant !== undefined
+        ? projectDiscussionModelParticipantLaunchV1(SessionSpawnNewInputV2Schema.parse(parsed.data)) : undefined);
+    admittedInput = redactMemoryActionInput(actionId, parsed.data);
+    if (isPublicProfilePreparationActionIdV1(actionId)) {
+      if (ctx.publicProfilePreparedAction && ctx.publicProfilePreparedAction.actionId !== actionId) {
+        return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+      }
+      if (!ctx.publicProfilePreparedAction && !ctx.publicProfilePreviewResult) {
+        if (options?.approvalReplay) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        let prepared: Awaited<ReturnType<typeof preparePublicProfileAction>>;
+        try { prepared = await preparePublicProfileAction(actionId, admittedInput, deps.publicProfileActions, ctx); }
+        catch (error) {
+          if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+          return { ok: false, ...normalizeActionExecutorThrownError(error) };
+        }
+        if (prepared.kind === 'settled') {
+          if (!prepared.result.ok) return prepared.result;
+          ctx = { ...ctx, publicProfilePreviewResult: prepared.result };
+        } else ctx = { ...ctx, publicProfilePreparedAction: prepared.effect };
       }
     }
     const invitationFailure = await admitDiscussionInvitationTargets(actionId, admittedInput, ctx, ctx.sessionTargetsV1);

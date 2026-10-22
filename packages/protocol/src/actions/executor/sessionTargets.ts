@@ -85,6 +85,7 @@ async function matching(
   target: Extract<SessionTargetSelectorV1, { selector: 'matching' }>,
   context: ActionExecutorContext,
   base: ActionSessionAddress | null,
+  sourceSessionId?: string,
 ): Promise<readonly ActionSessionAddress[] | ActionExecuteFailure> {
   // Session operands never turn Runs into Session targets.
   if (target.filter.show === 'runs') return [];
@@ -94,6 +95,7 @@ async function matching(
   const preview = FollowRulePreviewResultV1Schema.safeParse(await deps.sessionFollowPreview({
     context, input: { receiver: base ? { kind: 'session', sessionId: base.sessionId } : { kind: 'account' },
       filter: { ...target.filter, show: 'sessions' } },
+    ...(sourceSessionId ? { sourceSessionId } : {}),
     ...(base ? { serverId: base.serverId } : context.serverId ? { serverId: context.serverId } : {}),
     ...(context.signal ? { signal: context.signal } : {}),
   }));
@@ -164,7 +166,7 @@ async function follows(
     if (!rule.definition.enabled || rule.receiver.kind !== 'session') continue;
     if (direction === 'followers' && rule.receiver.sessionId === base.sessionId) continue;
     const matches = await matching(deps, { selector: 'matching', filter: rule.definition.filter }, scopedContext,
-      { serverId: base.serverId, sessionId: rule.receiver.sessionId });
+      { serverId: base.serverId, sessionId: rule.receiver.sessionId }, direction === 'followers' ? base.sessionId : undefined);
     if ('ok' in matches) return matches;
     // Rule delivery excludes its receiver as a source, just as stored Follow
     // relations do. A raw filter preview can still match that same Session.

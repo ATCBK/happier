@@ -39,6 +39,20 @@ describe('CLI Session target composition', () => {
   const managerId = 'c222222222222222222222222';
   const context = { surface: 'cli', authority: 'present_user', serverId: 'srv_target_home' } as const;
 
+  it('evaluates one Follow source without reading the corpus, preserving match, miss and unknown', async () => {
+    const { deps } = setup(null);
+    const post = vi.spyOn(axios, 'post').mockImplementation(async () => { throw new Error('No corpus access'); });
+    const filter = normalizeSessionListFilterV1({ homeServerIds: [context.serverId], show: 'sessions',
+      startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible' });
+    const read = (value: typeof filter) => deps.sessionFollowPreview!({ context, sourceSessionId: sessionId,
+      input: { receiver: { kind: 'session', sessionId: managerId }, filter: value } });
+    expect(await read(filter)).toMatchObject({ coverage: 'complete', matches: [{ source: { kind: 'session', sessionId } }] });
+    expect(await read({ ...filter, homeServerIds: ['different-home'] })).toMatchObject({ coverage: 'complete', matches: [] });
+    expect(await read({ ...filter, underSessionId: managerId })).toMatchObject({ coverage: 'partial', matches: [],
+      unavailable: [{ source: { kind: 'session', sessionId } }] });
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('reads Following and private rules through the portable Home of a fixed local profile', async () => {
     await withConfiguredDaemonTestHome({ prefix: 'follow-portable-home-' }, async () => {
       const profileId = 'stack_agent-qa-coord-n1__id_default';

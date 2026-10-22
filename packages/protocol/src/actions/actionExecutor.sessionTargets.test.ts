@@ -76,6 +76,43 @@ function harness() {
 }
 
 describe('SessionTarget at the Actions front door', () => {
+  it('resolves operational selectors once before exact handler parsing, retaining manager CAS identities', async () => {
+    const h = harness();
+    const effects: unknown[] = [];
+    let resolutions = 0;
+    const executor = createActionExecutor({ ...h.deps,
+      readSessionManager: async () => { resolutions += 1; return { kind: 'manager', address: { serverId: 'home', sessionId: 'manager' } }; },
+      sessionManagerSet: async (args: unknown) => { effects.push(args); return { ok: true, sessionId: 'manager', managerSessionId: 'new-manager', attachedAt: 1 }; },
+    } as unknown as ActionExecutorDeps);
+    const result = await executor.execute('session.manager.set', {
+      sessionId: { selector: 'manager' }, managerSessionId: 'new-manager', expectedManagerSessionId: 'self',
+    }, { ...context, bypassApprovals: true });
+    expect(result).toMatchObject({ ok: true });
+    expect(resolutions).toBe(1);
+    expect(effects).toEqual([expect.objectContaining({ sessionId: 'manager', managerSessionId: 'new-manager', expectedManagerSessionId: 'self' })]);
+  });
+
+  it('fans out lifecycle selectors through the real executor and preserves exact-id result shapes', async () => {
+    const h = harness();
+    const stopped: string[] = [];
+    const executor = createActionExecutor({ ...h.deps, sessionStop: async ({ sessionId }: { sessionId: string }) => {
+      stopped.push(sessionId); return { stopped: true };
+    } } as unknown as ActionExecutorDeps);
+    expect(await executor.execute('session.stop', { sessionId: { selector: 'workers' } }, context))
+      .toMatchObject({ ok: true, result: { kind: 'fanout', results: [
+        { target: { sessionId: 'a' }, result: { ok: true } }, { target: { sessionId: 'b' }, result: { ok: true } },
+      ] } });
+    expect(await executor.execute('session.stop', { sessionId: 'exact' }, context)).toEqual({ ok: true, result: { stopped: true } });
+    expect(stopped).toEqual(['a', 'b', 'exact']);
+  });
+
+  it('refuses unresolved operational targets with content-free canonical issues before effects', async () => {
+    const h = harness();
+    const executor = createActionExecutor({ ...h.deps, readSessionManager: async () => { throw new Error('private session content'); } } as unknown as ActionExecutorDeps);
+    expect(await executor.execute('session.goal.get', { sessionId: { selector: 'manager' } }, context))
+      .toEqual({ ok: false, errorCode: 'session_target_unavailable', error: 'session_target_unavailable', details: { cause: 'target_read_failed' } });
+  });
+
   it('keeps ambiguous exact-reference previews unavailable without disclosing candidate addresses', async () => {
     const h = harness();
     const ambiguous = createActionExecutor({ ...h.deps, resolveSessionReference: async () => ({ kind: 'ambiguous',
@@ -147,7 +184,11 @@ describe('SessionTarget at the Actions front door', () => {
           rules: [], coverage: 'complete', peopleCount: 7 };
       },
       readSessionFollowRules: async () => ({ kind: 'complete', rules: [rule('manager'), rule('rule-receiver'), rule('parent'), rule(null), rule('off', false)] }),
-      sessionFollowPreview: async () => preview(['parent']),
+      sessionFollowPreview: async (args: Parameters<NonNullable<ActionExecutorDeps['sessionFollowPreview']>>[0]) => {
+        // A followers query must never request the full Session corpus.
+        expect(args.sourceSessionId).toBe('parent');
+        return preview(['parent']);
+      },
     } as unknown as ActionExecutorDeps);
     await expect(executor.execute('session.message.send', { sessionId: { selector: 'followers' }, message: 'hello' }, context))
       .resolves.toMatchObject({ ok: true, result: { kind: 'fanout', results: [
