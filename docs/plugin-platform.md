@@ -3001,6 +3001,14 @@ not supply reply instructions. Immediate Local welcome sends the same admitted
 literal through the existing `welcomeText` RPC input when available. Adopting an
 existing run consumes its retained policy rather than newly edited preferences.
 
+In 0.3 development, standalone Voice Agent provisioning uses the same native
+runtime lifetime and transport budgets as other Execution Runs. The UI does not
+derive a startup cutoff from its network timeout or inject a 60-second bootstrap
+default. After prompt admission, READY uses the daemon's ordinary Voice response
+budget. Existing explicit `bootstrapTimeoutMs` RPC values remain supported as
+READY response overrides; they do not bound credential, MCP or native runtime
+preparation. Stop and caller cancellation retire the same start occurrence.
+
 Recognition, reply instructions and output voice are distinct provider contracts;
 do not publish a universal independent language control when a provider couples
 them or leaves language session-owned. Conversation controls, search and direct
