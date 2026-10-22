@@ -9550,6 +9550,13 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       running: "Выполняется",
       waiting: "Ждёт подтверждения",
       blocked: "Не разрешено",
+      pending: "Выполняется",
+    },
+    pending: {
+      title: "Принято, ещё выполняется",
+      description: "Завершится в фоне. На этой странице — то, что вернул вызов при завершении.",
+      unknownTitle: "Результат неизвестен",
+      unknownDescription: "Happier не смог подтвердить запуск. Проверьте, прежде чем повторять.",
     },
     approvalRequested: {
       title: "Отправлено на одобрение",
@@ -9558,6 +9565,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     actionOutcome: {
       refused: "Отклонено",
       failed: "Не удалось",
+      refusedReason: "Happier не разрешил этот вызов.",
+      failedReason: "Не удалось выполнить этот вызов.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} с ошибкой · ${refused} отклонено`,
       cause: {
         outsideAgentSessions: "Не сессия этого агента",

@@ -11452,6 +11452,13 @@ const enToolView = {
     running: "Running",
     waiting: "Waiting for approval",
     blocked: "Not allowed",
+    pending: "In progress",
+  },
+  pending: {
+    title: "Accepted, still in progress",
+    description: "It finishes in the background. This page shows what it returned when the call ended.",
+    unknownTitle: "Outcome unknown",
+    unknownDescription: "Happier couldn’t confirm it started. Check before trying again.",
   },
   approvalRequested: {
     title: "Sent for approval",
@@ -11460,6 +11467,8 @@ const enToolView = {
   actionOutcome: {
     refused: 'Refused',
     failed: 'Failed',
+    refusedReason: "Happier didn’t allow this call.",
+    failedReason: "This call couldn’t be completed.",
     mixed: ({ failed, refused }: { failed: number; refused: number }) =>
       `${failed} failed · ${refused} refused`,
     cause: {

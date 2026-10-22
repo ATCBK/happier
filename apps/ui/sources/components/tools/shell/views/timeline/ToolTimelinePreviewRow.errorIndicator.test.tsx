@@ -12,11 +12,6 @@ vi.mock('@/components/tools/catalog', () => ({
     knownTools: {},
 }));
 
-vi.mock('@/components/tools/renderers/system/MCPToolView', () => ({
-    formatMCPTitle: (name: string) => name,
-    formatMCPSubtitle: () => null,
-}));
-
 vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));

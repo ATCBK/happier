@@ -8926,6 +8926,13 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
           running: "En curs",
           waiting: "Esperant l'aprovació",
           blocked: "No permesa",
+          pending: "En curs",
+        },
+        pending: {
+          title: "Acceptada, encara en curs",
+          description: "Acaba en segon pla. Aquesta pàgina mostra el que va tornar quan va acabar la crida.",
+          unknownTitle: "Resultat desconegut",
+          unknownDescription: "Happier no ha pogut confirmar que s’hagi iniciat. Comprova-ho abans de tornar-ho a provar.",
         },
         approvalRequested: {
           title: "Enviada per aprovar",
@@ -8934,6 +8941,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         actionOutcome: {
           refused: "Rebutjada",
           failed: "Fallida",
+          refusedReason: "Happier no ha permès aquesta crida.",
+          failedReason: "Aquesta crida no s’ha pogut completar.",
           mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} amb error · ${refused} rebutjades`,
           cause: {
             outsideAgentSessions: "No és una sessió d’aquest Agent",

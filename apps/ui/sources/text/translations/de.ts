@@ -9624,6 +9624,13 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
           running: "Läuft",
           waiting: "Wartet auf Freigabe",
           blocked: "Nicht erlaubt",
+          pending: "Läuft",
+        },
+        pending: {
+          title: "Angenommen, läuft noch",
+          description: "Es wird im Hintergrund abgeschlossen. Diese Seite zeigt, was beim Ende des Aufrufs zurückkam.",
+          unknownTitle: "Ergebnis unbekannt",
+          unknownDescription: "Happier konnte den Start nicht bestätigen. Prüfe das, bevor du es erneut versuchst.",
         },
         approvalRequested: {
           title: "Zur Freigabe gesendet",
@@ -9632,6 +9639,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         actionOutcome: {
           refused: "Abgelehnt",
           failed: "Fehlgeschlagen",
+          refusedReason: "Happier hat diesen Aufruf nicht erlaubt.",
+          failedReason: "Dieser Aufruf konnte nicht abgeschlossen werden.",
           mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} fehlgeschlagen · ${refused} abgelehnt`,
           cause: {
             outsideAgentSessions: "Keine Sitzung dieses Agents",

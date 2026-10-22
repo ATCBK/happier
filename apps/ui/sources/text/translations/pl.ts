@@ -9529,6 +9529,13 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       running: "W toku",
       waiting: "Czeka na zatwierdzenie",
       blocked: "Niedozwolone",
+      pending: "W toku",
+    },
+    pending: {
+      title: "Przyjęte, nadal w toku",
+      description: "Kończy się w tle. Ta strona pokazuje, co zwróciło wywołanie w chwili zakończenia.",
+      unknownTitle: "Wynik nieznany",
+      unknownDescription: "Happier nie mógł potwierdzić uruchomienia. Sprawdź, zanim spróbujesz ponownie.",
     },
     approvalRequested: {
       title: "Wysłano do zatwierdzenia",
@@ -9537,6 +9544,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     actionOutcome: {
       refused: "Odrzucone",
       failed: "Nieudane",
+      refusedReason: "Happier nie zezwolił na to wywołanie.",
+      failedReason: "Nie udało się ukończyć tego wywołania.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} nieudane · ${refused} odrzucone`,
       cause: {
         outsideAgentSessions: "To nie jest sesja tego agenta",

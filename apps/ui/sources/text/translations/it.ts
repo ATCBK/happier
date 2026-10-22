@@ -9914,6 +9914,13 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       running: "In corso",
       waiting: "In attesa di approvazione",
       blocked: "Non consentita",
+      pending: "In corso",
+    },
+    pending: {
+      title: "Accettata, ancora in corso",
+      description: "Si completa in background. Questa pagina mostra cosa ha restituito al termine della chiamata.",
+      unknownTitle: "Esito sconosciuto",
+      unknownDescription: "Happier non ha potuto confermare l’avvio. Controlla prima di riprovare.",
     },
     approvalRequested: {
       title: "Inviata per l'approvazione",
@@ -9922,6 +9929,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     actionOutcome: {
       refused: "Rifiutata",
       failed: "Non riuscita",
+      refusedReason: "Happier non ha consentito questa chiamata.",
+      failedReason: "Non è stato possibile completare questa chiamata.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} non riuscite · ${refused} rifiutate`,
       cause: {
         outsideAgentSessions: "Non è una sessione di questo Agent",

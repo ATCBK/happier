@@ -9532,6 +9532,13 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       running: "En cours",
       waiting: "En attente d'approbation",
       blocked: "Non autorisé",
+      pending: "En cours",
+    },
+    pending: {
+      title: "Acceptée, toujours en cours",
+      description: "Elle se termine en arrière-plan. Cette page montre ce qu’elle a renvoyé à la fin de l’appel.",
+      unknownTitle: "Résultat inconnu",
+      unknownDescription: "Happier n’a pas pu confirmer son démarrage. Vérifie avant de réessayer.",
     },
     approvalRequested: {
       title: "Envoyée pour approbation",
@@ -9540,6 +9547,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     actionOutcome: {
       refused: "Refusé",
       failed: "Échec",
+      refusedReason: "Happier n’a pas autorisé cet appel.",
+      failedReason: "Cet appel n’a pas pu aboutir.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} en échec · ${refused} refusées`,
       cause: {
         outsideAgentSessions: "Pas une session de cet Agent",

@@ -13,6 +13,8 @@ export type ToolActionFailurePresentation = Readonly<{
     cause: string | null;
     /** A short human cause when the typed result names one the product can say in words. */
     summary: string | null;
+    /** The executor's own words for the failure ("Timed out after 120000ms"), when it gave any. */
+    message: string | null;
 }>;
 
 /** The Action vocabulary's policy, permission and authority denials: the call was not allowed, it did not break. */
@@ -62,6 +64,7 @@ export function resolveToolActionFailure(tool: ToolCall): ToolActionFailurePrese
         outcome: refused ? 'refused' : 'failed',
         code: failure.code,
         cause: failure.cause,
+        message: failure.message,
         summary: failure.code === 'codex_tool_restriction_unsupported_auth'
             ? t('toolView.actionOutcome.cause.toolPolicyUnsupportedAuth') : resolveCauseSummary(failure.cause),
     };

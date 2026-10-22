@@ -9694,6 +9694,13 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       running: "En curso",
       waiting: "Esperando aprobación",
       blocked: "No permitida",
+      pending: "En curso",
+    },
+    pending: {
+      title: "Aceptada, aún en curso",
+      description: "Termina en segundo plano. Esta página muestra lo que devolvió cuando terminó la llamada.",
+      unknownTitle: "Resultado desconocido",
+      unknownDescription: "Happier no pudo confirmar que empezara. Compruébalo antes de volver a intentarlo.",
     },
     approvalRequested: {
       title: "Enviada para aprobación",
@@ -9702,6 +9709,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     actionOutcome: {
       refused: "Rechazada",
       failed: "Fallida",
+      refusedReason: "Happier no permitió esta llamada.",
+      failedReason: "No se pudo completar esta llamada.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} con error · ${refused} rechazadas`,
       cause: {
         outsideAgentSessions: "No es una sesión de este Agent",

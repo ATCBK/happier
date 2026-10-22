@@ -77,7 +77,8 @@ function getPaths(result: unknown): string[] {
 
 function getText(tool: ToolViewProps['tool']): string | null {
     const failure = resolveToolActionFailure(tool);
-    if (failure) return failure.summary ?? toolActionOutcomeLabel(failure.outcome);
+    // The product's words for a known cause first, then the executor's own (a run that timed out says so).
+    if (failure) return failure.summary ?? failure.message ?? toolActionOutcomeLabel(failure.outcome);
     const parsed = maybeParseJson(tool.result);
     if (typeof parsed === 'string' && parsed.trim()) return parsed;
     const obj = asRecord(parsed);

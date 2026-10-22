@@ -9,14 +9,9 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { buildToolHeaderModel } from './buildToolHeaderModel';
-import {
-  resolveToolActionFailure,
-  toolActionOutcomeLabel,
-} from './resolveToolActionFailure';
-import {
-  resolveToolStatusIndicatorKind,
-  type ToolStatusIndicatorKind,
-} from './resolveToolStatusIndicatorKind';
+import { toolActionOutcomeLabel } from './resolveToolActionFailure';
+import type { ToolStatusIndicatorKind } from './resolveToolStatusIndicatorKind';
+import { resolveToolCallOutcome } from './resolveToolCallOutcome';
 import { ToolOutcomeStatus } from './ToolOutcomeStatus';
 import { ToolStatusIndicator } from './ToolStatusIndicator';
 
@@ -60,37 +55,45 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
     [props.metadata, props.tool],
   );
   const tool = model.toolForRendering;
-  const kind = resolveToolStatusIndicatorKind(tool);
-  const failure = kind === 'error' ? resolveToolActionFailure(tool) : null;
-  const word = failure
-    ? toolActionOutcomeLabel(failure.outcome)
-    : outcomeWord(kind);
-  const outcome =
-    word === null ? undefined : failure || kind === 'error' ? (
-      // The row's outcome mark sits at the line's start here, not at a row's trailing edge.
-      <View style={styles.outcome}>
-        <ToolOutcomeStatus
+  // One outcome owner for this header and the page's Result section.
+  const result = React.useMemo(() => resolveToolCallOutcome(tool), [tool]);
+  let outcome: React.ReactNode;
+  if (result.kind === 'status') {
+    const word = outcomeWord(result.indicator);
+    outcome =
+      word === null ? undefined : result.indicator === 'error' ? (
+        <View style={styles.outcome}>
+          <ToolOutcomeStatus testID="tool-details-outcome" label={word} glyph="warning-circle" tone="danger" />
+        </View>
+      ) : (
+        <View
           testID="tool-details-outcome"
-          label={word}
-          glyph={
-            failure?.outcome === 'refused' ? 'minus-circle' : 'warning-circle'
-          }
-          tone={failure?.outcome === 'refused' ? 'quiet' : 'danger'}
-        />
-      </View>
-    ) : (
-      <View
-        testID="tool-details-outcome"
-        accessible
-        accessibilityLabel={word}
-        style={styles.outcome}
-      >
-        <ToolStatusIndicator tool={tool} />
-        <Text style={styles.outcomeText} numberOfLines={1}>
-          {word}
-        </Text>
+          accessible
+          accessibilityLabel={word}
+          style={styles.outcome}
+        >
+          <ToolStatusIndicator tool={tool} />
+          <Text style={styles.outcomeText} numberOfLines={1}>
+            {word}
+          </Text>
+        </View>
+      );
+  } else {
+    const mark =
+      result.kind === 'failure'
+        ? result.failure.outcome === 'refused'
+          ? { label: toolActionOutcomeLabel('refused'), glyph: 'minus-circle' as const, tone: 'quiet' as const }
+          : { label: toolActionOutcomeLabel('failed'), glyph: 'warning-circle' as const, tone: 'danger' as const }
+        : result.kind === 'approval_requested'
+          ? { label: t('toolView.approvalRequested.title'), glyph: 'paper-plane-tilt' as const, tone: 'quiet' as const }
+          : { label: t('toolView.outcome.pending'), glyph: 'clock' as const, tone: 'quiet' as const };
+    // The row's outcome mark sits at the line's start here, not at a row's trailing edge.
+    outcome = (
+      <View style={styles.outcome}>
+        <ToolOutcomeStatus testID="tool-details-outcome" {...mark} />
       </View>
     );
+  }
   return (
     <PageHeader
       testID="tool-details-header"

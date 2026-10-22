@@ -10000,6 +10000,13 @@ localTailscale: {
       running: "実行中",
       waiting: "承認待ち",
       blocked: "許可されていません",
+      pending: "進行中",
+    },
+    pending: {
+      title: "受け付け済み・進行中",
+      description: "バックグラウンドで完了します。このページには呼び出し終了時の結果が表示されます。",
+      unknownTitle: "結果不明",
+      unknownDescription: "Happier は開始を確認できませんでした。再試行する前に確認してください。",
     },
     approvalRequested: {
       title: "承認待ちに送信しました",
@@ -10008,6 +10015,8 @@ localTailscale: {
     actionOutcome: {
       refused: "拒否",
       failed: "失敗",
+      refusedReason: "Happier はこの呼び出しを許可しませんでした。",
+      failedReason: "この呼び出しを完了できませんでした。",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `失敗 ${failed} · 拒否 ${refused}`,
       cause: {
         outsideAgentSessions: "このエージェントのセッションではありません",

@@ -2,11 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ToolCall } from '@happier-dev/session-core/messages';
-import { maybeParseJson } from '@happier-dev/protocol/activity/parseJson';
 import {
   isRecord,
   readHappierActionToolPayload,
-  readHappierActionToolResultCandidates,
 } from '@happier-dev/protocol/actions/happierActionToolResult';
 
 import {
@@ -22,11 +20,10 @@ import {
   readHappierActionCallInput,
 } from '@/components/sessions/transcript/references/happierActionToolResult';
 import {
-  resolveToolActionFailure,
-  toolActionOutcomeLabel,
-} from '@/components/tools/shell/presentation/resolveToolActionFailure';
+  readDecodedToolResult,
+  resolveToolCallOutcome,
+} from '@/components/tools/shell/presentation/resolveToolCallOutcome';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Item } from '@/components/ui/lists/Item';
@@ -36,35 +33,6 @@ import { CodeView } from '@/components/ui/media/CodeView';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-
-/** The most decoded form of a result: the parsed text of an MCP text envelope, its structured content, or the payload. */
-function readDecodedResult(tool: ToolCall): unknown {
-  const candidates = readHappierActionToolResultCandidates(
-    tool.result,
-    tool.input,
-  );
-  return candidates.length > 0
-    ? candidates[candidates.length - 1]
-    : maybeParseJson(tool.result);
-}
-
-/** The executor's own words for a typed Action failure (`{ errorCode, error }`), when it gave any. */
-function readActionFailureMessage(tool: ToolCall): string | null {
-  for (const candidate of readHappierActionToolResultCandidates(
-    tool.result,
-    tool.input,
-  )) {
-    if (
-      isRecord(candidate) &&
-      typeof candidate.errorCode === 'string' &&
-      typeof candidate.error === 'string' &&
-      candidate.error.trim()
-    ) {
-      return candidate.error.trim();
-    }
-  }
-  return null;
-}
 
 function isEmptyValue(value: unknown): boolean {
   if (value === null || value === undefined) return true;
@@ -144,29 +112,35 @@ export const ToolCallDetailsSections = React.memo(
           : null,
       [actionId, args],
     );
-    const failure = resolveToolActionFailure(tool);
-    const failureMessage = failure ? readActionFailureMessage(tool) : null;
-    const failed = failure !== null;
+    // The header reads the same outcome: a refusal, a request sent for approval, unsettled work or a status.
+    const outcome = React.useMemo(() => resolveToolCallOutcome(tool), [tool]);
+    const failure = outcome.kind === 'failure' ? outcome.failure : null;
+    const failureMessage = failure?.message ?? null;
+    const approvalRequest = actionId && outcome.kind === 'approval_requested' ? outcome : null;
+    const pending = outcome.kind === 'pending' ? outcome : null;
     const decoded = React.useMemo(
       () =>
-        tool.state === 'completed' && !failed && tool.result != null
-          ? readDecodedResult(tool)
+        outcome.kind === 'status' && tool.state === 'completed' && tool.result != null
+          ? readDecodedToolResult(tool)
           : undefined,
-      [failed, tool],
+      [outcome.kind, tool],
     );
-    // An Action that asked for approval returned a request, not its result: it reads as that request.
-    const approvalRequest = React.useMemo(() => {
-      if (!actionId || decoded === undefined) return null;
-      const parsed = ActionApprovalRequestCreatedResultSchema.safeParse(decoded);
-      return parsed.success ? parsed.data : null;
-    }, [actionId, decoded]);
     // An Action's result reads by meaning through the same owner as its arguments; raw keys stay in Debug.
     const resultFields = React.useMemo(
       () =>
-        actionId && decoded !== undefined && !approvalRequest
+        actionId && decoded !== undefined
           ? describeActionResultFields({ result: decoded, actionArgs: args })
           : null,
-      [actionId, approvalRequest, args, decoded],
+      [actionId, args, decoded],
+    );
+    const pendingDetails = React.useMemo(
+      () =>
+        pending
+          ? (describeActionResultFields({ result: pending.details, actionArgs: args })?.rows ?? [])
+              .filter((row) => row.kind === 'value')
+              .map((row) => ({ key: row.path, label: row.title, value: row.value }))
+          : [],
+      [args, pending],
     );
 
     return (
@@ -194,7 +168,9 @@ export const ToolCallDetailsSections = React.memo(
               title={
                 failure.summary ??
                 failureMessage ??
-                toolActionOutcomeLabel(failure.outcome)
+                (failure.outcome === 'refused'
+                  ? t('toolView.actionOutcome.refusedReason')
+                  : t('toolView.actionOutcome.failedReason'))
               }
               subtitle={
                 failure.summary && failureMessage ? failureMessage : undefined
@@ -229,6 +205,21 @@ export const ToolCallDetailsSections = React.memo(
                 }
               />
             </SectionContentRow>
+          </ItemGroup>
+        ) : pending ? (
+          <ItemGroup
+            title={t('tools.structuredResult.result')}
+            testID="tool-details-result"
+          >
+            <Item
+              testID="tool-details-pending"
+              title={pending.confirmed ? t('toolView.pending.title') : t('toolView.pending.unknownTitle')}
+              subtitle={pending.confirmed ? t('toolView.pending.description') : t('toolView.pending.unknownDescription')}
+              subtitleLines={0}
+              mode="info"
+              showChevron={false}
+            />
+            {pendingDetails.length > 0 ? <ApprovalTechnicalDetails lines={pendingDetails} /> : null}
           </ItemGroup>
         ) : approvalRequest ? (
           <ItemGroup

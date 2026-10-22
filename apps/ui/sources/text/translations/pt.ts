@@ -9812,6 +9812,13 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       running: "Em execução",
       waiting: "Aguardando aprovação",
       blocked: "Não permitida",
+      pending: "Em andamento",
+    },
+    pending: {
+      title: "Aceita, ainda em andamento",
+      description: "Ela termina em segundo plano. Esta página mostra o que foi retornado quando a chamada terminou.",
+      unknownTitle: "Resultado desconhecido",
+      unknownDescription: "O Happier não conseguiu confirmar que começou. Verifique antes de tentar de novo.",
     },
     approvalRequested: {
       title: "Enviada para aprovação",
@@ -9820,6 +9827,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     actionOutcome: {
       refused: "Recusada",
       failed: "Falhou",
+      refusedReason: "O Happier não permitiu esta chamada.",
+      failedReason: "Não foi possível concluir esta chamada.",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} com falha · ${refused} recusadas`,
       cause: {
         outsideAgentSessions: "Não é uma sessão deste Agent",

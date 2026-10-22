@@ -9352,6 +9352,13 @@ export const zhHans: TranslationStructure = {
       running: "运行中",
       waiting: "等待批准",
       blocked: "不允许",
+      pending: "进行中",
+    },
+    pending: {
+      title: "已接受，仍在进行",
+      description: "它会在后台完成。此页面显示调用结束时返回的内容。",
+      unknownTitle: "结果未知",
+      unknownDescription: "Happier 无法确认它已开始。重试前请先检查。",
     },
     approvalRequested: {
       title: "已提交审批",
@@ -9360,6 +9367,8 @@ export const zhHans: TranslationStructure = {
     actionOutcome: {
       refused: "已拒绝",
       failed: "失败",
+      refusedReason: "Happier 不允许此调用。",
+      failedReason: "无法完成此调用。",
       mixed: ({ failed, refused }: { failed: number; refused: number }) => `失败 ${failed} · 拒绝 ${refused}`,
       cause: {
         outsideAgentSessions: "不是此智能体的会话",

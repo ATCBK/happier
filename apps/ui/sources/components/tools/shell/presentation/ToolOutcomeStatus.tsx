@@ -15,8 +15,9 @@ import { workStatusGlyphColor } from '@/components/work/status/workStatusTreatme
 export const ToolOutcomeStatus = React.memo(function ToolOutcomeStatus(props: Readonly<{
     testID: string;
     label: string;
-    glyph: 'warning-circle' | 'minus-circle';
-    /** `quiet` for a refusal: the product saying no is not a break. */
+    /** A request sent for approval or still in progress reads with its own quiet glyph. */
+    glyph: 'warning-circle' | 'minus-circle' | 'paper-plane-tilt' | 'clock';
+    /** `quiet` for a refusal, an approval wait or unsettled work: the product saying no is not a break. */
     tone: 'danger' | 'quiet';
 }>) {
     const { theme } = useUnistyles();
