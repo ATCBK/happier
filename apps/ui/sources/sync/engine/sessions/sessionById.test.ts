@@ -1182,7 +1182,7 @@ describe('fetchAndApplySessionById', () => {
     expect(getSessionEncryption).not.toHaveBeenCalled();
   });
 
-  it('falls back to scanning /v2/sessions when the single-session route is missing', async () => {
+  it('refuses a missing detail route even when a list could supply a retained Session', async () => {
     const applySessions = vi.fn();
     const request = vi.fn(async (path: string, _init: RequestInit) => {
       if (path === '/v2/sessions/s_legacy') {
@@ -1235,17 +1235,10 @@ describe('fetchAndApplySessionById', () => {
       log: { log: () => {} },
     });
 
-    expect(result.ok).toBe(true);
-    expect(applySessions).toHaveBeenCalledWith([
-      expect.objectContaining({
-        id: 's_legacy',
-        encryptionMode: 'plain',
-      }),
-    ]);
+    expect(result).toMatchObject({ ok: false, session: null, errorCode: 'invalid_response', httpStatus: 404 });
+    expect(applySessions).not.toHaveBeenCalled();
     expect(request.mock.calls.map((call) => call[0])).toEqual([
       '/v2/sessions/s_legacy',
-      '/v2/sessions?limit=200',
-      '/v1/sessions/s_legacy/turns',
     ]);
   });
 
@@ -1328,79 +1321,6 @@ describe('fetchAndApplySessionById', () => {
     ]);
   });
 
-  it('hydrates from /v1/sessions when older servers are missing both /v2 session routes', async () => {
-    const applySessions = vi.fn();
-    const request = vi.fn(async (path: string) => {
-      if (path === '/v2/sessions/s_legacy_v1') {
-        return new Response(JSON.stringify({
-          error: 'Not found',
-          path: '/v2/sessions/s_legacy_v1',
-          method: 'GET',
-        }), { status: 404 });
-      }
-
-      if (path === '/v2/sessions?limit=200') {
-        return new Response(JSON.stringify({
-          error: 'Not found',
-          path: '/v2/sessions',
-          method: 'GET',
-        }), { status: 404 });
-      }
-
-      if (path === '/v1/sessions/s_legacy_v1/turns') {
-        return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 });
-      }
-
-      expect(path).toBe('/v1/sessions');
-      return new Response(JSON.stringify({
-        sessions: [
-          {
-            id: 's_legacy_v1',
-            createdAt: 1,
-            updatedAt: 2,
-            seq: 3,
-            active: true,
-            activeAt: 2,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-            metadataVersion: 1,
-            metadata: JSON.stringify({ readStateV1: null }),
-            agentStateVersion: 1,
-            agentState: JSON.stringify({ controlledByUser: true }),
-            share: null,
-          },
-        ],
-      }), { status: 200 });
-    });
-
-    const result = await fetchAndApplySessionById({
-      sessionId: 's_legacy_v1',
-      credentials: { token: 't' } as any,
-      encryption: {
-        decryptEncryptionKey: async () => null,
-        initializeSessions: async () => {},
-        getSessionEncryption: () => null,
-      },
-      sessionDataKeys: new Map<string, Uint8Array>(),
-      request,
-      applySessions,
-      log: { log: () => {} },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(applySessions).toHaveBeenCalledWith([
-      expect.objectContaining({
-        id: 's_legacy_v1',
-        encryptionMode: 'plain',
-      }),
-    ]);
-    expect(request.mock.calls.map((call) => call[0])).toEqual([
-      '/v2/sessions/s_legacy_v1',
-      '/v2/sessions?limit=200',
-      '/v1/sessions',
-      '/v1/sessions/s_legacy_v1/turns',
-    ]);
-  });
 
   it('returns not_found for the current-server session-by-id 404 contract without compat scanning', async () => {
     const applySessions = vi.fn();
@@ -1468,11 +1388,11 @@ describe('fetchAndApplySessionById', () => {
       ok: false,
       session: null,
       errorCode: 'invalid_response',
+      httpStatus: 404,
     });
     expect(applySessions).not.toHaveBeenCalled();
     expect(request.mock.calls.map(([path]) => path)).toEqual([
       '/v2/sessions/s_current_text_extra_404',
-      '/v2/sessions?limit=200',
     ]);
   });
 
@@ -1545,7 +1465,7 @@ describe('fetchAndApplySessionById', () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves compatibility fallback without claiming not_found when a missing v2 route has no matching list row', async () => {
+  it('refuses a missing v2 detail route without scanning Account lists or claiming Session absence', async () => {
     const applySessions = vi.fn();
     const request = vi.fn(async (path: string) => {
       if (path === '/v2/sessions/s_legacy_absent') {
@@ -1586,7 +1506,6 @@ describe('fetchAndApplySessionById', () => {
     expect(applySessions).not.toHaveBeenCalled();
     expect(request.mock.calls.map(([path]) => path)).toEqual([
       '/v2/sessions/s_legacy_absent',
-      '/v2/sessions?limit=200',
     ]);
   });
 
