@@ -24,6 +24,7 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
   registry: ConnectedServiceRuntimeRegistry;
   trackedSessions: Map<number, TrackedSession>;
   getRequester(): RequesterSessionRuntimeContext | null;
+  resolveRequesterSessionRuntimeContext?: Parameters<typeof startDaemonSessionControlRuntime>[0]['resolveRequesterSessionRuntimeContext'];
   resolveQualifiedConnectedAccountV4Support: NonNullable<Parameters<typeof startDaemonSessionControlRuntime>[0]['resolveQualifiedConnectedAccountV4Support']>;
   getApiMachineForSessions?: Parameters<typeof startDaemonSessionControlRuntime>[0]['getApiMachineForSessions'];
   pidToAwaiter?: Parameters<typeof startDaemonSessionControlRuntime>[0]['pidToAwaiter'];
@@ -96,10 +97,10 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
       getApiMachineForSessions: input.getApiMachineForSessions ?? (() => null),
       getConnectedServiceRefreshCoordinator: () => input.getRequester()?.connectedServiceRefreshCoordinator ?? null,
       getConnectedServiceQuotasCoordinator: () => input.getRequester()?.connectedServiceQuotasCoordinator ?? null,
-      resolveRequesterSessionRuntimeContext: async sessionId => {
+      resolveRequesterSessionRuntimeContext: input.resolveRequesterSessionRuntimeContext ?? (async sessionId => {
         const requester = input.getRequester();
         return requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null;
-      },
+      }),
       // getRequester lends the caller's context; its enclosing fixture owns teardown.
       releaseRequesterSessionRuntimeContext: async () => {},
       resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,

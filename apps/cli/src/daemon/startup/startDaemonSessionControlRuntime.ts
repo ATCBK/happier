@@ -2894,11 +2894,13 @@ export async function startDaemonSessionControlRuntime(
   const releaseSessionAccountContext = async (context: RequesterSessionRuntimeContext | null): Promise<void> => {
     if (context && requesterRuntimeAccess) await requesterRuntimeAccess.release(context);
   };
+  // Selecting a requester and validating an optional port's returned context
+  // are one read-only resolution phase. Callers' later effects stay outside.
   const resolveSessionAccountContext = async (
     sessionId: string | null,
     retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
     signal?: AbortSignal,
-  ): Promise<RequesterSessionRuntimeContext | null> => {
+  ): Promise<RequesterSessionRuntimeContext | null> => runWithRequesterSessionCurrentnessCheckpoint(async () => {
     if (sessionId === null) return null;
     const tracked = findTrackedSessionByHappySessionId(
       params.pidToTrackedSession.values(),
@@ -2936,7 +2938,7 @@ export async function startDaemonSessionControlRuntime(
       throw new Error('requester_session_not_current');
     }
     return null;
-  };
+  }, { readOnly: true });
   const withSessionAccountContext = async <T>(
     sessionId: string | null,
     operation: (context: RequesterSessionRuntimeContext | null) => Promise<T>,

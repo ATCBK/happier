@@ -195,7 +195,7 @@ let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
 afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
-it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending', 'follow-idle-source'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'currentness-phase', 'resolution-currentness', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending', 'follow-idle-source'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
   const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
@@ -426,13 +426,16 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
       serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', machineId: 'machine', custodianAccountId: 'alice',
       credentials: aliceCredentials, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
       registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => runPurposeSurface ? 'advertised' : 'indeterminate',
+      ...(surface === 'resolution-currentness' ? { resolveRequesterSessionRuntimeContext: createRequesterSessionRuntimeContextResolver({
+        trackedSessions, getCreateRuntime: () => null, recoverBootstrap: async () => null,
+      }) } : {}),
       ...(actionPolicySurface || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { startup: { resolveCurrentMachineExecutionOriginContext: async () => {
         authorizationStartReads = sessionReads;
         authorizationProfileReads = 0;
         return { machineId: 'machine', serverIdentityId: 'bob-home' };
       } } } : {}) });
     const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
-      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' || surface === 'follow-idle-source' ? { existingSessionId: requesterSessionId } : {}),
+      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'currentness-phase' || surface === 'resolution-currentness' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' || surface === 'follow-idle-source' ? { existingSessionId: requesterSessionId } : {}),
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: host.installation?.installationId ?? 'installation', role: 'use', encryptionMode: 'plain' },
@@ -462,6 +465,115 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
     }
     runtime = await runtimeConstruction;
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'resolution-currentness') {
+      trackedSessions.set(process.pid, { pid: process.pid, happySessionId: requesterSessionId, startedBy: 'daemon',
+        requesterSessionRuntimeContext: runtime, requesterWorkAttributionV1: runtime.bootstrap.attribution });
+      const guard = host.runtime.connectedServicePredictiveSwitchGuard;
+      if (!guard) throw new Error('Missing daemon predictive admission');
+      const input = { sessionId: requesterSessionId, serviceId: 'openai-codex' as const,
+        groupId: 'bob-group', activeProfileId: 'bob-subscription', reason: 'usage_limit' as const };
+      const counts = () => ({ session: sessionReads, profile: authorizationProfileReads,
+        currentness: get.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/encryption/currentness')).length });
+      const delta = (before: ReturnType<typeof counts>) => {
+        const after = counts();
+        return { session: after.session - before.session, profile: after.profile - before.profile,
+          currentness: after.currentness - before.currentness };
+      };
+      // Entry and exit are separate decisions. Each resolution composes the
+      // canonical tracked resolver with the daemon's optional-port validation.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const before = counts();
+        expect(await guard(input)).toEqual({ status: 'allow' });
+        expect(delta(before)).toEqual({ session: 2, profile: 2, currentness: 2 });
+      }
+      const beforeRevocation = counts();
+      const homeGet = get.getMockImplementation()!;
+      let release: (() => void) | undefined;
+      let entered: (() => void) | undefined;
+      const requested = new Promise<void>(resolve => { entered = resolve; });
+      const released = new Promise<void>(resolve => { release = resolve; });
+      get.mockImplementation(async (...args) => {
+        if (new URL(String(args[0])).pathname === `/v2/sessions/${requesterSessionId}`) {
+          entered?.();
+          await released;
+        }
+        return homeGet(...args);
+      });
+      try {
+        const pending = guard(input);
+        await requested;
+        current = false;
+        release?.();
+        expect(await pending).toEqual({ status: 'suppress', reason: 'requester_session_not_current' });
+        expect(delta(beforeRevocation)).toEqual({ session: 1, profile: 1, currentness: 1 });
+        expect(runtime.bootstrap.savedSecretOperationContext.readSnapshot()).toBeNull();
+      } finally { release?.(); get.mockImplementation(homeGet); }
+      return;
+    }
+    if (surface === 'currentness-phase') {
+      const requester = runtime;
+      const phaseCounts = () => ({
+        session: sessionReads,
+        profile: get.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/profile')).length,
+        currentness: get.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/encryption/currentness')).length,
+      });
+      const delta = (before: ReturnType<typeof phaseCounts>) => {
+        const after = phaseCounts();
+        return { session: after.session - before.session, profile: after.profile - before.profile,
+          currentness: after.currentness - before.currentness };
+      };
+      const oneQualification = { session: 1, profile: 1, currentness: 1 };
+      // The warm Settings guards surrounding requester authority do not start
+      // another remote qualification. Later calls still acquire fresh authority.
+      for (let phase = 0; phase < 2; phase++) {
+        const before = phaseCounts();
+        expect(await requester.isCurrent()).toBe(true);
+        expect(delta(before)).toEqual(oneQualification);
+      }
+      const homeGet = get.getMockImplementation()!;
+      let release: (() => void) | undefined;
+      let entered: (() => void) | undefined;
+      let held = false;
+      const holdSession = () => {
+        held = true;
+        const requested = new Promise<void>(resolve => { entered = resolve; });
+        const released = new Promise<void>(resolve => { release = resolve; });
+        get.mockImplementation(async (...args) => {
+          if (held && new URL(String(args[0])).pathname === `/v2/sessions/${requesterSessionId}`) {
+            entered?.();
+            await released;
+          }
+          return homeGet(...args);
+        });
+        return requested;
+      };
+      try {
+        const before = phaseCounts();
+        const requested = holdSession();
+        const cancelled = new AbortController();
+        const first = requester.isCurrent(cancelled.signal);
+        const survivor = requester.isCurrent();
+        await requested;
+        cancelled.abort();
+        expect(await first).toBe(false);
+        expect(requester.readAccountSettingsSnapshot()).not.toBeNull();
+        held = false; release?.();
+        expect(await survivor).toBe(true);
+        expect(delta(before)).toEqual(oneQualification);
+
+        const beforeEffect = phaseCounts();
+        const effectRequested = holdSession();
+        const effectAdmission = requester.isCurrent();
+        await effectRequested;
+        current = false;
+        held = false; release?.();
+        expect(await effectAdmission).toBe(false);
+        expect(delta(beforeEffect)).toEqual(oneQualification);
+        expect(admitted.admitted.savedSecretOperationContext.readSnapshot()).toBeNull();
+        expect(await requester.isCurrent()).toBe(false);
+      } finally { held = false; release?.(); get.mockImplementation(homeGet); }
+      return;
+    }
     if (surface === 'follow-idle-source') {
       const reconciled: (string | null)[] = [];
       runtime.bindSessionFollowSourceReconciliation(async source => { reconciled.push(source); }, new AbortController().signal);
