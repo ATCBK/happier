@@ -7,6 +7,8 @@ import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/di
 import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { computeAccountEncryptionMigrateKeyFingerprintV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import type { Credentials } from '@/persistence';
 import { openEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import {
   EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
@@ -46,7 +48,7 @@ const createInput = {
 let ownerFingerprint: string;
 const currentness = (mode: 'plain' | 'e2ee') => ({
   mode, version: 1, signingKeyFingerprint: mode === 'e2ee' ? 'a'.repeat(64) : null,
-  contentKeyFingerprint: mode === 'e2ee' ? ownerFingerprint : null, updatedAt: 1,
+  contentKeyFingerprint: mode === 'e2ee' ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(ownerFingerprint) : null, updatedAt: 1,
   recipientEnvelopeReadiness: mode === 'plain' ? { status: 'unavailable', reason: 'plain_account' } : { status: 'available' },
 });
 
@@ -537,12 +539,22 @@ describe('Home Discussion resource transport', () => {
     expect(request.data).not.toMatch(/Secret|Private/);
   });
 
-  it('creates with an independent Discussion key and reopens the acknowledged content', async () => {
+  it.each(['legacy', 'dataKey'] as const)('creates with live Account currentness and reopens an independent Discussion key (%s)', async variant => {
+    const keyPair = tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(9));
+    const caller: Credentials = variant === 'legacy' ? credentials : { token: credentials.token,
+      encryption: { type: 'dataKey', publicKey: keyPair.publicKey, machineKey: keyPair.secretKey } };
+    const publicKey = variant === 'legacy' ? libsodiumPublicKeyFromSecretKey(
+      await deriveKey(credentials.encryption.secret, 'Happy EnCoder', ['content']),
+    ) : keyPair.publicKey;
     axiosRequest.mockImplementation(async (request: { url: string; method: string; data?: string }) => {
-      if (request.url.endsWith('/encryption/currentness')) return { status: 200, data: currentness('e2ee') };
+      if (request.url.endsWith('/encryption/currentness')) return { status: 200, data: {
+        ...currentness('e2ee'), contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(publicKey),
+      } };
       if (request.method === 'GET') return { status: 200, data: { discussions: [], nextCursor: null } };
       const body = DiscussionCreateRequestV1Schema.parse(JSON.parse(request.data!));
-      const resource = await openResourceDataKey({ credentials, mode: 'e2ee', dataEncryptionKey: body.dataEncryptionKey! });
+      // The server's recipient admission consumes the resource fingerprint, not Account currentness's encoding.
+      expect(body.expectedOwnerContentPublicKeyFingerprint).toBe(computeContentPublicKeyFingerprint(publicKey));
+      const resource = await openResourceDataKey({ credentials: caller, mode: 'e2ee', dataEncryptionKey: body.dataEncryptionKey! });
       if (resource.mode !== 'e2ee') throw new Error('Expected encrypted resource');
       const crypto = { mode: 'e2ee' as const, ctx: { encryptionKey: resource.dataKey, encryptionVariant: 'dataKey' as const } };
       expect(resource.dataKey).not.toEqual(credentials.encryption.secret);
@@ -550,8 +562,23 @@ describe('Home Discussion resource transport', () => {
       return { status: 200, data: { discussion: { ...wireSummary(crypto, body.dataEncryptionKey!), titleContent: body.titleContent },
         firstMessage: { ...wireMessage(crypto), content: body.firstMessage.content } } };
     });
-    const result = await action({ credentials })({ actionId: 'discussion.create', input: createInput, context });
+    const result = await action({ credentials: caller })({ actionId: 'discussion.create', input: createInput, context });
     expect(result).toMatchObject({ discussion: { title: 'Title' }, firstMessage: { content } });
+  });
+
+  it.each(['keyless', 'stale'] as const)('refuses encrypted creation before publication with %s Account material', async state => {
+    axiosRequest.mockImplementation(async (request: { url: string; method: string }) => {
+      if (request.url.endsWith('/encryption/currentness')) return { status: 200, data: {
+        ...currentness('e2ee'), ...(state === 'stale' ? {
+          contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair().publicKey),
+        } : {}),
+      } };
+      return { status: 200, data: { discussions: [], nextCursor: null } };
+    });
+    expect(await action({ credentials: state === 'keyless' ? keyless : credentials })({
+      actionId: 'discussion.create', input: createInput, context,
+    })).toMatchObject({ ok: false, errorCode: 'resource_encryption_material_unavailable' });
+    expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
   });
 
   it.each(['active', 'archived'])('recovers the original encrypted create key through authorized %s pages after a lost response', async state => {

@@ -1,6 +1,8 @@
 import axios, { type Method } from 'axios';
 import { randomUUID } from 'node:crypto';
 import { ApprovalRequestOriginV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { bindDiscussionActionHttpRequestV1, discussionActionOutputSchemaV1, hasProtectedDiscussionActionContextV1, readDiscussionCandidatesV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { buildDiscussionMutationRequestBodyV1, DISCUSSION_HTTP_PATHS_V1, DiscussionCreateResponseV1Schema, DiscussionDetailsResponseV1Schema, DiscussionErrorResponseV1Schema, DiscussionListResponseV1Schema, DiscussionMessagesResponseV1Schema, DiscussionAgentPostRequestV1Schema, DiscussionAgentPostResponseV1Schema, DiscussionAgentCreateRequestV1Schema, DiscussionAgentCreateResponseV1Schema, type DiscussionAgentPublisherRequestV1, type DiscussionAgentPublisherResponseV1, DiscussionPostResponseV1Schema, DiscussionReadResponseV1Schema } from '@happier-dev/protocol/discussions/api';
@@ -17,7 +19,7 @@ import type { ActionExecutorContext, ActionExecutorDeps, StrictSessionStoredMess
 import type { StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { getRandomBytes } from '@/api/encryption';
-import { createResourceDataKey, openResourceDataKey, type ResourceDataKey } from '@/api/encryption/resourceDataKey';
+import { createResourceDataKey, openResourceDataKey, ResourceDataKeyUnavailableError, type ResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
@@ -297,9 +299,23 @@ export function createDiscussionActionDeps(options: Readonly<{
         });
         const existing = (args.creationLocalId || context.approvedActionReplay) && currentness.mode === 'e2ee' ? await recoverCreation(creationLocalId) : null;
         if (currentness.mode === 'e2ee' && !currentness.contentKeyFingerprint) throw new DiscussionRequestError('recipient_key_unavailable');
+        let ownerContentPublicKeyFingerprint: string | undefined;
+        if (currentness.mode === 'e2ee') {
+          const encryption = options.credentials.encryption;
+          if (!encryption) throw new ResourceDataKeyUnavailableError();
+          let material;
+          try {
+            material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: encryption,
+              ...(encryption.type === 'dataKey' ? { dataKeyPublicKey: encryption.publicKey } : {}) });
+          } catch { throw new ResourceDataKeyUnavailableError(); }
+          // Account currentness encodes the same digest differently from resource recipient bindings.
+          if (convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint)
+            !== currentness.contentKeyFingerprint) throw new ResourceDataKeyUnavailableError();
+          ownerContentPublicKeyFingerprint = material.contentPublicKeyFingerprint;
+        }
         const key = existing ? await openKey(existing) : await createResourceDataKey({
           credentials: options.credentials, mode: currentness.mode,
-          ...(currentness.mode === 'e2ee' ? { expectedContentPublicKeyFingerprint: currentness.contentKeyFingerprint! } : {}),
+          ...(ownerContentPublicKeyFingerprint ? { expectedContentPublicKeyFingerprint: ownerContentPublicKeyFingerprint } : {}),
         });
         const title = DiscussionTitleV1Schema.parse({ v: 1, title: args.title });
         const mentions = readDiscussionMentionedParticipantIdsV1(args.firstMessage.content);
@@ -315,7 +331,7 @@ export function createDiscussionActionDeps(options: Readonly<{
           ...(args.anchor === undefined ? {} : { anchor: args.anchor }),
           ...(participants === undefined ? {} : { participants }),
           ...(key.mode === 'e2ee' ? { dataEncryptionKey: key.dataEncryptionKey,
-            expectedOwnerContentPublicKeyFingerprint: currentness.contentKeyFingerprint ?? undefined } : {}),
+            expectedOwnerContentPublicKeyFingerprint: ownerContentPublicKeyFingerprint } : {}),
           firstMessage: { ...firstMessage, authoredContent: firstMessage.content, content: sealSessionStoredContent({ ...crypto, payload: firstMessage.content }),
             requestEqualityEvidenceV1: equality(serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...firstMessage })) },
         });
