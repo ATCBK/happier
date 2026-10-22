@@ -9530,6 +9530,10 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       waiting: "Czeka na zatwierdzenie",
       blocked: "Niedozwolone",
     },
+    approvalRequested: {
+      title: "Wysłano do zatwierdzenia",
+      description: "Otwórz prośbę, aby sprawdzić, czy została zatwierdzona.",
+    },
     actionOutcome: {
       refused: "Odrzucone",
       failed: "Nieudane",

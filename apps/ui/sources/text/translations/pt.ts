@@ -9813,6 +9813,10 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       waiting: "Aguardando aprovação",
       blocked: "Não permitida",
     },
+    approvalRequested: {
+      title: "Enviada para aprovação",
+      description: "Abra o pedido para ver se foi aprovado.",
+    },
     actionOutcome: {
       refused: "Recusada",
       failed: "Falhou",

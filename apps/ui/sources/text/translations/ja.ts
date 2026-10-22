@@ -10001,6 +10001,10 @@ localTailscale: {
       waiting: "承認待ち",
       blocked: "許可されていません",
     },
+    approvalRequested: {
+      title: "承認待ちに送信しました",
+      description: "リクエストを開くと承認されたか確認できます。",
+    },
     actionOutcome: {
       refused: "拒否",
       failed: "失敗",

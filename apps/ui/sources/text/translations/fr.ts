@@ -9533,6 +9533,10 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       waiting: "En attente d'approbation",
       blocked: "Non autorisé",
     },
+    approvalRequested: {
+      title: "Envoyée pour approbation",
+      description: "Ouvrez la demande pour voir si elle a été approuvée.",
+    },
     actionOutcome: {
       refused: "Refusé",
       failed: "Échec",

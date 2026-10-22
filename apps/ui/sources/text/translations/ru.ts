@@ -9551,6 +9551,10 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       waiting: "Ждёт подтверждения",
       blocked: "Не разрешено",
     },
+    approvalRequested: {
+      title: "Отправлено на одобрение",
+      description: "Откройте запрос, чтобы узнать, одобрен ли он.",
+    },
     actionOutcome: {
       refused: "Отклонено",
       failed: "Не удалось",

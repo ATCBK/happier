@@ -11453,6 +11453,10 @@ const enToolView = {
     waiting: "Waiting for approval",
     blocked: "Not allowed",
   },
+  approvalRequested: {
+    title: "Sent for approval",
+    description: "Open the request to see whether it was approved.",
+  },
   actionOutcome: {
     refused: 'Refused',
     failed: 'Failed',

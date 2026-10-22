@@ -9353,6 +9353,10 @@ export const zhHans: TranslationStructure = {
       waiting: "等待批准",
       blocked: "不允许",
     },
+    approvalRequested: {
+      title: "已提交审批",
+      description: "打开请求查看是否已获批准。",
+    },
     actionOutcome: {
       refused: "已拒绝",
       failed: "失败",

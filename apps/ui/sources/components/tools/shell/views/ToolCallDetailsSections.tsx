@@ -26,6 +26,9 @@ import {
   toolActionOutcomeLabel,
 } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
@@ -151,13 +154,19 @@ export const ToolCallDetailsSections = React.memo(
           : undefined,
       [failed, tool],
     );
+    // An Action that asked for approval returned a request, not its result: it reads as that request.
+    const approvalRequest = React.useMemo(() => {
+      if (!actionId || decoded === undefined) return null;
+      const parsed = ActionApprovalRequestCreatedResultSchema.safeParse(decoded);
+      return parsed.success ? parsed.data : null;
+    }, [actionId, decoded]);
     // An Action's result reads by meaning through the same owner as its arguments; raw keys stay in Debug.
     const resultFields = React.useMemo(
       () =>
-        actionId && decoded !== undefined
+        actionId && decoded !== undefined && !approvalRequest
           ? describeActionResultFields({ result: decoded, actionArgs: args })
           : null,
-      [actionId, args, decoded],
+      [actionId, approvalRequest, args, decoded],
     );
 
     return (
@@ -221,6 +230,16 @@ export const ToolCallDetailsSections = React.memo(
               />
             </SectionContentRow>
           </ItemGroup>
+        ) : approvalRequest ? (
+          <ItemGroup
+            title={t('tools.structuredResult.result')}
+            testID="tool-details-result"
+          >
+            <ApprovalRequestRow
+              artifactId={approvalRequest.artifactId}
+              serverId={props.serverId ?? null}
+            />
+          </ItemGroup>
         ) : resultFields ? (
           resultFields.rows.length > 0 ? (
             <ActionApprovalFieldsCard
@@ -256,6 +275,29 @@ export const ToolCallDetailsSections = React.memo(
     );
   },
 );
+
+/** The approval an Action asked for, opening that request where its decision lives. */
+function ApprovalRequestRow(
+  props: Readonly<{ artifactId: string; serverId: string | null }>,
+) {
+  const router = useDestinationRouter();
+  const { artifactId, serverId } = props;
+  return (
+    <Item
+      testID="tool-details-approval-request"
+      title={t('toolView.approvalRequested.title')}
+      subtitle={t('toolView.approvalRequested.description')}
+      subtitleLines={0}
+      onPress={
+        serverId
+          ? () => router.push(buildApprovalHref(artifactId, serverId))
+          : undefined
+      }
+      mode={serverId ? undefined : 'info'}
+      showChevron={Boolean(serverId)}
+    />
+  );
+}
 
 const styles = StyleSheet.create((theme) => ({
   block: {

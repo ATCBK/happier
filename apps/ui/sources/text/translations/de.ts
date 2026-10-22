@@ -9625,6 +9625,10 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
           waiting: "Wartet auf Freigabe",
           blocked: "Nicht erlaubt",
         },
+        approvalRequested: {
+          title: "Zur Freigabe gesendet",
+          description: "Öffne die Anfrage, um zu sehen, ob sie freigegeben wurde.",
+        },
         actionOutcome: {
           refused: "Abgelehnt",
           failed: "Fehlgeschlagen",

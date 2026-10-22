@@ -9695,6 +9695,10 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       waiting: "Esperando aprobación",
       blocked: "No permitida",
     },
+    approvalRequested: {
+      title: "Enviada para aprobación",
+      description: "Abre la solicitud para ver si se aprobó.",
+    },
     actionOutcome: {
       refused: "Rechazada",
       failed: "Fallida",

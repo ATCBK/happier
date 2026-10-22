@@ -9915,6 +9915,10 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       waiting: "In attesa di approvazione",
       blocked: "Non consentita",
     },
+    approvalRequested: {
+      title: "Inviata per l'approvazione",
+      description: "Apri la richiesta per vedere se è stata approvata.",
+    },
     actionOutcome: {
       refused: "Rifiutata",
       failed: "Non riuscita",

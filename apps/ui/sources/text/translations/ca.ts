@@ -8927,6 +8927,10 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
           waiting: "Esperant l'aprovació",
           blocked: "No permesa",
         },
+        approvalRequested: {
+          title: "Enviada per aprovar",
+          description: "Obre la sol·licitud per veure si s'ha aprovat.",
+        },
         actionOutcome: {
           refused: "Rebutjada",
           failed: "Fallida",
