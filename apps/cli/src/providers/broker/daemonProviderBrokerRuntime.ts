@@ -20,6 +20,7 @@ import {
 } from '@/daemon/peer/mediation/verifyProviderBrokerRouteGrantV1';
 import type { DirectRouteGrantTrustRoot } from '@/daemon/peer/mediation/verifyRouteGrantSignature';
 import { startProviderBrokerApplicationServer } from './providerBrokerApplicationServer';
+import { runProviderBrokerApplicationPhase } from './providerBrokerApplicationFailureContext';
 import {
   createProviderBrokerRequestHandler,
   type ProviderBrokerApplicationStreamLifetime,
@@ -603,13 +604,15 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
       // L10/11 BROKER-05): the member it attributes the request to is read
       // without starting or joining managed custody, so a refused request
       // materializes nothing.
-      const sourceMemberKey = await input.sourceOwner.selectSourceMemberKey({
-        source: request.selectedSource,
-        application: request.authority.payload.application,
-        signal: request.request.signal ?? new AbortController().signal,
-      });
+      const sourceMemberKey = await runProviderBrokerApplicationPhase('source_select', request.requestId, () =>
+        input.sourceOwner.selectSourceMemberKey({
+          source: request.selectedSource,
+          application: request.authority.payload.application,
+          signal: request.request.signal ?? new AbortController().signal,
+        }));
       if (!sourceMemberKey) return unavailable;
-      const admitted = await input.admitRequest({ ...request, sourceMemberKey });
+      const admitted = await runProviderBrokerApplicationPhase('home_admission', request.requestId, () =>
+        input.admitRequest({ ...request, sourceMemberKey }));
       if (!admitted.ok) {
         // Actual authority loss ends the operation's custody (L10/11 A2(8));
         // a limit, a turn boundary or an unreachable Home does not.
@@ -624,16 +627,17 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
         || JSON.stringify(admitted.source) !== JSON.stringify(request.selectedSource)
         || JSON.stringify(admitted.operation) !== JSON.stringify(request.authority.payload.consumer)
       ) return unavailable;
-      const selected = await streamLifetime.acquireSource({
-        source: request.selectedSource,
-        resourceId: request.authority.payload.resourceId,
-        brokerMachineId: request.authority.payload.target.machineId,
-        operation: request.authority.payload.consumer,
-        expectedResourceRevision: request.expectedResourceRevision,
-        application: request.authority.payload.application,
-        modelId: request.requestFacts.modelId,
-        sourceRevision: request.expectedSourceRevision,
-      });
+      const selected = await runProviderBrokerApplicationPhase('source_open', request.requestId, () =>
+        streamLifetime.acquireSource({
+          source: request.selectedSource,
+          resourceId: request.authority.payload.resourceId,
+          brokerMachineId: request.authority.payload.target.machineId,
+          operation: request.authority.payload.consumer,
+          expectedResourceRevision: request.expectedResourceRevision,
+          application: request.authority.payload.application,
+          modelId: request.requestFacts.modelId,
+          sourceRevision: request.expectedSourceRevision,
+        }));
       if (!selected) return unavailable;
       // A Pool that switched members between admission and acquisition must
       // not forward under a member the Home did not admit.

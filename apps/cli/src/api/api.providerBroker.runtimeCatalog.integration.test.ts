@@ -4,7 +4,7 @@ import {
   PROVIDER_BROKER_OPEN_HTTP_PATH_V1,
   PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1,
 } from '@happier-dev/protocol';
-import { TEAM_CREDENTIAL_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_ACTION_PATHS_V1, TeamCredentialResourceSummaryV1Schema } from '@happier-dev/protocol/teams';
 
 import { ApiClient } from './api';
 
@@ -31,7 +31,7 @@ describe('ApiClient Team credential Provider broker methods', () => {
   });
 
   it('reads the current custodian resource projection through its canonical Action route', async () => {
-    const resource = {
+    const resource = TeamCredentialResourceSummaryV1Schema.parse({
       id: 'resource-1',
       teamId: 'team-1',
       custodianAccountId: 'account-1',
@@ -46,16 +46,16 @@ describe('ApiClient Team credential Provider broker methods', () => {
         service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
       },
       requestPolicy: null,
-      brokerMachineId: 'broker-1',
+      brokerPlacement: { kind: 'machine', machineId: 'broker-1' },
       allMembersDeliveryMode: null,
       groupGrants: [],
       memberGrants: [],
       readiness: { kind: 'available' },
       recoveryAction: null,
-      brokerPresentation: { selectedTarget: null, eligibleTargets: [] },
+      brokerPresentation: { selectedTarget: null, eligibleTargets: [], selectedPool: null, eligiblePools: [] },
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
-    } as const;
+    });
     vi.mocked(axios.post).mockResolvedValueOnce({ status: 200, data: resource });
 
     await expect(api.getTeamCredentialResource('resource-1')).resolves.toEqual(resource);

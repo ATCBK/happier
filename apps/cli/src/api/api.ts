@@ -1229,7 +1229,6 @@ export class ApiClient {
       { resourceId },
       {
         headers: { Authorization: `Bearer ${this.credential.token}`, 'Content-Type': 'application/json' },
-        timeout: 10_000,
         ...(options?.signal ? { signal: options.signal } : {}),
       },
     );
@@ -1246,7 +1245,9 @@ export class ApiClient {
       ProviderBrokerRequestAdmissionV1Schema.parse(request),
       {
         headers: { Authorization: `Bearer ${this.credential.token}`, 'Content-Type': 'application/json' },
-        timeout: 10_000,
+        // The native Provider request owns this admission's lifetime. An
+        // independent HTTP cutoff can abandon a Home transaction that still
+        // commits usage, and must not pre-empt the containing request.
         ...(options?.signal ? { signal: options.signal } : {}),
       },
     );
@@ -1311,7 +1312,6 @@ export class ApiClient {
       TeamCredentialResourceTestAdmissionV1Schema.parse(request),
       {
         headers: { Authorization: `Bearer ${this.credential.token}`, 'Content-Type': 'application/json' },
-        timeout: 10_000,
         ...(options?.signal ? { signal: options.signal } : {}),
       },
     );

@@ -28,6 +28,7 @@ import type {
 import { createExternalProviderTerminalTokenReader } from './externalProviderTerminalTokens';
 import { isSameTeamCredentialBrokerApplication } from './teamCredentialModelCatalog';
 import { readProviderBrokerTransportFailure } from './providerBrokerTransportFailure';
+import { runProviderBrokerApplicationPhase } from './providerBrokerApplicationFailureContext';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
     PROVIDER_BROKER_MODEL_ID_HEADER, projectProviderBrokerEndpointMetadata } from './providerBrokerPrivateProtocol';
 import type { SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
@@ -531,14 +532,18 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
         });
         if (!verification.valid) return { ok: false, reasonCode: verification.reasonCode };
 
+        const requestId = input.createRequestId();
+        const streamLifetime = context.streamLifetime;
+        const authorizeModelCatalog = input.authorizeModelCatalog;
+
         if (
             request.method === 'DELETE'
             && request.pathAndQuery === PROVIDER_BROKER_PRIVATE_CLOSE_PATH
         ) {
-            if (!context.streamLifetime) {
+            if (!streamLifetime) {
                 return { ok: false, reasonCode: 'resource_unavailable' };
             }
-            await context.streamLifetime.retire();
+            await runProviderBrokerApplicationPhase('operation_close', requestId, () => streamLifetime.retire());
             return {
                 ok: true,
                 response: {
@@ -552,10 +557,11 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
         }
         if (context.releaseOnly) return { ok: false, reasonCode: 'grant_expired' };
 
-        const policySnapshot = await input.resolveRequestPolicy({
-            authority: verification.authority.payload,
-            request,
-        });
+        const policySnapshot = await runProviderBrokerApplicationPhase('request_policy', requestId, () =>
+            input.resolveRequestPolicy({
+                authority: verification.authority.payload,
+                request,
+            }));
         if (!policySnapshot) return { ok: false, reasonCode: 'resource_unavailable' };
         // The resource revision is deliberately not compared against the
         // signed authority: it is a mutable policy fact and this request
@@ -572,30 +578,32 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
             )
         ) return { ok: false, reasonCode: 'resource_changed' };
         if (request.method === 'GET' && request.pathAndQuery === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
-            if (!input.authorizeModelCatalog || !context.streamLifetime) return { ok: false, reasonCode: 'resource_unavailable' };
+            if (!authorizeModelCatalog || !streamLifetime) return { ok: false, reasonCode: 'resource_unavailable' };
             const requestedModel = Object.entries(request.headers ?? {})
                 .find(([name]) => name.toLowerCase() === PROVIDER_BROKER_MODEL_ID_HEADER)?.[1];
             const modelId = requestedModel ? policySnapshot.modelCatalog.resolveCanonicalModelId(requestedModel) : null;
             if (!modelId || !policySnapshot.modelCatalog.models.some(model => model.id === modelId)) {
                 return { ok: false, reasonCode: 'model_not_allowed' };
             }
-            const authorize = () => input.authorizeModelCatalog!({
-                authorization: { kind: 'private', authority: verification.authority },
-                expectedResourceRevision: policySnapshot.resourceRevision, request,
-            });
+            const authorize = () => runProviderBrokerApplicationPhase('model_catalog_authorization', requestId, () =>
+                authorizeModelCatalog({
+                    authorization: { kind: 'private', authority: verification.authority },
+                    expectedResourceRevision: policySnapshot.resourceRevision, request,
+                }));
             const authorized = await authorize();
             if (!authorized.ok) return authorized;
             // The exact runtime must be materialized to read its declaration.
             // Home authorizes this private metadata demand first; no inference,
             // upstream credential disclosure or UsageEvent is performed.
-            const selected = await context.streamLifetime.acquireSource({
-                source: policySnapshot.source, resourceId: verification.authority.payload.resourceId,
-                brokerMachineId: verification.authority.payload.target.machineId,
-                operation: verification.authority.payload.consumer,
-                expectedResourceRevision: policySnapshot.resourceRevision,
-                application: verification.authority.payload.application,
-                modelId, sourceRevision: policySnapshot.sourceRevision,
-            });
+            const selected = await runProviderBrokerApplicationPhase('source_open', requestId, () =>
+                streamLifetime.acquireSource({
+                    source: policySnapshot.source, resourceId: verification.authority.payload.resourceId,
+                    brokerMachineId: verification.authority.payload.target.machineId,
+                    operation: verification.authority.payload.consumer,
+                    expectedResourceRevision: policySnapshot.resourceRevision,
+                    application: verification.authority.payload.application,
+                    modelId, sourceRevision: policySnapshot.sourceRevision,
+                }));
             if (!selected) return { ok: false, reasonCode: 'resource_unavailable' };
             const current = await authorize();
             if (!current.ok) return current;
@@ -605,12 +613,13 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
             return response ? { ok: true, response } : { ok: false, reasonCode: 'resource_unavailable' };
         }
         if (request.method === 'GET' && request.pathAndQuery === '/v1/models') {
-            if (!input.authorizeModelCatalog) return { ok: false, reasonCode: 'resource_unavailable' };
-            const authorized = await input.authorizeModelCatalog({
-                authorization: { kind: 'private', authority: verification.authority },
-                expectedResourceRevision: policySnapshot.resourceRevision,
-                request,
-            });
+            if (!authorizeModelCatalog) return { ok: false, reasonCode: 'resource_unavailable' };
+            const authorized = await runProviderBrokerApplicationPhase('model_catalog_authorization', requestId, () =>
+                authorizeModelCatalog({
+                    authorization: { kind: 'private', authority: verification.authority },
+                    expectedResourceRevision: policySnapshot.resourceRevision,
+                    request,
+                }));
             if (!authorized.ok) return authorized;
             return { ok: true, response: modelListResponse(policySnapshot.modelCatalog, policySnapshot.policy) };
         }
@@ -629,24 +638,26 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
             return { ok: false, reasonCode: 'route_not_allowed' };
         }
 
-        const admitted = await input.admit({
-            authority: verification.authority,
-            ...(context.streamLifetime ? { streamLifetime: context.streamLifetime } : {}),
-            expectedResourceRevision: policySnapshot.resourceRevision,
-            expectedSourceRevision: policySnapshot.sourceRevision,
-            selectedSource: policySnapshot.source,
-            requestId: input.createRequestId(),
-            request: evaluated.request,
-            requestFacts: {
-                generation: evaluated.generation,
-                routeKind: evaluated.routeKind,
-                modelId: evaluated.modelId,
-                reasoningEffort: evaluated.reasoningEffort,
-            },
-        });
+        const admitted = await runProviderBrokerApplicationPhase('home_admission', requestId, () =>
+            input.admit({
+                authority: verification.authority,
+                ...(streamLifetime ? { streamLifetime } : {}),
+                expectedResourceRevision: policySnapshot.resourceRevision,
+                expectedSourceRevision: policySnapshot.sourceRevision,
+                selectedSource: policySnapshot.source,
+                requestId,
+                request: evaluated.request,
+                requestFacts: {
+                    generation: evaluated.generation,
+                    routeKind: evaluated.routeKind,
+                    modelId: evaluated.modelId,
+                    reasoningEffort: evaluated.reasoningEffort,
+                },
+            }));
         if (!admitted.ok) return admitted;
 
-        const response = await requestProviderAccess(admitted.access, evaluated.request);
+        const response = await runProviderBrokerApplicationPhase('upstream_forward', requestId, () =>
+            requestProviderAccess(admitted.access, evaluated.request));
         return { ok: true, response };
     };
 }

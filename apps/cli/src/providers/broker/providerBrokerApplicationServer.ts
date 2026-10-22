@@ -16,6 +16,7 @@ import type {
 } from './providerBrokerRequestHandler';
 import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
+import { ProviderBrokerApplicationPhaseError } from './providerBrokerApplicationFailureContext';
 export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
 
 export type ProviderBrokerApplicationStreamTarget = Readonly<{
@@ -151,15 +152,21 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
     const proxies = new Set<FirstBytesLocalCapabilityProxy>();
     const streamLifetimes = new Set<Pick<ProviderBrokerApplicationStreamLifetime, 'close' | 'retire'>>();
     const app = fastify({ logger: false });
-    app.addHook('onError', async (_request, _reply, error) => {
-        const errorCode = typeof error.code === 'string' && (
-            Object.hasOwn(constants.errno, error.code)
-            || Object.hasOwn(errorCodes, error.code)
-            || Object.getOwnPropertyDescriptor(AxiosError, error.code)?.value === error.code
-        ) ? error.code : undefined;
+    app.addHook('onError', async (request, _reply, error) => {
+        const failure = error instanceof ProviderBrokerApplicationPhaseError ? error : null;
+        const original = failure?.cause instanceof Error ? failure.cause : error;
+        const code = 'code' in original ? original.code : undefined;
+        const errorCode = typeof code === 'string' && (
+            Object.hasOwn(constants.errno, code)
+            || Object.hasOwn(errorCodes, code)
+            || Object.getOwnPropertyDescriptor(AxiosError, code)?.value === code
+        ) ? code : undefined;
         logger.warnLocalFile('[provider-broker-application]', {
             stage: 'handler', code: 'exception',
-            errorName: APPLICATION_ERROR_NAMES.has(error.name) ? error.name : 'UnknownError',
+            phase: failure?.phase ?? 'handler',
+            applicationRequestId: request.id,
+            ...(failure ? { brokerRequestId: failure.brokerRequestId } : {}),
+            errorName: APPLICATION_ERROR_NAMES.has(original.name) ? original.name : 'UnknownError',
             ...(errorCode ? { errorCode } : {}),
         });
     });

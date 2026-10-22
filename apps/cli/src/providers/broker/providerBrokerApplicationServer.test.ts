@@ -154,16 +154,20 @@ describe('Provider broker target application integration', () => {
       handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
       localConsumer: {
         authorize: () => true,
-        request: async () => { throw Object.assign(new Error('private credential diagnostic'), { name, code, statusCode }); },
+        request: async () => { throw Object.assign(new Error('private credential diagnostic'), {
+          name, code, statusCode, phase: 'private phase', brokerRequestId: 'private credential id',
+        }); },
       },
     });
     try {
-      const response = await server.app.inject({ method: 'GET', url: '/v1/models' });
+      const response = await server.app.inject({ method: 'GET', url: '/v1/models', headers: {
+        'request-id': 'private credential id', 'x-request-id': 'private credential id',
+      } });
       expect(response.statusCode).toBe(403);
       expect(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]).toBe('broker_unavailable');
       expect(response.json().error.code).toBe('broker_unavailable');
       expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', {
-        stage: 'handler', code: 'exception', ...expected,
+        stage: 'handler', code: 'exception', phase: 'handler', applicationRequestId: expect.any(String), ...expected,
       });
       expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
       expect(response.body).not.toContain('private');
