@@ -74,8 +74,11 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         tokenStorage: { getCredentialsForServerUrl: async () => ({ token: 'hdr.eyJzdWIiOiJhY2NvdW50LWEifQ.sig' }) },
     });
 });
-vi.mock('@/sync/api/session/apiSocket', () => ({
-    apiSocket: {
+// The socket transport is the boundary: these overrides shadow only its transport methods, while
+// the real disconnected socket answers every other reader (for example no Account observation).
+vi.mock('@/sync/api/session/apiSocket', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/api/session/apiSocket')>();
+    Object.assign(actual.apiSocket, {
         request: requestMock,
         emitWithAck: vi.fn(),
         send: vi.fn(),
@@ -85,8 +88,9 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         disconnect: vi.fn(),
         invalidateRequests: vi.fn(),
         initialize: vi.fn(),
-    },
-}));
+    });
+    return actual;
+});
 
 import { storage } from './domains/state/storage';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";

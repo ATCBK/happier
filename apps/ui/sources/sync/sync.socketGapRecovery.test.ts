@@ -35,8 +35,11 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         tokenStorage: { getCredentialsForServerUrl: async () => ({ token: 'hdr.eyJzdWIiOiJhY2NvdW50LWEifQ.sig' }) },
     });
 });
-vi.mock('@/sync/api/session/apiSocket', () => ({
-    apiSocket: {
+// The socket transport is the boundary: these overrides shadow only its transport methods, while
+// the real disconnected socket answers every other reader (for example no Account observation).
+vi.mock('@/sync/api/session/apiSocket', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/api/session/apiSocket')>();
+    Object.assign(actual.apiSocket, {
         request: requestMock,
         invalidateRequests: vi.fn(),
         emitWithAck: vi.fn(),
@@ -46,8 +49,9 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         onReconnected: vi.fn(),
         disconnect: vi.fn(),
         initialize: vi.fn(),
-    },
-}));
+    });
+    return actual;
+});
 
 import { storage } from './domains/state/storage';
 import { getActiveServerSnapshot } from './domains/server/serverRuntime';

@@ -110,6 +110,7 @@ vi.mock('@/sync/sync', () => ({
         refreshMachinesThrottled: vi.fn(async () => {}),
         presentPaywall: vi.fn(async () => ({ success: false, error: 'nope' })),
         refreshProfile: vi.fn(async () => {}),
+        getAccountEncryptionObservationBinding: vi.fn(() => null),
     },
 }));
 

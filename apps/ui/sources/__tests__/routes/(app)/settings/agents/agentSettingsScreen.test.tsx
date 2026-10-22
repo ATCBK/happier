@@ -550,6 +550,9 @@ vi.mock('@/sync/sync', () => ({
     sync: {
         applySettings: applySettingsMock,
         mutateAccountSettingsOnce: mutateAccountSettingsOnceMock,
+        // No admitted Account transport exists in this fixture: Action Account context capture
+        // observes an absent binding instead of throwing.
+        getAccountEncryptionObservationBinding: () => undefined,
     },
 }));
 
