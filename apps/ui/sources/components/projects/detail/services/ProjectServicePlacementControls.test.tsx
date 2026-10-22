@@ -448,7 +448,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
       const dispatch = createDeferred<void>();
       const freshRead = createDeferred<void>();
       const readEntered = createDeferred<void>();
-      const placementRead = createDeferred<void>();
+      let placementRead = createDeferred<void>();
       const frames: boolean[] = [];
       const expectedMachine = machineId === 'devbox' ? 'Source workstation' : 'Worker workstation';
       const startingText = `localServices.row.startingOn:{"machine":"${expectedMachine}"}`;
@@ -535,13 +535,29 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         expect(h.screen.getTextContent()).toContain(`localServices.row.onMachine:{"machine":"${machineId === 'devbox' ? 'Source workstation' : 'Worker workstation'}"}`);
         expect(frames.length).toBeGreaterThan(0);
         expect(frames.every(exposedIdleOrUnavailable => !exposedIdleOrUnavailable)).toBe(true);
-        captureFrame = () => {};
+        const runningFrames: string[] = [];
+        holdPlacement = true;
+        captureFrame = () => {
+          if (h.screen.findByTestId(`service-row-status-${nativeState}`)) {
+            runningFrames.push(h.screen.getTextContent());
+          }
+        };
         await act(async () => { h.setRowMachine(machineId); h.setRunning(true); holdReads = false; freshRead.resolve(); });
         await vi.waitFor(() => expect(h.screen.findByTestId(`service-row-status-${nativeState}`)).toBeTruthy());
+        expect(runningFrames.length).toBeGreaterThan(0);
+        expect(runningFrames[0]).toContain(expectedMachine);
+        expect(runningFrames.every(frame => !frame.includes('common.loading'))).toBe(true);
+        // The retained destination is presentation, not fresh custody or a CAS
+        // basis. A remounted reader cannot safely save/move until its read settles.
+        expect(h.runsOn().props.disabled).toBe(true);
+        captureFrame = () => {};
+        await act(async () => { holdPlacement = false; placementRead.resolve(); });
+        if (nativeState === 'running') await vi.waitFor(() => expect(h.runsOn().props.disabled).toBe(false));
         expect(h.screen.getTextContent()).not.toContain('common.loading');
         if (nativeState === 'failed') return;
         // The acknowledged receipt cannot revive Loading on a later complete read
         // without this instance (including a genuine native exit).
+        placementRead = createDeferred<void>();
         holdPlacement = true;
         await act(async () => { h.setRunning(false); publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
           v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
@@ -559,6 +575,48 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         }
       } finally { dispatch.resolve(); freshRead.resolve(); placementRead.resolve(); await start; await h.screen.unmount(); }
     });
+
+  it('retains actual placement across a control remount, replaces it with a fresh read and resets it on Source change', async () => {
+    const read = createDeferred<void>();
+    let hold = false;
+    const h = await setup({ running: true, sharedObservation: true,
+      saved: { runsOn: { kind: 'workers', destination: { kind: 'machine', machineId: 'hz-build-1' } }, unavailable: 'primary' },
+      beforePlacementRead: async () => { if (hold) await read.promise; } });
+    try {
+      await act(async () => h.setControlVisible(false));
+      hold = true;
+      await act(async () => h.setControlVisible(true));
+      expect(h.screen.getTextContent()).not.toContain('common.loading');
+      // The retained actual location wins over a differing next-start preference.
+      expect(h.screen.getTextContent()).not.toContain('Worker workstation');
+      expect(h.runsOn().props.disabled).toBe(true);
+      expect(h.screen.findByTestId('placement.fallback:primary')?.props.accessibilityState).toMatchObject({ checked: true, disabled: true });
+      await act(async () => { h.setRunning(false); hold = false; read.resolve(); });
+      await vi.waitFor(() => expect(h.runsOn().props.disabled).toBe(false));
+      expect(h.screen.getTextContent()).toContain('Worker workstation');
+      await act(async () => h.setSourceRef('different-checkout'));
+      expect(h.screen.getTextContent()).not.toContain('Worker workstation');
+    } finally { read.resolve(); await h.screen.unmount(); }
+  });
+
+  it('keeps safe controls enabled during a background refresh and replaces retained placement with a read failure', async () => {
+    const read = createDeferred<void>();
+    let hold = false;
+    const h = await setup({ running: false, sharedObservation: true,
+      beforePlacementRead: async () => { if (hold) await read.promise; } });
+    try {
+      hold = true;
+      await act(async () => h.setLifecycle('refresh'));
+      expect(h.runsOn().props.disabled).toBe(false);
+      expect(h.screen.findByTestId('placement.fallback:fail')?.props.accessibilityState).toMatchObject({ disabled: false });
+      await act(async () => { hold = false; read.resolve(); });
+      h.failPlacementReads();
+      await act(async () => h.setLifecycle('failed-refresh'));
+      await vi.waitFor(() => expect(h.screen.findByTestId('placement.unavailable')).toBeTruthy());
+      expect(h.screen.findByTestId('placement.runsOn')).toBeNull();
+      expect(h.writes).toEqual([]);
+    } finally { read.resolve(); await h.screen.unmount(); }
+  });
 
   it('keeps acknowledged Running while a changed SOURCE feed awaits its complete binding read, then shows native exit', async () => {
     const bindingRead = createDeferred<void>();

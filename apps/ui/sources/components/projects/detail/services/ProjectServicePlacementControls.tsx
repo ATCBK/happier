@@ -6,7 +6,7 @@ import type {
   ProjectServicePlacementV1,
 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import { executeServiceRelocationAction, type ServiceRelocationOutcome } from './serviceRelocationAction';
-import { ProjectServicePlacementObservationProvider, useProjectServicePlacementObservation, useProjectServiceStartPlacementObservation } from './projectServicePlacementObservation';
+import { ProjectServicePlacementObservationProvider, useProjectServicePlacementObservation, useProjectServicePlacementValueObservation } from './projectServicePlacementObservation';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { projectExecutionChoicesEqualV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -90,7 +90,10 @@ export function useProjectServicePlacement(
   const ready = setting.state.kind === 'ready' ? setting.state.value : null;
   const actual = ready?.actual ?? null;
   const desiredPlacement = ready?.placement ?? null;
-  useProjectServiceStartPlacementObservation(serviceName, desiredPlacement?.runsOn ?? null);
+  const retained = useProjectServicePlacementValueObservation(serviceName, ready);
+  // A remounted control can present this scope's last observation immediately.
+  // Its own fresh custody/revision remains mandatory for save and Move admission.
+  const displayPlacement = setting.state.kind === 'loading' ? retained : ready;
   const displayChoice: ProjectExecutionChoiceV1 | null = actual?.status === 'present'
     ? actual.target.machineId === source.machineId ? { kind: 'primary' }
       : { kind: 'workers', destination: { kind: 'machine', machineId: actual.target.machineId } }
@@ -124,7 +127,7 @@ export function useProjectServicePlacement(
     },
     [address, mutate, refresh, serviceName],
   );
-  return { ...setting, address, actual, desiredPlacement, displayChoice, canSaveNextStart, canMove, moveBlocked, save };
+  return { ...setting, address, actual, desiredPlacement, displayPlacement, displayChoice, canSaveNextStart, canMove, moveBlocked, save };
 }
 
 function noticeText(notice: ObservedWorkerSettingNotice): string | null {
@@ -324,14 +327,15 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
 
   const state = placement.state;
   const ready = state.kind === 'ready' ? state.value : null;
-  const observed = ready?.actual ?? null;
-  const actual = observed?.status === 'present' ? observed.target : null;
-  const runsOn = ready?.placement.runsOn ?? null;
+  const observed = placement.displayPlacement?.actual ?? null;
+  const actual = ready?.actual.status === 'present' ? ready.actual.target : null;
+  const displayedActual = observed?.status === 'present' ? observed.target : null;
+  const runsOn = placement.displayPlacement?.placement.runsOn ?? null;
   const portable = props.declaration?.portable === true;
   const label = useWorkerDestinationLabel(props.source.serverId, runsOn, props.source.machineId);
   const sourceMachine = useServerScopedMachine(props.source.serverId, props.source.machineId);
   const sourceName = (sourceMachine ? getMachineDisplayName(sourceMachine) : null) ?? t('projectWorkers.primary');
-  const actualMachine = useServerScopedMachine(props.source.serverId, actual?.machineId ?? '');
+  const actualMachine = useServerScopedMachine(props.source.serverId, displayedActual?.machineId ?? '');
   const unavailableMachine = useServerScopedMachine(props.source.serverId, observed?.status === 'unavailable' ? observed.machineId ?? '' : '');
   const pendingDestination = move && move.phase !== 'refused' ? move.destination : null;
   const pendingLabel = useWorkerDestinationLabel(props.source.serverId, pendingDestination, props.source.machineId);
@@ -362,7 +366,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   // state nor a lost feed proves Stop.
   const stoppedBeforeStart = observation.stoppedBeforeStart;
 
-  const custodyKnown = observed?.status === 'present' || observed?.status === 'absent';
+  const custodyKnown = ready?.actual.status === 'present' || ready?.actual.status === 'absent';
   const moving = observation.requestPending || managed.busy || managedMove === 'acquiring' || move?.phase === 'resolving' || move?.phase === 'requesting' || move?.phase === 'approval'
     || (move?.phase === 'operation' && observation.relocating);
   const moveBlockedReason = actual && placement.moveBlocked
@@ -418,8 +422,8 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     : runsOn?.kind === 'workers' && runsOn.destination.kind === 'pool'
       ? [t('projectServices.anyWorker'), label.name].filter(Boolean).join(' · ')
       : (label.name ?? (label.missing ? t('projectServices.destinationMissing') : null));
-  const actualName = actual
-    ? actual.machineId === props.source.machineId
+  const actualName = displayedActual
+    ? displayedActual.machineId === props.source.machineId
       ? t('projectServices.thisMachine', { name: sourceName })
       : (actualMachine ? getMachineDisplayName(actualMachine) : null) ?? t('projectServices.otherMachine')
     : null;
@@ -450,7 +454,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           ? moveBlockedReason
           : stoppedBeforeStart && desiredName
           ? t('projectServices.willStartOn', { name: desiredName })
-          : actual || !runsOn
+          : displayedActual || !runsOn
             ? undefined
             : runsOn.kind === 'primary'
               ? t('projectServices.runsHere')
@@ -590,7 +594,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
                   open: pickerOpen,
                   detailColor: theme.colors.text.primary,
                   chevronColor: theme.colors.text.secondary,
-                  field: resolveFieldBoxColors(theme, label.missing && !actual ? 'invalid' : 'idle'),
+                  field: resolveFieldBoxColors(theme, label.missing && !displayedActual ? 'invalid' : 'idle'),
                   placeholder: t('common.loading'),
                   placeholderColor: theme.colors.input.placeholder,
                 }),
@@ -611,7 +615,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
           title={t('projectServices.whenUnavailable')}
           accessoryLayout={compact ? 'stacked' : 'adaptive'}
           disabled={!placement.canSaveNextStart || moving}
-          value={ready?.placement.unavailable ?? 'fail'}
+          value={placement.displayPlacement?.placement.unavailable ?? 'fail'}
           options={[
             { id: 'primary', label: t('projectServices.fallbackPrimary') },
             { id: 'fail', label: t('projectServices.fallbackFail') },

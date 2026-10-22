@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import type { ProjectServicePlacementGetResultV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -41,6 +42,7 @@ type Entry = Readonly<{ attachment: ProjectServicePlacementOperationAttachment; 
 type ManagedSelection = Readonly<{ scopeKey: string; draft: ManagedMachineSelectionDraft; purpose: 'start' | 'move' }>;
 type ManagedContinuation = ReturnType<typeof useProjectServiceManagedMachine>;
 type ApprovedStart = Readonly<{ serviceName: string; machineId: string; requestId: string }>;
+type ReadyPlacement = Extract<ProjectServicePlacementGetResultV1, { status: 'ready' }>;
 type ObservationContext = Readonly<{
   source: ProjectServiceSource;
   entries: ReadonlyMap<string, Entry>;
@@ -50,7 +52,8 @@ type ObservationContext = Readonly<{
   pendingRequests: ReadonlySet<string>;
   approvedStarts: ReadonlyMap<string, ApprovedStart>;
   startRequests: ReadonlyMap<string, ProjectExecutionChoiceV1 | null>;
-  observeStartPlacement: (name: string, choice: ProjectExecutionChoiceV1 | null) => void;
+  observedPlacements: ReadonlyMap<string, ReadyPlacement>;
+  observePlacement: (name: string, placement: ReadyPlacement | null) => void;
   executeMove: (serviceName: string, destination: ProjectExecutionChoiceV1,
     execute: (signal: AbortSignal, onApprovalPending: (registration: ActionApprovalRegistration) => void) => Promise<ServiceRelocationOutcome>) => Promise<ServiceRelocationOutcome | null>;
   runtimeActionExecute?: FrontDoorRuntimeActionExecute;
@@ -232,12 +235,12 @@ function ScopedObservationProvider(props: Readonly<{
   const requests = React.useRef(new Map<string, AbortController>());
   const [pendingRequests, setPendingRequests] = React.useState<ReadonlySet<string>>(() => new Set());
   const [startRequests, setStartRequests] = React.useState<ReadonlyMap<string, ProjectExecutionChoiceV1 | null>>(() => new Map());
-  const observedPlacements = React.useRef(new Map<string, ProjectExecutionChoiceV1>());
-  const observeStartPlacement = React.useCallback((name: string, choice: ProjectExecutionChoiceV1 | null) => {
+  const observedPlacements = React.useRef(new Map<string, ReadyPlacement>());
+  const observePlacement = React.useCallback((name: string, placement: ReadyPlacement | null) => {
     // Moving between Running/ready groups remounts placement controls. Their
     // initial unread state cannot erase this scope's last observed destination.
     // Start still resolves fresh placement before dispatching any native effect.
-    if (choice) observedPlacements.current.set(name, choice);
+    if (placement) observedPlacements.current.set(name, placement);
   }, []);
   const [approvals, setApprovals] = React.useState<ReadonlyMap<string, ActionApprovalRegistration>>(() => new Map());
   React.useEffect(() => {
@@ -317,7 +320,7 @@ function ScopedObservationProvider(props: Readonly<{
     const name = declaration.selection.name;
     // This is the existing local Start invocation's lifetime. Native operations
     // take over its presentation as soon as they are observed.
-    setStartRequests(current => new Map(current).set(name, choice ?? observedPlacements.current.get(name) ?? null));
+    setStartRequests(current => new Map(current).set(name, choice ?? observedPlacements.current.get(name)?.placement.runsOn ?? null));
     try {
       const resolved = choice ?? await resolveStart(target, signal);
       if (!resolved || signal?.aborted || !props.binding?.isCurrent()) return undefined;
@@ -387,9 +390,9 @@ function ScopedObservationProvider(props: Readonly<{
     return new Map(current).set(serviceName, { ...entry, observation });
   }), []);
   const source = React.useMemo(() => props.source, [props.source.serverId, props.source.refId, props.source.machineId]);
-  const context = React.useMemo(() => ({ source, entries, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observeStartPlacement, executeStart, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
+  const context = React.useMemo(() => ({ source, entries, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observedPlacements: observedPlacements.current, observePlacement, executeStart, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
     runtimeActionExecute: props.runtimeActionExecute }),
-    [source, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observeStartPlacement, executeStart, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
+    [source, attach, clear, acknowledgeBinding, executeMove, pendingRequests, approvedStarts, startRequests, observePlacement, executeStart, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
   return <StartContext.Provider value={executeStart}><Context.Provider value={context}>
     {props.binding ? approvalIds.map(artifactId => <ServiceStartApprovalObserver key={artifactId} artifactId={artifactId}
       source={source} binding={props.binding!} publish={publishApproval} />) : null}
@@ -508,10 +511,12 @@ export function useProjectServiceStartDestination() {
   return React.useContext(StartContext);
 }
 
-/** Keep the placement owner's last observation available during Start's fresh admission read. */
-export function useProjectServiceStartPlacementObservation(name: string, choice: ProjectExecutionChoiceV1 | null) {
-  const observe = React.useContext(Context)?.observeStartPlacement;
+/** Retain presentation through row regrouping; callers still require their fresh read for mutations. */
+export function useProjectServicePlacementValueObservation(name: string, placement: ReadyPlacement | null) {
+  const context = React.useContext(Context);
+  const observe = context?.observePlacement;
   React.useLayoutEffect(() => {
-    observe?.(name, choice);
-  }, [name, choice, observe]);
+    observe?.(name, placement);
+  }, [name, placement, observe]);
+  return placement ?? context?.observedPlacements.get(name) ?? null;
 }
