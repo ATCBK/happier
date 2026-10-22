@@ -365,6 +365,13 @@ beforeEach(async () => {
     vi.stubGlobal('localStorage', createMemoryStorage(localStorageBacking) as unknown as Storage);
     vi.stubGlobal('sessionStorage', createMemoryStorage(sessionStorageBacking) as unknown as Storage);
 
+    // A prior test's real Socket teardown withdraws its Home's Machine presence.
+    // Start each test with fresh reachability observations, while preserving
+    // withdrawal/reconnect behavior within the test's own Account lifetimes.
+    (await vi.importActual<typeof import('@/sync/domains/machines/reachability/machineReachability')>(
+        '@/sync/domains/machines/reachability/machineReachability',
+    )).clearMachineRequestReachabilityForTest();
+
     if (process.env.HAPPIER_VITEST_FORBID_FETCH === '1') {
         vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
             const url =
