@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
@@ -9,6 +9,7 @@ import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema,
     DISCUSSION_AGENT_POST_EVENT_V1, DISCUSSION_HTTP_PATHS_V1, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
 import { createDiscussionMessageRefV1, DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { db } from '@/storage/db';
+import { eventRouter } from '@/app/events/eventRouter';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
@@ -22,7 +23,7 @@ import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessi
 import { createSessionInputReplyProgressInTx, projectSessionInputRepliesFromTurnInTx, readSessionMessageReplyInTx,
     mutateSessionMessageReplyForMachineInTx, mutateSessionMessageReplyForAccountInTx, isSessionInputSourceCurrentInTx } from '@/app/session/messages/sessionMessageReply';
 import { deriveSessionMessageReplyReturnLocalIdV1, SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
-import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { decodeBase64, encodeBase64 } from 'privacy-kit';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
@@ -46,6 +47,26 @@ import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/proto
 import { createMaterializedEphemeralRunnerFixture } from '@/app/ephemeralRunner/materializedRunner.testkit';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { registerSessionArchiveRoutes } from '@/app/api/routes/session/registerSessionArchiveRoutes';
+import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
+import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
+import { registerSessionFollowRoutes } from '@/app/api/routes/session/registerSessionFollowRoutes';
+import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
+import { registerSessionPatchRoute } from '@/app/api/routes/session/registerSessionPatchRoute';
+import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
+import { featuresRoutes } from '@/app/api/routes/features/featuresRoutes';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import type { AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { ApiSessionClient } from '../../../../cli/src/api/session/sessionClient';
+import { createPlainSessionFixture } from '../../../../cli/src/testkit/backends/sessionFixtures';
+import { createApiSessionSocketStub } from '../../../../cli/src/testkit/backends/apiSessionSocketHarness';
+import { MessageQueue2 } from '../../../../cli/src/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '../../../../cli/src/agent/runtime/permissions/queuedPrompt';
+import { registerPermissionModeMessageQueueBinding } from '../../../../cli/src/agent/runtime/permissions/bindModeQueue';
+import { runPermissionModePromptLoop } from '../../../../cli/src/agent/runtime/runPermissionModePromptLoop';
+import { createNativeAgentSessionOperations } from '../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeBinding } from '../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
+import { MessageBuffer } from '../../../../cli/src/ui/ink/messageBuffer';
+import { createInitialHostRuntimeActivityMutation } from '../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 
 const document = (text: string) => ({ v: 1 as const, parts: [{ t: 'text' as const, text }] });
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -795,7 +816,7 @@ describe('First-class Discussions service (SQLite)', () => {
             content: { t: 'plain', v: {} }, replyDisposition: 'return_pending', replyProgress: { ...progress!, acceptedTurnId, outcome: { kind } } } });
         const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: session.id, localId: requestLocalId, acceptedTurnId });
         const input = { authentication, actorAccountId: owner.id, discussionId, producer: { v: 1 as const, kind: 'agent' as const, sessionId: session.id },
-            replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId }, request: { ...postRequest(kind), localId,
+            replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId }, terminalReturn: true as const, request: { ...postRequest(kind), localId,
                 replyTarget: { kind: 'message' as const, messageId: discussion.messageId } } };
         expect(await postDiscussionMessage(input)).toMatchObject({ ok: true, value: { message: { producerV1: { replyReturn: { outcome: kind } }, addressingV1: { participantSessionIds: [] } } } });
         expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: requestLocalId } } })).replyProgress)
@@ -827,7 +848,7 @@ describe('First-class Discussions service (SQLite)', () => {
             request: { ...postRequest('A stale answer'), localId, replyTarget: { kind: 'message', messageId: discussion.messageId } } })).toMatchObject({ ok: false });
         expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(0);
     });
-    it('refuses provider readmission of a withdrawn materialized original after reinvitation', async () => {
+    it('withdraws a materialized Discussion original without starving the next ordinary input after reinvitation', async () => {
         const { owner, discussionId } = await fixture();
         const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
         const participant = { kind: 'session' as const, sessionId: session.id };
@@ -836,34 +857,235 @@ describe('First-class Discussions service (SQLite)', () => {
             request: { ...postRequest('Question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant }] } }, mentionedSessionIds: [session.id] } });
         if (!question.ok) throw new Error(question.error);
         const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
-        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
-        expect(progress).not.toBeNull();
         const { socket, machine } = await publisherSocket(owner.id, session.id);
+        const current = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        const publisherAuthority = { accountId: owner.id, sessionId: session.id, machineId: machine.id, committedFence: current.lastActiveAt };
         const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
             discussionAddressing: discussion, replyIntent: { mode: 'return' } });
-        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine', discussionAddressing: discussion,
-            admittedTarget: { homeId: await getOrCreateServerIdentityId(), accountId: owner.id, sessionId: session.id, machineId: machine.id, installationId: machine.installationId! } });
-        const finalContent = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Question' },
-            meta: withSessionInputAuthorityV1({}, settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })) } };
+        await getOrCreateServerIdentityId();
         const localId = deriveDiscussionFollowInputLocalIdV1(discussion);
-        await db.sessionMessage.create({ data: { sessionId: session.id, localId, seq: 1, messageRole: 'user', content: finalContent,
-            inputAdmissionReceipt: receipt, replyProgress: progress!, replyDisposition: 'return_pending' } });
+        const reply = { mode: 'return' as const, discussion };
+        const content = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Question' },
+            meta: withSessionInputRequestV1({}, request) } };
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
+            targetMachineId: machine.id, sessionId: session.id, localId, content, reply,
+            requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1 })).toMatchObject({ status: 'accepted', localId });
+        const claim = await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority,
+            deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' });
+        expect(claim).toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        if (!claim.ok || !claim.didMaterialize) throw new Error('Expected the real addressed input claim');
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse(claim.message.inputAdmissionReceipt);
+        const finalContent = { ...content, v: { ...content.v, meta: {
+            ...withSessionInputAuthorityV1(content.v.meta, settleSessionInputRequestV1({
+                request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })),
+            [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({
+                request, requestedProvenance: undefined, inputAdmissionReceipt: receipt }),
+        } } };
         const readmit = async () => {
             let response: unknown;
             await getSocketHandler(socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1, sessionId: session.id, localId,
                 decision: { kind: 'admit', finalContent, validation: { reply: { mode: 'return', discussion } } } }, (value: unknown) => { response = value; });
             return SessionPendingAdmissionSettlementResponseV1Schema.parse(response);
         };
-        expect(await readmit()).toMatchObject({ result: { status: 'alreadyAccepted', localId } });
-        const mute = { authentication, accountId: owner.id, receiver: { kind: 'session' as const, sessionId: session.id },
-            scope: { kind: 'source' as const, source: { kind: 'discussion' as const, discussionId } } };
-        expect(await changeDeliveryMute({ ...mute, operation: 'set' })).toMatchObject({ ok: true });
-        expect(await readmit()).toMatchObject({ result: { status: 'rejected', code: 'session_input_muted' } });
-        expect(await changeDeliveryMute({ ...mute, operation: 'remove' })).toMatchObject({ ok: true });
+        expect(await readmit()).toMatchObject({ result: { status: 'accepted', localId } });
         expect(await readmit()).toMatchObject({ result: { status: 'alreadyAccepted', localId } });
         expect(await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        expect(await db.sessionFollowEdge.count({ where: { sourceDiscussionId: discussionId, destinationSessionId: session.id } })).toBe(0);
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, { principal: {
+            kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: session.id }))).observations).toEqual([]);
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } })).replyProgress)
+            .toMatchObject({ disposition: 'released', outcome: { kind: 'cancelled' } });
+        expect(await readmit()).toMatchObject({ result: { status: 'rejected', code: 'session_input_cancelled' } });
         expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
         expect(await readmit()).toMatchObject({ result: { status: 'rejected', code: 'session_input_cancelled' } });
+        const ordinaryLocalId = crypto.randomUUID();
+        const ordinaryRequest = buildTrustedHostSessionInputAdmissionV1('agent').request;
+        const ordinaryContent = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'An unrelated ordinary input' },
+            meta: withSessionInputRequestV1({}, ordinaryRequest) } };
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
+            targetMachineId: machine.id, sessionId: session.id, localId: ordinaryLocalId, content: ordinaryContent,
+            requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1 })).toMatchObject({ status: 'accepted', localId: ordinaryLocalId });
+        const ordinaryClaim = await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority,
+            deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' });
+        expect(ordinaryClaim).toMatchObject({ ok: true, didMaterialize: true, message: { localId: ordinaryLocalId } });
+        if (!ordinaryClaim.ok || !ordinaryClaim.didMaterialize) throw new Error('Expected the unrelated ordinary input claim');
+        const ordinaryReceipt = SessionInputAdmissionReceiptV1Schema.parse(ordinaryClaim.message.inputAdmissionReceipt);
+        const ordinaryFinal = { ...ordinaryContent, v: { ...ordinaryContent.v, meta: {
+            ...withSessionInputAuthorityV1(ordinaryContent.v.meta, settleSessionInputRequestV1({
+                request: ordinaryRequest, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: ordinaryReceipt })),
+            [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({
+                request: ordinaryRequest, requestedProvenance: undefined, inputAdmissionReceipt: ordinaryReceipt }),
+        } } };
+        expect(await settlePendingInputAdmission({ actorUserId: owner.id, sessionId: session.id, localId: ordinaryLocalId, publisherAuthority,
+            decision: { kind: 'admit', finalContent: ordinaryFinal } })).toMatchObject({ ok: true, result: { status: 'accepted', localId: ordinaryLocalId } });
+    });
+    it('quietly withdraws the queued Discussion input after a busy native turn and reaches the next ordinary provider input', async () => {
+        const { owner, discussionId } = await fixture();
+        const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const participant = { kind: 'session' as const, sessionId: receiver.id };
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant } })).toMatchObject({ ok: true });
+        const { socket, machine } = await publisherSocket(owner.id, receiver.id);
+        await db.session.update({ where: { id: receiver.id }, data: { metadata: JSON.stringify({
+            machineId: machine.id, path: '/repo', flavor: 'codex', permissionMode: 'default', permissionModeUpdatedAt: 0 }) } });
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        const transportEvents: string[] = [];
+        app.addHook('onResponse', async (request, response) => {
+            transportEvents.push(`${request.method} ${request.url.split('?')[0]} ${response.statusCode}`);
+        });
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        // Credential verification and Socket.IO forwarding are boundaries. All
+        // resource admission, input custody, CLI preparation and writes stay real.
+        app.decorate('authenticate', async (request: FastifyRequest) => {
+            request.userId = owner.id; request.authAuthority = 'present_user'; request.authTokenKind = 'account';
+        });
+        registerSessionListingRoutes(app); registerSessionMessageRoutes(app); registerSessionFollowRoutes(app);
+        registerAccountEncryptionRoutes(app); registerSessionPatchRoute(app); sessionPendingRoutes(app); featuresRoutes(app);
+        const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+        onTestFinished(() => app.close());
+        const serverId = await getOrCreateServerIdentityId();
+        const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse((await app.inject({ method: 'GET', url: '/v1/features' })).json()) };
+        const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: owner.id })).toString('base64url')}.fixture`, encryption: null };
+        const defaults = createApiSessionSocketStub();
+        const transportSocket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+            transportEvents.push(`socket ${event}`);
+            const handler = socket.handlers.get(event);
+            if (!handler) return defaults.emitWithAck(event, payload);
+            let response: unknown;
+            await handler(payload, (value: unknown) => { response = value; });
+            return response;
+        } });
+        socket.emit.mockImplementation((event: string, ...args: unknown[]) => transportSocket.trigger(event, ...args));
+        const connection = { connectionType: 'session-scoped' as const, userId: owner.id, sessionId: receiver.id, socket: socket as never };
+        eventRouter.addConnection(owner.id, connection);
+        onTestFinished(() => eventRouter.removeConnection(owner.id, connection));
+        let phase = 'client startup';
+        const clientSession = createPlainSessionFixture({ id: receiver.id });
+        const client = new ApiSessionClient(credentials.token, { ...clientSession, metadata: { ...clientSession.metadata,
+            machineId: machine.id, path: '/repo', permissionMode: 'default', permissionModeUpdatedAt: 0 } }, {
+            localMachineId: machine.id, metadataAuthority: { kind: 'owner', credentials }, getServerFeaturesSnapshot: () => features,
+            initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({
+                sessionId: receiver.id, agentRuntimeApplicability: 'not_applicable' })],
+            transport: { serverId, serverUrl: origin, createSessionSocketTransport: () => ({ socket: transportSocket as never,
+                transport: createSocketTransportAdapter(transportSocket as never) }) },
+        });
+        const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode),
+            { batcher: combinePermissionModeQueuedPrompts });
+        registerPermissionModeMessageQueueBinding({ session: client, queue, getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {} });
+        const abort = new AbortController();
+        let enterBusy!: () => void;
+        let releaseBusy!: () => void;
+        const busyEntered = new Promise<void>(resolve => { enterBusy = resolve; });
+        const busy = new Promise<void>(resolve => { releaseBusy = resolve; });
+        const delivered: string[] = [];
+        const failures: unknown[] = [];
+        // Only the native Agent transport is replaced. Its real adapter and
+        // the common host normalizer produce durable Pending acceptance.
+        const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+        const nativeTurnIds: string[] = [];
+        let sequence = 0;
+        const nativeSession: AgentSessionRuntime = {
+            async send(request) {
+                delivered.push(request.input.text);
+                nativeTurnIds.push(request.delivery.turnId);
+                const emit = (event: AgentSessionRuntimeEvent) => { for (const listener of listeners) listener(event); };
+                emit({ sequence: ++sequence, sessionId: receiver.id, emittedAtMs: sequence,
+                    kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
+                emit({ sequence: ++sequence, sessionId: receiver.id, emittedAtMs: sequence,
+                    kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' });
+                const complete = () => emit({ sequence: ++sequence, sessionId: receiver.id, emittedAtMs: sequence,
+                    kind: 'turn-complete', turnId: request.delivery.turnId });
+                if (delivered.length === 1) { enterBusy(); void busy.then(complete); }
+                else complete();
+                return { status: 'admitted' };
+            },
+            watch(listener) { listeners.add(listener); return { dispose: () => { listeners.delete(listener); } }; },
+            dispose: async () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(nativeSession, receiver.id,
+            undefined, undefined, undefined, undefined, undefined, {
+                // No native control is declared or invoked by this transport fixture.
+                context: {} as AgentSessionRuntimeContext, cwd: '/repo', connectedAccounts: [],
+                capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+                cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+            });
+        const outcomes = createSessionProviderInputOutcomeBinding({ getTarget: () => client });
+        const unbindOutcomes = bindSessionProviderInputOutcome({ runtime, observe: outcomes.observeProviderInputOutcome,
+            wakePendingMaterialization() {} });
+        let loop: Promise<void> | undefined;
+        let cleanup: Promise<void> | undefined;
+        const close = () => cleanup ??= (async () => {
+            releaseBusy(); abort.abort(); await loop?.catch(() => undefined); unbindOutcomes();
+            await runtime.resetOrDisposeRuntime(); await client.close(); await app.close();
+        })();
+        onTestFinished(close);
+        const enqueue = async (localId: string, text: string, discussion?: Parameters<typeof deriveDiscussionFollowInputLocalIdV1>[0]) => {
+            const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+                ...(discussion ? { discussionAddressing: discussion, replyIntent: { mode: 'return' } } : {}) });
+            expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
+                targetMachineId: machine.id, sessionId: receiver.id, localId,
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text }, meta: withSessionInputRequestV1({}, request) } },
+                ...(discussion ? { reply: { mode: 'return', discussion } } : {}), requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1,
+            })).toMatchObject({ status: 'accepted', localId });
+        };
+        try {
+            phase = 'canonical publisher startup claim';
+            expect(await client.claimCurrentSessionPublisherAuthorityForStartup()).toMatchObject({ status: 'claimed' });
+            const busyId = crypto.randomUUID();
+            await enqueue(busyId, 'BUSY_NATIVE_PRELUDE');
+            phase = 'busy input materialization';
+            expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).toMatchObject({ type: 'materialized', localId: busyId });
+            loop = runPermissionModePromptLoop({ providerName: 'Test', agentMessageType: 'codex', explicitPermissionMode: undefined,
+                session: client, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
+                createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
+                messageBuffer: new MessageBuffer(), shouldExit: () => abort.signal.aborted, getAbortSignal: () => abort.signal,
+                keepAlive() {}, setThinking() {}, sendReady() {
+                    if (delivered.some(text => text.includes('ORDINARY_AFTER_WITHDRAWAL'))) abort.abort();
+                }, currentPermissionModeUpdatedAt: 0, setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {},
+                formatPromptErrorMessage: String, onPromptFailure: error => { failures.push(error); },
+                registerProviderAcceptedEffect: outcomes.registerProviderAcceptedEffect,
+            });
+            phase = 'waiting for genuine native work';
+            await Promise.race([busyEntered, loop.then(() => { throw new Error('Host loop ended before native work began'); })]);
+            const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+                request: { ...postRequest('Queued revoked question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant }] } },
+                    mentionedSessionIds: [receiver.id] } });
+            if (!question.ok) throw new Error(question.error);
+            const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: receiver.id };
+            const localId = deriveDiscussionFollowInputLocalIdV1(discussion);
+            await enqueue(localId, 'REVOKED_DISCUSSION_MUST_NOT_REACH_PROVIDER', discussion);
+            phase = 'queued input materialization during native work';
+            expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).toMatchObject({ type: 'materialized', localId });
+            expect(queue.queue).toContainEqual(expect.objectContaining({ message: expect.objectContaining({ localId, discussionAddressing: discussion }) }));
+            expect(delivered).toHaveLength(1);
+            expect(await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+            expect(await db.sessionFollowEdge.count({ where: { sourceDiscussionId: discussionId, destinationSessionId: receiver.id } })).toBe(0);
+            const ordinaryId = crypto.randomUUID();
+            await enqueue(ordinaryId, 'ORDINARY_AFTER_WITHDRAWAL');
+            phase = 'quiet withdrawal and ordinary provider continuation';
+            releaseBusy();
+            await loop;
+            await client.flush();
+            expect(delivered).toHaveLength(2);
+            expect(delivered[1]).toContain('ORDINARY_AFTER_WITHDRAWAL');
+            expect(delivered.some(text => text.includes('REVOKED_DISCUSSION_MUST_NOT_REACH_PROVIDER'))).toBe(false);
+            expect(failures).toEqual([]);
+            const transcript = await db.sessionMessage.findMany({ where: { sessionId: receiver.id } });
+            expect(JSON.stringify(transcript.map(message => message.content))).not.toContain('turn_failed');
+            expect(transcript.find(message => message.localId === localId)?.replyProgress)
+                .toMatchObject({ disposition: 'released', outcome: { kind: 'cancelled' } });
+            expect(client.hasPendingProviderInput(localId)).toBe(false);
+            expect(client.hasPendingProviderInput(busyId)).toBe(false);
+            expect(client.hasPendingProviderInput(ordinaryId)).toBe(false);
+            expect(transcript.find(message => message.localId === ordinaryId)?.acceptedTurnId).toBe(nativeTurnIds[1]);
+            expect(await db.sessionPendingMessage.findMany({ where: { sessionId: receiver.id },
+                select: { localId: true, status: true, discardedReason: true } }))
+                .toEqual([{ localId, status: 'discarded', discardedReason: 'session_input_cancelled' }]);
+            expect(await db.session.findUniqueOrThrow({ where: { id: receiver.id },
+                select: { pendingCount: true, pendingBlockedCount: true } })).toEqual({ pendingCount: 0, pendingBlockedCount: 0 });
+        } finally {
+            await close();
+        }
     });
     it('never exposes the causal Run as a Discussion destination or accepts its Session-return ACK', async () => {
         const { owner, discussionId } = await fixture();

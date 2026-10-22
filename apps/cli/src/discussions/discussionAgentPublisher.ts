@@ -260,6 +260,7 @@ export function createDiscussionAgentPublisher(params: Readonly<{
           if ('operation' in reviewedRequest) return denied();
           const { v: _version, sessionId: _sessionId, replyReturn: _return, ...input } = reviewedRequest;
           publication = { ...input, ...reviewedOrigin, ...(draftReview ? { draftReview } : {}),
+            ...(terminalReturn ? { terminalReturn } : {}),
             request: { ...input.request, localId: deriveSessionMessageReplyReturnLocalIdV1({
               sessionId: params.session.sessionId, localId: approved.replyReturn.requestLocalId,
               ...(approved.replyReturn.acceptedTurnId ? { acceptedTurnId: approved.replyReturn.acceptedTurnId } : {}),
@@ -291,7 +292,7 @@ export function createDiscussionAgentPublisher(params: Readonly<{
       // The append owner stamps factual original provenance. Raw Account
       // operands supply neither a different causal root nor Run attribution.
       const { runId: _authoredRun, toolCallId: _authoredTool, ...terminal } = request;
-      return await publish(terminal, signal);
+      return await publish({ ...terminal, terminalReturn: true }, signal);
     }
     const publication = prepareActiveDiscussionAgentPublication({ session: params.session,
       serverIdentityId: params.getServerIdentityId?.(), request: parsed.data.request });

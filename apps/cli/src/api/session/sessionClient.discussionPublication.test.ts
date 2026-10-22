@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { FeaturesResponseSchema, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
-import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentPostPublicationV1Schema, DiscussionAgentCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
 import { createApiSessionSocketStub, createSessionTranscriptHomeStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
@@ -103,7 +103,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
           producerV1: { v: 1, kind: 'agent', sessionId }, content: raw.request.firstMessage.content, mentionedAccountIds: [], createdAt: 1,
         } } };
       }
-      const request = DiscussionAgentPostRequestV1Schema.parse(payload);
+      const request = DiscussionAgentPostPublicationV1Schema.parse(payload);
       publications.push(request);
       return { v: 1, ok: true, value: { messageSeq: 2, message: {
         id: 'committed-answer', discussionId: request.discussionId, localId: request.request.localId, seq: 2,
@@ -148,6 +148,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
   expect(publications).toHaveLength(1);
   expect(publications[0]).toMatchObject({ sourceSession: { sourceSessionId: sessionId, sourceTurnId: witness.turnId,
     sourceInputId: witness.inputId, via: 'action' } });
+  expect(publications[0]).not.toHaveProperty('terminalReturn');
   const addressing = { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId };
   currentWitness = { ...witness, discussionAddressing: addressing };
   // Use the real connection's public feature observation from this exact
@@ -245,6 +246,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
     .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });
   expect(publications).toHaveLength(3);
+  expect(publications[2]).toMatchObject({ terminalReturn: true });
   terminalReturned = true;
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
     .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });

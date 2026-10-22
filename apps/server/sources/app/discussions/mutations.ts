@@ -333,6 +333,7 @@ async function admitAddressedParticipantsInTx(tx: Tx, input: ExactDiscussion & R
 export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     request: DiscussionPostRequestV1; producer?: DiscussionProducerV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
     draftReview?: { artifactId: string; decidingAccountId: string };
+    terminalReturn?: true;
 }>): Promise<DiscussionResult<DiscussionPostResponseV1>> {
     const parsed = DiscussionPostRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure('discussion_invalid_content');
@@ -366,14 +367,18 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
     const intent = messageIntent(context.storageMode, parsed.data);
     if ('error' in intent) return discussionFailure(intent.error);
     // Decline releases the original return; it is never a public reply outcome.
-    const returnOutcome = returnProgress?.outcome?.kind;
-    if (returnOutcome === 'declined') return discussionFailure('discussion_post_denied');
+    const originalOutcome = returnProgress?.outcome;
+    if (originalOutcome?.kind === 'declined') return discussionFailure('discussion_post_denied');
+    // A committed explicit body answers the original, even when its native
+    // final was empty or failed before the person approved publication. Only
+    // the verified host final-return path preserves a non-answer outcome.
+    const terminalOutcome = input.terminalReturn && originalOutcome?.kind !== 'answer' ? originalOutcome : undefined;
     if (returned?.success && producer && returnProgress) producer = { ...producer,
         ...(returnProgress.workflow ? { runId: returnProgress.workflow.runId } : {}),
         ...(returnProgress.actionRequestAttributionV1 ? { actionRequestAttributionV1: returnProgress.actionRequestAttributionV1 } : {}),
         ...(returned.data.acceptedTurnId ? { sourceSession: { sourceSessionId: producer.sessionId,
             sourceTurnId: returned.data.acceptedTurnId, sourceInputId: returned.data.requestLocalId, via: 'action' as const } } : {}),
-        replyReturn: { ...returned.data, outcome: returnOutcome ?? 'answer' },
+        replyReturn: { ...returned.data, outcome: terminalOutcome?.kind ?? 'answer' },
     };
     const existing = await readMessageByLocalIdInTx(tx, discussion.id, intent.localId);
     const source = await resolveDiscussionDocTargetInTx(tx, { discussionId: discussion.id, replyTarget: intent.replyTarget });
@@ -424,6 +429,8 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
         acceptedTurnId: returned.data.acceptedTurnId, localId: intent.localId,
         workflow: returned.data.workflow,
         publicationRef: { kind: 'discussion', discussion: { serverId: returned.data.serverId, discussionId: discussion.id }, messageId: message.id },
+        outcome: terminalOutcome ?? { kind: 'answer', publicationRef: { kind: 'discussion',
+            discussion: { serverId: returned.data.serverId, discussionId: discussion.id }, messageId: message.id } },
     })) throw new Error('Discussion publication lost its original reply custody');
     await publishChangedInTx(tx, discussion.id);
     const actors = await projectDiscussionAccountActorsInTx(tx, [message]);

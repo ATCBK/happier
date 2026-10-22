@@ -613,6 +613,8 @@ and qualified Discussion data key retain only a keyed row's viewport offset or
 tail-follow intent; the renderer's existing entry-placement/held-anchor owner
 restores it across Back/Forward, message arrival and viewport changes. This is
 ephemeral navigation placement, not a second message store or synced read cursor.
+Native physical placement is captured at the existing drag/momentum terminal
+callbacks and exit, not by measuring the buffered window on every scroll frame.
 Main Session transcripts retain their existing durable entry lifecycle.
 
 In current 0.3 development, UI and CLI `approval.request.list` use the same strict
@@ -898,6 +900,15 @@ An autonomous/unknown or other-Home requester has no local Account-name projecti
 facts describe who asked and who posted; they do not prove the Account or credential used
 by a separate outward operation. Reply custody without that exact operation actor leaves
 the result's “using” identity unknown.
+
+In development source, a committed explicit reply is an `answer`, including when
+the person approves its private draft after the native turn finishes with an empty
+or failed final. The append transaction records that same answer/publication on
+the original input; later turn projection cannot downgrade it or create another
+return. The trusted publisher preserves its verified `terminalReturn` distinction
+only for a host final/result fallback, whose genuine pass, failure, cancellation
+or no-result outcome remains typed. Authored Action/RPC inputs cannot select that
+host classification. This corrects new publications, not retained historical rows.
 
 In development source, CLI input attribution and Discussion reply-return markers
 use the canonical Home identity from the existing feature observation of their

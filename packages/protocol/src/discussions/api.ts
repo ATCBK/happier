@@ -292,6 +292,8 @@ export type DiscussionDraftReviewV1 = z.infer<typeof DiscussionDraftReviewV1Sche
 /** Trusted host transport only; authoring requests cannot carry review authority. */
 export const DiscussionAgentPostPublicationV1Schema = lazyZodSchema(() => z.extend(DiscussionAgentPostRequestV1Schema, {
   draftReview: z.optional(DiscussionDraftReviewV1Schema),
+  /** Verified host final/result return, never an authored explicit reply. */
+  terminalReturn: z.optional(z.literal(true)),
 }));
 export type DiscussionAgentPostPublicationV1 = z.infer<typeof DiscussionAgentPostPublicationV1Schema>;
 /** The installed owning Machine replays a privately reviewed post without impersonating a live Session publisher. */

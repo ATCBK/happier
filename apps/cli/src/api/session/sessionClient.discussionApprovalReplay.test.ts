@@ -827,7 +827,7 @@ it.each([
       expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).toMatchObject({ ok: true });
       terminalReturned = true;
       expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).toMatchObject({ ok: true });
-      expect(openSessionStoredContent({ ...crypto, content: DiscussionAgentPostRequestV1Schema.parse(publications.at(-1)).request.content })).toEqual(terminalContent);
+      expect(openSessionStoredContent({ ...crypto, content: DiscussionAgentPostPublicationV1Schema.parse(publications.at(-1)).request.content })).toEqual(terminalContent);
       phase = 'approved unknown acknowledgement';
       const unknownArtifactId = await approve();
       corruptNextAck = true;
@@ -860,7 +860,7 @@ it.each([
       expect(await replayHostReturn('The requested session failed.')).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(publications).toHaveLength(beforeHost + 1);
       expect(lastPublicationReplay).toBe(lastHostApprovalArtifactId);
-      expect(publications.at(-1)).toMatchObject({ sessionId, replyReturn: terminal.replyReturn });
+      expect(publications.at(-1)).toMatchObject({ sessionId, replyReturn: terminal.replyReturn, terminalReturn: true });
       expect(await replayHostReturn('Invented success instead of failed original', 'forged-terminal-original')).toMatchObject({ ok: true,
         result: { status: 'failed', execution: { errorCode: 'discussion_post_denied' } } });
       expect(publications).toHaveLength(beforeHost + 1);

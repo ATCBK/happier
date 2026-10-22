@@ -43,6 +43,8 @@ import { createDiscussion, postDiscussionMessage } from '@/app/discussions/mutat
 import { inviteDiscussionParticipant, removeDiscussionParticipant } from '@/app/discussions/accessService';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
+import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
+import type { SessionTurnMutationV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 import { machineUpdateHandler } from '@/app/api/socket/machineUpdateHandler';
 import { resolveVerifiedMachineSocketInstallationId, VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY } from '@/app/api/socket/machineSocketInstallationProof';
@@ -143,8 +145,10 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
         if (!progress) throw new Error('Original Discussion return custody unavailable');
         await db.sessionMessage.create({ data: { sessionId: session.id, localId: inputId, seq: 1, messageRole: 'user', content: document('Original addressed input'),
             replyProgress: { ...progress, acceptedTurnId: turnId }, replyDisposition: progress.disposition, replyTargetMachineId: machine.id } });
-        await db.sessionTurn.create({ data: { sessionId: session.id, turnId, status: 'completed', startedAt: 1n, updatedAt: 2n,
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId, status: revocation === 'none' ? 'in_progress' : 'completed', startedAt: 1n, updatedAt: 2n,
             transcriptAnchorsJson: JSON.stringify({ startUserMessageSeq: 1, userMessageSeqs: [1] }) } });
+        const emptyFinal = { v: 1, sessionId: session.id, mutationId: randomUUID(), action: 'complete', turnId,
+            observedAt: 3, transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1] } } satisfies SessionTurnMutationV1;
         const presence = createSessionPublisherPresence();
         const publisherSocket = {};
         expect(await presence.registerPublisher({ socket: publisherSocket, binding: { accountId: account.id, machineId: machine.id, sessionId: session.id },
@@ -226,6 +230,7 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
             // network boundary; the actual Stop and append owners stay real.
             socket.use((packet, next) => {
                 if (packet[0] !== DISCUSSION_AGENT_POST_EVENT_V1) return next();
+                if (revocation === 'none') expect(packet[1]).not.toHaveProperty('terminalReturn');
                 if (afterPublication) {
                     const acknowledge = packet.at(-1);
                     if (typeof acknowledge !== 'function') return next(new Error('Publication ACK unavailable'));
@@ -294,12 +299,22 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                         agentStartCaller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 } } },
                     { sessionId: session.id, isCurrent: async () => sessions.has(pid) });
                 expect(draft, JSON.stringify({ draft, httpOutcomes })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+                if (revocation === 'none') {
+                    // The explicit native call creates its review while active;
+                    // its empty final completes before the person approves.
+                    // C2 legitimately has no native final result at this point.
+                    expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: emptyFinal }))
+                        .toMatchObject({ ok: true });
+                    expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: inputId } } }))
+                        .toMatchObject({ replyProgress: { disposition: 'return_pending', outcome: { kind: 'terminal_no_result' } } });
+                }
                 const store = createCliApprovalsArtifactStore({ credentials, serverId, serverHttpBaseUrl });
                 const open = await store.approvalsList({ serverId, status: 'open', limit: 10 });
                 expect(open.items).toHaveLength(1);
                 const artifactId = open.items[0]!.artifactId;
                 const approval = ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId }));
                 expect(approval.discussionDraftReview).toBe(true);
+                if (revocation === 'none') expect(approval.executionOriginV1).toMatchObject({ caller: { kind: 'session' } });
                 const binding = approval.executionOriginV1.externalActionExecutionAuthorization?.binding;
                 // Project only non-secret binding facts into assertion output.
                 expect({ source: binding?.sessionActionSource, origin: binding?.sessionActionOrigin }).toMatchObject({
@@ -441,12 +456,30 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                     expect(rows).toHaveLength(1);
                     expect(rows[0]).toMatchObject({ content: { t: 'plain', v: content }, producerV1: { kind: 'agent', sessionId: session.id,
                         sourceSession: { sourceSessionId: session.id, sourceInputId: inputId, sourceTurnId: turnId } } });
+                    if (revocation === 'none') {
+                        expect(rows[0]?.producerV1).toMatchObject({ replyReturn: { outcome: 'answer' } });
+                        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: inputId } } }))
+                            .toMatchObject({ replyProgress: { disposition: 'returned', outcome: { kind: 'answer', publicationRef: {
+                                kind: 'discussion', discussion: { serverId: homeId, discussionId }, messageId: rows[0]!.id,
+                            } } } });
+                    }
                     expect(httpOutcomes.filter(value => value.startsWith('POST /v1/discussions/'))).toEqual([]);
                     const settled = ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId }));
                     expect(sameStrictJsonValue(settled.executionOriginV1, approval.executionOriginV1), 'Original signed provenance remains immutable').toBe(true);
                     expect(await personExecutor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' }))
                         .toMatchObject({ ok: true, result: { status: lostAcknowledgement ? 'failed' : 'executed' } });
                     expect(await db.discussionMessage.count({ where: { discussionId, seq: { gt: addressing.throughSeq } } })).toBe(1);
+                    if (revocation === 'none') {
+                        // A repeated empty terminal cannot replace the explicit
+                        // publication or reopen its already-returned obligation.
+                        expect(await applySessionTurnMutation({ actorUserId: account.id, authentication,
+                            mutation: { ...emptyFinal, mutationId: randomUUID(), observedAt: 4 } })).toMatchObject({ ok: true });
+                        expect(await db.discussionMessage.findUniqueOrThrow({ where: { id: rows[0]!.id } }))
+                            .toMatchObject({ producerV1: { replyReturn: { outcome: 'answer' } } });
+                        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: inputId } } }))
+                            .toMatchObject({ replyProgress: { disposition: 'returned', outcome: { kind: 'answer', publicationRef: { messageId: rows[0]!.id } } } });
+                        expect(await db.discussionMessage.count({ where: { discussionId, seq: { gt: addressing.throughSeq } } })).toBe(1);
+                    }
                 } else {
                     expect(result).not.toMatchObject({ ok: true, result: { status: 'executed' } });
                     expect(rows).toHaveLength(0);

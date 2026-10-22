@@ -234,6 +234,7 @@ export function machineUpdateHandler(
             const publication = parsed.data.publication;
             const append = { actorAccountId: userId, authentication: readSessionAccessAuthenticationFromSocket(socket),
                 discussionId: publication.discussionId, request: publication.request, draftReview: publication.draftReview,
+                ...(publication.terminalReturn ? { terminalReturn: publication.terminalReturn } : {}),
                 ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}),
                 producer: { v: 1 as const, kind: 'agent' as const, sessionId: publication.sessionId,
                     ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),

@@ -77,6 +77,15 @@ describe('session discussion content', () => {
     expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, sourceSession: undefined } }).success).toBe(false);
     expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, sourceSession: undefined,
       replyReturn: { serverId: 'home', requestLocalId: 'input' } } }).success).toBe(true);
+    const terminalPublication = { ...post, replyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn' },
+      terminalReturn: true };
+    expect(DiscussionAgentPublisherPublicationV1Schema.parse(terminalPublication)).toEqual(terminalPublication);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.parse({ ...replay, publication: terminalPublication }))
+      .toEqual({ ...replay, publication: terminalPublication });
+    // Only the verified host publisher can distinguish a final-return notice
+    // from an explicit answer; an authored RPC request cannot select it.
+    const { draftReview: _review, ...authoredTerminal } = terminalPublication;
+    expect(DiscussionAgentPostRequestV1Schema.safeParse(authoredTerminal).success).toBe(false);
     const unknown = { v: 1, ok: false, error: 'outcome_unknown' };
     expect(DiscussionAgentApprovedReplayResponseV1Schema.parse(unknown)).toEqual(unknown);
     expect(DiscussionAgentPostResponseV1Schema.safeParse(unknown).success).toBe(false);

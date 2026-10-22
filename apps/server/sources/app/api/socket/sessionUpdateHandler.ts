@@ -628,6 +628,7 @@ export function sessionUpdateHandler(
             const append = 'discussionId' in publication ? { ...actor, discussionId: publication.discussionId,
                 request: publication.request,
                 ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
+                ...(publication.terminalReturn ? { terminalReturn: publication.terminalReturn } : {}),
                 ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) } : null;
             const publish = () => publisher.presence.runAsCurrentPublisherInTx({
                 socket,
