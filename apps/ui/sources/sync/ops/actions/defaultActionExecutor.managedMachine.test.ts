@@ -19,12 +19,53 @@ import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/appr
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 
 installApprovalCommonModuleMocks();
 beforeAll(loadSyncSingletonForTests);
-afterEach(() => { resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); });
+afterEach(() => { resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); actionOperationStore.reset(); vi.restoreAllMocks(); });
 
 describe('managed native UI Action frontdoor', () => {
+    it('settles Delete to its filed Ask when the retained daemon operation keeps the HTTP request open', async () => {
+        const target = await upsertServerProfile({ serverUrl: 'https://native-delete-approval.test' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_native_delete');
+        await resetPendingQueueState({ serverId: 'server-b', accountId: 'account-b' });
+        const token = `e30.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'account-a', tokenEpoch: 3,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        setRuntimeFetch(async (rawUrl, init) => {
+            const url = new URL(String(rawUrl));
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/machines/managed/actions/get') return Response.json({
+                id: 'managed-a', homeId: 'srv_native_delete', custodianAccountId: 'account-a',
+                controller: { machineId: 'controller-a', installationId: 'installation-a' },
+                launch: { provider: { pluginId: 'happier.machine.cua', localId: 'local-sandbox' }, schemaVersion: 1, name: 'Guest', choices: {} },
+                resource: { contributionRef: { pluginId: 'happier.machine.cua', localId: 'local-sandbox' }, schemaVersion: 1, value: {} },
+                desired: 'stop', desiredWhen: 'now', allocation: 'bound', creationState: 'active', intentRevision: 3,
+                retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            });
+            if (url.pathname === '/v1/machines') return Response.json([]);
+            expect(url.pathname).toBe('/v1/actions/machines.managed.delete');
+            const requestId = String((JSON.parse(String(init?.body)) as { requestId: string }).requestId);
+            actionOperationStore.mergeSnapshots({ serverId: target.id, snapshots: [ActionOperationSnapshotV1Schema.parse({
+                version: 1, operationId: 'delete-operation', requestId, revision: 2,
+                actionId: 'machines.managed.delete', state: 'running', scope: { accountId: 'account-a', machineId: 'controller-a' },
+                title: 'Delete managed machine', createdAt: 1, startedAt: 2, cancellation: 'supported',
+                progress: { kind: 'phase', phase: 'waiting_for_approval', label: 'Waiting for approval',
+                    approval: { kind: 'approval_request_created', artifactId: 'delete-ask', actionId: 'machines.managed.delete' } },
+            })] });
+            return await new Promise<Response>(() => {});
+        });
+        const execution = createDefaultActionExecutor().execute('machines.managed.delete', {
+            homeId: 'srv_native_delete', managedId: 'managed-a', when: 'now', expectedRevision: 3,
+            intent: 'delete', reviewedDependencies: true,
+        }, { serverId: target.id, expectedAccountId: 'account-a', surface: 'ui', authority: 'present_user' });
+        expect(await Promise.race([execution, new Promise(resolve => setTimeout(() => resolve('still-pending'), 100))])).toEqual({
+            ok: true, result: { kind: 'approval_request_created', artifactId: 'delete-ask', actionId: 'machines.managed.delete' },
+        });
+    });
     it.each([
         ['ui', 'machines.provisioners.options'], ['voice', 'machines.provisioners.options'],
         ['ui', 'machines.environment.apply'], ['voice', 'machines.environment.apply'],

@@ -249,6 +249,7 @@ import { createMachinePoolActionClient, MachinePoolActionError } from '@/sync/ap
 import { createMachinePresetActionClient, MachinePresetActionError } from '@/sync/api/machines/managedMachinePresets';
 import { createManagedMachineActionClient, ManagedMachineActionError } from '@/sync/api/machines/managedMachineActions';
 import { executeManagedMachineNativeAction, withManagedMachineNativeReadLifetime } from '@/sync/api/machines/managedMachineOrigination';
+import { subscribeActionOperationByRequestId } from '@/sync/domains/actionOperations/subscribeActionOperationByRequestId';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { createUiManagedMachineReferenceReader } from './managedMachineReferenceDeps';
 import { resolveActionOriginationPreferenceFailureV1 } from '@happier-dev/protocol/actions/executor/actionOriginationPreferences';
@@ -4828,6 +4829,45 @@ function resolveNativeManagedAction(actionId: ActionId, opts?: DefaultActionExec
     && parsed.data !== 'machines.managed.references.get' ? parsed.data : null;
 }
 
+function executeManagedNativeActionWithApprovalObservation(params: Readonly<{
+  actionId: ManagedMachineActionIdV1;
+  requestId: string;
+  serverId: string;
+  accountId: string;
+  execute: () => Promise<ActionExecuteResult>;
+}>): Promise<ActionExecuteResult> {
+  return new Promise<ActionExecuteResult>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    const finish = (result: ActionExecuteResult) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      resolve(result);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      reject(error);
+    };
+    const stop = subscribeActionOperationByRequestId({
+      requestId: params.requestId,
+      serverId: params.serverId,
+      accountId: params.accountId,
+      onUpdate: operation => {
+        const approval = operation.state === 'running' && operation.actionId === params.actionId
+          && operation.progress?.kind === 'phase' ? operation.progress.approval : undefined;
+        if (approval?.kind !== 'approval_request_created' || approval.actionId !== params.actionId) return;
+        finish({ ok: true, result: approval });
+      },
+    });
+    unsubscribe = stop;
+    if (settled) unsubscribe();
+    void params.execute().then(finish, fail);
+  });
+}
+
 export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions): DefaultActionExecutor {
   let unscoped: ReturnType<typeof buildDefaultActionExecutor> | undefined;
   const ordinary = () => unscoped ?? (unscoped = buildDefaultActionExecutor(opts));
@@ -4875,17 +4915,21 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       try {
         const native = resolveNativeManagedAction(actionId, opts);
         const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, archiveOperation, archiveInput: input, serverId }, async (executor, account) => {
+          const actionRequestId = native ? actionContext.actionRequestId ?? randomUUID() : actionContext.actionRequestId;
           const capturedContext = {
             ...actionContext,
             signal,
             serverId,
+            ...(actionRequestId ? { actionRequestId } : {}),
             ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
             runtimeAccountId: account.accountId,
           };
           account.assertCurrent();
           throwIfAborted(signal);
-          return native ? await executor.executeNativeManagedAction(native, input, capturedContext)
-            : await executor.execute(actionId, input, capturedContext);
+          if (!native) return await executor.execute(actionId, input, capturedContext);
+          return await executeManagedNativeActionWithApprovalObservation({ actionId: native,
+            requestId: actionRequestId!, serverId, accountId: account.accountId,
+            execute: () => executor.executeNativeManagedAction(native, input, capturedContext) });
         }, actionId);
         return await (native ? withManagedMachineNativeReadLifetime(native, actionContext.signal, execute) : execute(actionContext.signal));
       } catch (error) {
