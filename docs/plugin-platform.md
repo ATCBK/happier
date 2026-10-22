@@ -820,6 +820,18 @@ contracts remain unchanged. Routing continuity does not automatically repair
 an endpoint's physical target; real placement/transport/credential/config changes
 retain Channels' transfer and endpoint-convergence owners.
 
+In unreleased 0.3 source, `actions.getCurrentExecutionRouting()` reads the
+invoking plugin's own current Home/Machine/plugin routing through that same
+caller-origin owner. It returns null when current origin evidence is unavailable;
+older hosts omit the optional read. Channels fails closed in both cases and
+compares this stamp with the retained connection placement before polling,
+projecting Session replies, or claiming, reconciling or settling outward custody.
+Retirement also checks placement while the connection exists. After connection
+deletion, the existing retention owner retires only eligible terminal custody at
+the unchanged thirty-day cutoff, using the same exact-revision CAS.
+The provider Action's target-routing check still runs before provider
+effects. Account-wide visibility alone does not place work on a daemon.
+
 In unreleased 0.3 source, background services invoke provider Actions through
 the same host-stamped caller and currentness checks as other plugin callers,
 including installed plugins. Registry shutdown, occurrence retirement and
@@ -3371,6 +3383,11 @@ then rotates through the existing exact-revision lease and credential CAS. Expir
 alone does not latch `needs_reauth`; an explicit reconnect-required or rejected
 result still does. Provider or transport outcomes that remain uncertain stay retryable. CLI `--auth cs:`
 selection resolves account identity and leaves credential admission to this owner.
+In 0.3 development, a selector naming the supported service, group/profile kind
+and exact id projects that identity without an inventory discovery request.
+Shorthand still uses inventory to resolve ambiguity. Missing groups/profiles,
+membership, revisions and credential health are admitted by the daemon before
+materialization and launch; a qualified selector cannot establish those facts.
 Once the current profile requires reconnect, automatic and foreground credential
 checks preserve that status rather than downgrading it from an expiry-only plugin
 observation and retrying the rejected grant. Reconnection supplies a new revision
