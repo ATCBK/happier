@@ -136,24 +136,77 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Machin
     targets?: readonly PluginExecutionOriginContextualTarget[];
 }>): Readonly<{ eligibilityKey: string; activityKey: string }> {
     const targets = params.targets ?? readPluginExecutionOriginMachineTargets(params);
-    // Capture activity once per target. Sorting used to rescan the whole fleet
-    // twice per comparison for every mounted plugin during census hydration.
-    const facts = targets.map(target => ({ target, ...readMachineFact(params, target) }));
-    // Activity only ranks executable targets. Moving a refused Machine around
-    // an eligible one changes neither admission nor the automatic choice.
-    const rankedActivity = (fact: typeof facts[number]) => fact.rejection === null ? fact.activeAt : 0;
-    const compareTarget = (left: typeof facts[number], right: typeof facts[number]) =>
-        left.target.serverIdentityId.localeCompare(right.target.serverIdentityId)
+    return createPluginMachineExecutionOriginMachineFacts({ ...params, targets }).getSnapshot();
+}
+
+/** Retained serialization at the existing publication, not an authorization cache. */
+export function createPluginMachineExecutionOriginMachineFacts(params: MachineFactInputs & Readonly<{
+    targets: readonly PluginExecutionOriginContextualTarget[];
+}>) {
+    type Row = { target: PluginExecutionOriginContextualTarget; fact: ReturnType<PluginExecutionOriginMachineFactReader>;
+        serialized: string; rank: number };
+    const compareTarget = (left: Row, right: Row) => left.target.serverIdentityId.localeCompare(right.target.serverIdentityId)
         || left.target.machineId.localeCompare(right.target.machineId);
-    const project = ({ target, rejection, eligible }: typeof facts[number]) => [
-        target.serverIdentityId, target.machineId, rejection, eligible,
-    ];
-    // Ranking may change on a heartbeat while every candidate remains admitted.
-    // Keep that input separate so re-election does not rebuild candidate facts.
-    const eligibilityKey = JSON.stringify([...facts].sort(compareTarget).map(project));
-    const activityKey = JSON.stringify(facts.sort((left, right) => rankedActivity(right) - rankedActivity(left)
-        || compareTarget(left, right)).map(project));
-    return { eligibilityKey, activityKey };
+    const activity = (row: Row) => row.fact.rejection === null ? row.fact.activeAt : 0;
+    const compareActivity = (left: Row, right: Row) => activity(right) - activity(left) || compareTarget(left, right);
+    const serializeRow = (target: PluginExecutionOriginContextualTarget, fact: Row['fact']) =>
+        JSON.stringify([target.serverIdentityId, target.machineId, fact.rejection, fact.eligible]);
+    const byHome = new Map<string, Map<string, Row[]>>();
+    const rows = params.targets.map(target => {
+        const fact = readMachineFact(params, target);
+        const row: Row = { target, fact, serialized: serializeRow(target, fact), rank: 0 };
+        let home = byHome.get(target.serverIdentityId);
+        if (!home) { home = new Map(); byHome.set(target.serverIdentityId, home); }
+        const duplicates = home.get(target.machineId);
+        if (duplicates) duplicates.push(row); else home.set(target.machineId, [row]);
+        return row;
+    }).sort(compareTarget);
+    const ranked = [...rows].sort(compareActivity);
+    ranked.forEach((row, index) => { row.rank = index; });
+    const serializeRows = (items: readonly Row[]) => `[${items.map(row => row.serialized).join(',')}]`;
+    let current = { eligibilityKey: serializeRows(rows), activityKey: serializeRows(ranked) };
+    return {
+        getSnapshot: () => current,
+        update(inputs: MachineFactInputs, changedTargets: readonly PluginExecutionOriginContextualTarget[] = params.targets) {
+            let eligibilityChanged = false;
+            let activityChanged = false;
+            for (const target of changedTargets) {
+                const selected = byHome.get(target.serverIdentityId)?.get(target.machineId);
+                if (!selected) continue;
+                const fact = readMachineFact(inputs, target);
+                for (const row of selected) {
+                    if (row.fact.activeAt === fact.activeAt && row.fact.eligible === fact.eligible && row.fact.rejection === fact.rejection) continue;
+                    if (row.fact.eligible !== fact.eligible || row.fact.rejection !== fact.rejection) {
+                        row.serialized = serializeRow(row.target, fact);
+                        eligibilityChanged = true;
+                    }
+                    row.fact = fact;
+                    // Most heartbeats retain order. Only an actual rank change
+                    // moves a row; unchanged targets are never read or serialized.
+                    const index = row.rank;
+                    if ((index > 0 && compareActivity(ranked[index - 1]!, row) > 0)
+                        || (index + 1 < ranked.length && compareActivity(row, ranked[index + 1]!) > 0)) {
+                        ranked.splice(index, 1);
+                        let low = 0;
+                        let high = ranked.length;
+                        while (low < high) {
+                            const middle = (low + high) >>> 1;
+                            if (compareActivity(ranked[middle]!, row) <= 0) low = middle + 1;
+                            else high = middle;
+                        }
+                        ranked.splice(low, 0, row);
+                        for (let rank = Math.min(index, low); rank <= Math.max(index, low); rank += 1) ranked[rank]!.rank = rank;
+                        activityChanged = true;
+                    }
+                }
+            }
+            if (eligibilityChanged || activityChanged) {
+                const next = { eligibilityKey: eligibilityChanged ? serializeRows(rows) : current.eligibilityKey,
+                    activityKey: serializeRows(ranked) };
+                if (next.eligibilityKey !== current.eligibilityKey || next.activityKey !== current.activityKey) current = next;
+            }
+        },
+    };
 }
 
 export function buildPluginMachineSourceExecutionOriginCandidates(params: MachineFactInputs & Readonly<{

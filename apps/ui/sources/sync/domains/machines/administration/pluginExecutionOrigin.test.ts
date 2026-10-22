@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import * as executionOrigins from './pluginExecutionOrigin';
 
 import {
     buildPluginMachineExecutionOriginCandidates,
@@ -21,6 +22,57 @@ const accountId = parseToken(createAccountTokenForTests('plugin-owner'));
 afterEach(clearMachineRequestReachabilityForTest);
 
 describe('execution-origin Machine fact serialization', () => {
+    it('updates only changed target facts and retains serialized eligibility across unrelated updates', () => {
+        const targets = Array.from({ length: 138 }, (_, index) => ({ serverIdentityId: 'srv_one', machineId: `machine-${index}` }));
+        const facts = new Map(targets.map((target, index) => [target.machineId,
+            { activeAt: index, eligible: true, rejection: null as 'revoked' | null }]));
+        let reads = 0;
+        const readMachineFact = (target: typeof targets[number]) => { reads += 1; return facts.get(target.machineId)!; };
+        const projection = executionOrigins.createPluginMachineExecutionOriginMachineFacts({ targets, machineSnapshots: [], readMachineFact });
+        const first = projection.getSnapshot();
+        reads = 0;
+        const target = targets[0]!;
+        for (let index = 1; index <= 5; index += 1) {
+            facts.set(target.machineId, { activeAt: index / 10, eligible: true, rejection: null });
+            projection.update({ machineSnapshots: [], readMachineFact }, [target]);
+            expect(projection.getSnapshot()).toBe(first);
+        }
+        expect(reads).toBe(5);
+        facts.set(target.machineId, { activeAt: 200, eligible: true, rejection: null });
+        projection.update({ machineSnapshots: [], readMachineFact }, [target]);
+        expect(projection.getSnapshot().eligibilityKey).toBe(first.eligibilityKey);
+        expect(JSON.parse(projection.getSnapshot().activityKey)[0]).toEqual(['srv_one', target.machineId, null, true]);
+        facts.set(target.machineId, { activeAt: 200, eligible: false, rejection: 'revoked' });
+        projection.update({ machineSnapshots: [], readMachineFact }, [target]);
+        expect(JSON.parse(projection.getSnapshot().eligibilityKey)).toContainEqual(['srv_one', target.machineId, 'revoked', false]);
+        expect(reads).toBe(7);
+    });
+
+    it('keeps incremental activity ordering equivalent to a fresh selection across ties, duplicate supplies and Home boundaries', () => {
+        const targets = ['srv_one', 'srv_two'].flatMap(serverIdentityId => ['a', 'b', 'c'].map(machineId => ({ serverIdentityId, machineId })));
+        targets.push({ ...targets[0]! });
+        const facts = new Map(targets.map((target, index) => [JSON.stringify(target),
+            { activeAt: index, eligible: true, rejection: null as 'revoked' | null }]));
+        const inputs = { machineSnapshots: [], readMachineFact: (target: typeof targets[number]) => facts.get(JSON.stringify(target))! };
+        const projection = executionOrigins.createPluginMachineExecutionOriginMachineFacts({ ...inputs, targets });
+        const initial = projection.getSnapshot();
+        for (const [target, fact] of facts) facts.set(target, { ...fact, activeAt: fact.activeAt + 10 });
+        projection.update(inputs, targets);
+        expect(projection.getSnapshot()).toBe(initial);
+        const changes = [
+            [targets[0]!, { activeAt: 100, eligible: true, rejection: null }],
+            [targets[3]!, { activeAt: 100, eligible: true, rejection: null }],
+            [targets[0]!, { activeAt: 200, eligible: false, rejection: 'revoked' }],
+            [targets[1]!, { activeAt: -1, eligible: true, rejection: null }],
+            [targets[0]!, { activeAt: 0, eligible: true, rejection: null }],
+        ] as const;
+        for (const [target, fact] of changes) {
+            facts.set(JSON.stringify(target), fact);
+            projection.update(inputs, [target]);
+            expect(projection.getSnapshot()).toEqual(serializePluginMachineExecutionOriginMachineFacts({ ...inputs, targets,
+                pluginId: 'acme.plugin', materializations: [], sources: [] }));
+        }
+    });
     it('ignores activity ordering among rejected targets but retains selectable target ordering', () => {
         const rows = ['machine-a', 'machine-b'];
         const materializations = rows.map(machineId => candidate({ serverIdentityId: 'srv_one', machineId,

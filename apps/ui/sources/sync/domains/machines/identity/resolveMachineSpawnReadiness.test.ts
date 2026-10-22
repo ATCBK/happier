@@ -3,6 +3,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import { canAttemptMachineSpawn, resolveMachineSpawnReadiness } from './resolveMachineSpawnReadiness';
 import { recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachinePickerPresence } from './resolveMachinePickerPresence';
 
 const scope = { serverId: 'readiness-home', accountId: 'readiness-account' };
 const onlineMachine: Machine = {
@@ -26,6 +27,16 @@ const onlineMachine: Machine = {
 };
 
 describe('resolveMachineSpawnReadiness', () => {
+    it('uses current roster reachability after an offline readiness snapshot, retaining exact probe refusals', () => {
+        const machine = { ...onlineMachine, activeAt: Date.now() };
+        expect(resolveMachinePickerPresence(machine, undefined, scope)).toEqual({ status: 'online', selectable: true });
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId: machine.id, machine,
+            spawnReadiness: { status: 'offline', machineId: machine.id } })).toBe(true);
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId: machine.id, machine,
+            spawnReadiness: { status: 'rpcUnavailable', machineId: machine.id } })).toBe(false);
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId: machine.id, machine,
+            spawnReadiness: { status: 'keyUnavailable', machineId: machine.id } })).toBe(false);
+    });
     it('does not admit a scoped failed machine from a fresh heartbeat', () => {
         const scope = { serverId: 'spawn-home', accountId: 'spawn-account' };
         recordMachineRequestFailed({ ...scope, machineId: onlineMachine.id });

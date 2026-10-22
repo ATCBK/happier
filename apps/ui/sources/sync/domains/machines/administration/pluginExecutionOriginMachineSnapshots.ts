@@ -2,17 +2,18 @@ import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
-import { getServerProfileById, areServerProfileIdentifiersEquivalent, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { loadMachineDisplayWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import { readRegisteredStorageState, subscribeRegisteredStorageState, subscribeRegisteredStorageMachineUpdates } from '@/sync/domains/state/storageStateReaderBridge';
 import type { storage } from '@/sync/domains/state/storageStore';
-import { serverAccountScopeListKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { createServerAccountScope, serverAccountScopeListKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAllProfileMachineInventorySnapshots, type ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
 import { readMachineRequestReachabilityRevision, subscribeMachineRequestReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { sessionListRuntimeClock, type SessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { resolveFleetSnapshotMachineRejection } from './fleetUnion';
-import { readPluginExecutionOriginMachineTargets, serializePluginMachineExecutionOriginMachineFacts,
+import { readPluginExecutionOriginMachineTargets, createPluginMachineExecutionOriginMachineFacts,
     buildPluginMachineExecutionOriginCandidates, buildPluginMachineSourceExecutionOriginCandidates,
     combinePluginMachineExecutionOriginCandidates, resolvePluginMachineExecutionOriginState,
     type PluginMachineReleaseClassificationV1, type PluginMachineExecutionOriginRejectionV1,
@@ -86,15 +87,30 @@ type InventoryPublication = Readonly<{
     state: StorageState;
     reachabilityRevision: number;
     observedAtMs: number;
+    homes: ReadonlyMap<string, InventoryHome>;
+    changedTargets: readonly PluginExecutionOriginContextualTarget[];
+    fullRefresh: boolean;
+    activeServerIdentityId: string;
+}>;
+type InventoryMachineFact = ReturnType<PluginExecutionOriginMachineFactReader>;
+type InventoryRow = Readonly<{
+    machine: ServerMachineInventorySnapshotV1['machines'][number];
+    eligible: boolean;
+    presence: string;
+    fact: InventoryMachineFact;
+    nextRefreshAtMs: number | null;
+}>;
+type InventoryHome = Readonly<{
+    snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }>;
+    rows: ReadonlyMap<string, InventoryRow>;
 }>;
 type Demand = {
     inputs: ExecutionOriginMachineSnapshotInputs;
     targets: readonly PluginExecutionOriginContextualTarget[];
     context: Context;
     facts: Readonly<{ eligibilityKey: string; activityKey: string }> | null;
+    factProjection: ReturnType<typeof createPluginMachineExecutionOriginMachineFacts> | null;
     factsInventory: InventoryPublication | null;
-    eligibilityFacts: readonly ReturnType<PluginExecutionOriginMachineFactReader>[];
-    rankedTargets: readonly PluginExecutionOriginContextualTarget[];
     current: ExecutionOriginMachineSnapshotSelection;
     snapshot: ExecutionOriginMachineSnapshotSelection;
     listener: () => void;
@@ -295,34 +311,22 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             if (demand.factsInventory !== inventory) {
                 const sibling = [...context.demands].find(other => other !== demand && other.inputs.pluginId === inputs.pluginId
                     && other.factsInventory === inventory && sameTargets(other.targets, demand.targets));
-                const rank = (target: PluginExecutionOriginContextualTarget) => {
-                    const fact = inventory.readMachineFact(target);
-                    return fact.rejection === null ? fact.activeAt : 0;
-                };
-                const compare = (left: PluginExecutionOriginContextualTarget, right: PluginExecutionOriginContextualTarget) =>
-                    rank(right) - rank(left) || left.serverIdentityId.localeCompare(right.serverIdentityId) || left.machineId.localeCompare(right.machineId);
-                const eligibilityUnchanged = demand.facts !== null && demand.targets.every((target, index) => {
-                    const next = inventory.readMachineFact(target);
-                    const previous = demand.eligibilityFacts[index];
-                    return previous?.eligible === next.eligible && previous.rejection === next.rejection;
-                });
-                const orderUnchanged = demand.facts !== null && demand.rankedTargets.every((target, index, targets) =>
-                    index === 0 || compare(targets[index - 1]!, target) <= 0);
                 if (sibling) {
                     demand.facts = sibling.facts;
-                    demand.eligibilityFacts = sibling.eligibilityFacts;
-                    demand.rankedTargets = sibling.rankedTargets;
-                } else if (!eligibilityUnchanged || !orderUnchanged) {
-                    demand.facts = serializePluginMachineExecutionOriginMachineFacts({ ...inputs,
-                        targets: demand.targets, machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact });
-                    demand.eligibilityFacts = demand.targets.map(inventory.readMachineFact);
-                    demand.rankedTargets = [...demand.targets].sort(compare);
+                    demand.factProjection = sibling.factProjection;
+                } else {
+                    const facts = { machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact };
+                    if (!demand.factProjection) demand.factProjection = createPluginMachineExecutionOriginMachineFacts({
+                        ...facts, targets: demand.targets,
+                    });
+                    else demand.factProjection.update(facts, inventory.fullRefresh ? undefined : inventory.changedTargets);
+                    demand.facts = demand.factProjection.getSnapshot();
                 }
                 demand.factsInventory = inventory;
             }
             const readinessHome = inputs.readinessServerIdentityId
                 ?? readPluginMachineExecutionTargetPreference(inventory.state.settings.machineAdministrationTargetsLocalV1, inputs.pluginId)?.serverIdentityId
-                ?? getServerProfileById(inputs.activeServerId)?.serverIdentityId ?? '';
+                ?? inventory.activeServerIdentityId;
             const prefix = `${context.key}\u0000${readinessHome}\u0000${inventory.pendingHomes.has(readinessHome)}\u0000`;
             const eligibilityKey = `${prefix}${demand.facts!.eligibilityKey}`;
             // Activity ranks an initial/replacement Auto choice. A heartbeat
@@ -361,32 +365,69 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 accountScopesByServerId: context.scopes, nowMs, loadWarmEntries: loadMachineDisplayWarmCacheEntries });
             let nextRefreshAtMs: number | null = null;
             const pendingHomes = new Set<string>();
-            const homes = new Map<string, Readonly<{ snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }>;
-                facts: ReadonlyMap<string, ReturnType<PluginExecutionOriginMachineFactReader>> }>>();
+            const homes = new Map<string, InventoryHome>();
+            const changedTargets: PluginExecutionOriginContextualTarget[] = [];
+            const resolveScopeId = captureServerProfileScopeResolver();
             for (const snapshot of snapshots) {
                 if ('serverIdentityId' in snapshot && isMachineInventoryPending(snapshot)) pendingHomes.add(snapshot.serverIdentityId);
+                if (snapshot.kind !== 'resolved') continue;
+                const old = previous?.homes.get(snapshot.serverIdentityId);
+                const sameAdmission = old !== undefined && old.snapshot.accountId === snapshot.accountId
+                    && old.snapshot.observation === snapshot.observation && old.snapshot.settled === snapshot.settled
+                    && previous !== null && nowMs >= previous.observedAtMs;
+                // A census/Account/reachability transition can change an absent
+                // demanded target too (unknown vs missing), without a row delta.
+                if (!sameAdmission && previous) for (const demand of context.demands) {
+                    for (const target of demand.targets) if (target.serverIdentityId === snapshot.serverIdentityId) changedTargets.push(target);
+                }
+                const eligible = new Set(snapshot.executionEligibleMachineIds);
+                const rows = new Map<string, InventoryRow>();
+                const scope = createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId);
                 for (const machine of snapshot.machines) {
-                    const deadline = readMachineStatusNextRefreshAtMs(machine, nowMs);
+                    const before = old?.rows.get(machine.id);
+                    const executionEligible = eligible.has(machine.id);
+                    const sameRow = sameAdmission && before?.machine === machine
+                        && before.fact.activeAt === machine.activeAt
+                        && (before.nextRefreshAtMs === null || nowMs < before.nextRefreshAtMs);
+                    const livePresence = sameRow && previous?.reachabilityRevision === revision
+                        ? null : resolveMachinePickerPresence(machine, nowMs, scope, resolveScopeId);
+                    const presence = livePresence ? livePresence.status === 'offline' ? livePresence.reason : livePresence.status : before!.presence;
+                    const unchanged = sameRow && before!.eligible === executionEligible && before!.presence === presence;
+                    let row = before;
+                    if (!unchanged) {
+                        const proposed = { activeAt: machine.activeAt, eligible: executionEligible,
+                            rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine, executionEligible }) };
+                        const fact = before && before.fact.activeAt === proposed.activeAt && before.fact.eligible === proposed.eligible
+                            && before.fact.rejection === proposed.rejection ? before.fact : proposed;
+                        row = { machine, eligible: executionEligible, presence, fact, nextRefreshAtMs: readMachineStatusNextRefreshAtMs(machine, nowMs) };
+                    }
+                    rows.set(machine.id, row!);
+                    if (before?.fact !== row!.fact) changedTargets.push({ serverIdentityId: snapshot.serverIdentityId, machineId: machine.id });
+                    const deadline = row!.nextRefreshAtMs;
                     if (deadline !== null && (nextRefreshAtMs === null || deadline < nextRefreshAtMs)) nextRefreshAtMs = deadline;
                 }
-                if (snapshot.kind !== 'resolved') continue;
-                const eligible = new Set(snapshot.executionEligibleMachineIds);
-                const facts = new Map(snapshot.machines.map(machine => [machine.id, {
-                    activeAt: machine.activeAt, eligible: eligible.has(machine.id),
-                    rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine, executionEligible: eligible.has(machine.id) }),
-                }] as const));
-                homes.set(snapshot.serverIdentityId, { snapshot, facts });
+                for (const machineId of old?.rows.keys() ?? []) if (!rows.has(machineId)) {
+                    changedTargets.push({ serverIdentityId: snapshot.serverIdentityId, machineId });
+                }
+                homes.set(snapshot.serverIdentityId, { snapshot, rows });
             }
-            context.inventory = { snapshots, nextRefreshAtMs, pendingHomes, state, observedAtMs: nowMs,
+            for (const [serverIdentityId, old] of previous?.homes ?? []) if (!homes.has(serverIdentityId)) {
+                for (const machineId of old.rows.keys()) changedTargets.push({ serverIdentityId, machineId });
+                for (const demand of context.demands) {
+                    for (const target of demand.targets) if (target.serverIdentityId === serverIdentityId) changedTargets.push(target);
+                }
+            }
+            context.inventory = { snapshots, nextRefreshAtMs, pendingHomes, state, observedAtMs: nowMs, homes, changedTargets, fullRefresh: !previous,
+                activeServerIdentityId: getServerProfileById(context.inputs.activeServerId)?.serverIdentityId ?? '',
                 reachabilityRevision: revision,
                 readMachineFact: target => {
                     const home = homes.get(target.serverIdentityId);
-                    return home?.facts.get(target.machineId) ?? { activeAt: 0, eligible: false,
+                    return home?.rows.get(target.machineId)?.fact ?? { activeAt: 0, eligible: false,
                         rejection: resolveFleetSnapshotMachineRejection({ snapshot: home?.snapshot, machine: undefined }) };
                 } };
         } else {
             if (previous.state.settings.machineAdministrationTargetsLocalV1 === state.settings.machineAdministrationTargetsLocalV1) return;
-            context.inventory = { ...previous, state };
+            context.inventory = { ...previous, state, changedTargets: [], fullRefresh: false };
         }
         for (const demand of context.demands) publishDemand(demand);
     }
@@ -408,8 +449,9 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                         ?? (areServerProfileIdentifiersEquivalent(context.inputs.activeServerId, serverId) ? Object.values(state.machines) : []);
                     // Changed-root updates already published. This receipt adds the
                     // heartbeat-only path that deliberately preserves the store root.
+                    const home = snapshot?.kind === 'resolved' ? context.inventory?.homes.get(snapshot.serverIdentityId) : undefined;
                     if (machineIds.some(id => rows?.find(row => row.id === id)?.activeAt
-                        !== snapshot?.machines.find(row => row.id === id)?.activeAt)) publishContext(context, true);
+                        !== home?.rows.get(id)?.fact.activeAt)) publishContext(context, true);
                 }
                 armClock();
             })].filter((stop): stop is () => void => stop !== null);
@@ -449,7 +491,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 const reuse = previous?.context === context && sameTargets(previous.targets, targets);
                 demand = { inputs: next, targets: reuse ? previous.targets : targets, context,
                     facts: reuse ? previous.facts : null, factsInventory: reuse ? previous.factsInventory : null,
-                    eligibilityFacts: reuse ? previous.eligibilityFacts : [], rankedTargets: reuse ? previous.rankedTargets : [],
+                    factProjection: reuse ? previous.factProjection : null,
                     current: previous?.current ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION,
                     snapshot: previous?.snapshot ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION, listener, retirements: [],
                     description: previous?.description ?? null };

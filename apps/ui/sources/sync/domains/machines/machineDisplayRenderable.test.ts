@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { MachineDisplayRenderable } from './machineDisplayRenderable';
 import {
     areMachineDisplayRenderablesEqual,
@@ -25,6 +26,19 @@ function makeMachineDisplay(partial: Partial<MachineDisplayRenderable> & Pick<Ma
 }
 
 describe('machine display renderables', () => {
+    it('captures heartbeat input scalars separately from a display retained and updated by the store', () => {
+        const machine = createMachineFixture({ activeAt: 10, updatedAt: 10 });
+        const first = buildMachineDisplayRenderableFromMachine(machine);
+        expect(buildMachineDisplayRenderableFromMachine(machine)).toBe(first);
+        // The store retains both raw and display objects for a presence-only
+        // publication and advances their receipt timestamps in place.
+        machine.activeAt = first.activeAt = 20;
+        machine.updatedAt = first.updatedAt = 20;
+        const refreshed = buildMachineDisplayRenderableFromMachine(machine);
+        expect(refreshed).not.toBe(first);
+        expect(refreshed).toMatchObject({ activeAt: 20, updatedAt: 20 });
+        expect(refreshed.metadata).toBe(first.metadata);
+    });
     it('invalidates an architecture-only update in both display subscription comparisons', () => {
         const before = makeMachineDisplay({ id: 'build', metadata: { platform: 'linux' } });
         const after = { ...before, metadata: { ...before.metadata, arch: 'x64' } };

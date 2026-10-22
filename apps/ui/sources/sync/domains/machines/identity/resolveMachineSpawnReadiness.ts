@@ -55,6 +55,9 @@ export function canAttemptMachineSpawn(params: Readonly<{
         nowMs: params.nowMs,
     });
     if (currentReadiness.status !== 'ready' && currentReadiness.status !== 'unknown' && currentReadiness.status !== 'probing') return false;
-    const readiness = params.spawnReadiness ?? currentReadiness;
+    // Retain only exact probe refusals. Presence and identity are projections
+    // of current Machine facts, so an older readiness snapshot cannot veto recovery.
+    const readiness = params.spawnReadiness?.status === 'rpcUnavailable' || params.spawnReadiness?.status === 'keyUnavailable'
+        ? params.spawnReadiness : currentReadiness;
     return readiness.status === 'ready' || readiness.status === 'unknown' || readiness.status === 'probing';
 }

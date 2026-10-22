@@ -43,8 +43,37 @@ export function buildMachineDisplayMetadata(metadata: MachineMetadata | null | u
     };
 }
 
+// Machine content is replaced at publication. Heartbeat receipt fields may be
+// updated in place, so identity alone cannot retain the projected display row.
+const machineDisplays = new WeakMap<Machine, Readonly<{
+    metadata: Machine['metadata'];
+    updatedAt: number;
+    activeAt: number;
+    display: MachineDisplayRenderable;
+}>>();
+
 export function buildMachineDisplayRenderableFromMachine(machine: Machine): MachineDisplayRenderable {
-    return {
+    const previous = machineDisplays.get(machine);
+    const display = previous?.display;
+    if (previous && display && previous.metadata === machine.metadata
+        && display.id === machine.id
+        && display.isShared === machine.isShared
+        && display.access === machine.access
+        && display.kind === machine.kind
+        && previous.updatedAt === machine.updatedAt
+        && display.updatedAt === machine.updatedAt
+        && display.active === machine.active
+        && previous.activeAt === machine.activeAt
+        && display.activeAt === machine.activeAt
+        && display.revokedAt === (machine.revokedAt ?? null)
+        && display.replacedByMachineId === (machine.replacedByMachineId ?? null)
+        && display.replacedAt === (machine.replacedAt ?? null)
+        && display.replacementReason === (machine.replacementReason ?? null)
+        && display.replacementSource === (machine.replacementSource ?? null)
+        && display.replacementActorUserId === (machine.replacementActorUserId ?? null)
+        && display.availability === machine.availability
+        && display.metadataVersion === machine.metadataVersion) return display;
+    const next = {
         id: machine.id,
         ...(machine.isShared !== undefined ? { isShared: machine.isShared } : {}),
         ...(machine.access ? { access: machine.access } : {}),
@@ -60,8 +89,12 @@ export function buildMachineDisplayRenderableFromMachine(machine: Machine): Mach
         replacementActorUserId: machine.replacementActorUserId ?? null,
         ...(machine.availability ? { availability: machine.availability } : {}),
         metadataVersion: machine.metadataVersion,
-        metadata: buildMachineDisplayMetadata(machine.metadata),
+        metadata: previous && previous.metadata === machine.metadata
+            ? previous.display.metadata : buildMachineDisplayMetadata(machine.metadata),
     };
+    machineDisplays.set(machine, { metadata: machine.metadata,
+        updatedAt: machine.updatedAt, activeAt: machine.activeAt, display: next });
+    return next;
 }
 
 export function areMachineDisplayRenderablesEqual(

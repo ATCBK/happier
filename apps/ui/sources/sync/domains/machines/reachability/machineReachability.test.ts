@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
+import * as reachabilityProtocol from '@happier-dev/protocol/machines/machineReachabilityV1';
+import * as scopeKeys from '@/sync/domains/scope/serverAccountScope';
+import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 import {
     clearMachineRequestReachabilityForTest,
@@ -12,15 +15,107 @@ import {
     recordMachineRequestFailed,
     recordMachineRequestSucceeded,
     subscribeMachineRequestReachability,
+    resolveMachineReachability,
+    withdrawMachinePresenceForScope,
+    captureMachinePresenceObservation,
 } from './machineReachability';
 
-afterEach(() => clearMachineRequestReachabilityForTest());
+afterEach(() => {
+    clearMachineRequestReachabilityForTest();
+    vi.unstubAllEnvs();
+});
 
 describe('machine reachability', () => {
+    it('derives only changed Machine verdicts while checking live expiry and scope withdrawal', () => {
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '60000');
+        const scope = { serverId: 'home', accountId: 'account-a' };
+        const machines = Array.from({ length: 138 }, (_, index) => ({ id: `machine-${index}`, active: true, activeAt: 100 }));
+        const resolveScope = captureServerProfileScopeResolver();
+        const derive = vi.spyOn(reachabilityProtocol, 'isMachineReachableV1');
+        try {
+            for (const machine of machines) expect(resolveMachineReachability(scope, machine, 110, resolveScope)).toBe('reachable');
+            derive.mockClear();
+            for (let publication = 0; publication < 5; publication += 1) {
+                machines[publication]!.activeAt += 1;
+                for (const machine of machines) expect(resolveMachineReachability(scope, machine, 120 + publication, resolveScope)).toBe('reachable');
+            }
+            expect(derive).toHaveBeenCalledTimes(5);
+
+            const machine = machines[0]!;
+            expect(resolveMachineReachability(scope, machine, machine.activeAt + 60_000, resolveScope)).toBe('reachable');
+            expect(resolveMachineReachability(scope, machine, machine.activeAt + 60_001, resolveScope)).toBe('unreachable');
+            // Backwards time and in-place heartbeat changes cannot retain an expired result.
+            expect(resolveMachineReachability(scope, machine, 110, resolveScope)).toBe('reachable');
+            machine.activeAt = 70_000;
+            expect(resolveMachineReachability(scope, machine, 70_000, resolveScope)).toBe('reachable');
+            recordMachineRequestFailed({ ...scope, machineId: machine.id, observedAtMs: 70_001 });
+            expect(resolveMachineReachability(scope, machine, 70_001, resolveScope)).toBe('unreachable');
+            recordMachineRequestSucceeded({ ...scope, machineId: machine.id, observedAtMs: 70_002 });
+            expect(resolveMachineReachability(scope, machine, 70_002, resolveScope)).toBe('reachable');
+            expect(resolveMachineReachability({ ...scope, accountId: 'account-b' }, machine, 70_002, resolveScope)).toBe('reachable');
+            withdrawMachinePresenceForScope(scope);
+            expect(resolveMachineReachability(scope, machine, 70_002, resolveScope)).toBe('unknown');
+            captureMachinePresenceObservation(scope)([machine.id]);
+            expect(resolveMachineReachability(scope, machine, 70_002, resolveScope)).toBe('reachable');
+            const mutable = { ...machine, revokedAt: 0 };
+            expect(resolveMachineReachability(scope, mutable, 70_002, resolveScope)).toBe('reachable');
+            mutable.revokedAt = 1;
+            expect(resolveMachineReachability(scope, mutable, 70_002, resolveScope)).toBe('unreachable');
+            machine.active = false;
+            expect(resolveMachineReachability(scope, machine, 70_002, resolveScope)).toBe('reachable');
+            vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '0');
+            expect(resolveMachineReachability(scope, machine, 70_002, resolveScope)).toBe('unreachable');
+        } finally {
+            derive.mockRestore();
+        }
+    });
+
+    it('reads a 138-Machine publication without rebuilding scoped keys or resolving each scope twice', () => {
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '60000');
+        const scope = { serverId: 'home', accountId: 'account-a' };
+        const machines = Array.from({ length: 138 }, (_, index) => ({ id: `machine-${index}`, active: true, activeAt: 100 }));
+        const resolveScope = vi.fn(captureServerProfileScopeResolver());
+        recordMachineRequestSucceeded({ ...scope, machineId: machines[0]!.id, observedAtMs: 100 });
+        const observation = readMachineRequestReachabilityObservation(scope, machines[0]!.id);
+        const encode = vi.spyOn(scopeKeys, 'serverAccountScopedResourceKey');
+        try {
+            for (let publication = 0; publication < 3; publication += 1) {
+                // An unrelated Machine change must not rebuild the other rows' identity keys.
+                machines[137]!.activeAt += 1;
+                recordMachineRequestSucceeded({ ...scope, machineId: machines[137]!.id, observedAtMs: 101 + publication });
+                for (const machine of machines) expect(resolveMachineReachability(scope, machine, 110, resolveScope)).toBe('reachable');
+                expect(readMachineRequestReachabilityObservation(scope, machines[0]!.id)).toBe(observation);
+            }
+            expect(resolveScope).toHaveBeenCalledTimes(138 * 3);
+            expect(encode).not.toHaveBeenCalled();
+        } finally {
+            encode.mockRestore();
+        }
+
+        // The same row object must still expose heartbeat expiry, mutation and revocation.
+        const machine = machines[0]!;
+        expect(resolveMachineReachability(scope, machine, 60_101)).toBe('unreachable');
+        machine.activeAt = 60_101;
+        expect(resolveMachineReachability(scope, machine, 60_101)).toBe('reachable');
+        expect(resolveMachineReachability(scope, { ...machine, revokedAt: 1 }, 60_101)).toBe('unreachable');
+
+        withdrawMachinePresenceForScope(scope);
+        const observe = captureMachinePresenceObservation(scope);
+        expect(resolveMachineReachability(scope, machine, 60_101)).toBe('unknown');
+        withdrawMachinePresenceForScope(scope);
+        observe([machine.id]);
+        expect(resolveMachineReachability(scope, machine, 60_101)).toBe('unknown');
+        captureMachinePresenceObservation(scope)([machine.id]);
+        expect(resolveMachineReachability(scope, machine, 60_101)).toBe('reachable');
+        expect(resolveMachineReachability(scope, machines[1]!, 110)).toBe('unknown');
+        expect(resolveMachineReachability({ ...scope, accountId: 'account-b' }, machines[1]!, 110)).toBe('reachable');
+    });
+
     it('retains a failed direct route across relay success and clears it at the exact reconnect edge', () => {
         const scope = { serverId: 'home', accountId: 'account-a' };
         const route = 'loopback_direct' as const;
         recordMachineRequestFailed({ ...scope, machineId: 'machine', route, observedAtMs: 20 });
+        expect(readMachineRequestReachabilityObservation({ serverId: ' home ', accountId: ' account-a ' }, ' machine ', route)?.outcome).toBe('failed');
         recordMachineRequestSucceeded({ ...scope, machineId: 'machine', observedAtMs: 30 });
         expect(isMachineReachable(scope, { id: 'machine', active: true }, 30)).toBe(true);
         expect(readMachineRequestReachabilityObservation(scope, 'machine', route)?.outcome).toBe('failed');

@@ -658,7 +658,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
 
     it('retains selection work across machine presentation updates while observing fresh eligibility and invocation data', async () => {
         // Observe the real expensive derivation; do not replace its implementation.
-        const serializeFacts = vi.spyOn(executionOrigin, 'serializePluginMachineExecutionOriginMachineFacts');
+        const createFacts = vi.spyOn(executionOrigin, 'createPluginMachineExecutionOriginMachineFacts');
         const serverIdentityId = 'srv_origin_presence';
         const url = 'https://origin-presence.example.test';
         await network.addHome(url, FIXTURE_ACCOUNT_ID);
@@ -688,6 +688,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             declaredDefaultOrigins: defaults, includeMachineCandidates: false });
         });
         const initial = hook.getCurrent();
+        expect(createFacts.mock.calls.length).toBeGreaterThan(0);
         expect(initial.canExecute).toBe(true);
         expect(initial.resolveExecutionOrigin()?.machineTarget.machine).toBe(machine);
 
@@ -695,7 +696,8 @@ describe('execution-origin plugin identity with real Account and machine owners'
         // replacing inventory facts. Observe serialization itself, forwarding JSON.
         const stringify = vi.spyOn(JSON, 'stringify');
         const machineFactsSerializations = () => stringify.mock.calls.filter(([value]) => Array.isArray(value)
-            && value.some(row => Array.isArray(row) && row[0] === serverIdentityId && row[1] === machine.id)).length;
+            && (value[0] === serverIdentityId && value[1] === machine.id
+                || value.some(row => Array.isArray(row) && row[0] === serverIdentityId && row[1] === machine.id))).length;
         // The shell reporter and open surface retain their own candidate
         // projections. Different declaration references need the same Machine facts.
         const detailedCandidates = candidates.map(candidate => ({ ...candidate, source: { ...candidate.source } }));
@@ -706,25 +708,25 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(detailedHook.getCurrent().candidates).toBe(hook.getCurrent().candidates);
         await hook.rerender();
         const settledSerializations = machineFactsSerializations();
-        const settledFactCalls = serializeFacts.mock.calls.length;
+        const settledFactCalls = createFacts.mock.calls.length;
         for (let index = 0; index < 5; index++) {
             await hook.rerender();
             await detailedHook.rerender();
         }
         console.info('execution-origin equal targets: 5 rerenders of 2 consumers', {
-            factCalls: serializeFacts.mock.calls.length - settledFactCalls,
+            factProjectionCreations: createFacts.mock.calls.length - settledFactCalls,
             serializations: machineFactsSerializations() - settledSerializations,
         });
-        expect(serializeFacts.mock.calls.length - settledFactCalls).toBe(0);
+        expect(createFacts.mock.calls.length - settledFactCalls).toBe(0);
         expect(machineFactsSerializations()).toBe(settledSerializations);
         await detailedHook.unmount();
 
-        const initialSerializations = serializeFacts.mock.calls.length;
+        const initialSerializations = createFacts.mock.calls.length;
         for (let version = 1; version <= 100; version += 1) {
             await act(async () => { storage.setState({ settingsVersion: version }); });
         }
-        const redundantSerializations = serializeFacts.mock.calls.length - initialSerializations;
-        console.info('execution-origin unchanged inventory: 100 settings-version updates, fact serializations =', redundantSerializations);
+        const redundantSerializations = createFacts.mock.calls.length - initialSerializations;
+        console.info('execution-origin unchanged inventory: 100 settings-version updates, fact projection creations =', redundantSerializations);
         expect(redundantSerializations).toBe(0);
         expect(hook.getCurrent().candidates).toBe(initial.candidates);
         expect(hook.getCurrent().canExecute).toBe(true);

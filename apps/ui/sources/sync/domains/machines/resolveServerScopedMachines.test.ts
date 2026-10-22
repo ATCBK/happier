@@ -33,6 +33,33 @@ describe('resolveServerScopedMachines', () => {
     });
     afterEach(() => standardCleanup());
 
+    it('reuses admitted membership for unchanged rows while rechecking current content and scoped list state', () => {
+        const rows = Array.from({ length: 138 }, (_, index) => createMachineFixture({
+            id: `incremental-${index}`, availability: { kind: 'available' },
+        }));
+        const context = { profile, serverIdentityId: identity, activeServerId: profile.id,
+            activeMachines: rows, machineListByServerId: { [identity]: rows },
+            machineListStatusByServerId: { [identity]: 'idle' as const } };
+        const admitted = readLiveMachineInventoryRows(context);
+        expect(admitted.size).toBe(138);
+        for (let index = 0; index < 10; index++) {
+            expect(readLiveMachineInventoryRows({ ...context }) === admitted).toBe(true);
+        }
+        const first = rows[0];
+        first.keyBasis = { dataEncryptionKey: 'new-key', metadataVersion: first.metadataVersion + 1,
+            daemonStateVersion: first.daemonStateVersion };
+        const pending = readLiveMachineInventoryRows(context);
+        expect(pending).not.toBe(admitted);
+        expect(pending.has(first)).toBe(false);
+        expect(readLiveMachineInventoryRows({ ...context, retainOpenedContent: true }).has(first)).toBe(true);
+        first.metadataVersion += 1;
+        expect(readLiveMachineInventoryRows(context).has(first)).toBe(true);
+        expect(readLiveMachineInventoryRows({ ...context,
+            machineListStatusByServerId: { [identity]: 'signedOut' } }).size).toBe(0);
+        expect(readLiveMachineInventoryRows({ ...context,
+            machineListByServerId: { [identity]: [], [profile.id]: rows } }).size).toBe(0);
+    });
+
     it.each(['idle', 'loading'] as const)('qualifies only admitted current scoped rows while %s, never an active fallback or stale alias', (status) => {
         const ready = createMachineFixture({ id: 'ready', availability: { kind: 'available' } });
         const pending = createMachineFixture({ id: 'pending', metadata: null });

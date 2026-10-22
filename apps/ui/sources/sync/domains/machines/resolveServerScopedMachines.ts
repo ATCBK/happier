@@ -21,6 +21,18 @@ type MachineWithId = MachineLike & Readonly<{
     keyBasis?: Readonly<{ metadataVersion: number; daemonStateVersion: number }> | null;
 }>;
 
+type MachineInventoryRowReadiness = 'available' | 'pending' | 'unavailable';
+const rowReadiness = new WeakMap<MachineWithId, Readonly<{
+    metadata: unknown;
+    availabilityKind: string | undefined;
+    metadataVersion: number | undefined;
+    daemonStateVersion: number | undefined;
+    keyBasis: MachineWithId['keyBasis'];
+    keyMetadataVersion: number | undefined;
+    keyDaemonStateVersion: number | undefined;
+    readiness: MachineInventoryRowReadiness;
+}>>();
+
 /** A newer published hint must be opened before its content can authorize execution. */
 export function hasCurrentMachineContent(machine: MachineWithId): boolean {
     return machine.metadata != null && (!machine.keyBasis
@@ -29,11 +41,32 @@ export function hasCurrentMachineContent(machine: MachineWithId): boolean {
 }
 
 /** Content admission is independent of list settlement and presence. */
-export function readMachineInventoryRowReadiness(machine: MachineWithId): 'available' | 'pending' | 'unavailable' {
-    if (machine.availability?.kind === 'locked') return 'unavailable';
-    if (machine.availability?.kind === 'available') return machine.metadata == null ? 'unavailable'
-        : hasCurrentMachineContent(machine) ? 'available' : 'pending';
-    return 'pending';
+export function readMachineInventoryRowReadiness(machine: MachineWithId): MachineInventoryRowReadiness {
+    const { metadata, metadataVersion, daemonStateVersion, keyBasis } = machine;
+    const availabilityKind = machine.availability?.kind;
+    const keyMetadataVersion = keyBasis?.metadataVersion;
+    const keyDaemonStateVersion = keyBasis?.daemonStateVersion;
+    const previous = rowReadiness.get(machine);
+    if (previous && previous.metadata === metadata && previous.availabilityKind === availabilityKind
+        && previous.metadataVersion === metadataVersion && previous.daemonStateVersion === daemonStateVersion
+        && previous.keyBasis === keyBasis && previous.keyMetadataVersion === keyMetadataVersion
+        && previous.keyDaemonStateVersion === keyDaemonStateVersion) return previous.readiness;
+    const readiness = availabilityKind === 'locked' || (availabilityKind === 'available' && metadata == null)
+        ? 'unavailable' : availabilityKind === 'available' && hasCurrentMachineContent(machine) ? 'available' : 'pending';
+    rowReadiness.set(machine, { metadata, availabilityKind, metadataVersion, daemonStateVersion,
+        keyBasis, keyMetadataVersion, keyDaemonStateVersion, readiness });
+    return readiness;
+}
+
+const liveRowsByInventory = new WeakMap<readonly MachineWithId[], {
+    current?: ReadonlySet<MachineWithId>;
+    opened?: ReadonlySet<MachineWithId>;
+}>();
+const EMPTY_LIVE_MACHINE_ROWS: ReadonlySet<never> = new Set();
+
+function isLiveMachineInventoryRow(machine: MachineWithId, retainOpenedContent: boolean): boolean {
+    return readMachineInventoryRowReadiness(machine) === 'available'
+        || (retainOpenedContent && machine.availability?.kind === 'available' && machine.metadata != null);
 }
 
 /**
@@ -84,16 +117,38 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
         serverIdAliases: [params.profile.id, ...(params.profile.legacyServerIds ?? [])],
     }, resolveScopeId);
     // A failed list read (`error`) never proves a retained row gone; only an unobserved or signed-out Home admits nothing.
-    if (inventory.status !== 'idle' && inventory.status !== 'loading' && inventory.status !== 'error') return new Set();
+    if (inventory.status !== 'idle' && inventory.status !== 'loading' && inventory.status !== 'error') return EMPTY_LIVE_MACHINE_ROWS;
     // A row's admitted content need not wait for unrelated fleet hydration.
     // Use scoped membership here: the active display fallback may still contain
     // an older row or a socket-only presence shell absent from the current list.
     // A refresh may retain the previous idle list status while newer content is
     // pending, so the row's readiness is required for both list states.
-    return new Set((inventory.machines ?? []).filter(machine => (
-        readMachineInventoryRowReadiness(machine) === 'available'
-        || (params.retainOpenedContent === true && machine.availability?.kind === 'available' && machine.metadata != null)
-    )));
+    const machines = inventory.machines;
+    if (!machines) return EMPTY_LIVE_MACHINE_ROWS;
+    const retainOpenedContent = params.retainOpenedContent === true;
+    const mode = retainOpenedContent ? 'opened' : 'current';
+    const cached = liveRowsByInventory.get(machines);
+    const previous = cached?.[mode];
+    if (previous) {
+        let admittedCount = 0;
+        let unchanged = true;
+        for (const machine of machines) {
+            const admitted = isLiveMachineInventoryRow(machine, retainOpenedContent);
+            if (admitted) admittedCount += 1;
+            if (previous.has(machine) !== admitted) { unchanged = false; break; }
+        }
+        // The cache is keyed by this exact array of T; only its original rows
+        // are ever inserted. Scope/status were resolved fresh before this read.
+        if (unchanged && admittedCount === previous.size) return previous as ReadonlySet<T>;
+    }
+    const rows = new Set<T>();
+    for (const machine of machines) {
+        if (isLiveMachineInventoryRow(machine, retainOpenedContent)) rows.add(machine);
+    }
+    const next = cached ?? { current: undefined, opened: undefined };
+    next[mode] = rows;
+    liveRowsByInventory.set(machines, next);
+    return rows;
 }
 
 /** The same ordered Home keys drive inventory reads and their subscription signatures. */

@@ -1,6 +1,6 @@
 import { isMachineReachableV1, isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
-import { createServerAccountScope, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 import type { SessionMachineReachability } from './resolveSessionMachineReachability';
 
@@ -18,17 +18,65 @@ type MachineRequestObservationInput = MachineReachabilityScope & Readonly<{
     route?: 'loopback_direct';
 }>;
 
-const observations = new Map<string, MachineRequestReachabilityObservation>();
-// A transport withdrawal invalidates retained presence, not Machine identity.
-// Each fresh ingress/read re-observes only its own Machine in that exact scope.
-const withdrawnPresence = new Map<string, Set<string>>();
+type ScopeReachability = {
+    relay: Map<string, MachineRequestReachabilityObservation>;
+    direct: Map<string, MachineRequestReachabilityObservation>;
+    // A transport withdrawal invalidates retained presence, not Machine identity.
+    // Each fresh ingress/read re-observes only its own Machine in that exact scope.
+    observedSinceWithdrawal?: Set<string>;
+};
+
+// Index the identity parts directly: reads do not rebuild encoded resource keys.
+const scopes = new Map<string, Map<string, ScopeReachability>>();
+type MachinePresence = Parameters<typeof isMachineReachable>[1];
+type DerivedReachability = {
+    serverId: string;
+    accountId: string;
+    machineId: string;
+    active: boolean;
+    activeAt: number | null | undefined;
+    revokedAt: number | null | undefined;
+    observation: MachineRequestReachabilityObservation | null;
+    graceMs: number;
+    evaluatedAtMs: number;
+    reachable: boolean;
+};
+// A row's descriptive verdict is derived again only when its own inputs change.
+// Scope, request failure, revocation and withdrawal remain live checks on every read.
+let derivedReachability = new WeakMap<MachinePresence, DerivedReachability>();
 const listeners = new Set<() => void>();
 const recoveryListeners = new Set<(scope: MachineReachabilityScope, machineId: string) => void>();
 let revision = 0;
 
-function presenceScopeKey(scope: MachineReachabilityScope | null | undefined, resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): string | null {
-    const normalized = createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
-    return normalized ? serverAccountScopedResourceKey(normalized) : null;
+function normalizeScope(scope: MachineReachabilityScope | null | undefined, resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): MachineReachabilityScope | null {
+    return createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
+}
+
+function readScope(scope: MachineReachabilityScope): ScopeReachability | undefined {
+    return scopes.get(scope.serverId)?.get(scope.accountId);
+}
+
+function ensureScope(scope: MachineReachabilityScope): ScopeReachability {
+    let accounts = scopes.get(scope.serverId);
+    if (!accounts) scopes.set(scope.serverId, accounts = new Map());
+    let state = accounts.get(scope.accountId);
+    if (!state) {
+        state = { relay: new Map(), direct: new Map() };
+        accounts.set(scope.accountId, state);
+    }
+    return state;
+}
+
+function retireEmptyScope(scope: MachineReachabilityScope, state: ScopeReachability | undefined): void {
+    if (!state || state.relay.size > 0 || state.direct.size > 0 || state.observedSinceWithdrawal) return;
+    const accounts = scopes.get(scope.serverId);
+    accounts?.delete(scope.accountId);
+    if (accounts?.size === 0) scopes.delete(scope.serverId);
+}
+
+function readObservation(state: ScopeReachability | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route']): MachineRequestReachabilityObservation | null {
+    const id = String(machineId ?? '').trim();
+    return state && id ? (route ? state.direct : state.relay).get(id) ?? null : null;
 }
 
 function publishReachabilityChange(): void {
@@ -38,18 +86,19 @@ function publishReachabilityChange(): void {
 
 /** Called by the existing Account socket's transport-withdrawal edge. Reconnect alone is not a presence observation. */
 export function withdrawMachinePresenceForScope(scope: MachineReachabilityScope): void {
-    const key = presenceScopeKey(scope);
-    if (!key) return;
-    withdrawnPresence.set(key, new Set());
+    const normalized = normalizeScope(scope);
+    if (!normalized) return;
+    ensureScope(normalized).observedSinceWithdrawal = new Set();
     publishReachabilityChange();
 }
 
 /** Capture before an HTTP read so a pre-withdrawal response cannot restore old presence. */
 export function captureMachinePresenceObservation(scope: MachineReachabilityScope | null): (machineIds: readonly string[]) => void {
-    const key = presenceScopeKey(scope);
-    const captured = key ? withdrawnPresence.get(key) : undefined;
+    const normalized = normalizeScope(scope);
+    const state = normalized ? readScope(normalized) : undefined;
+    const captured = state?.observedSinceWithdrawal;
     return machineIds => {
-        if (!key || !captured || withdrawnPresence.get(key) !== captured) return;
+        if (!captured || state?.observedSinceWithdrawal !== captured) return;
         let changed = false;
         for (const machineId of machineIds) {
             if (!captured.has(machineId)) { captured.add(machineId); changed = true; }
@@ -58,25 +107,20 @@ export function captureMachinePresenceObservation(scope: MachineReachabilityScop
     };
 }
 
-function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route'], resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): string | null {
-    const normalizedScope = createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
-    const normalizedMachineId = String(machineId ?? '').trim();
-    return normalizedScope && normalizedMachineId
-        ? serverAccountScopedResourceKey(normalizedScope, normalizedMachineId, ...(route ? [route] : []))
-        : null;
-}
-
 function recordMachineRequestObservation(
     input: MachineRequestObservationInput,
     outcome: MachineRequestReachabilityObservation['outcome'],
 ): void {
-    const key = observationKey(input, input.machineId, input.route);
-    if (!key) return;
+    const normalized = normalizeScope(input);
+    const id = String(input.machineId ?? '').trim();
+    if (!normalized || !id) return;
+    const state = ensureScope(normalized);
+    const observations = input.route ? state.direct : state.relay;
     const observedAtMs = input.observedAtMs ?? Date.now();
-    const previous = observations.get(key);
+    const previous = observations.get(id);
     if (previous && previous.observedAtMs > observedAtMs) return;
     if (previous?.outcome === outcome && previous.observedAtMs === observedAtMs) return;
-    observations.set(key, { outcome, observedAtMs });
+    observations.set(id, { outcome, observedAtMs });
     // Retain freshness for late-result ordering without reopening automatic readers.
     if (previous?.outcome === outcome) return;
     revision += 1;
@@ -97,8 +141,8 @@ export function readMachineRequestReachabilityObservation(
     route?: MachineRequestObservationInput['route'],
     resolveScopeId?: ProfileScopeResolver,
 ): MachineRequestReachabilityObservation | null {
-    const key = observationKey(scope, machineId, route, resolveScopeId);
-    return key ? observations.get(key) ?? null : null;
+    const normalized = normalizeScope(scope, resolveScopeId);
+    return normalized ? readObservation(readScope(normalized), machineId, route) : null;
 }
 
 export function subscribeMachineRequestReachability(listener: () => void): () => void {
@@ -137,26 +181,51 @@ export function resolveMachineReachability(
     nowMs: number = Date.now(),
     resolveScopeId?: ProfileScopeResolver,
 ): SessionMachineReachability {
-    const key = presenceScopeKey(scope, resolveScopeId);
-    if (!key) return 'unknown';
-    const requestOutcome = readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome;
+    const normalized = normalizeScope(scope, resolveScopeId);
+    if (!normalized) return 'unknown';
+    const state = readScope(normalized);
+    const observation = readObservation(state, machine.id);
+    const requestOutcome = observation?.outcome;
     if ((typeof machine.revokedAt === 'number' && Number.isFinite(machine.revokedAt) && machine.revokedAt > 0)
         || requestOutcome === 'failed') return 'unreachable';
-    const observedSinceWithdrawal = withdrawnPresence.get(key);
+    const observedSinceWithdrawal = state?.observedSinceWithdrawal;
     if (observedSinceWithdrawal && !observedSinceWithdrawal.has(machine.id)) return 'unknown';
-    return isMachineReachableV1({ machine, nowMs, graceMs: readMachineOnlineGraceMsFromEnv(), requestOutcome })
-        ? 'reachable' : 'unreachable';
+    const graceMs = readMachineOnlineGraceMsFromEnv();
+    const previous = derivedReachability.get(machine);
+    const activeAt = machine.activeAt;
+    if (previous && previous.serverId === normalized.serverId && previous.accountId === normalized.accountId
+        && previous.machineId === machine.id && previous.active === machine.active && previous.activeAt === activeAt
+        && previous.revokedAt === machine.revokedAt && previous.observation === observation
+        && previous.graceMs === graceMs
+        && Number.isFinite(nowMs) && nowMs >= previous.evaluatedAtMs
+        // Protocol grace is inclusive. A reachable timed verdict must be re-derived
+        // after that boundary; an expired verdict stays expired as time advances.
+        && (!previous.reachable || graceMs <= 0 || typeof activeAt !== 'number' || !activeAt || !Number.isFinite(activeAt)
+            || Math.max(0, nowMs - activeAt) <= graceMs)) {
+        return previous.reachable ? 'reachable' : 'unreachable';
+    }
+    const reachable = isMachineReachableV1({ machine, nowMs, graceMs, requestOutcome });
+    if (Number.isFinite(nowMs)) {
+        derivedReachability.set(machine, {
+            serverId: normalized.serverId, accountId: normalized.accountId, machineId: machine.id,
+            active: machine.active, activeAt, revokedAt: machine.revokedAt, observation,
+            graceMs, evaluatedAtMs: nowMs, reachable,
+        });
+    }
+    return reachable ? 'reachable' : 'unreachable';
 }
 
 /** The protocol-owned verdict; a failed request overrides pushed presence until a later reply or reconnect. */
 export const isMachineRequestReachabilityFailure = isMachineRequestReachabilityFailureV1;
 
 export function clearMachineRequestReachabilityForMachine(scope: MachineReachabilityScope, machineId: string): void {
-    const key = observationKey(scope, machineId);
-    if (!key) return;
-    const changed = observations.delete(key);
-    const directKey = observationKey(scope, machineId, 'loopback_direct');
-    const directChanged = directKey ? observations.delete(directKey) : false;
+    const normalized = normalizeScope(scope);
+    const id = String(machineId ?? '').trim();
+    if (!normalized || !id) return;
+    const state = readScope(normalized);
+    const changed = state?.relay.delete(id) ?? false;
+    const directChanged = state?.direct.delete(id) ?? false;
+    retireEmptyScope(normalized, state);
     if (changed || directChanged) {
         revision += 1;
         for (const listener of listeners) listener();
@@ -165,22 +234,29 @@ export function clearMachineRequestReachabilityForMachine(scope: MachineReachabi
 }
 
 export function clearMachineRequestReachabilityForScope(scope: MachineReachabilityScope): void {
-    const normalizedScope = createServerAccountScope(resolveServerProfileScopeIdForIdentifier(scope.serverId), scope.accountId);
+    const normalizedScope = normalizeScope(scope);
     if (!normalizedScope) return;
-    const prefix = serverAccountScopedResourceKey(normalizedScope);
-    let changed = false;
-    for (const key of observations.keys()) {
-        if (key.startsWith(prefix)) changed = observations.delete(key) || changed;
-    }
-    if (!changed) return;
+    const state = readScope(normalizedScope);
+    if (!state || (state.relay.size === 0 && state.direct.size === 0)) return;
+    state.relay.clear();
+    state.direct.clear();
+    retireEmptyScope(normalizedScope, state);
     revision += 1;
     for (const listener of listeners) listener();
 }
 
 export function clearMachineRequestReachabilityForTest(): void {
-    if (observations.size === 0 && withdrawnPresence.size === 0) return;
-    observations.clear();
-    withdrawnPresence.clear();
+    derivedReachability = new WeakMap();
+    let changed = false;
+    for (const accounts of scopes.values()) {
+        for (const state of accounts.values()) {
+            changed ||= state.relay.size > 0 || state.direct.size > 0 || state.observedSinceWithdrawal !== undefined;
+            // Retire captured ingress callbacks along with their scope.
+            state.observedSinceWithdrawal = undefined;
+        }
+    }
+    scopes.clear();
+    if (!changed) return;
     revision += 1;
     for (const listener of listeners) listener();
 }

@@ -230,6 +230,20 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 serverIdentityId,
                 retainOpenedContent: true,
             }, resolveScopeId);
+            const executionEligibleMachineIds: string[] = [];
+            const executionPendingMachineIds: string[] = [];
+            const machines: MachineDisplayRenderable[] = [];
+            for (const machine of raw.machines) {
+                // Presence is a live, self-expiring fact. Resolve it once for
+                // both projections without making display reuse an admission.
+                if (isMachineSelectableForFleet(accountScope, machine, params.nowMs, resolveScopeId)) {
+                    if (liveRows.has(machine)) executionEligibleMachineIds.push(machine.id);
+                    if (raw.observation === 'live' && readMachineInventoryRowReadiness(machine) === 'pending') {
+                        executionPendingMachineIds.push(machine.id);
+                    }
+                }
+                if (isPersistentMachine(machine)) machines.push(buildMachineDisplayRenderableFromMachine(machine));
+            }
             snapshots.push(Object.freeze({
                 kind: 'resolved',
                 accountId: accountScope?.accountId ?? null,
@@ -239,18 +253,9 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 observation: raw.observation,
                 inventoryStatus: raw.inventoryStatus,
                 ...(raw.settled ? { settled: true as const } : {}),
-                executionEligibleMachineIds: Object.freeze(raw.machines.filter((machine) => (
-                    isMachineSelectableForFleet(accountScope, machine, params.nowMs, resolveScopeId)
-                    && liveRows.has(machine)
-                )).map((machine) => machine.id)),
-                executionPendingMachineIds: Object.freeze(raw.observation === 'live' ? raw.machines.filter((machine) => (
-                    isMachineSelectableForFleet(accountScope, machine, params.nowMs, resolveScopeId)
-                    && readMachineInventoryRowReadiness(machine) === 'pending'
-                )).map((machine) => machine.id) : []),
-                machines: Object.freeze(raw.machines
-                    .filter(isPersistentMachine)
-                    .map(buildMachineDisplayRenderableFromMachine)
-                    .sort(compareMachineDisplays)),
+                executionEligibleMachineIds: Object.freeze(executionEligibleMachineIds),
+                executionPendingMachineIds: Object.freeze(executionPendingMachineIds),
+                machines: Object.freeze(machines.sort(compareMachineDisplays)),
             }));
             continue;
         }

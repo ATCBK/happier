@@ -7,12 +7,16 @@ import { createSessionListRuntimeClock } from '@/hooks/session/sessionListRuntim
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import * as inventory from '@/sync/domains/machines/machineInventorySnapshots';
 import * as origins from './pluginExecutionOrigin';
+import * as fleet from './fleetUnion';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed,
+    recordMachineRequestSucceeded, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { createExecutionOriginMachineSnapshotPublication, type ExecutionOriginMachineSnapshotInputs } from './pluginExecutionOriginMachineSnapshots';
 
 const originalState = storage.getState();
 const connections: Array<{ dispose(): void }> = [];
 afterEach(() => {
     for (const connection of connections.splice(0)) connection.dispose();
+    clearMachineRequestReachabilityForTest();
     storage.setState(originalState, true);
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -46,6 +50,72 @@ function fixture() {
 }
 
 describe('execution-origin Machine publication', () => {
+    it('invalidates retained facts on scoped request/withdrawal changes and absent-row census settlement', () => {
+        const { inputs, home, machine, connect } = fixture();
+        const scope = inputs.accountScopesByServerId.get(home.serverIdentityId)!;
+        const connection = connect();
+        const target = { serverIdentityId: home.serverIdentityId, machineId: machine.id };
+        const fact = () => connection.readCurrent().readMachineFact(target);
+        expect(fact()).toMatchObject({ eligible: true, rejection: null });
+        withdrawMachinePresenceForScope(scope);
+        expect(fact()).toMatchObject({ eligible: false, rejection: 'unknown' });
+        captureMachinePresenceObservation(scope)([machine.id]);
+        expect(fact()).toMatchObject({ eligible: true, rejection: null });
+        recordMachineRequestFailed({ ...scope, machineId: machine.id, observedAtMs: 10 });
+        expect(fact()).toMatchObject({ eligible: false, rejection: 'home_unreachable' });
+        recordMachineRequestSucceeded({ ...scope, machineId: machine.id, observedAtMs: 11 });
+        expect(fact()).toMatchObject({ eligible: true, rejection: null });
+        storage.setState({ machineListByServerId: { [home.id]: [] }, machineListStatusByServerId: { [home.id]: 'loading' } });
+        expect(fact().rejection).toBe('unknown');
+        storage.setState({ machineListStatusByServerId: { [home.id]: 'idle' } });
+        expect(fact().rejection).toBe('missing');
+        expect(connection.getSnapshot().key).toContain('missing');
+        storage.setState({ machineListByServerId: { [home.id]: [machine] } });
+        expect(fact()).toMatchObject({ eligible: true, rejection: null });
+        // A profile correspondence rebuild replaces the whole inventory basis;
+        // previously selected targets can disappear without a changed row.
+        connection.updateInputs({ ...inputs, profilesGeneration: 2,
+            profiles: [{ ...home, serverIdentityId: undefined }] });
+        expect(fact()).toMatchObject({ eligible: false, rejection: 'unknown' });
+        expect(connection.getSnapshot().key).toContain('unknown');
+    });
+    it('retains unchanged Machine facts and reads only the changed target across a fleet publication', () => {
+        const { inputs, home, source, machine, connect } = fixture();
+        const machines = [machine, ...Array.from({ length: 137 }, (_, index) => createMachineFixture({
+            id: `unrelated-${index}`, activeAt: Date.now() - index - 1,
+        }))];
+        storage.setState({ machineListByServerId: { [home.id]: machines } });
+        const sources = machines.map(row => ({ ...source, source: { ...source.source,
+            origin: { ...source.source.origin, sourceRef: { ...source.source.origin.sourceRef, machineId: row.id } } } }));
+        const connection = connect({ ...inputs, sources });
+        const untouchedTarget = { serverIdentityId: home.serverIdentityId, machineId: machine.id };
+        const untouched = connection.readCurrent().readMachineFact(untouchedTarget);
+        const originalRead = connection.readCurrent().readMachineFact;
+        const initial = connection.getSnapshot();
+        const rejectionReads = vi.spyOn(fleet, 'resolveFleetSnapshotMachineRejection');
+        for (let index = 1; index <= 5; index += 1) {
+            const next = [...machines];
+            next[1] = { ...next[1]!, metadata: { ...next[1]!.metadata!, displayName: `renamed-${index}` } };
+            storage.setState({ machineListByServerId: { [home.id]: next } });
+            expect(connection.readCurrent().readMachineFact(untouchedTarget)).toBe(untouched);
+            expect(connection.getSnapshot()).toBe(initial);
+            // The current raw accessor remains usable, but does not stand in for
+            // fresh invocation admission or change when another row changes.
+            expect(originalRead(untouchedTarget)).toBe(untouched);
+        }
+        expect(rejectionReads).toHaveBeenCalledTimes(5);
+        const scope = inputs.accountScopesByServerId.get(home.serverIdentityId)!;
+        recordMachineRequestFailed({ ...scope, machineId: machines[2]!.id });
+        expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId,
+            machineId: machines[2]!.id }).rejection).toBe('home_unreachable');
+        expect(connection.readCurrent().readMachineFact(untouchedTarget)).toBe(untouched);
+        expect(rejectionReads).toHaveBeenCalledTimes(6);
+        recordMachineRequestSucceeded({ ...scope, machineId: machines[2]!.id });
+        expect(rejectionReads).toHaveBeenCalledTimes(7);
+        storage.setState({ machineListByServerId: { [home.id]: [{ ...machine, revokedAt: Date.now() }, ...machines.slice(1)] } });
+        expect(connection.readCurrent().readMachineFact(untouchedTarget)).toMatchObject({ rejection: 'revoked', eligible: false });
+        expect(connection.getSnapshot().eligibilityKey).not.toBe(initial.eligibilityKey);
+    });
     it('retains Auto across heartbeat elections, shares it with a new consumer and gives explicit pins precedence', () => {
         const { inputs, connect, home, machine, source, now } = fixture();
         const second = createMachineFixture({ id: 'second-origin-machine', activeAt: now - 1 });
@@ -135,7 +205,7 @@ describe('execution-origin Machine publication', () => {
     });
 
     it('does no derivation on unchanged reads or unrelated publications across independent consumers', () => {
-        const serialize = vi.spyOn(origins, 'serializePluginMachineExecutionOriginMachineFacts');
+        const serialize = vi.spyOn(origins, 'createPluginMachineExecutionOriginMachineFacts');
         const targets = vi.spyOn(origins, 'readPluginExecutionOriginMachineTargets');
         const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
         const { inputs, source, home, machine, connect } = fixture();
@@ -187,11 +257,12 @@ describe('execution-origin Machine publication', () => {
         storage.getState().applyMachines([machine, second], false, { sourceServerId: home.id });
         const pair = { ...inputs, sources: [source, { ...source, source: { ...source.source,
             origin: { ...source.source.origin, sourceRef: { ...source.source.origin.sourceRef, machineId: second.id } } } }] };
+        const serialize = vi.spyOn(origins, 'createPluginMachineExecutionOriginMachineFacts');
         const connection = connect(pair);
+        const update = vi.spyOn(serialize.mock.results[0]!.value, 'update');
         const first = connection.getSnapshot();
         const state = storage.getState();
         const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
-        const serialize = vi.spyOn(origins, 'serializePluginMachineExecutionOriginMachineFacts');
         for (let index = 0; index < 100; index += 1) {
             storage.getState().applyMachines([{ ...machine }], false, { sourceServerId: home.id });
             expect(storage.getState()).toBe(state);
@@ -199,11 +270,12 @@ describe('execution-origin Machine publication', () => {
             connection.readCurrent();
         }
         expect(project).not.toHaveBeenCalled();
-        expect(serialize).not.toHaveBeenCalled();
+        expect(update).not.toHaveBeenCalled();
         storage.getState().applyMachines([{ ...machine, activeAt: now + 2 }], false, { sourceServerId: home.id });
         expect(storage.getState()).toBe(state);
         expect(project).toHaveBeenCalledTimes(1);
         expect(serialize).toHaveBeenCalledTimes(1);
+        expect(update).toHaveBeenCalledTimes(1);
         expect(connection.getSnapshot().key).not.toBe(first.key);
         expect(connection.getSnapshot().eligibilityKey).toBe(first.eligibilityKey);
         expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).activeAt).toBe(now + 2);
