@@ -39,6 +39,11 @@ export function readCurrentHostingProviderRuntimeServices(): HostingProviderRunt
     if (!services || !signal) return services;
     return Object.freeze({
         ...services,
+        ...(services.resolveScmHostingProviderRegistry ? {
+            resolveScmHostingProviderRegistry: (
+                options?: Parameters<NonNullable<HostingProviderRuntimeServices['resolveScmHostingProviderRegistry']>>[0],
+            ) => services.resolveScmHostingProviderRegistry!(options ?? { signal }),
+        } : {}),
         ...(services.resolveScmHostingTokenMaterialization ? {
             resolveScmHostingTokenMaterialization: (
                 input: Parameters<NonNullable<HostingProviderRuntimeServices['resolveScmHostingTokenMaterialization']>>[0],

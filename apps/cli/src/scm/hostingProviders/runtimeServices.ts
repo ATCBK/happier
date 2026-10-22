@@ -270,11 +270,14 @@ function readBasicCredentials(
  */
 async function resolveScmHostingConfiguredDeployments(
     input: ScmHostingProviderRuntimeRegistryInput,
+    signal: AbortSignal,
 ): Promise<ReadonlyMap<string, ScmHostingProviderConfiguredDeployments>> {
+    signal.throwIfAborted();
     const deploymentsByProviderId = new Map<string, ScmHostingProviderConfiguredDeployments>();
     const owner = input.resolveConnectedAccountPurposeBindingOwner?.() ?? null;
     if (!owner?.listAccounts) return deploymentsByProviderId;
     for (const provider of input.contributes.scmHostingProviders ?? []) {
+        signal.throwIfAborted();
         if (!provider.pluginId) continue;
         const providerId = `${provider.pluginId}/${provider.definition.id}`;
         const authorization = resolveProviderPurposeAuthorization(input, providerId);
@@ -283,10 +286,9 @@ async function resolveScmHostingConfiguredDeployments(
             const listed = await owner.listAccounts({
                 ...authorization,
                 limit: CONNECTED_ACCOUNT_METADATA_LIST_MAX_LIMIT,
-                // The registry-resolution seam carries no caller signal, so there is nothing to
-                // thread here; the owner still bounds the read itself.
-                signal: new AbortController().signal,
+                signal,
             });
+            signal.throwIfAborted();
             deploymentsByProviderId.set(providerId, Object.freeze({
                 bases: Object.freeze([...new Set(listed.accounts.flatMap(
                     (account) => [...account.connectedAccountBases],
@@ -294,6 +296,7 @@ async function resolveScmHostingConfiguredDeployments(
                 status: listed.status,
             }));
         } catch {
+            signal.throwIfAborted();
             // One provider's unavailable account listing must not fail the whole registry or let
             // another provider inherit its bases — and it must not be read as an empty inventory.
             deploymentsByProviderId.set(providerId, Object.freeze({
@@ -339,10 +342,13 @@ export function createHostScmHostingProviderRegistry(
 export function createHostScmHostingProviderRuntimeServices(
     input: ScmHostingProviderRuntimeRegistryInput,
 ): ScmHostingProviderRuntimeServices {
-    const resolveScmHostingProviderRegistry = async (): Promise<ResolvedScmHostingProviderRegistry> => {
+    const resolveScmHostingProviderRegistry = async (
+        options?: Readonly<{ signal?: AbortSignal }>,
+    ): Promise<ResolvedScmHostingProviderRegistry> => {
+        const signal = options?.signal ?? new AbortController().signal;
         return createHostScmHostingProviderRegistry(
             input,
-            await resolveScmHostingConfiguredDeployments(input),
+            await resolveScmHostingConfiguredDeployments(input, signal),
         );
     };
     const captureHostingAuthAuthority = (providerId: string) => {

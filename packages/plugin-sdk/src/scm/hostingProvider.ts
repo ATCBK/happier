@@ -200,7 +200,7 @@ export type HostingProviderResolvedRegistry = Readonly<{
 }>;
 
 export type HostingProviderRuntimeServices = Readonly<{
-    resolveScmHostingProviderRegistry?: () => Promise<HostingProviderResolvedRegistry>;
+    resolveScmHostingProviderRegistry?: (options?: Readonly<{ signal?: AbortSignal }>) => Promise<HostingProviderResolvedRegistry>;
     resolveScmHostingTokenMaterialization?: (input: Readonly<{
         kind: 'scm_hosting_token';
         /** Restrict this request to the durable Connected Account binding; do not try native credentials. */

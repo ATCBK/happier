@@ -25,6 +25,7 @@ import {
 import { runWithHostingProviderExecutionAuthority } from './executionAuthority';
 import { createHostScmHostingProviderRuntimeServices } from './runtimeServices';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { readCurrentHostingProviderRuntimeServices, runWithHostingProviderRuntimeServices } from '@happier-dev/plugin-sdk/scm/hosting';
 
 type RuntimeServicesInput = Parameters<typeof createHostScmHostingProviderRuntimeServices>[0];
 
@@ -203,6 +204,7 @@ function runAsHostingProvider<T>(
 // projection and credential transport are replaced at their system boundaries.
 function createAuthenticationBindingOwner(
   materializeAccount: Parameters<typeof createConnectedAccountPurposeBindingOwner>[0]['materializeAccount'],
+  projectTargetAccounts?: Parameters<typeof createConnectedAccountPurposeBindingOwner>[0]['projectTargetAccounts'],
 ) {
   const definitions = [
     { pluginId: GITHUB_PLUGIN_MANIFEST.id, localId: 'github', serviceId: 'github-account', base: 'https://github.com' },
@@ -226,18 +228,65 @@ function createAuthenticationBindingOwner(
     selectTarget: async () => { throw new Error('Authentication cannot select a new Account'); },
     resolveTarget: async (target) => target.kind === 'account'
       ? { displayName: 'Bound Account', account: target.account } : null,
-    projectTargetAccounts: async ({ target }) => ({
+    projectTargetAccounts: projectTargetAccounts ?? (async ({ target }) => ({
       status: 'complete' as const,
       accounts: accounts.filter(({ account }) => target.kind === 'account'
         && account.service.pluginId === target.account.service.pluginId)
         .map(({ entry, account }) => createListedDeploymentAccount(account.service, account.accountId, entry.base)),
-    }),
+    })),
     assertTargetAccountMaterializable: async () => undefined,
     materializeAccount,
   });
 }
 
 describe('createHostScmHostingProviderRuntimeServices', () => {
+  it('cancels configured deployment discovery with its hosting operation instead of continuing through other providers', async () => {
+    const controller = new AbortController();
+    const reason = new Error('compose observation retired');
+    let releaseMetadata!: () => void;
+    let metadataEntered!: () => void;
+    const heldMetadata = new Promise<void>(resolve => { releaseMetadata = resolve; });
+    const entered = new Promise<void>(resolve => { metadataEntered = resolve; });
+    let metadataReads = 0;
+    const owner = createAuthenticationBindingOwner(
+      async () => { throw new Error('Registry discovery must not materialize credentials'); },
+      async ({ target }) => {
+        metadataReads += 1;
+        if (metadataReads === 1) {
+          metadataEntered();
+          // A late HTTP response may still arrive after cancellation. The real
+          // purpose owner and host must not publish it or start another read.
+          await heldMetadata;
+        }
+        return { status: 'complete', accounts: target.kind === 'account' ? [
+          createListedDeploymentAccount(target.account.service, target.account.accountId, 'https://forge.example.test'),
+        ] : [] };
+      },
+    );
+    const services = createHostScmHostingProviderRuntimeServices({
+      ...createCrossProviderRuntimeInput(),
+      resolveConnectedAccountPurposeBindingOwner: () => owner,
+    });
+    const readRegistry = () => {
+      const current = readCurrentHostingProviderRuntimeServices();
+      if (!current?.resolveScmHostingProviderRegistry) throw new Error('Missing hosting registry service');
+      return current.resolveScmHostingProviderRegistry();
+    };
+    try {
+      const pending = runWithHostingProviderRuntimeServices(services, readRegistry, { signal: controller.signal });
+      await entered;
+      controller.abort(reason);
+      releaseMetadata();
+      await expect(pending).rejects.toBe(reason);
+      expect(metadataReads).toBe(1);
+      const registry = await runWithHostingProviderRuntimeServices(services, readRegistry, { signal: new AbortController().signal });
+      expect(registry.diagnostics).toEqual([]);
+      expect(metadataReads).toBe(3);
+    } finally {
+      releaseMetadata();
+    }
+  });
+
   it('uses a declared machine-native credential for an unbound GitHub Enterprise purpose without storing it', async () => {
     const service = { pluginId: GITHUB_PLUGIN_MANIFEST.id, localId: 'github-account' };
     let bindings: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };

@@ -3342,6 +3342,12 @@ Enterprise provisioning. Azure DevOps and Bitbucket publishing retains coordinat
 from an existing recognized remote; empty-repository target discovery is not
 implemented for those providers.
 
+In 0.3 development source, hosting registry resolution inherits the current SCM
+operation's cancellation signal through the existing SDK service scope. Configured
+Connected Account metadata reads use that same signal; cancellation refuses a late
+listing and stops discovery before the next provider. Registry callers outside an
+operation can supply the optional signal explicitly. No additional timeout is added.
+
 Forge throttling uses the canonical `REMOTE_RATE_LIMITED` failure and, when the
 forge supplies one, `retryNotBeforeMs`. PR and repository-provisioning responses
 share the validated failure fields. Git publishing, PR reads, checkout, clone and
