@@ -2868,7 +2868,8 @@ async function assertValidFinalAssistantAnchor(params: Readonly<{
     mutation: SessionTurnMutationV1;
     transcriptAnchorsJson: string | null | undefined;
 }>): Promise<void> {
-    if (params.mutation.action !== "complete" || !params.mutation.transcriptAnchors) return;
+    if ((params.mutation.action !== "complete" && params.mutation.action !== "append_transcript_anchors")
+        || !params.mutation.transcriptAnchors) return;
     if (!Object.prototype.hasOwnProperty.call(params.mutation.transcriptAnchors, "finalAssistantMessageSeq")) return;
     const finalSeq = params.mutation.transcriptAnchors.finalAssistantMessageSeq;
     if (finalSeq === null || finalSeq === undefined) return;
@@ -3488,7 +3489,11 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         const explicitlyStopsWaitingTurn = currentTurn?.status === "waiting"
             && params.turnMutation.action === "cancel"
             && params.turnMutation.reason === "explicit_stop";
-        if (currentTurn && isSessionTurnTerminalStatus(currentTurn.status) && !updatesRollbackFacet && !isRecoveryLifecycleEvidence && !explicitlyStopsWaitingTurn) {
+        // Native cancellation may settle before the host's durable transcript
+        // drain. Its exact late anchors annotate that turn without reopening it.
+        const appendsCancelledTurnAnchors = currentTurn?.status === "cancelled"
+            && params.turnMutation.action === "append_transcript_anchors";
+        if (currentTurn && isSessionTurnTerminalStatus(currentTurn.status) && !updatesRollbackFacet && !isRecoveryLifecycleEvidence && !explicitlyStopsWaitingTurn && !appendsCancelledTurnAnchors) {
             const reason = "terminal-turn";
             const isExactCurrentDaemonEnd = params.turnMutation.action === "end_session"
                 && requestedTurnId === targetTurnId

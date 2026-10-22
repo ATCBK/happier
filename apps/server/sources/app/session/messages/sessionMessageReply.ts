@@ -358,6 +358,7 @@ export async function readSessionInputDiscussionReplyReturnInTx(tx: Tx, params: 
 export async function settleSessionInputDiscussionReplyReturnInTx(tx: Tx, params: Readonly<{
     accountId: string; sessionId: string; requestLocalId: string; acceptedTurnId?: string;
     publicationRef: DiscussionMessageRefV1; localId: string; workflow?: SessionMessageDiscussionReplyReturnV1['workflow'];
+    outcome: SessionMessageReplyOutcomeV1;
 }>): Promise<boolean> {
     const original = await readOriginal(tx, params.sessionId, params.requestLocalId);
     const progress = original?.progress;
@@ -366,8 +367,7 @@ export async function settleSessionInputDiscussionReplyReturnInTx(tx: Tx, params
     })) return false;
     if (progress.outcome?.kind === 'answer' && 'publicationRef' in progress.outcome
         && !isDeepStrictEqual(progress.outcome.publicationRef, params.publicationRef)) return false;
-    await writeOriginal(tx, original, { ...progress, outcome: !progress.outcome || progress.outcome.kind === 'answer'
-        ? { kind: 'answer', publicationRef: params.publicationRef } : progress.outcome,
+    await writeOriginal(tx, original, { ...progress, outcome: params.outcome,
         disposition: 'returned', returnedInputLocalId: params.localId });
     return true;
 }
@@ -658,7 +658,13 @@ export async function projectSessionInputRepliesFromTurnInTx(tx: Tx, turn: Reado
         const original = await readOriginal(tx, turn.sessionId, input.localId);
         if (!original?.progress || original.progress.acceptedTurnId && original.progress.acceptedTurnId !== turn.turnId) continue;
         let progress: SessionMessageReplyProgressV1 = { ...original.progress, acceptedTurnId: turn.turnId };
-        if (terminal && !progress.outcome) {
+        // Cancellation can precede durable partial-answer custody. Enrich the
+        // same unreturned outcome when its exact anchor arrives; never replay
+        // a returned reply or replace an explicit answer/pass.
+        const receivesCancelledPartial = turn.status === 'cancelled' && final
+            && progress.outcome?.kind === 'cancelled' && !('result' in progress.outcome)
+            && progress.disposition !== 'returned';
+        if (terminal && (!progress.outcome || receivesCancelledPartial)) {
             progress = { ...progress, outcome: turn.status === 'failed' ? { kind: 'failed' }
                 : turn.status === 'cancelled' ? { kind: 'cancelled', ...(final ? { result: { sessionId: turn.sessionId, messageId: final.id } } : {}) }
                 : final ? { kind: 'answer', result: { sessionId: turn.sessionId, messageId: final.id } } : { kind: 'terminal_no_result' } };

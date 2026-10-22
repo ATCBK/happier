@@ -20,7 +20,7 @@ const { projectSessionInputRepliesFromTurnInTx, mutateSessionMessageReplyInTx } 
 beforeEach(() => { boundary.reset(); vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres'); });
 afterEach(() => vi.unstubAllEnvs());
 
-it.each(['partial', 'empty', 'explicit'] as const)('retains the exact cancelled foreground outcome through replay (%s)', async kind => {
+it.each(['partial', 'empty', 'explicit', 'late-partial', 'late-returned'] as const)('retains the exact cancelled foreground outcome through replay (%s)', async kind => {
     const progress: SessionMessageReplyProgressV1 = { v: 1, mode: 'wait', acceptedTurnId: 'stopped-turn', disposition: 'observing',
         ...(kind === 'explicit' ? { outcome: { kind: 'pass' } } : {}) };
     const input = { id: 'input-row', sessionId: 'session', seq: 1, localId: 'input', messageRole: 'user', sidechainId: null,
@@ -44,9 +44,16 @@ it.each(['partial', 'empty', 'explicit'] as const)('retains the exact cancelled 
     });
     const stopped = { sessionId: 'session', turnId: 'stopped-turn', status: 'cancelled',
         transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1, 4], ...(kind !== 'empty' ? { finalAssistantMessageSeq: 2 } : {}) }) };
+    if (kind === 'late-partial' || kind === 'late-returned') {
+        await inTx(tx => projectSessionInputRepliesFromTurnInTx(tx, {
+            ...stopped, transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1, 4] }),
+        }));
+        expect(input.replyProgress.outcome).toEqual({ kind: 'cancelled' });
+        if (kind === 'late-returned') input.replyProgress = { ...input.replyProgress, disposition: 'returned' };
+    }
     await inTx(tx => projectSessionInputRepliesFromTurnInTx(tx, stopped));
     await inTx(tx => projectSessionInputRepliesFromTurnInTx(tx, stopped));
-    expect(input.replyProgress.outcome).toEqual(kind === 'explicit' ? { kind: 'pass' } : kind === 'empty' ? { kind: 'cancelled' }
+    expect(input.replyProgress.outcome).toEqual(kind === 'explicit' ? { kind: 'pass' } : kind === 'empty' || kind === 'late-returned' ? { kind: 'cancelled' }
         : { kind: 'cancelled', result: { sessionId: 'session', messageId: 'stopped-partial' } });
     expect(foreign.replyProgress).toEqual({ ...progress, acceptedTurnId: 'another-turn' });
     expect(JSON.stringify(input.replyProgress)).not.toContain('partialText');

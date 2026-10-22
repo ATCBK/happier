@@ -5,6 +5,7 @@ import {
     type SessionTranscriptObservationProvenanceV1,
     VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
     API_TOKEN_FULL_GRANT_V1,
+    SessionTurnMutationV1Schema,
 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
 import { createEnvPatcher } from "@/testkit/env";
@@ -6018,7 +6019,7 @@ describe("sessionWriteService", () => {
             });
         });
 
-        it("merges appended transcript anchors without dropping previous user message seqs", async () => {
+        it.each(["in_progress", "cancelled"] as const)("merges appended transcript anchors without dropping previous user message seqs on %s turns", async status => {
             expect(typeof applySessionTurnMutation).toBe("function");
             currentTx.session.findUnique
                 .mockResolvedValueOnce({
@@ -6030,7 +6031,7 @@ describe("sessionWriteService", () => {
                     pendingPermissionRequestCount: 0,
                     pendingUserActionRequestCount: 0,
                     latestTurnId: "turn-1",
-                    latestTurnStatus: "in_progress",
+                    latestTurnStatus: status,
                     latestTurnStatusObservedAt: BigInt(100),
                     lastRuntimeIssue: null,
                     active: true,
@@ -6044,7 +6045,7 @@ describe("sessionWriteService", () => {
                     pendingPermissionRequestCount: 0,
                     pendingUserActionRequestCount: 0,
                     latestTurnId: "turn-1",
-                    latestTurnStatus: "in_progress",
+                    latestTurnStatus: status,
                     latestTurnStatusObservedAt: BigInt(100),
                     lastRuntimeIssue: null,
                     active: true,
@@ -6054,8 +6055,8 @@ describe("sessionWriteService", () => {
             currentTx.sessionTurnMutationReceipt.findUnique.mockResolvedValue(null);
             currentTx.sessionTurn.findUnique.mockResolvedValue({
                 ...completedTurnRow,
-                status: "in_progress",
-                terminalAt: null,
+                status,
+                terminalAt: status === "cancelled" ? BigInt(130) : null,
                 transcriptAnchorsJson: JSON.stringify({
                     startUserMessageSeq: 1,
                     startSeqInclusive: 2,
@@ -6065,16 +6066,17 @@ describe("sessionWriteService", () => {
             });
             currentTx.sessionTurn.update.mockImplementation(async (args: { data: { transcriptAnchorsJson?: string } }) => ({
                 ...completedTurnRow,
-                status: "in_progress",
-                terminalAt: null,
+                status,
+                terminalAt: status === "cancelled" ? BigInt(130) : null,
                 transcriptAnchorsJson: args.data.transcriptAnchorsJson ?? null,
                 updatedAt: BigInt(150),
                 lastMutationId: "mutation-anchors-2",
             }));
+            currentTx.sessionMessage.findFirst.mockResolvedValue({ seq: 10, messageRole: "agent", sidechainId: null });
 
-            await applySessionTurnMutation({ authentication,
+            const result = await applySessionTurnMutation({ authentication,
                 actorUserId: "u1",
-                mutation: {
+                mutation: SessionTurnMutationV1Schema.parse({
                     v: 1,
                     sessionId: "s1",
                     mutationId: "mutation-anchors-2",
@@ -6083,11 +6085,13 @@ describe("sessionWriteService", () => {
                     transcriptAnchors: {
                         userMessageSeqs: [3, 5],
                         endSeqInclusive: 12,
+                        finalAssistantMessageSeq: 10,
                     },
                     observedAt: 150,
-                },
+                }),
             });
 
+            expect(result).toMatchObject({ ok: true, didApply: true });
             const updateArg = currentTx.sessionTurn.update.mock.calls[0]?.[0];
             const anchors = JSON.parse(updateArg.data.transcriptAnchorsJson);
             expect(anchors).toEqual({
@@ -6095,15 +6099,18 @@ describe("sessionWriteService", () => {
                 startSeqInclusive: 2,
                 endSeqInclusive: 12,
                 userMessageSeqs: [1, 3, 5],
+                finalAssistantMessageSeq: 10,
             });
             expect(updateArg.data).toMatchObject({
+                status,
                 transcriptAnchorProjectionVersion: 1,
                 transcriptAnchorMinSeq: 1,
                 transcriptAnchorMaxSeq: 12,
             });
+            expect(updateArg.data).not.toHaveProperty("terminalAt");
         });
 
-        it("rejects a final assistant anchor outside the canonical turn transcript range", async () => {
+        it.each(["complete", "append_transcript_anchors"] as const)("rejects a final assistant anchor outside the canonical turn transcript range on %s", async action => {
             currentTx.session.findUnique
                 .mockResolvedValueOnce({
                     accountId: "u1",
@@ -6154,14 +6161,14 @@ describe("sessionWriteService", () => {
                     sessionId: "s1",
                     mutationId: "mutation-invalid-final-anchor",
                     turnId: "turn-1",
-                    action: "complete",
+                    action,
                     transcriptAnchors: { finalAssistantMessageSeq: 11 },
                     observedAt: 200,
                 },
             });
 
-            expect(result).toEqual({ ok: false, error: "invalid-params" });
             expect(currentTx.sessionTurn.update).not.toHaveBeenCalled();
+            expect(result).toEqual({ ok: false, error: "invalid-params" });
 
             currentTx.session.findUnique
                 .mockResolvedValueOnce({
@@ -6214,7 +6221,7 @@ describe("sessionWriteService", () => {
                     sessionId: "s1",
                     mutationId: "mutation-valid-final-anchor",
                     turnId: "turn-1",
-                    action: "complete",
+                    action,
                     transcriptAnchors: { finalAssistantMessageSeq: 10 },
                     observedAt: 201,
                 },
