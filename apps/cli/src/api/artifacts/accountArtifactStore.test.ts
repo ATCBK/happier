@@ -34,6 +34,9 @@ import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptTransportInputV1Schema } 
 import { createResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 
 // The ordinary-Artifact Home fixtures below expose Account "owner" with no legacy Role settings.
 // Keep the real Role deletion policy even when a scenario only reads or restores an Artifact.
@@ -348,12 +351,21 @@ describe('createAccountArtifactStore', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'not_found' });
   });
 
-  it('opens complete Role sources with header discovery and only selected body batches', async () => {
+  it.each(['cold', 'warm'] as const)('opens complete Role sources with one finite %s admission and only selected body batches', async observation => {
     const { default: http } = await vi.importActual<typeof import('axios')>('axios');
     mockGet.mockImplementation(http.get);
     mockPost.mockImplementation(http.post);
-    const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
-      getAccountEncryptionMode: async () => 'plain' });
+    const accountId = 'owner';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const store = createCredentialedAccountArtifactStore({ token, encryption: null });
+    const channel = observation === 'warm' ? await createRequesterCurrentnessSocketHarness() : undefined;
+    let holder: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness> | undefined;
+    let mode: 'plain' | 'e2ee' = 'plain';
+    let modeReads = 0;
+    let identityReads = 0;
+    let unavailableMode = false;
+    let listAudience: 'owner' | 'shared' | 'empty' = 'owner';
+    let afterBatch: (() => void) | undefined;
     const rows = Array.from({ length: 502 }, (_, index) => ({ id: `artifact-${index}`, ownerAccountId: 'owner',
       access: 'owner' as const, encryptionMode: 'plain' as const, publicAudience: 'none' as const,
       header: encodePlainArtifactStoredContent(index >= 500 ? { kind: 'role.v1', name: 'Custom role' } : { kind: 'memory_doc.v1', title: 'Unrelated' }),
@@ -367,14 +379,21 @@ describe('createAccountArtifactStore', () => {
     const server = createServer(async (request, response) => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       let result: unknown;
-      if (request.method === 'GET' && url.pathname === '/v1/artifacts') {
+      if (request.method === 'GET' && url.pathname === '/v1/account/encryption') {
+        modeReads++;
+        result = { mode: unavailableMode ? 'unknown' : mode, updatedAt: 1 };
+      } else if (request.method === 'GET' && url.pathname === '/v1/account/encryption/currentness') {
+        identityReads++;
+        result = createAccountEncryptionCurrentnessFixture({ mode });
+      } else if (request.method === 'GET' && url.pathname === '/v1/artifacts') {
         request.resume();
         listUrls.push(url);
         const cursor = url.searchParams.get('cursor');
         const lastId = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')).id : undefined;
         const start = lastId === undefined ? 0 : rows.findIndex(row => row.id === lastId) + 1;
-        result = rows.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
-          ({ ...row, ...(url.searchParams.get('includeBody') ? { body } : {}) }));
+        result = listAudience === 'empty' ? [] : rows.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
+          ({ ...row, ...(listAudience === 'shared' ? { ownerAccountId: 'foreign-owner', access: 'view' } : {}),
+            ...(url.searchParams.get('includeBody') ? { body } : {}) }));
       } else if (request.method === 'POST' && url.pathname === '/v1/artifacts/read') {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -393,6 +412,7 @@ describe('createAccountArtifactStore', () => {
               header: encodePlainArtifactStoredContent({ kind: 'role.v1', name: BUILT_IN_ROLES_V1.reviewer.name }),
               body: encodePlainArtifactStoredContent({ body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer) }) } : {}) }, recipientCensus: null });
         result = ArtifactReadBatchResponseV1Schema.parse({ items: batchOutcome === 'incomplete' ? items.slice(1) : items });
+        afterBatch?.();
       } else {
         response.writeHead(404).end();
         return;
@@ -404,18 +424,65 @@ describe('createAccountArtifactStore', () => {
     try {
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('missing_loopback_address');
-      await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, async () => {
+      const serverBaseUrl = `http://127.0.0.1:${address.port}`;
+      await runWithServerHttpBaseUrl(serverBaseUrl, async () => {
+        if (channel) {
+          holder = acquireRequesterAccountEncryptionCurrentness({ accountId, token, serverBaseUrl });
+          await holder.read();
+        }
         const read = createRoleSourceReaderV1({ artifactStore: store });
-        const inventory = await read();
+        const samples: { modeReads: number; elapsedMs: number }[] = [];
+        const measure = async () => {
+          const before = modeReads;
+          const startedAt = performance.now();
+          const inventory = await read();
+          samples.push({ modeReads: modeReads - before, elapsedMs: performance.now() - startedAt });
+          return inventory;
+        };
+        const inventory = await measure();
+        for (let repeat = 1; repeat < 5; repeat++) await measure();
         expect(inventory.status).toBe('ready');
         expect(RoleActionOutputSchemasV1['roles.list'].parse({ items: inventory.entries, diagnostics: inventory.diagnostics }).items)
           .toHaveLength(Object.keys(BUILT_IN_ROLES_V1).length + 2);
         expect(inventory.entries.filter(entry => entry.roleId.startsWith('artifact-'))).toEqual(
           ['artifact-500', 'artifact-501'].map(roleId => ({ roleId, role: BUILT_IN_ROLES_V1.builder,
             revision: { headerVersion: 2, bodyVersion: 3 }, shared: false, viewOnly: false, migratedFromV0_2: false })));
-        expect(listUrls).toHaveLength(2);
+        expect(listUrls).toHaveLength(10);
         expect(listUrls.every(url => !url.searchParams.has('includeBody'))).toBe(true);
-        expect(batches).toEqual([['artifact-500', 'artifact-501']]);
+        expect(batches).toEqual(Array.from({ length: 5 }, () => ['artifact-500', 'artifact-501']));
+        expect(samples.map(sample => sample.modeReads)).toEqual(Array.from({ length: 5 }, () => observation === 'cold' ? 2 : 1));
+        expect(identityReads).toBe(observation === 'cold' ? 0 : 1);
+        // Body-bearing transport pages use the same outward admission as the
+        // selected-body route, not one extra fresh read per physical page.
+        const beforeBodyPages = modeReads;
+        const bodyPages = await store.list({ includeBody: true, limit: 1000 });
+        expect(bodyPages.items).toHaveLength(502);
+        expect(bodyPages.items.every(item => typeof item.body === 'string')).toBe(true);
+        expect(modeReads - beforeBodyPages).toBe(observation === 'cold' ? 2 : 1);
+        // Admission belongs to this invocation, not the retained store. A cold
+        // second header-only list must acquire its own fresh fallback.
+        if (observation === 'cold') {
+          const beforeSecondList = modeReads;
+          await store.list({ kind: 'role.v1' });
+          expect(modeReads - beforeSecondList).toBe(1);
+          mode = 'e2ee';
+          await expect(store.list({ kind: 'role.v1' })).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+          mode = 'plain';
+          unavailableMode = true;
+          await expect(store.list({ kind: 'role.v1' })).rejects.toMatchObject({ code: 'account_encryption_mode_unavailable' });
+          unavailableMode = false;
+        }
+        // Shared rows follow their owner's persisted mode, never this
+        // recipient Account's unrelated mode. Empty inventories need no mode.
+        mode = 'e2ee';
+        for (const audience of ['shared', 'empty'] as const) {
+          listAudience = audience;
+          const before = modeReads;
+          expect((await store.list({ kind: 'role.v1' })).items).toHaveLength(audience === 'shared' ? 2 : 0);
+          expect(modeReads).toBe(before);
+        }
+        listAudience = 'owner';
+        mode = 'plain';
         batchOutcome = 'changed';
         expect((await read()).entries.filter(entry => entry.roleId.startsWith('artifact-'))).toEqual(
           ['artifact-501', 'artifact-500'].map(roleId => ({ roleId, role: BUILT_IN_ROLES_V1.reviewer,
@@ -430,6 +497,13 @@ describe('createAccountArtifactStore', () => {
         await expect(read()).rejects.toMatchObject({ code: 'artifact_read_invalid' });
         batchOutcome = 'unavailable';
         await expect(read()).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 503 });
+        // A body response cannot borrow the earlier inventory's admission after
+        // authority changes, even while a connected observation holds plain.
+        batchOutcome = 'success';
+        afterBatch = () => { mode = 'e2ee'; };
+        await expect(read()).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+        afterBatch = undefined;
+        mode = 'plain';
         batchOutcome = 'held';
         const held = new Promise<void>(resolve => { onHeldBatch = resolve; });
         const controller = new AbortController();
@@ -440,6 +514,8 @@ describe('createAccountArtifactStore', () => {
         await cancelled;
       });
     } finally {
+      await holder?.dispose();
+      await channel?.close();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
