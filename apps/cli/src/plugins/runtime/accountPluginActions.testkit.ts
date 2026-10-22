@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema, PluginAvailabilityIntentReadActionOutputV1Schema,
+    PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactReadActionOutputV1Schema,
     normalizePluginReleaseFactsV1 } from '@happier-dev/protocol/plugins/availability';
 import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1,
     createPluginUiArtifactArchiveV1, encodePluginUiArtifactArchiveBodyV1, PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins/ui';
@@ -55,9 +56,10 @@ export async function registerAuthoredAccountActionRelease(app: FastifyInstance,
     const enabled = new Map(fixtures.map(fixture => [fixture.pluginId, true]));
     let bundledFallback = false;
     const response = (fixture: typeof primary | undefined) => PluginAvailabilityIntentReadActionOutputV1Schema.parse({ availabilityCursor: 1,
-        hostingCapability: { enabled: false }, intent: !fixture || (bundledFallback && fixture === primary) ? null : {
+        hostingCapability: { enabled: true, maxArtifactBytes: 16 * 1024 * 1024, maxAccountBytes: 256 * 1024 * 1024 },
+        intent: !fixture || (bundledFallback && fixture === primary) ? null : {
             pluginId: fixture.pluginId, desiredVersion: fixture.manifest.version, enabled: enabled.get(fixture.pluginId),
-            offlineUiHosting: 'disabled', revision: '1', writableCollections: [] },
+            offlineUiHosting: 'enabled', revision: '1', writableCollections: [] },
         release: !fixture || (bundledFallback && fixture === primary) ? null : fixture.release,
         uiArtifacts: !fixture || (bundledFallback && fixture === primary) ? [] : fixture.release.uiSlots.map(slot => ({ release: fixture.release.ref, contributionId: slot.contributionId,
             artifactId: slot.artifactId, tier: slot.tier, platform: slot.platform,
@@ -72,6 +74,19 @@ export async function registerAuthoredAccountActionRelease(app: FastifyInstance,
     const artifacts = registerPlainArtifactRoutes(app, accountId);
     for (const fixture of fixtures) artifacts.seed(fixture.artifactId, encodePlainArtifactStoredContent(fixture.archive.header),
         encodePlainArtifactStoredContent({ body: encodePluginUiArtifactArchiveBodyV1(fixture.archive.body) }));
+    app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.uiArtifact.read'], async (request, reply) => {
+        const input = PluginAvailabilityUiArtifactReadActionInputV1Schema.parse(request.body);
+        const fixture = fixtures.find(fixture => fixture.pluginId === input.release.pluginId
+            && fixture.manifest.version === input.release.version);
+        const link = response(fixture).uiArtifacts.find(link => link.contributionId === input.contributionId
+            && link.artifactId === input.artifactId && link.tier === input.tier && link.platform === input.platform);
+        const stored = fixture ? artifacts.read(fixture.artifactId) : null;
+        if (!link || !stored) return reply.code(404).send({ error: 'plugin_ui_artifact_not_found' });
+        return PluginAvailabilityUiArtifactReadActionOutputV1Schema.parse({ link, artifact: {
+            header: stored.header, headerVersion: stored.headerVersion, body: stored.body, bodyVersion: stored.bodyVersion,
+            dataEncryptionKey: stored.dataEncryptionKey, seq: stored.seq,
+        } });
+    });
     const setPluginEnabled = (pluginId: string, value: boolean) => {
         if (!enabled.has(pluginId)) throw new Error('unknown authored fixture plugin');
         enabled.set(pluginId, value);

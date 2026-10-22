@@ -67,6 +67,34 @@ vi.mock('@/configuration', async (importOriginal) => {
 });
 
 describe('createAccountArtifactStore', () => {
+  it.each(['plain', 'e2ee'] as const)('opens qualified %s envelopes with the existing codec and refuses Account mode mismatches', async mode => {
+    const machineKey = new Uint8Array(randomBytes(32));
+    const credentials = mode === 'plain' ? { token: 'token', encryption: null }
+      : { token: 'token', encryption: { type: 'dataKey' as const, machineKey, publicKey: x25519.getPublicKey(machineKey) } };
+    const resource = await createResourceDataKey({ credentials, mode });
+    const seal = (value: unknown) => resource.mode === 'plain' ? encodePlainArtifactStoredContent(value)
+      : encodeBase64(encryptWithDataKey(value, resource.dataKey), 'base64');
+    const envelope = { header: seal({ kind: 'plugin_ui_artifact.v1' }), body: seal({ body: 'verified archive' }),
+      dataEncryptionKey: resource.dataEncryptionKey ?? ARTIFACT_PLAIN_DATA_KEY_MARKER };
+    const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => mode });
+    await expect(store.openStoredEnvelope(envelope)).resolves.toEqual({ header: { kind: 'plugin_ui_artifact.v1' }, body: 'verified archive' });
+    const mismatch = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => mode === 'plain' ? 'e2ee' : 'plain' });
+    await expect(mismatch.openStoredEnvelope(envelope)).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+  });
+
+  it('does not release qualified envelope content after mode retirement or cancellation', async () => {
+    const envelope = { header: encodePlainArtifactStoredContent({}), body: encodePlainArtifactStoredContent({ body: 'private' }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER };
+    let first = true;
+    const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
+      getAccountEncryptionMode: async () => { if (first) { first = false; return 'plain'; } return 'e2ee'; } });
+    await expect(store.openStoredEnvelope(envelope)).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+    const controller = new AbortController();
+    const cancelled = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
+      getAccountEncryptionMode: async () => { controller.abort(new Error('cancelled')); return 'plain'; } });
+    await expect(cancelled.openStoredEnvelope(envelope, { signal: controller.signal })).rejects.toThrow('cancelled');
+  });
+
   it.each([
     { status: 503, serverError: 'database_transaction_conflict_exhausted', code: 'database_transaction_conflict_exhausted' },
     { status: 503, serverError: 'database_connection_unavailable', code: 'database_connection_unavailable' },

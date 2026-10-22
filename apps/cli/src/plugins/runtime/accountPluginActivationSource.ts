@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import axios from 'axios';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
+    PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactReadActionOutputV1Schema,
     PluginAvailabilityIntentsListActionOutputV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
     resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, normalizePluginReleaseFactsV1,
     type PluginAvailabilityIntentReadActionOutputV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
@@ -193,10 +194,17 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
                     const slot = release.uiSlots.find(slot => slot.artifactId === artifactId && slot.platform === 'web' && slot.tier === 'reactNative');
                     const link = slot ? read.uiArtifacts.find(link => link.release.version === release.ref.version
                         && isPluginUiReleaseSlotCompatibleWithArtifactLinkV1(slot, link)) : null;
-                    if (!link) throw new Error('plugin_account_execution_artifact_unavailable');
+                    if (!slot || !link) throw new Error('plugin_account_execution_artifact_unavailable');
+                    const response = PluginAvailabilityUiArtifactReadActionOutputV1Schema.parse(await postAvailability(input,
+                        PluginAvailabilityActionHttpPathsV1['account.plugins.availability.uiArtifact.read'],
+                        PluginAvailabilityUiArtifactReadActionInputV1Schema.parse({ release: release.ref,
+                            contributionId: slot.contributionId, artifactId: slot.artifactId, tier: slot.tier, platform: slot.platform })));
+                    if (createCanonicalJsonSigningInput(response.link) !== createCanonicalJsonSigningInput(link)) {
+                        throw new Error('plugin_account_execution_identity_mismatch');
+                    }
                     const artifact = await runWithServerHttpBaseUrl(input.serverUrl, () => createCredentialedAccountArtifactStore(input.credentials)
-                        .read(link.accountArtifactId, { signal: input.signal, prepareRecipients: false, includeSharedAudience: false }));
-                    if (!artifact || artifact.access !== 'owner' || typeof artifact.body !== 'string') throw new Error('plugin_account_execution_artifact_unavailable');
+                        .openStoredEnvelope(response.artifact, { signal: input.signal }));
+                    if (typeof artifact.body !== 'string') throw new Error('plugin_account_execution_artifact_unavailable');
                     const opened = openPluginUiArtifactArchiveV1({ pluginId, expectedArtifactDigest: graph.digest,
                         header: artifact.header, body: decodePluginUiArtifactArchiveBodyV1(artifact.body) });
                     if (!opened || createCanonicalJsonSigningInput(opened.artifactGraph) !== createCanonicalJsonSigningInput(graph)) {

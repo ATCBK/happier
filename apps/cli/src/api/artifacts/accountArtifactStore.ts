@@ -715,6 +715,21 @@ export function createAccountArtifactStore(params: Readonly<{
   };
   const store = {
     read,
+    /** Qualified host APIs admit their own identity; reuse the Account codec, not ordinary Artifact visibility. */
+    openStoredEnvelope: async (envelope: Readonly<{ header: string; body: string; dataEncryptionKey: string }>,
+      options?: Readonly<{ signal?: AbortSignal }>): Promise<Readonly<{ header: Readonly<Record<string, unknown>>; body: ArtifactBodyV1 | null }>> => {
+      options?.signal?.throwIfAborted();
+      const mode = await params.getAccountEncryptionMode({ ...options, usage: 'fresh-authority' });
+      options?.signal?.throwIfAborted();
+      const codec = await openCodec(params.credentials, envelope.dataEncryptionKey, mode);
+      const header = decode(codec, envelope.header);
+      const body = decodeBody(codec, envelope.body);
+      if (!header || typeof header !== 'object' || Array.isArray(header)) throw new ArtifactEncryptionMaterialUnavailableError();
+      requireBodyForArtifactKind(header as Readonly<Record<string, unknown>>, body);
+      await assertOwnerAccountMode({ access: 'owner', encryptionMode: codec.mode }, undefined, { ...options, usage: 'fresh-authority' });
+      options?.signal?.throwIfAborted();
+      return { header: header as Readonly<Record<string, unknown>>, body };
+    },
     /** Host-only exact-request recipient. A View grant never supplies decision authority. */
     prepareApprovalRequesterRecipient: async (input: Readonly<{
       artifactId: string; requesterAccountId: string; sessionId: string; signal?: AbortSignal;

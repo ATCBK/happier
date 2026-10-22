@@ -87,11 +87,11 @@ describe('Account activation source assembly', () => {
         const home = await mkdtemp(join(tmpdir(), 'account-missing-artifact-'));
         const app = fastify();
         const daemon = fastify();
-        const { pluginId, artifactId } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const { pluginId } = await registerAuthoredAccountActionRelease(app, 'owner');
         const qualifiedId = formatQualifiedPluginActionId({ pluginId, localId: 'echo' });
         const credentials = { token: 'fixture', encryption: null } as const;
         const serverUrl = 'http://account-missing-artifact.test';
-        const failedSourcePath = phase === 'Artifact' ? `/v1/artifacts/${artifactId}`
+        const failedSourcePath = phase === 'Artifact' ? PluginAvailabilityActionHttpPathsV1['account.plugins.availability.uiArtifact.read']
             : PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'];
         let missingSourceReads = 0;
         app.addHook('onRequest', async (request, reply) => {
@@ -235,7 +235,9 @@ describe('Account activation source assembly', () => {
         if (!artifact) throw new Error('authored fixture artifact missing');
         artifacts.seed(artifactId, artifact.header, encodePlainArtifactStoredContent({ body: 'not an artifact archive' }));
         let artifactReads = 0;
-        app.addHook('onRequest', async request => { if (request.url === `/v1/artifacts/${artifactId}`) artifactReads += 1; });
+        app.addHook('onRequest', async request => {
+            if (request.url === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.uiArtifact.read']) artifactReads += 1;
+        });
         app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
         app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
@@ -271,6 +273,36 @@ describe('Account activation source assembly', () => {
                 expect(definitions.some(action => action.id === `${providerPluginId}/actions/record`)).toBe(true);
             } finally { await runtime.dispose(); }
         } finally { daemon.mockRestore(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
+    });
+    it('refuses a qualified hosted response for another Artifact identity even when its archive bytes are valid', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'account-hosted-identity-'));
+        const app = fastify();
+        const { pluginId } = await registerAuthoredAccountActionRelease(app, 'owner');
+        app.addHook('onSend', async (request, _reply, payload) => {
+            if (request.url !== PluginAvailabilityActionHttpPathsV1['account.plugins.availability.uiArtifact.read']
+                || typeof payload !== 'string') return payload;
+            const response = JSON.parse(payload);
+            return JSON.stringify({ ...response, link: { ...response.link,
+                accountArtifactId: 'c7e5d73f-88a7-44bc-98ed-23edbffb6214' } });
+        });
+        app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-hosted-identity.test' });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | undefined;
+        try {
+            runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir: home,
+                contributes: createResolvedContributionRegistry({}), accountExecution: {
+                    credentials: { token: 'fixture', encryption: null },
+                    serverUrl: 'http://account-hosted-identity.test', isCurrent: () => true } });
+            await runtime.activateContributionsOnDemand([{ pluginId, family: 'actions', localId: 'echo' }]);
+            expect(runtime.pluginDiagnosticsByPluginId[pluginId]).toEqual(expect.arrayContaining([
+                expect.objectContaining({ code: 'plugin_daemon_module_load_failed', message: 'plugin_account_execution_identity_mismatch' }),
+            ]));
+            const lease = { registry: runtime, source: 'ephemeral' as const, durableRevision: -1, release: async () => {} };
+            const list = createCommittedContributedActionDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+            expect(list().some(action => action.id === `${pluginId}/actions/echo`)).toBe(false);
+        } finally { await runtime?.dispose(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
     });
     it('loads a current host-bundled portable declaration without an Account release or Machine installation', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-bundled-source-'));
@@ -311,10 +343,14 @@ describe('Account activation source assembly', () => {
             await expect(source.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime')).rejects.toThrow('plugin_account_execution_retired');
         } finally { restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
     });
-    it('loads an Account release through canonical Artifact bytes without a Machine and retires on disable', async () => {
+    it('loads an Account release through qualified hosted Artifact bytes unavailable to ordinary reads, without a Machine, and retires on disable', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-source-'));
         const app = fastify();
-        const { pluginId, manifest, setEnabled } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const { pluginId, manifest, artifactId, setEnabled } = await registerAuthoredAccountActionRelease(app, 'owner');
+        // Hosted plugin Artifacts are intentionally isolated from ordinary Artifact reads.
+        app.addHook('onRequest', async (request, reply) => {
+            if (request.url === `/v1/artifacts/${artifactId}`) return reply.code(404).send({ error: 'not_found' });
+        });
         app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
         app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
