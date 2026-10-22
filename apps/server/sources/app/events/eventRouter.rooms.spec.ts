@@ -12,32 +12,40 @@ const { findSession, transactionBoundary } = vi.hoisted(() => ({
     transactionBoundary: {
         failCommits: 0,
         committed: false,
+        projectionReadsPerSnapshot: [] as number[],
         error: new Error("commit unavailable"),
     },
 }));
 
-vi.mock("@/storage/db", () => ({
-    // Persistence is the boundary; inTx and credential authorization remain real.
-    db: {
-        session: { findUnique: findSession },
-        $transaction: async (read: (tx: object) => Promise<unknown>) => {
-            transactionBoundary.committed = false;
-            const result = await read({
-            session: { findUnique: findSession, findFirst: async () => null },
-            account: { findUnique: async () => null },
-            ephemeralRunnerActivation: { findFirst: async () => null },
-            machine: { findFirst: async () => null },
-            accessKey: { findUnique: async () => null },
-            });
-            if (transactionBoundary.failCommits > 0) {
-                transactionBoundary.failCommits -= 1;
-                throw transactionBoundary.error;
-            }
-            transactionBoundary.committed = true;
-            return result;
+vi.mock("@/storage/db", async () => {
+    const { inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
+    return {
+        // Persistence is the boundary; inTx and credential authorization remain real.
+        db: {
+            session: { findUnique: findSession },
+            $transaction: async (read: (tx: object) => Promise<unknown>) => {
+                transactionBoundary.committed = false;
+                const firstRead = findSession.mock.calls.length;
+                const result = await read({
+                    ...inTxPostgresControlStatementMock,
+                    session: { findUnique: findSession, findFirst: async () => null },
+                    account: { findUnique: async () => null },
+                    ephemeralRunnerActivation: { findFirst: async () => null },
+                    machine: { findFirst: async () => null },
+                    accessKey: { findUnique: async () => null },
+                });
+                transactionBoundary.projectionReadsPerSnapshot.push(findSession.mock.calls.slice(firstRead)
+                    .filter(([query]) => query.select.account).length);
+                if (transactionBoundary.failCommits > 0) {
+                    transactionBoundary.failCommits -= 1;
+                    throw transactionBoundary.error;
+                }
+                transactionBoundary.committed = true;
+                return result;
+            },
         },
-    },
-}));
+    };
+});
 
 type MetricSample = {
     labels: Record<string, string>;
@@ -61,6 +69,7 @@ describe("eventRouter (rooms)", () => {
         register.resetMetrics();
         transactionBoundary.failCommits = 0;
         transactionBoundary.committed = false;
+        transactionBoundary.projectionReadsPerSnapshot = [];
     });
 
     afterEach(() => {
@@ -228,9 +237,9 @@ describe("eventRouter (rooms)", () => {
             try {
                 await deliver();
                 expect(delivered).toEqual([...sockets.map(socket => socket.id), tokenSocket.id]);
-                // Repeated structural reads are the measured fan-out cost, not incidental wiring.
-                const projectionReads = findSession.mock.calls.filter(([query]) => query.select.account);
-                expect(projectionReads).toHaveLength(1);
+                // Capture shares one structural read; the later policy-owned
+                // readmission snapshot independently refreshes each credential.
+                expect(transactionBoundary.projectionReadsPerSnapshot[0]).toBe(1);
 
                 delivered.length = 0;
                 emittedAfterCommit.length = 0;
