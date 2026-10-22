@@ -5553,6 +5553,12 @@ export type ExecutionRunStartFailureDetailsV1 = {
             'explicitModel'
         ];
     } | undefined;
+    issues?: {
+        code: string;
+        path: (string | number)[];
+        expected?: string | undefined;
+        acceptedValues?: (string | number | boolean | null)[] | undefined;
+    }[] | undefined;
 };
 export type PluginMachineExecutionOriginV1 = {
     serverIdentityId: string;

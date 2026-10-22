@@ -1114,6 +1114,37 @@ export type SessionControlActionResultById = {
             } | undefined;
         };
         ok?: true | undefined;
+        connectedServices?: {
+            v: 2;
+            bindingsByServiceId: Record<string, {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                selection: 'profile';
+                profileId: string;
+            }>;
+        } | undefined;
         readiness?: {
             v: 1;
             status: 'unknown' | 'ready' | 'unavailable';
@@ -1640,6 +1671,37 @@ export type SessionControlActionResultById = {
                         } | undefined;
                     };
                     ok?: true | undefined;
+                    connectedServices?: {
+                        v: 2;
+                        bindingsByServiceId: Record<string, {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'direct';
+                            disclosedMember: {
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                accountId: string;
+                            };
+                        } | {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'brokered';
+                            disclosedMember?: undefined;
+                        } | {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
+                        }>;
+                    } | undefined;
                     readiness?: {
                         v: 1;
                         status: 'unknown' | 'ready' | 'unavailable';
