@@ -653,6 +653,26 @@ describe('OptionPickerOverlay', () => {
         expect(onSelect).toHaveBeenCalledWith('fast');
     });
 
+    it('shows a row\'s source suffix after its name', async () => {
+        const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
+
+        const screen = await renderScreen(<OptionPickerOverlay
+                    title="Model"
+                    options={[
+                        { value: 'same', label: 'gpt-5.6-luna', labelSuffix: '· via Work pool', description: 'd' },
+                        { value: 'other', label: 'Fast', description: 'f' },
+                    ]}
+                    selectedValue="other"
+                    emptyText="empty"
+                    canEnterCustomValue={false}
+                    onSelect={vi.fn()}
+                />);
+
+        const text = screen.getTextContent();
+        expect(text).toContain('gpt-5.6-luna');
+        expect(text).toContain('· via Work pool');
+    });
+
     it('marks the current choice with exactly one check in list presentation', async () => {
         const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
 

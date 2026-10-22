@@ -543,6 +543,7 @@ export function PlanOptionRow(
           rowRole={rowRole}
           title={labelContent ?? optionLabel}
           titleAccessory={titleAccessory}
+          titleQualifier={props.option.titleQualifier}
           contentAlign={props.option.contentAlign}
           titleHighlightQuery={props.option.labelHighlightQuery}
           subtitle={displayedSubtitle}
@@ -629,6 +630,7 @@ export function PlanOptionRow(
         testID={optionTestId}
         title={labelContent ?? optionLabel}
         titleAccessory={titleAccessory}
+        titleQualifier={props.option.titleQualifier}
         contentAlign={props.option.contentAlign}
         titleHighlightQuery={props.option.labelHighlightQuery}
         subtitle={displayedSubtitle}

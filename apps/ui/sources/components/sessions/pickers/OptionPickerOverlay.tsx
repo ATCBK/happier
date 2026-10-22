@@ -571,7 +571,7 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     id: valueKey,
                     testID: `${optionTestIDPrefix}:${valueKey}`,
                     label: option.label,
-                    ...(option.labelSuffix ? { titleAccessory: option.labelSuffix } : {}),
+                    ...(option.labelSuffix ? { titleQualifier: option.labelSuffix } : {}),
                     searchText: [option.searchText, option.labelSuffix].filter(Boolean).join(' '),
                     onPressIn: () => {
                         selectionPressPendingRef.current = true;

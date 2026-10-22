@@ -67,8 +67,10 @@ type SelectionListOptionBase = Readonly<{
     label: string;
     /** Rich visual label, resolved only by a mounted row; `label` remains its matching/spoken name. */
     labelContent?: SelectionListLazyVisual;
-    /** An inline mark after the label, such as "· via DeepSeek"; rendered by the row's `Item`. */
+    /** An inline mark after the label, such as a "Default" tag; rendered by the row's `Item`. */
     titleAccessory?: SelectionListLazyVisual;
+    /** A short text qualifier after the label, such as "· via DeepSeek"; the row's `Item` keeps the label whole beside it. */
+    titleQualifier?: string;
     /** Whether the leading mark and trailing accessory centre on a multi-line row (default) or sit level with the label (`Item.contentAlign`). */
     contentAlign?: 'center' | 'start';
     /** Tints this query's matches in the label: a search hit whose label is the very text that matched. */
