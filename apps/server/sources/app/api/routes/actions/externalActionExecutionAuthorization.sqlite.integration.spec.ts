@@ -89,6 +89,7 @@ import { createUsageSnapshot } from '@/app/api/routes/connect/providerAccountUsa
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
 import { featuresRoutes } from "@/app/api/routes/features/featuresRoutes";
 import { registerSessionListingRoutes } from "@/app/api/routes/session/registerSessionListingRoutes";
+import { registerSessionCreateOrLoadRoute } from "@/app/api/routes/session/registerSessionCreateOrLoadRoute";
 import { buildSessionListServerQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { registerSessionMessageRoutes } from "@/app/api/routes/session/registerSessionMessageRoutes";
@@ -1568,6 +1569,7 @@ describe("external Action execution authorization", () => {
         const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null,
             undefined, false, routes => {
                 registerDiscussionRoutes(routes);
+                registerSessionCreateOrLoadRoute(routes);
                 if (caller === 'session') {
                     startSocket(routes);
                     // The parent Session publisher is the external boundary;
@@ -1586,13 +1588,14 @@ describe("external Action execution authorization", () => {
         const runId = crypto.randomUUID();
         const target = { kind: 'machine' as const, machineId: fixture.machine.id,
             project: { machineId: fixture.machine.id, directory: '/repo' } };
-        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get' | 'workflow.run.wait', timeoutSeconds = 300) => {
+        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get' | 'workflow.run.wait' | 'session.list', timeoutSeconds = 300) => {
             const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
                 caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
                 sourceTurnId: 'workflow-turn', callerPermissionMode: 'default', causalPermissionAuthority: null,
                 requestId: crypto.randomUUID() });
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId, target,
-                input: actionId === 'workflow.run.start' ? { runId,
+                input: actionId === 'session.list' ? { underSessionId: session.id, view: 'summary', limit: 20 }
+                    : actionId === 'workflow.run.start' ? { runId,
                     source: { kind: 'inline', definition: { version: 1, blocks: ['work'] } } }
                     : actionId === 'workflow.run.wait' ? { runId, conditions: ['terminal'], timeoutSeconds } : { runId } });
             const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
@@ -1766,6 +1769,31 @@ describe("external Action execution authorization", () => {
                             features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {},
                         }) }),
                     });
+                    // The Workflow creator supplies an ordinary manager at
+                    // birth. Origin provenance alone must not grant membership.
+                    const createLeaf = (managed: boolean) => app.inject({ method: 'POST', url: '/v1/sessions',
+                        headers: { authorization: `Bearer ${token}`, ...currentAccountStoredContentCompatibilityHeaders },
+                        payload: { tag: crypto.randomUUID(), metadataLayoutVersion: 1,
+                            sharedMetadata: { ciphertext: JSON.stringify({ v: 1 }) }, ownerMetadata: { t: 'plain', v: { v: 1 } },
+                            dataEncryptionKey: null, encryptionMode: 'plain', originKind: 'run_step', originRunId: runId,
+                            originSessionId: session.id, workDepth: 1, ...(managed ? { manager: { sessionId: session.id } } : {}) } });
+                    const managedLeaf = await createLeaf(true);
+                    const unlinkedLeaf = await createLeaf(false);
+                    expect(managedLeaf.statusCode, managedLeaf.body).toBe(200);
+                    expect(unlinkedLeaf.statusCode, unlinkedLeaf.body).toBe(200);
+                    expect(managedLeaf.json()).toMatchObject({ session: { manager: { sessionId: session.id },
+                        origin: { kind: 'run_step', runId } } });
+                    const listAuthorization = await issue('session.list');
+                    const listed = await cli.execute('session.list', { underSessionId: session.id, view: 'summary', limit: 20 }, {
+                        surface: 'agent', authority: 'account_automation', defaultSessionId: session.id,
+                        actionCaller: { kind: 'session', sessionId: session.id },
+                        externalActionTarget: target, externalActionExecutionAuthorization: listAuthorization,
+                    });
+                    expect(listed, JSON.stringify(listed)).toMatchObject({ ok: true });
+                    if (!listed.ok) throw new Error('Signed Agent list was refused');
+                    const listedIds = (listed.result as { sessions: { id: string }[] }).sessions.map(row => row.id);
+                    expect(listedIds).toContain(managedLeaf.json().session.id);
+                    expect(listedIds).not.toContain(unlinkedLeaf.json().session.id);
                     const authorization = await issue('workflow.run.wait');
                     const connected = new Promise<void>(resolve => socket.once('connection', () => resolve()));
                     let resolveRead: (() => void) | undefined;
