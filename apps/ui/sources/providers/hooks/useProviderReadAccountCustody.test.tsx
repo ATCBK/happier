@@ -66,6 +66,9 @@ beforeEach(async () => {
     await account.restore({ serverIdentityId: 'srv_provider_active', currentAccount: true });
     peerId = await account.addHome({ name: 'Read peer', serverUrl: peerUrl,
         serverIdentityId: 'srv_provider_peer', accountId: 'peer-a', currentAccount: true, active: false });
+    // addHome deliberately starts with an empty census. These readers exercise
+    // Machine RPCs, so publish the addressed peer's real Machine boundary too.
+    await account.publishMachines(peerId, provider.state.machines);
     installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: peerId,
         catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
 });
@@ -122,6 +125,7 @@ describe('Provider read custody at an addressed peer Account', () => {
             expect(rendered.getCurrent().data).toBeNull();
             expect(rendered.getCurrent().loading).toBe(true);
             expect(observations.every(data => data === null)).toBe(true);
+            await act(async () => { await account.publishMachines(peerId, provider.state.machines); });
             await act(async () => { release(); });
             await waitForHomeGovernance(() => expect(rendered.getCurrent().data).not.toBeNull());
             retired = false;

@@ -42,7 +42,7 @@ import { Text } from '@/components/ui/text/Text';
  * column reads. Only HTTP, Socket.IO and the device credential store are replaced;
  * the Action parser, store, loader, applied Home lifetime and Account wake are real.
  */
-const listRuns = vi.fn<(input: { operation: string; request: { attention?: string; projection?: 'membership' } }) => Promise<unknown>>();
+const listRuns = vi.fn<(input: { operation: string; request: { attention?: string; projection?: 'membership'; limit?: number } }) => Promise<unknown>>();
 const listAutomationRuns = vi.fn<() => Promise<unknown>>();
 let workflowsEnabled = true;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -251,8 +251,9 @@ describe('useInboxSummary workflow source', () => {
         await waitForHomeGovernance(() => expect(latest?.count).toBe(0));
         expect(listRuns.mock.calls.map(([input]) => ({ projection: input.request.projection ?? 'full',
             bytes: Buffer.byteLength(JSON.stringify(input)) }))).toEqual([
-            { projection: 'membership', bytes: 106 }, { projection: 'full', bytes: 80 }, { projection: 'membership', bytes: 106 },
+            { projection: 'membership', bytes: 106 }, { projection: 'full', bytes: expect.any(Number) }, { projection: 'membership', bytes: 106 },
         ]);
+        expect(listRuns.mock.calls[1]?.[0].request).toMatchObject({ attention: 'required', limit: expect.any(Number) });
     });
 
     it('counts an ordinary Automation failure with Workflows disabled', async () => {

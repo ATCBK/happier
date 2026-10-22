@@ -27,6 +27,7 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { loadEffectiveHomeViewState, updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import * as sessionListQueryRuntime from '@/sync/domains/session/listing/sessionListQueryRuntime';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -121,6 +122,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     standardCleanup();
+    clearMachineRequestReachabilityForTest();
     await connection?.dispose();
     connection = undefined;
     await setActiveServerId(initialServerId);
@@ -218,6 +220,28 @@ async function renderSection() {
 }
 
 describe('HubAttentionSection', () => {
+    it('keeps Home attention usable when its selected Agents machine has unknown presence', async () => {
+        state.loginState = 'logged_out';
+        state.profile = { connectedServicesV2: [], connectedAccountsV4: [account('acct-1', 'needs_reauth')] };
+        const { screen, push } = await renderSection();
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('The attention fixture Account must be restored');
+
+        await act(async () => { withdrawMachinePresenceForScope(scope); });
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findAll(node => node.props?.testID === 'settings-overview-attention.agent:claude.action'))
+            .toHaveLength(0);
+        const serviceAction = screen.findByTestId('settings-overview-attention.service:happier.example/subscription/acct-1.action');
+        expect(serviceAction).not.toBeNull();
+        serviceAction!.props.onPress();
+        expect(push).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ accountId: 'acct-1' }) }));
+
+        await act(async () => { captureMachinePresenceObservation(scope)(['machine-1']); });
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findByTestId('settings-overview-attention.agent:claude.action')).not.toBeNull();
+        expect(rpc).not.toHaveBeenCalled();
+    });
+
     it('offers the same pending Sessions as the Home count and opens their Inbox', async () => {
         state.loginState = 'logged_in';
         state.profile = {};

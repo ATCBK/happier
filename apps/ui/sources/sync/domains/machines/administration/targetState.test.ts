@@ -4,9 +4,12 @@ import { adoptHomeProfile, type ServerProfile } from '@/sync/domains/server/serv
 import { resolveAllProfileMachineInventorySnapshots } from '../machineInventorySnapshots';
 import { t } from '@/text';
 import {
+    captureMachinePresenceObservation,
     clearMachineRequestReachabilityForTest,
     recordMachineRequestFailed,
+    withdrawMachinePresenceForScope,
 } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineAdministrationTargetState } from './targetSelection';
 
 import {
     buildMachineAdministrationCandidateInventoryRowsFromSnapshots,
@@ -87,6 +90,31 @@ describe('snapshot Administration candidates', () => {
 
         expect(rows[0]?.candidate.availability).toBe('offline');
     });
+    it('keeps a selected machine well formed while presence is withdrawn and recovers on a fresh observation', () => {
+        const scope = { serverId: profile.serverIdentityId!, accountId: 'account-b' };
+        const selectedMachine = machine({ id: 'machine-b', active: true });
+        const readCandidate = () => buildMachineAdministrationCandidatesFromSnapshots({
+            snapshots: [{ kind: 'resolved', profileId: profile.id, accountId: scope.accountId,
+                serverIdentityId: scope.serverId, serverName: 'Server B', observation: 'live', machines: [selectedMachine] }],
+            nowMs: 100,
+        })[0]!;
+        const initial = readCandidate();
+        expect(initial.availability).toBe('online');
+
+        withdrawMachinePresenceForScope(scope);
+        const withdrawn = readCandidate();
+        expect(withdrawn.availability).toBe('unknown');
+        expect(resolveMachineAdministrationTargetState({ storedTarget: initial.target, candidates: [withdrawn] }))
+            .toEqual({ kind: 'missing', target: initial.target, snapshot: withdrawn, inventoryKnown: false });
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [withdrawn] }))
+            .toEqual({ kind: 'unselected', candidates: [withdrawn] });
+
+        captureMachinePresenceObservation(scope)([selectedMachine.id]);
+        const restored = readCandidate();
+        expect(resolveMachineAdministrationTargetState({ storedTarget: initial.target, candidates: [restored] }))
+            .toEqual({ kind: 'online', target: initial.target, machine: restored });
+    });
+
     it('keeps routing and tombstone facts from the canonical snapshot producer', () => {
         const machines = [
             machine({ id: 'online', active: true }),
