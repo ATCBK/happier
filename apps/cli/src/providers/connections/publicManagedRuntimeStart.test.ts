@@ -326,7 +326,11 @@ it.each(['Start', 'next-request', 'new-stream'] as const)('G1 recovers retained 
       await vi.waitFor(async () => expect(await readFile(join(gateway.directory, 'gateway-inputs'), 'utf8')).toContain('interrupted input\n'));
       process.kill(originalPid, 'SIGTERM');
       expect(await waitForProcessExit(originalPid)).toBe(true);
-      expect((await interrupted).status).toBe(500);
+      const interruptedResponse = await interrupted;
+      expect(interruptedResponse.status).toBe(403);
+      expect(JSON.parse(interruptedResponse.body)).toMatchObject({
+        error: { type: 'permission_error', code: 'broker_unavailable' },
+      });
       await vi.waitFor(() => expect(survivor.source.access.endpointUrl('api')).toBeNull());
       if (recovery === 'new-stream') {
         // The carrier closes only this stream's join, then supplies a fresh

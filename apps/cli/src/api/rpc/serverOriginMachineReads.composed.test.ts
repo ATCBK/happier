@@ -468,8 +468,20 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 if (scenario === 'account' || scenario === 'pool' || scenario === 'installed' || scenario === 'saved_gateway') {
                     expect(projection.groups.length).toBeGreaterThan(0);
                     expect(projection.groups.every(group => group.authorization.authorized && group.rows.length > 0)).toBe(true);
-                    expect(projection.groups.flatMap(group => group.rows).every(row => row.confidence === 'account_unverified'
-                        && row.compatibility.result.status === 'experimental' && row.compatibility.confirmed === false)).toBe(true);
+                    const rows = projection.groups.flatMap(group => group.rows);
+                    // CLIProxyAPI publishes the pinned SDK's explicit image-only capability.
+                    // Unknown chat support still uses experimental confirmation.
+                    const unsupported = rows.filter(row => row.descriptor.capabilities?.toolRoundTrips === 'unsupported');
+                    expect(new Set(unsupported.map(row => row.ref.modelId))).toEqual(new Set(['gpt-image-1.5', 'gpt-image-2']));
+                    for (const row of rows) {
+                        expect(row.confidence).toBe('account_unverified');
+                        expect(row.compatibility.confirmed).toBe(false);
+                        expect(row.compatibility.result.status).toBe(
+                            row.descriptor.capabilities?.toolRoundTrips === 'unsupported' ? 'incompatible' : 'experimental');
+                        if (row.compatibility.result.status === 'incompatible') {
+                            expect(row.compatibility.result.reasons).toContain('model_capability_toolRoundTrips_unsupported');
+                        }
+                    }
                     expect(projection.groups.map(group => group.connectionId)).not.toContain('saved-gateway');
                     expect(new Set(projection.groups.map(group => JSON.stringify(group.rows[0]?.application))).size).toBe(projection.groups.length);
                 }
