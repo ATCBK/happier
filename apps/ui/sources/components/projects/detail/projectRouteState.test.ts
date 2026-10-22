@@ -162,6 +162,17 @@ describe('project route state', () => {
             initialResource: null });
         expect(Object.fromEntries(new URL(href, 'https://happier.test').searchParams)).toEqual({ worktreeId: '@root', comparisonId: 'comparison-a' });
     });
+    it('retires the previous file comparison and anchor without assigning them to the next selected file', () => {
+        const href = buildProjectRouteHref({ workspaceRefId: 'wr_1', segment: 'code', serverId: 'home-a',
+            activeRootPath: '/repo', defaultRootPath: '/repo',
+            routeParams: { initialFile: 'closed.ts', comparison: 'branch', head: 'old-head', base: 'old-base', comparisonId: 'file-basis',
+                fileView: 'changes', blame: '1', fileOpenAs: 'preview', source: 'diff', anchor: 'range', startLine: '7', endLine: '9',
+                layoutId: 'dashboard', right: 'files' },
+            initialResource: { kind: 'file', path: 'current.ts' } });
+        const params = Object.fromEntries(new URL(href, 'https://happier.test').searchParams);
+        expect(readProjectFileRouteTarget(params)).toEqual({ kind: 'file', path: 'current.ts' });
+        expect(params).toEqual({ serverId: 'home-a', worktreeId: '@root', initialFile: 'current.ts', layoutId: 'dashboard', right: 'files' });
+    });
     it('replaces stale Details and initial resource intent while preserving qualified dashboard and companion state', () => {
         const href = buildProjectRouteHref({ workspaceRefId: 'wr_1', segment: 'changes', serverId: 'home-a',
             activeRootPath: '/repo/feature', defaultRootPath: '/repo', activeWorktreeId: 'feature-checkout',

@@ -1,5 +1,6 @@
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { FILE_TARGET_ANCHOR_PARAM_KEYS } from '@/utils/url/sessionFileDeepLink';
+import { serializeScmReviewTarget } from '@/utils/url/scmReviewTargetUrl';
 import type { PaneDetailsStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import { buildActiveDetailsRouteParams, parseSessionPaneUrlState, serializeSessionPaneUrlState,
     SESSION_PANE_URL_PARAM_KEYS, type SessionPaneUrlDetailsTarget } from '@/components/sessions/panes/url/sessionPaneUrlState';
@@ -230,6 +231,27 @@ export function normalizeProjectDetailsSourceSurface(value: unknown): ProjectDet
     return null;
 }
 
+/** Resource projection replaces only its launch fields, leaving the Project's other route context intact. */
+export function serializeProjectInitialResource(resource: ProjectFileRouteTarget | Readonly<{ kind: 'commit'; sha: string }> | null,
+    previousFile?: ProjectFileRouteTarget | null): Record<string, string | undefined> {
+    const params: Record<string, string | undefined> = { initialFile: undefined, initialCommit: undefined,
+        fileView: undefined, blame: undefined, fileOpenAs: undefined };
+    for (const key of FILE_TARGET_ANCHOR_PARAM_KEYS) params[key] = undefined;
+    // A standalone comparisonId is Project context. Only a parsed file comparison owns
+    // these selector fields; let its canonical serializer name what must be withdrawn.
+    if (previousFile?.changes) {
+        for (const key of Object.keys(serializeScmReviewTarget({ comparison: previousFile.changes }))) params[key] = undefined;
+    }
+    if (resource?.kind === 'commit') params.initialCommit = resource.sha;
+    if (resource?.kind === 'file') {
+        params.initialFile = resource.path;
+        for (const [key, value] of Object.entries(serializeSessionPaneUrlState({ details: resource }))) {
+            if (key !== 'details' && key !== 'path') params[key] = value;
+        }
+    }
+    return params;
+}
+
 export function buildProjectRouteHref(input: Readonly<{
     workspaceRefId: string;
     segment?: ProjectRouteSegment;
@@ -271,14 +293,10 @@ export function buildProjectRouteHref(input: Readonly<{
         }
         Object.assign(resourceParams, serializeSessionPaneUrlState(input.details ? { details: input.details } : {}));
     }
-    if (input.initialResource && input.details === undefined) {
-        resourceParams[input.initialResource.kind === 'file' ? 'initialFile' : 'initialCommit'] =
-            input.initialResource.kind === 'file' ? input.initialResource.path : input.initialResource.sha;
-        if (input.initialResource.kind === 'file') {
-            const fileParams = serializeSessionPaneUrlState({ details: input.initialResource });
-            for (const [key, value] of Object.entries(fileParams)) {
-                if (key !== 'details' && key !== 'path') resourceParams[key] = value;
-            }
+    if (input.initialResource !== undefined && input.details === undefined) {
+        for (const [key, value] of Object.entries(serializeProjectInitialResource(input.initialResource, readProjectFileRouteTarget(input.routeParams ?? {})))) {
+            if (value === undefined) delete routeParams[key];
+            else resourceParams[key] = value;
         }
     }
     return resolveProjectRoutePathForSurface({

@@ -1,19 +1,21 @@
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import * as React from 'react';
 import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { readProjectFileRouteTarget, readProjectRouteCompanion, readProjectRouteStringParam } from './projectRouteState';
-import { serializeFileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
+import { readProjectFileRouteTarget, readProjectRouteCompanion, readProjectRouteStringParam, readProjectSelectedRouteResource, serializeProjectInitialResource } from './projectRouteState';
 import { createProjectCommitDetailsTab } from './projectDetailsTabBuilders';
 import { createSessionPaneDetailsTab } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import { useProjectRouteRouterRef } from './useProjectRouteRouterRef';
+
+function resourceAdmissionKey(scopeId: string, resource: Parameters<typeof serializeProjectInitialResource>[0]): string | null {
+    return resource ? `${scopeId}:${JSON.stringify(serializeProjectInitialResource(resource))}` : null;
+}
 
 /** Destination-owned admission of the initial resource carried by its route. */
 export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: WorkspaceRefV1 | null): boolean {
+    const routerRef = useProjectRouteRouterRef();
     const params = useDestinationParams<Record<string, string | string[] | undefined>>();
     const fileTarget = readProjectFileRouteTarget(params);
-    const file = fileTarget?.path;
-    const anchorKey = fileTarget?.anchor ? JSON.stringify(serializeFileTargetAnchor(fileTarget.anchor, fileTarget.anchorSource)) : '';
-    const viewKey = JSON.stringify([fileTarget?.view, fileTarget?.blame, fileTarget?.openAs, fileTarget?.changes]);
     const commit = readProjectRouteStringParam(params.initialCommit);
     const tab = fileTarget ? createSessionPaneDetailsTab(fileTarget) : commit ? createProjectCommitDetailsTab(commit) : null;
     const canAdmit = workspaceRef !== null;
@@ -30,7 +32,8 @@ export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: W
         // Availability and unavailable selection are still owned by the sidebar registry/host.
         pane.selectRightDestination(typeof companion === 'string' ? { kind: 'builtin', id: companion } : companion);
     }, [canAdmit, companion, companionKey, pane.scopeId, pane.selectRightDestination]);
-    const admissionKey = canAdmit && tab ? `${pane.scopeId}:${tab.key}:${anchorKey}:${viewKey}` : null;
+    const resource = fileTarget ?? (commit ? { kind: 'commit' as const, sha: commit } : null);
+    const admissionKey = canAdmit && tab ? resourceAdmissionKey(pane.scopeId, resource) : null;
     const lastAdmitted = React.useRef<string | null>(null);
     React.useEffect(() => {
         // Route resources have no checkout authority until the shared resolver accepts an exact ref.
@@ -40,12 +43,23 @@ export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: W
             lastAdmitted.current = null;
             return;
         }
-        const admissionKey = `${pane.scopeId}:${tab.key}:${anchorKey}:${viewKey}`;
-        if (lastAdmitted.current === admissionKey) return;
+        if (lastAdmitted.current === admissionKey) {
+            const details = pane.scopeState?.details;
+            // A closed resource must no longer address this destination. Otherwise an explicit
+            // open of the same URL is indistinguishable from the route we already admitted.
+            if (details && (!details.isOpen || !details.tabs.some(candidate => candidate.key === tab.key))) {
+                const selected = readProjectSelectedRouteResource(details) ?? null;
+                // This tab is already selected. Projecting it must not replay opening side effects
+                // such as promoting its preview or resetting the reading anchor.
+                lastAdmitted.current = resourceAdmissionKey(pane.scopeId, selected);
+                routerRef.current.setParams(serializeProjectInitialResource(selected, fileTarget));
+            }
+            return;
+        }
         lastAdmitted.current = admissionKey;
         pane.openDetailsTab(tab, { intent: fileTarget?.openAs ?? 'pinned' });
         // Retain the qualified resource in the destination URL across phone/Workspace projection.
-        // Admission is idempotent within this mounted destination, not a destructive query consume.
-    }, [anchorKey, canAdmit, commit, file, pane.openDetailsTab, pane.scopeId, viewKey]);
+        // Admission is idempotent while that resource remains in this mounted destination.
+    }, [admissionKey, canAdmit, pane.openDetailsTab, pane.scopeId, pane.scopeState?.details, routerRef]);
     return admissionKey !== null && lastAdmitted.current !== admissionKey;
 }

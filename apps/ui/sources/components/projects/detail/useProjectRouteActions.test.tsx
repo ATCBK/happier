@@ -10,10 +10,11 @@ const routerMock = createExpoRouterMock({ pathname: '/projects/wr_1/context', pa
 vi.mock('expo-router', () => routerMock.module);
 const workspaceRef: WorkspaceRefV1 = { id: 'wr_1', serverId: 'server-1', machineId: 'machine-1',
     rootPath: '/repo', label: 'Project Alpha', createdAtMs: 1, lastOpenedAtMs: null };
+// Install the Expo transport before loading the owner, outside the behavioral test deadline.
+const { useProjectRouteActions } = await import('./useProjectRouteActions');
 describe('project route actions', () => {
     beforeEach(() => { routerMock.spies.push.mockClear(); routerMock.spies.replace.mockClear(); });
     it('changes pages without dropping qualified dashboard, comparison, and file intent', async () => {
-        const { useProjectRouteActions } = await import('./useProjectRouteActions');
         const hook = await renderHook(() => useProjectRouteActions({ workspaceRef,
             activeRootPath: '/repo/feature', activeWorktreeId: 'checkout-a' }));
         hook.getCurrent().navigateToSegment({ segment: 'changes', method: 'push' });
