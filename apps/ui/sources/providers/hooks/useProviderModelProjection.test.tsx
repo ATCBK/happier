@@ -30,6 +30,7 @@ function projection(connectionIds: readonly string[] = []) {
 }
 
 const { useProviderModelProjection } = await import('./useProviderModelProjection');
+const { useProviderConnectionModels } = await import('./useProviderConnectionModels');
 await loadSyncSingletonForTests();
 
 afterEach(async () => {
@@ -48,6 +49,60 @@ beforeEach(async () => {
 });
 
 describe('useProviderModelProjection', () => {
+    it('shares connection-model list demand and retains its distinct policy facts across reopen and failed refresh', async () => {
+        const firstResult = { status: 'success' as const, connectionId: 'pc_a', connectionRevision: 2,
+            manualModelPolicy: 'allowed' as const, modelLoadAction: 'descriptor_absent' as const,
+            models: [{ id: 'model-a', source: 'probe' as const, stale: false,
+                loadState: 'unknown' as const, visibility: 'visible' as const }] };
+        let resolveRead!: (value: unknown) => void;
+        const read = vi.fn(() => new Promise(resolve => { resolveRead = resolve; }));
+        rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODELS, () => read());
+        const input = { enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' };
+        const first = await renderHook(() => useProviderConnectionModels(input));
+        // Omitted and explicit Home both resolve to this same applied Account.
+        const second = await renderHook(() => useProviderConnectionModels({ ...input, serverId: null }));
+        await act(async () => resolveRead(firstResult));
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(first.getCurrent().models).toBe(second.getCurrent().models);
+        expect(second.getCurrent()).toMatchObject({ connectionRevision: 2, manualModelPolicy: 'allowed', modelLoadAction: 'descriptor_absent' });
+        const cached = first.getCurrent().models;
+        await first.unmount();
+        await second.unmount();
+        const reopened = await renderHook(() => useProviderConnectionModels(input));
+        expect(reopened.getCurrent().models).toBe(cached);
+        expect(reopened.getCurrent().loading).toBe(true);
+        await act(async () => resolveRead({ status: 'error', error: createProviderErrorV1('provider_endpoint_unavailable') }));
+        expect(reopened.getCurrent().models).toBe(cached);
+        expect(reopened.getCurrent().error?.code).toBe('provider_endpoint_unavailable');
+        expect(read).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a live connection-list borrower after its sibling closes and isolates the next connection', async () => {
+        const answer = (connectionId: string) => ({ status: 'success' as const, connectionId, connectionRevision: 1,
+            manualModelPolicy: 'catalog-only' as const, modelLoadAction: 'descriptor_absent' as const,
+            models: [{ id: connectionId, source: 'probe' as const, stale: false,
+                loadState: 'unknown' as const, visibility: 'visible' as const }] });
+        let resolveRead!: (value: unknown) => void;
+        const read = vi.fn(() => new Promise(resolve => { resolveRead = resolve; }));
+        rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODELS, () => read());
+        const input = { enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' };
+        const first = await renderHook((props: { active: boolean }) => useProviderConnectionModels({ ...input, active: props.active }),
+            { initialProps: { active: false } });
+        expect(read).not.toHaveBeenCalled();
+        await first.rerender({ active: true });
+        const second = await renderHook((props: { connectionId: string }) => useProviderConnectionModels({ ...input, ...props }),
+            { initialProps: { connectionId: 'pc_a' } });
+        await first.unmount();
+        await act(async () => resolveRead(answer('pc_a')));
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(second.getCurrent().models[0]?.id).toBe('pc_a');
+        await second.rerender({ connectionId: 'pc_b' });
+        expect(second.getCurrent().models).toEqual([]);
+        await act(async () => resolveRead(answer('pc_b')));
+        expect(second.getCurrent().models[0]?.id).toBe('pc_b');
+        expect(read).toHaveBeenCalledTimes(2);
+    });
+
     it('shares admitted display results across surfaces and paints cached content during reopen revalidation', async () => {
         describeProviderModels.mockResolvedValueOnce(projection(['pc_first']));
         const input = { enabled: true, machineId: 'machine-a', serverId,

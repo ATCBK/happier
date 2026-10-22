@@ -29,6 +29,8 @@ type MachineModelDiscoveryParams = Readonly<{
     timeoutMs?: number;
     capabilityParams: Readonly<Record<string, unknown>>;
     bypassCache?: boolean;
+    /** Read again after an observer gap without forcing the daemon's own cache. */
+    revalidate?: boolean;
     signal?: AbortSignal;
 }>;
 
@@ -54,7 +56,7 @@ export async function discoverMachineModelsForActions(params: MachineModelDiscov
 
 async function discoverMachineModelsWithTransport(params: MachineModelDiscoveryParams, invoke: (signal: AbortSignal) => Promise<MachineCapabilitiesInvokeResult>): Promise<DynamicModelProbeCacheEntry | null> {
     const cached = readDynamicModelProbeCache(params.cacheKey, params.successMaxAgeMs);
-    if (!params.bypassCache && isDynamicModelProbeCacheFresh(cached)) return cached;
+    if (!params.bypassCache && !params.revalidate && isDynamicModelProbeCacheFresh(cached)) return cached;
 
     return runDynamicModelProbeDedupe(params.cacheKey, async (signal) => {
         let spawnFailure: SpawnFailureV1 | undefined;

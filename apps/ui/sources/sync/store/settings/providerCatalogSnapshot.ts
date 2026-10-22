@@ -1,5 +1,5 @@
 import type { ProviderConnectionsCatalogSnapshotV1, ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
+import type { DaemonProviderModelProjectionResponseV1, DaemonProviderModelsResponseV1, DaemonProviderConnectionsDescribeResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -20,9 +20,14 @@ export type ProviderCatalogSnapshot = Readonly<{
 }>;
 const snapshots = new Map<string, ProviderCatalogSnapshot>();
 type ModelProjection = Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }>;
+type ConnectionModels = Extract<DaemonProviderModelsResponseV1, { status: 'success' }>;
+type ConnectionCheck = Extract<DaemonProviderConnectionsDescribeResponseV1, { status: 'success' }>;
+type ModelDisplay = Readonly<{ kind: 'projection'; value: ModelProjection }>
+    | Readonly<{ kind: 'connection-list'; value: ConnectionModels }>
+    | Readonly<{ kind: 'connection-check'; value: ConnectionCheck }>;
 type ModelProjectionSnapshot = {
     scope: ServerAccountScope;
-    data: ModelProjection | null;
+    data: ModelDisplay | null;
     requested: number;
     accepted: number;
     listeners: Set<() => void>;
@@ -82,7 +87,19 @@ function modelProjectionKey(scope: ServerAccountScope, credentialKey: string, qu
     return JSON.stringify([serverAccountScopeKeySuffix(scope), credentialKey, queryKey]);
 }
 export function getProviderModelProjectionSnapshot(scope: ServerAccountScope, credentialKey: string, queryKey: string): ModelProjection | null {
-    return modelProjections.get(modelProjectionKey(scope, credentialKey, queryKey))?.data ?? null;
+    const data = modelProjections.get(modelProjectionKey(scope, credentialKey, queryKey))?.data;
+    return data?.kind === 'projection' ? data.value : null;
+}
+export function getProviderConnectionModelsSnapshot(scope: ServerAccountScope, credentialKey: string, queryKey: string): ConnectionModels | null {
+    const data = modelProjections.get(modelProjectionKey(scope, credentialKey, queryKey))?.data;
+    return data?.kind === 'connection-list' ? data.value : null;
+}
+export function providerConnectionCheckQueryKey(machineId: string, connectionId?: string): string {
+    return JSON.stringify(['connection-check', machineId, connectionId ?? null]);
+}
+export function getProviderConnectionCheckSnapshot(scope: ServerAccountScope, credentialKey: string, queryKey: string): ConnectionCheck | null {
+    const data = modelProjections.get(modelProjectionKey(scope, credentialKey, queryKey))?.data;
+    return data?.kind === 'connection-check' ? data.value : null;
 }
 function ensureModelProjectionSnapshot(scope: ServerAccountScope, key: string): ModelProjectionSnapshot {
     let snapshot = modelProjections.get(key);
@@ -115,6 +132,18 @@ export function subscribeProviderModelProjectionSnapshot(scope: ServerAccountSco
 }
 /** Each caller revalidates through its own Action; only admitted successes enter the shared display snapshot. */
 export function beginProviderModelProjectionRead(scope: ServerAccountScope, credentialKey: string, queryKey: string): (data: ModelProjection) => void {
+    const publish = beginModelDisplayRead(scope, credentialKey, queryKey);
+    return value => publish({ kind: 'projection', value });
+}
+export function beginProviderConnectionModelsRead(scope: ServerAccountScope, credentialKey: string, queryKey: string): (data: ConnectionModels) => void {
+    const publish = beginModelDisplayRead(scope, credentialKey, queryKey);
+    return value => publish({ kind: 'connection-list', value });
+}
+export function beginProviderConnectionCheckRead(scope: ServerAccountScope, credentialKey: string, queryKey: string): (data: ConnectionCheck) => void {
+    const publish = beginModelDisplayRead(scope, credentialKey, queryKey);
+    return value => publish({ kind: 'connection-check', value });
+}
+function beginModelDisplayRead(scope: ServerAccountScope, credentialKey: string, queryKey: string): (data: ModelDisplay) => void {
     const key = modelProjectionKey(scope, credentialKey, queryKey);
     const target = ensureModelProjectionSnapshot(scope, key);
     const request = ++target.requested;

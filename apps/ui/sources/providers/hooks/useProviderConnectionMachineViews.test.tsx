@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import {
@@ -51,6 +51,59 @@ describe('useProviderConnectionMachineViews', () => {
         providerHarness.reset();
         standardCleanup();
         await account.reset();
+    });
+
+    it('shares the selected Machine check with its peer row and retains it on a new detail demand', async () => {
+        const pending: Array<(value: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void> = [];
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
+            () => new Promise(resolve => { pending.push(resolve); }));
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const { useProviderConnections } = await import('./useProviderConnections');
+        const targets = [row('srv_a', 'machine-a', serverId)];
+        const hook = await renderHook(() => ({
+            query: useProviderConnections({ enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' }),
+            peers: useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets }),
+        }));
+        const result = createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+            connectionId: 'pc_a', displayName: 'Checked Machine source',
+        })] });
+        try {
+            await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+            await flushHookEffects();
+            expect(pending).toHaveLength(1);
+        } finally { await act(async () => { pending.splice(0).forEach(resolve => resolve(result)); }); }
+        await waitForHomeGovernance(() => expect(hook.getCurrent().peers.loading).toBe(false));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().query.loading).toBe(false));
+        const revised = createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+            connectionId: 'pc_a', displayName: 'Background Machine check',
+        })] });
+        let refresh!: Promise<void>;
+        await act(async () => { refresh = hook.getCurrent().peers.refresh(); });
+        await vi.waitFor(() => expect(pending).toHaveLength(1));
+        await act(async () => { pending.splice(0).forEach(resolve => resolve(revised)); await refresh; });
+        expect(hook.getCurrent().query.data?.connections[0]?.displayName).toBe('Checked Machine source');
+        expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-a']).toMatchObject({
+            status: 'success', connection: { displayName: 'Background Machine check' },
+        });
+        await hook.unmount();
+        const reopening: Array<ReturnType<typeof useProviderConnections>> = [];
+        const reopened = await renderHook(() => {
+            const query = useProviderConnections({ enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' });
+            reopening.push(query);
+            return query;
+        });
+        // Each hook resolves its credential asynchronously. A retained catalog is
+        // exposed only once this hook's exact Account binding is current. Its first
+        // admitted render must paint the cached check before the fresh Account answer.
+        const admittedIndex = reopening.findIndex(query => query.catalog !== null);
+        expect(admittedIndex).toBeGreaterThanOrEqual(0);
+        expect(reopening.slice(0, admittedIndex).every(query => query.data === null)).toBe(true);
+        expect(reopening[admittedIndex]?.data?.connections[0]?.displayName).toBe('Background Machine check');
+        // Account content remains visible during optional Machine revalidation.
+        expect(reopened.getCurrent().loading).toBe(false);
+        await vi.waitFor(() => expect(pending).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(reopened.getCurrent().data?.connections).toEqual([]));
+        await act(async () => { pending.splice(0).forEach(resolve => resolve(result)); });
     });
 
     it('refreshes peer machine facts through the connection query Account refresh without crossing Homes', async () => {

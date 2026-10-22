@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { ProviderErrorV1 } from '@happier-dev/protocol';
-import type { DaemonProviderModelRowV1, DaemonProviderModelsResponseV1 } from '@happier-dev/protocol/rpc';
+import type { DaemonProviderModelRowV1 } from '@happier-dev/protocol/rpc';
+import { beginProviderConnectionModelsRead, getProviderConnectionModelsSnapshot, subscribeProviderModelProjectionSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
@@ -9,6 +10,8 @@ import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
+
+const EMPTY_MODELS: readonly DaemonProviderModelRowV1[] = Object.freeze([]);
 
 export function useProviderConnectionModels(input: Readonly<{
     enabled: boolean;
@@ -19,10 +22,6 @@ export function useProviderConnectionModels(input: Readonly<{
 }>) {
     const { describeProviderConnectionModels, ready, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
-    const [models, setModels] = React.useState<readonly DaemonProviderModelRowV1[]>([]);
-    const [connectionRevision, setConnectionRevision] = React.useState<number | null>(null);
-    const [manualModelPolicy, setManualModelPolicy] = React.useState<'allowed' | 'catalog-only' | null>(null);
-    const [modelLoadAction, setModelLoadAction] = React.useState<Extract<DaemonProviderModelsResponseV1, { status: 'success' }>['modelLoadAction'] | null>(null);
     const [error, setError] = React.useState<ProviderErrorV1 | null>(null);
     const [loading, setLoading] = React.useState(false);
     const [stateScopeKey, setStateScopeKey] = React.useState<string | null>(null);
@@ -39,8 +38,20 @@ export function useProviderConnectionModels(input: Readonly<{
     stateAccountLifetimeRef.current = stateAccountLifetime;
     const stateScopeKeyRef = React.useRef(stateScopeKey);
     stateScopeKeyRef.current = stateScopeKey;
-    const scopeKey = JSON.stringify([input.enabled, input.machineId, input.serverId, input.connectionId,
-        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null]);
+    const scopeKey = JSON.stringify([input.enabled, input.machineId, input.connectionId,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : input.serverId,
+        binding?.credentialKey ?? null]);
+    const queryKey = JSON.stringify(['connection-models', scopeKey]);
+    const scopeEnabled = Boolean(input.enabled && input.connectionId);
+    const readSnapshot = React.useCallback(() => scopeEnabled && binding?.credentialKey && binding.isCurrent()
+        && (accountLifetime?.isCurrent() ?? true)
+        ? getProviderConnectionModelsSnapshot(binding.scope, binding.credentialKey, queryKey) : null,
+    [accountLifetime, binding, scopeEnabled, queryKey]);
+    const subscribeSnapshot = React.useCallback((listener: () => void) => scopeEnabled && input.active !== false
+        && binding?.credentialKey && binding.isCurrent()
+        ? subscribeProviderModelProjectionSnapshot(binding.scope, binding.credentialKey, queryKey, listener) : () => {},
+    [binding, input.active, scopeEnabled, queryKey]);
+    const data = React.useSyncExternalStore(subscribeSnapshot, readSnapshot, readSnapshot);
 
     React.useEffect(() => {
         const registration = accountLifetime?.onRetire(() => {
@@ -51,10 +62,6 @@ export function useProviderConnectionModels(input: Readonly<{
             stateScopeKeyRef.current = null;
             setStateAccountLifetime(null);
             setStateScopeKey(null);
-            setModels([]);
-            setConnectionRevision(null);
-            setManualModelPolicy(null);
-            setModelLoadAction(null);
             setError(null);
             setLoading(false);
         });
@@ -75,15 +82,11 @@ export function useProviderConnectionModels(input: Readonly<{
             stateScopeKeyRef.current = scopeKey;
             setStateAccountLifetime(accountLifetime);
             setStateScopeKey(scopeKey);
-            setModels([]);
-            setConnectionRevision(null);
-            setManualModelPolicy(null);
-            setModelLoadAction(null);
             setError(null);
             setLoading(false);
             return null;
         }
-        if (!ready) return null;
+        if (!ready || !binding?.credentialKey) return null;
         pendingRead.current?.abort();
         const controller = new AbortController();
         pendingRead.current = controller;
@@ -95,13 +98,10 @@ export function useProviderConnectionModels(input: Readonly<{
             stateScopeKeyRef.current = scopeKey;
             setStateAccountLifetime(accountLifetime);
             setStateScopeKey(scopeKey);
-            setModels([]);
-            setConnectionRevision(null);
-            setManualModelPolicy(null);
-            setModelLoadAction(null);
             setError(null);
         }
         setLoading(true);
+        const publish = beginProviderConnectionModelsRead(binding.scope, binding.credentialKey, queryKey);
         try {
             const result = await describeProviderConnectionModels({
                 ...(input.machineId ? { machineId: input.machineId } : {}),
@@ -114,10 +114,7 @@ export function useProviderConnectionModels(input: Readonly<{
                 stateScopeKeyRef.current = scopeKey;
                 setStateAccountLifetime(accountLifetime);
                 setStateScopeKey(scopeKey);
-                setModels(result.models);
-                setConnectionRevision(result.connectionRevision);
-                setManualModelPolicy(result.manualModelPolicy);
-                setModelLoadAction(result.modelLoadAction);
+                publish(result);
                 setError(null);
             } else {
                 setError(result.error);
@@ -139,7 +136,7 @@ export function useProviderConnectionModels(input: Readonly<{
             if (pendingRead.current === controller) pendingRead.current = null;
             if (generation.current === requestGeneration && requestStillCurrent()) setLoading(false);
         }
-    }, [accountLifetime, binding, describeProviderConnectionModels, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
+    }, [accountLifetime, binding, describeProviderConnectionModels, ready, input.connectionId, input.enabled, input.machineId, input.serverId, queryKey, scopeKey]);
 
     const refresh = React.useCallback(async (): Promise<void> => {
         await refreshWithResult();
@@ -154,10 +151,6 @@ export function useProviderConnectionModels(input: Readonly<{
             stateAccountLifetimeRef.current = accountLifetime;
             setStateScopeKey(scopeKey);
             setStateAccountLifetime(accountLifetime);
-            setModels([]);
-            setConnectionRevision(null);
-            setManualModelPolicy(null);
-            setModelLoadAction(null);
             setError(null);
         }
         void refreshWithResult();
@@ -170,12 +163,11 @@ export function useProviderConnectionModels(input: Readonly<{
 
     const stateMatchesScope = stateScopeKey === scopeKey
         && stateAccountLifetime === accountLifetime;
-    const scopeEnabled = Boolean(input.enabled && input.connectionId);
     return {
-        models: stateMatchesScope ? models : [],
-        connectionRevision: stateMatchesScope ? connectionRevision : null,
-        manualModelPolicy: stateMatchesScope ? manualModelPolicy : null,
-        modelLoadAction: stateMatchesScope ? modelLoadAction : null,
+        models: data?.models ?? EMPTY_MODELS,
+        connectionRevision: data?.connectionRevision ?? null,
+        manualModelPolicy: data?.manualModelPolicy ?? null,
+        modelLoadAction: data?.modelLoadAction ?? null,
         error: stateMatchesScope ? error : null,
         loading: input.active !== false && scopeEnabled
             && (resolution.kind === 'resolving' || resolution.kind === 'bound')

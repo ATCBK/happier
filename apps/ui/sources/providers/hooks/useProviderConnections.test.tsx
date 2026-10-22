@@ -290,6 +290,39 @@ describe('useProviderConnections', () => {
         expect(hook.getCurrent().data?.localInstallations).toEqual([]);
     });
 
+    it('replaces a reopened cached Machine answer with fresh Account facts while its new check is pending or refused', async () => {
+        let revision = 1;
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: ProviderConnectionsCatalogV1Schema.parse({
+                ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+                connections: [{ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                    ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+                }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision, createdAt: 1, updatedAt: revision }],
+            }) } } }),
+        });
+        machineRpcWithServerScope.mockResolvedValueOnce(createProviderConnectionsDescribeFixture({ connections: [
+            createProviderConnectionViewFixture({ connectionId: 'pc_a', revision: 1 }),
+        ] }));
+        const input = { enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' };
+        const first = await renderHook(() => useProviderConnections(input));
+        await waitForHomeGovernance(() => expect(first.getCurrent().loading).toBe(false));
+        await first.unmount();
+        revision = 2;
+        let finish!: (response: unknown) => void;
+        machineRpcWithServerScope.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const reopened = await renderHook(() => useProviderConnections(input));
+        try {
+            await waitForHomeGovernance(() => expect(finish).toBeTypeOf('function'));
+            expect(reopened.getCurrent().catalog?.connections[0]?.revision).toBe(2);
+            expect(reopened.getCurrent().data?.connections[0]?.revision).toBe(2);
+        } finally {
+            await act(async () => finish?.({ status: 'error', error: createProviderErrorV1('agent_timeout', { machineId: 'machine-a' }) }));
+        }
+        await waitForHomeGovernance(() => expect(reopened.getCurrent().loading).toBe(false));
+        expect(reopened.getCurrent().machineError?.code).toBe('agent_timeout');
+        expect(reopened.getCurrent().data?.connections[0]?.revision).toBe(2);
+    });
+
     it('publishes changed, added and deleted Account facts while retaining only equivalent Machine augmentation', async () => {
         const savedConnection = (id: string, revision: number) => ({
             v: 1, id, source: { kind: 'custom', template: buildCustomProviderTemplate({

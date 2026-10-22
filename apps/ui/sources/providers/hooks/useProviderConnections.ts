@@ -11,7 +11,9 @@ import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
-import { getProviderCatalogSnapshot, subscribeProviderCatalogSnapshots, type ProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
+import { getProviderCatalogSnapshot, subscribeProviderCatalogSnapshots, type ProviderCatalogSnapshot,
+    beginProviderConnectionCheckRead, getProviderConnectionCheckSnapshot, providerConnectionCheckQueryKey,
+    subscribeProviderModelProjectionSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import {
@@ -41,6 +43,7 @@ type ProviderConnectionsState = Readonly<{
     data: Success | null;
     error: Extract<DaemonProviderConnectionsDescribeResponseV1, { status: 'error' }>['error'] | null;
     machineError?: Extract<DaemonProviderConnectionsDescribeResponseV1, { status: 'error' }>['error'] | null;
+    accountAnswered?: boolean;
     loading: boolean;
 }>;
 
@@ -91,6 +94,16 @@ export function useProviderConnections(input: Readonly<{
         resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null]);
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
+    const machineQueryKey = input.machineId ? providerConnectionCheckQueryKey(input.machineId, input.connectionId) : null;
+    const readMachineSnapshot = React.useCallback(() => input.enabled && machineQueryKey && binding?.credentialKey
+        && binding.isCurrent() && (accountLifetime?.isCurrent() ?? true)
+        ? getProviderConnectionCheckSnapshot(binding.scope, binding.credentialKey, machineQueryKey) : null,
+    [accountLifetime, binding, input.enabled, machineQueryKey]);
+    const subscribeMachineSnapshot = React.useCallback((listener: () => void) => active && input.enabled
+        && machineQueryKey && binding?.credentialKey && binding.isCurrent()
+        ? subscribeProviderModelProjectionSnapshot(binding.scope, binding.credentialKey, machineQueryKey, listener) : () => {},
+    [active, binding, input.enabled, machineQueryKey]);
+    const cachedMachine = React.useSyncExternalStore(subscribeMachineSnapshot, readMachineSnapshot, readMachineSnapshot);
     const scopeEnabled = input.enabled;
     const accountMatchesScope = state.accountScopeKey === accountScopeKey && state.accountLifetime === accountLifetime;
     const answeredCatalog = accountMatchesScope && catalogAdmission?.data
@@ -110,7 +123,10 @@ export function useProviderConnections(input: Readonly<{
     const catalog = answeredCatalog ?? retained?.catalog ?? null;
     const answeredData = state.catalog?.data && answeredCatalog === null ? null
         : stateMatchesScope ? state.data : accountMatchesScope ? state.accountData ?? null : null;
-    const data = answeredData ?? retained?.data ?? null;
+    // A mounted editor keeps the exact answer its draft read. Other readers may
+    // refresh the shared last-known Machine check without changing that basis.
+    const data = stateMatchesScope && state.accountAnswered ? answeredData
+        : cachedMachine ?? answeredData ?? retained?.data ?? null;
     const error = stateMatchesScope ? state.error : null;
     const machineError = stateMatchesScope ? state.machineError ?? null : null;
     // Account rows are already usable while optional Machine facts refresh.
@@ -168,7 +184,7 @@ export function useProviderConnections(input: Readonly<{
             if (requestGeneration !== generation.current || !requestStillCurrent()) return;
             if (accountResult.status === 'error') {
                 setState({ scopeKey, accountScopeKey, accountLifetime, data: null, accountData: null,
-                    error: accountResult.error, machineError: null, loading: true });
+                    error: accountResult.error, machineError: null, accountAnswered: true, loading: true });
                 return null;
             }
             accountData = accountResult;
@@ -199,14 +215,17 @@ export function useProviderConnections(input: Readonly<{
                     ...(current.data.localInstallationsStatus ? { localInstallationsStatus: current.data.localInstallationsStatus } : {}),
                 } : {};
                 return { scopeKey, accountScopeKey, accountLifetime, data: { ...accountResult, ...machineCollections, connections }, accountData: accountResult, catalog,
-                    error: null, machineError: null, loading: true };
+                    error: null, machineError: null, accountAnswered: true, loading: true };
             });
             if (!machineId) return accountData;
+            const publishMachine = machineQueryKey && binding?.credentialKey
+                ? beginProviderConnectionCheckRead(binding.scope, binding.credentialKey, machineQueryKey) : null;
             const result = await describeProviderConnections({ machineId, serverId,
                 ...(input.connectionId ? { connectionId: input.connectionId } : {}),
             }, { signal: controller.signal });
             if (requestGeneration !== generation.current || !requestStillCurrent()) return;
             if (result.status === 'success') {
+                publishMachine?.(result);
                 const connections = new Map(result.connections.map(connection => [connection.connectionId, connection]));
                 for (const connection of accountData.connections) {
                     const machineConnection = connections.get(connection.connectionId);
@@ -216,11 +235,11 @@ export function useProviderConnections(input: Readonly<{
                 }
                 const augmented = { ...result, connections: [...connections.values()] };
                 setState({ scopeKey, accountScopeKey, accountLifetime, data: augmented, accountData, catalog,
-                    error: null, machineError: null, loading: true });
+                    error: null, machineError: null, accountAnswered: true, loading: true });
                 return augmented;
             } else {
                 setState({ scopeKey, accountScopeKey, accountLifetime, data: accountData, accountData, catalog,
-                    error: null, machineError: result.error, loading: true });
+                    error: null, machineError: result.error, accountAnswered: true, loading: true });
             }
             return accountData;
         } catch (caught) {
@@ -230,7 +249,7 @@ export function useProviderConnections(input: Readonly<{
                     ...(input.connectionId ? { connectionId: input.connectionId } : {}),
                 });
             setState({ scopeKey, accountScopeKey, accountLifetime, data: accountData, accountData, catalog,
-                error: accountData ? null : failure, machineError: accountData ? failure : null, loading: true });
+                error: accountData ? null : failure, machineError: accountData ? failure : null, accountAnswered: accountData !== null, loading: true });
             return accountData;
         } finally {
             if (pendingRead.current === controller) pendingRead.current = null;
@@ -241,7 +260,7 @@ export function useProviderConnections(input: Readonly<{
                     : current);
             }
         }
-    }, [accountLifetime, binding, resolution.kind, accountScopeKey, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, readCatalogAdmission, scopeKey]);
+    }, [accountLifetime, binding, resolution.kind, accountScopeKey, describeProviderConnections, ready, input.connectionId, input.enabled, input.machineId, input.serverId, machineQueryKey, readCatalogAdmission, scopeKey]);
 
     React.useEffect(() => {
         const unregister = active && input.enabled

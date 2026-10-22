@@ -10,6 +10,8 @@ import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { beginProviderConnectionCheckRead, getProviderConnectionCheckSnapshot, providerConnectionCheckQueryKey,
+    subscribeProviderModelProjectionSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { registerProviderConnectionReader, type ProviderConnectionReadTarget } from './providerConnectionRefresh';
 import {
     captureActiveServerAccountScopeLifetime,
@@ -80,7 +82,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
     const stateMatchesPeerAccounts = Object.keys(state.byTargetKey).every(key => sameAccountScope(
         state.accountScopesByTargetKey[key], accountScopesByTargetKey[key],
     ));
-    const byTargetKey = React.useMemo(() => {
+    const capturedByTargetKey = React.useMemo(() => {
         if (!stateMatchesScope) return {};
         if (stateMatchesPeerAccounts) return state.byTargetKey;
         return Object.fromEntries(Object.entries(state.byTargetKey).map(([key, view]) => [key,
@@ -89,6 +91,45 @@ export function useProviderConnectionMachineViews(input: Readonly<{
                 : { status: 'loading', connection: null } satisfies ProviderConnectionMachineViewState,
         ]));
     }, [accountScopesByTargetKey, state, stateMatchesPeerAccounts, stateMatchesScope]);
+    const cachedSnapshots = React.useRef<readonly ReturnType<typeof getProviderConnectionCheckSnapshot>[]>([]);
+    const readSnapshots = React.useCallback(() => {
+        const next = targetsRef.current.map(row => {
+            const binding = credentialStates.get(resolveServerProfileScopeIdForIdentifier(row.serverId))?.binding;
+            return scopeEnabled && binding?.credentialKey && binding.isCurrent() && (accountLifetime?.isCurrent() ?? true)
+                ? getProviderConnectionCheckSnapshot(binding.scope, binding.credentialKey,
+                    providerConnectionCheckQueryKey(row.target.machineId, input.connectionId)) : null;
+        });
+        if (next.length !== cachedSnapshots.current.length || next.some((value, index) => value !== cachedSnapshots.current[index])) {
+            cachedSnapshots.current = next;
+        }
+        return cachedSnapshots.current;
+    }, [accountLifetime, credentialStates, input.connectionId, scopeEnabled, targetsKey]);
+    const subscribeSnapshots = React.useCallback((listener: () => void) => {
+        if (input.active === false || !scopeEnabled) return () => {};
+        const releases = targetsRef.current.flatMap(row => {
+            const binding = credentialStates.get(resolveServerProfileScopeIdForIdentifier(row.serverId))?.binding;
+            return binding?.credentialKey && binding.isCurrent() ? [subscribeProviderModelProjectionSnapshot(
+                binding.scope, binding.credentialKey, providerConnectionCheckQueryKey(row.target.machineId, input.connectionId), listener,
+            )] : [];
+        });
+        return () => { for (const release of releases) release(); };
+    }, [credentialStates, input.active, input.connectionId, scopeEnabled, targetsKey]);
+    const snapshots = React.useSyncExternalStore(subscribeSnapshots, readSnapshots, readSnapshots);
+    const byTargetKey = React.useMemo(() => {
+        let projected: Record<string, ProviderConnectionMachineViewState> | null = null;
+        targetsRef.current.forEach((row, index) => {
+            const key = providerSettingsMachineRowKey(row.target);
+            const captured = capturedByTargetKey[key];
+            const cached = snapshots[index];
+            // Mounted responses keep their captured peer basis; a new view paints
+            // the resource owner's last-known check while its own Action revalidates.
+            if (cached && (!captured || captured.status === 'loading' && captured.connection === null)) {
+                projected ??= { ...capturedByTargetKey };
+                projected[key] = { status: 'loading', connection: cached.connections.find(connection => connection.connectionId === input.connectionId) ?? null };
+            }
+        });
+        return projected ?? capturedByTargetKey;
+    }, [capturedByTargetKey, input.connectionId, snapshots, targetsKey]);
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
     currentAccountLifetimeRef.current = accountLifetime;
 
@@ -164,12 +205,15 @@ export function useProviderConnectionMachineViews(input: Readonly<{
                 }) } satisfies ProviderConnectionMachineViewState] as const;
             }
             try {
+                const publish = binding.credentialKey ? beginProviderConnectionCheckRead(binding.scope, binding.credentialKey,
+                    providerConnectionCheckQueryKey(machineId, input.connectionId)) : null;
                 const result = await describeProviderConnections({
                     machineId, serverId: row.serverId, connectionId: input.connectionId,
                 }, { signal: requestControllers.get(key)!.signal });
                 if (!binding.isCurrent()) return [key, { status: 'error',
                     error: createProviderErrorV1('provider_authorization_changed', { connectionId: input.connectionId, machineId }),
                 } satisfies ProviderConnectionMachineViewState] as const;
+                if (result.status === 'success' && requestStillCurrent() && !requestControllers.get(key)!.signal.aborted) publish?.(result);
                 return [key, result.status === 'success'
                     ? { status: 'success', connection: result.connections.find(connection => connection.connectionId === input.connectionId) ?? null } satisfies ProviderConnectionMachineViewState
                     : { status: 'error', error: result.error } satisfies ProviderConnectionMachineViewState] as const;

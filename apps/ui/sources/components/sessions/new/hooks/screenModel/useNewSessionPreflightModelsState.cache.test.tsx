@@ -40,7 +40,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     };
   });
 
-  it('does not re-probe when a fresh result is cached', async () => {
+  it('retains a fresh result immediately and revalidates once after returning to the picker', async () => {
 
     capabilityRpc.mockClear();
     resetDynamicModelProbeCacheForTests();
@@ -72,11 +72,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     let root2!: renderer.ReactTestRenderer;
     root2 = (await renderScreen(React.createElement(Harness))).tree;
     expect(readLatest().preflightModels?.availableModels.map(model => model.id)).toEqual(['m1']);
+    await vi.waitFor(() => expect(capabilityRpc).toHaveBeenCalledTimes(2));
     await act(async () => {
       root2.unmount();
     });
 
-    expect(capabilityRpc).toHaveBeenCalledTimes(1);
+    expect(capabilityRpc).toHaveBeenCalledTimes(2);
   });
 
   it('does not attempt dynamic model probing for plugin backend targets', async () => {

@@ -14,6 +14,7 @@ import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicMod
 import {
     dynamicModelProbeRetryAt,
     isDynamicModelProbeCacheFresh,
+    isDynamicModelProbePending,
     readDynamicModelProbeCache,
     subscribeDynamicModelProbeCache,
     type DynamicModelProbeCacheEntry,
@@ -187,15 +188,21 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
             }, Math.max(0, retryAt - Date.now()));
         };
         if (!enabled) return;
+        let firstObserver = false;
         const unsubscribe = subscribeDynamicModelProbeCache(preflightModelsKey, () => {
             const entry = readDynamicModelProbeCache(preflightModelsKey, modelSuccessCacheMaxAgeMs);
             applyEntry(entry);
             if (dynamicModelProbeRetryAt(entry) === null) staticFallbackRetryRef.current = null;
             scheduleRetry(entry);
-        });
+        }, () => { firstObserver = true; });
         const force = refreshNonce !== lastHandledRefreshNonceRef.current;
         lastHandledRefreshNonceRef.current = refreshNonce;
-        if (!force && isDynamicModelProbeCacheFresh(cacheEntry)) {
+        // A successful catalog is retained for immediate display, but a new demand
+        // interval still revalidates. Overlapping observers join the same probe;
+        // unavailable/unknown outcomes keep their existing retry/Action policy.
+        const revalidate = cacheEntry?.kind === 'success' && dynamicModelProbeRetryAt(cacheEntry) === null
+            && cacheEntry.reason !== 'outcomeUnknown' && (firstObserver || isDynamicModelProbePending(preflightModelsKey));
+        if (!force && !revalidate && isDynamicModelProbeCacheFresh(cacheEntry)) {
             scheduleRetry(cacheEntry);
         } else {
             setProbePhase(preflightModelsRef.current ? 'refreshing' : 'loading');
@@ -209,6 +216,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
                 successMaxAgeMs: modelSuccessCacheMaxAgeMs,
                 timeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS,
                 bypassCache: force,
+                revalidate,
                 signal: controller.signal,
                 capabilityParams: {
                     timeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS,
@@ -234,7 +242,13 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
     }, [agentType, backendTargetForProbe, backendTargetKey, preflightModelsKey, modelSuccessCacheMaxAgeMs, enabled, params.capabilityServerId, params.cwd, params.selectedMachineId, refreshNonce, retryNonce, probeContextCapabilityParams]);
 
     const hasCurrentIdentity = lastCacheKeyRef.current === preflightModelsKey;
-    const currentModels = hasCurrentIdentity ? preflightModels : null;
+    // A remounted picker renders before its effect can adopt the retained
+    // snapshot. Read that exact current key so the first frame keeps its rows.
+    const retainedEntry = dynamicProbeEnabled && !hasCurrentIdentity && preflightModelsKey
+        ? readDynamicModelProbeCache(preflightModelsKey, modelSuccessCacheMaxAgeMs) : null;
+    const currentModels = hasCurrentIdentity ? preflightModels
+        : retainedEntry?.kind === 'success' ? retainedEntry.value : null;
+    const currentModelsTargetKey = hasCurrentIdentity ? preflightModelsTargetKey : backendTargetKey;
     const modelOptions = React.useMemo(
         () => {
             if (!agentType) {
@@ -243,11 +257,11 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
             return getModelOptionsForAgentTypeOrPreflight({
                 agentType,
                 preflight: currentModels,
-                preflightTargetKey: preflightModelsTargetKey,
+                preflightTargetKey: currentModelsTargetKey,
                 currentTargetKey: backendTargetKey,
             });
         },
-        [agentType, backendTargetKey, currentModels, preflightModelsTargetKey],
+        [agentType, backendTargetKey, currentModels, currentModelsTargetKey],
     );
 
     const probe = React.useMemo(() => ({
@@ -258,5 +272,5 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         ...(hasCurrentIdentity ? failure : {}),
         ...(dynamicProbeEnabled && preflightModelsKey && enabled ? { onRefresh } : {}),
     }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, failure, dynamicProbeEnabled, preflightModelsKey, enabled, onRefresh]);
-    return { preflightModels: currentModels, preflightModelsTargetKey: currentModels ? preflightModelsTargetKey : null, modelOptions, probe };
+    return { preflightModels: currentModels, preflightModelsTargetKey: currentModels ? currentModelsTargetKey : null, modelOptions, probe };
 }

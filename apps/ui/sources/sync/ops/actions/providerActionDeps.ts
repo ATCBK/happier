@@ -22,8 +22,9 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
       machineRpcWithServerScope<unknown, typeof request.input>({
         machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
         signal,
-        ...(request.actionId === 'providers.models.projection' ? {
-          readAdmission: createMachineRpcReadAdmission(['provider-model-projection', account.serverId,
+        ...(request.actionId === 'providers.models.projection' || request.actionId === 'providers.models.list'
+          || request.actionId === 'providers.connections.describe' ? {
+          readAdmission: createMachineRpcReadAdmission([request.actionId, account.serverId,
             account.accountId, machineId, request.input]),
         } : {}),
         ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),

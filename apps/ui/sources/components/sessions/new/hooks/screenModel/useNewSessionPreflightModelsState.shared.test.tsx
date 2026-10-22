@@ -20,19 +20,43 @@ beforeEach(async () => {
 afterEach(standardCleanup);
 afterAll(() => preflight.dispose());
 
+it('returns retained models on the first render without waiting for an effect or opening demand', async () => {
+    capabilityRpc.mockReset();
+    const key = buildDynamicModelProbeCacheKey({ machineId: 'retained-machine', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
+        providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo' })!;
+    const retained = { availableModels: [{ id: 'retained', name: 'Retained' }], supportsFreeform: false };
+    cache.writeDynamicModelProbeCacheSuccess(key, retained);
+    const renders: Array<ReturnType<typeof useNewSessionPreflightModelsState>['preflightModels']> = [];
+    const hook = await renderHook(() => {
+        const result = useNewSessionPreflightModelsState({
+            backendTarget: { kind: 'backend', backendId: 'codex' }, selectedMachineId: 'retained-machine',
+            capabilityServerId: preflight.serverId, cwd: '/repo', enabled: false,
+        });
+        renders.push(result.preflightModels);
+        return result;
+    });
+    try {
+        expect(renders[0]).toBe(retained);
+        expect(capabilityRpc).not.toHaveBeenCalled();
+    } finally { await hook.unmount(); }
+});
+
 it('shares one fresh-cache revalidation across demanded siblings and revalidates again after their observer gap', async () => {
     cache.resetDynamicModelProbeCacheForTests();
     capabilityRpc.mockReset();
     const key = buildDynamicModelProbeCacheKey({ machineId: 'shared-machine', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }), providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo' })!;
     cache.writeDynamicModelProbeCacheSuccess(key, { availableModels: [{ id: 'before', name: 'Before' }], supportsFreeform: false });
-    capabilityRpc.mockResolvedValue({ ok: true, result: {
+    const firstRead = createDeferred<{ ok: true; result: { availableModels: { id: string; name: string }[]; supportsFreeform: boolean } }>();
+    const refreshed = { ok: true as const, result: {
         availableModels: [{ id: 'after', name: 'After' }], supportsFreeform: false,
-    } });
+    } };
+    capabilityRpc.mockResolvedValue(refreshed).mockImplementationOnce(() => firstRead.promise);
     const render = (cwd: string, enabled = true) => renderHook(() => useNewSessionPreflightModelsState({
         backendTarget: { kind: 'backend', backendId: 'codex' }, selectedMachineId: 'shared-machine',
         capabilityServerId: preflight.serverId, cwd, enabled,
     }));
     const screen = await render('/repo');
+    expect(screen.getCurrent().probe.phase).toBe('refreshing');
     const detail = await render('/repo');
     const other = await render('/other', false);
     await waitForHomeGovernance(async () => {
@@ -40,6 +64,7 @@ it('shares one fresh-cache revalidation across demanded siblings and revalidates
         expect(capabilityRpc).toHaveBeenCalledTimes(1);
     });
     const otherOptions = other.getCurrent().modelOptions;
+    await act(async () => firstRead.resolve(refreshed));
     await waitForHomeGovernance(async () => {
         await flushHookEffects();
         expect(screen.getCurrent().preflightModels?.availableModels.map((model) => model.id)).toEqual(['after']);
@@ -76,6 +101,9 @@ it('shares one fresh-cache revalidation across demanded siblings and revalidates
 
 it('retains another model picker but releases an abandoned occurrence before remount', async () => {
     capabilityRpc.mockReset();
+    const key = buildDynamicModelProbeCacheKey({ machineId: 'owned-machine', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
+        providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo' })!;
+    cache.writeDynamicModelProbeCacheSuccess(key, { availableModels: [{ id: 'retained', name: 'Retained' }], supportsFreeform: false });
     capabilityRpc.mockImplementationOnce(() => new Promise<never>(() => {}));
     capabilityRpc.mockResolvedValue({ ok: true, result: {
         availableModels: [{ id: 'remounted', name: 'Remounted' }], supportsFreeform: false,
@@ -93,7 +121,7 @@ it('retains another model picker but releases an abandoned occurrence before rem
     await first.unmount();
     const joined = await render();
     expect(capabilityRpc).toHaveBeenCalledTimes(1);
-    expect(retained.getCurrent().probe.phase).toBe('loading');
+    expect(retained.getCurrent().probe.phase).toBe('refreshing');
     await retained.unmount();
     await joined.unmount();
     const remounted = await render();

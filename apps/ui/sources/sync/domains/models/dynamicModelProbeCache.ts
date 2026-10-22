@@ -112,14 +112,20 @@ const persistedCache = createPersistentProbedResourceCache<PreflightModelList>({
 
 const listenersByKey = new Map<string, Set<() => void>>();
 
-export function subscribeDynamicModelProbeCache(key: string, listener: () => void): () => void {
+export function subscribeDynamicModelProbeCache(key: string, listener: () => void, onFirstObserver?: () => void): () => void {
     const listeners = listenersByKey.get(key) ?? new Set<() => void>();
+    const firstObserver = listeners.size === 0;
     listeners.add(listener);
     listenersByKey.set(key, listeners);
+    if (firstObserver) onFirstObserver?.();
     return () => {
         listeners.delete(listener);
         if (listeners.size === 0) listenersByKey.delete(key);
     };
+}
+
+export function isDynamicModelProbePending(key: string): boolean {
+    return persistedCache.hasPending(key);
 }
 
 function notifyDynamicModelProbeCache(key: string): void {

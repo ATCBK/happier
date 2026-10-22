@@ -38,6 +38,7 @@ export function createPersistentProbedResourceCache<T>(params: Readonly<{
     writeSuccess: (key: string, value: T, nowMs?: number) => void;
     writeError: (key: string, error: Error, nowMs?: number) => void;
     runDedupe: <R>(key: string, run: (signal: AbortSignal) => Promise<R>, signal?: AbortSignal) => Promise<R>;
+    hasPending: (key: string) => boolean;
     resetForTests: () => void;
 }> {
     const cache = new ProbedResourceCache<T>({
@@ -185,6 +186,7 @@ export function createPersistentProbedResourceCache<T>(params: Readonly<{
             ensureHydrated();
             cache.setError(key, error, nowMs);
         },
+        hasPending: (key) => inflight.has(key),
         runDedupe: <R,>(key: string, run: (signal: AbortSignal) => Promise<R>, signal?: AbortSignal): Promise<R> => {
             ensureHydrated();
             const abortError = () => Object.assign(new Error('Probe consumer cancelled'), { name: 'AbortError' });
