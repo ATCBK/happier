@@ -15,10 +15,16 @@ import { getTranslationValue, t, tLoose } from '@/text';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 import { presentPluginInstallApprovalRows } from './pluginInstallApprovalFacts';
 
+const EXACT_READ = { exactRead: true } as const;
+
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
 type ApprovalReference = NonNullable<ApprovalValueRow['reference']>;
-import { useApprovalReferenceReading } from './approvalReferenceReading';
+import { useApprovalReferenceReading, type ApprovalReferenceReading } from './approvalReferenceReading';
+import { navigateToSession } from '@/hooks/session/useNavigateToSession';
+import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useOptionalAuth } from '@/auth/context/AuthContext';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 /**
  * The arguments an approval would run with. `card` (default) is the self-contained card a transcript
@@ -38,6 +44,14 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     failureMessage?: string;
     /** Card only: the arguments start behind their "Details" line (a phone's inline prompt keeps its decision in view). */
     collapsed?: boolean;
+    /**
+     * A page opened on its own (a tool call's details) mounts no Session list, so a Session argument
+     * settles by one exact read instead of waiting on a list that never loads.
+     */
+    exactSessionReads?: boolean;
+    /** Page only: the section's title when these fields are not the request's arguments (a call's Result). */
+    title?: string;
+    testID?: string;
 }>) {
     const [detailsOpen, setDetailsOpen] = React.useState(props.collapsed !== true);
     // A kind with its own human presentation reads through it; its raw structure stays in Technical details.
@@ -57,9 +71,9 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
 
     if (props.anatomy === 'page') {
         return (
-            <ItemGroup title={t('approvals.details')}>
+            <ItemGroup title={props.title ?? t('approvals.details')} testID={props.testID}>
                 {rows.map((row) => row.kind === 'value' && !row.entries ? (
-                    <ApprovalValueItem key={row.path} row={row} serverId={props.serverId ?? null} anatomy="page" />
+                    <ApprovalValueItem key={row.path} row={row} serverId={props.serverId ?? null} anatomy="page" exactSessionReads={props.exactSessionReads} />
                 ) : row.kind === 'value' && row.entries ? (
                     // A structured value is still one argument: the same row as its siblings, the
                     // argument's name as the title and its entries in the description's place.
@@ -161,16 +175,18 @@ function ApprovalValueItem(props: Readonly<{
     row: Extract<ApprovalActionFieldsPresentation['rows'][number], { kind: 'value' }>;
     serverId: string | null;
     anatomy?: 'page' | 'table';
+    exactSessionReads?: boolean;
 }>) {
     const { row } = props;
     // A declared confidential input is held by the original request and never shown: it reads as
     // supplied under its declared title, not as a missing or unavailable value.
     const literal = row.valueFormat === 'unavailable' ? t('common.unavailable')
         : row.valueFormat === 'confidential' ? t('approvals.confidentialSupplied')
+        : row.valueFormat === 'timestamp' ? formatApprovalTimestamp(row.value)
         : row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no')
         : row.selectedOptions ? row.selectedOptions.map(option => option.labelKey && typeof getTranslationValue(option.labelKey) === 'string'
             ? tLoose(option.labelKey) : option.label).join(', ') : row.value;
-    const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
+    const reading = useApprovalReferenceReading(row.reference, literal, props.serverId, props.exactSessionReads ? EXACT_READ : undefined);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
     if (props.anatomy === 'table') {
         return (
@@ -188,6 +204,7 @@ function ApprovalValueItem(props: Readonly<{
             </>
         );
     }
+    if (reading.session) return <ApprovalSessionLinkItem title={title} reading={reading} session={reading.session} />;
     return (
         <Item
             title={title}
@@ -197,6 +214,32 @@ function ApprovalValueItem(props: Readonly<{
             showChevron={false}
         />
     );
+}
+
+/** A Session the page could read is a way to it: its row opens that Session. */
+function ApprovalSessionLinkItem(props: Readonly<{ title: string; reading: ApprovalReferenceReading;
+    session: NonNullable<ApprovalReferenceReading['session']> }>) {
+    // The shared open-a-Session owner (Home switch, telemetry, destination); a page outside a signed-in
+    // shell (an isolated render) has no Account to refresh, so the switch only skips that refresh.
+    const router = useDestinationRouter();
+    const refreshFromActiveServer = useOptionalAuth()?.refreshFromActiveServer;
+    const { id, serverId } = props.session;
+    return (
+        <Item
+            testID="approvals.session-link"
+            title={props.title}
+            subtitle={props.reading.text}
+            subtitleLines={0}
+            onPress={() => void navigateToSession(id, serverId ? { serverId } : undefined,
+                { router, refreshFromActiveServer: refreshFromActiveServer ?? (async () => {}) })}
+        />
+    );
+}
+
+/** A Protocol moment (epoch milliseconds) as the app says its other times; an unreadable value stays as sent. */
+function formatApprovalTimestamp(value: string): string {
+    const at = Number(value);
+    return Number.isFinite(at) ? formatAsOfTime(at) : value;
 }
 
 /**
@@ -268,7 +311,9 @@ export function ApprovalTechnicalDetails(props: Readonly<{ lines: readonly Appro
 }
 
 function ApprovalEntryLine(props: Readonly<{ entry: ApprovalStructuredEntries[number]; serverId: string | null; labelStyle: object; valueStyle: object }>) {
-    const reading = useApprovalReferenceReading(props.entry.reference, props.entry.value ?? '', props.serverId);
+    const literal = props.entry.valueFormat === 'timestamp' && props.entry.value !== null
+        ? formatApprovalTimestamp(props.entry.value) : props.entry.value ?? '';
+    const reading = useApprovalReferenceReading(props.entry.reference, literal, props.serverId);
     return (
         <>
             <Text style={props.labelStyle}>{nameApprovalReferenceLabel(props.entry.label, props.entry.reference, reading.named)}</Text>
