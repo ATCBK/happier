@@ -242,6 +242,12 @@ export function AgentAddModal(
       : (allSources.find((source) => source.id === slot.selection)?.format ?? null);
   const acpSourceId =
     allSources.find((source) => source.format === 'acp-registry')?.id ?? null;
+  // The ready-to-add count the empty plugin source leads with (lab aa H); read only while that state shows.
+  const pluginSourceSelected = selectedFormat === 'happier-npm';
+  const acpCatalog = useRegistryItems(
+    { kind: 'agent', ...(acpSourceId ? { sourceIds: [acpSourceId] } : {}) },
+    pluginSourceSelected && acpSourceId !== null,
+  );
   const catalog = useRegistryItems({
     kind: 'agent',
     ...(slot.sourceIds ? { sourceIds: slot.sourceIds } : {}),
@@ -395,7 +401,10 @@ export function AgentAddModal(
         empty: (
           <AgentCatalogEmpty
             query={query}
-            pluginSource={selectedFormat === 'happier-npm'}
+            pluginSource={pluginSourceSelected}
+            {...(pluginSourceSelected && acpCatalog.items.length > 0
+              ? { registryAgentCount: acpCatalog.items.length }
+              : {})}
             onClear={() => setQuery('')}
             {...(acpSourceId
               ? {
@@ -426,6 +435,8 @@ export function AgentAddModal(
             row={row}
             entry={row.status.entry}
             sourceTitle={sourceTitle(row.summary.sourceId)}
+            serverId={scope?.serverId ?? null}
+            targetSelection={targetSelection}
             onAddSeparate={() => setSeparate((previous) => new Set(previous).add(row.key))}
             testID={TEST_ID}
           />
@@ -634,34 +645,53 @@ export function AgentCatalogEmpty(
     pluginSource: boolean;
     onClear: () => void;
     onBrowseRegistry?: () => void;
+    /** The agents the ACP Registry offers, said under the actions as the other way forward. */
+    registryAgentCount?: number;
   }>,
 ) {
   const { theme } = useUnistyles();
   const query = props.query.trim();
   if (!query && props.pluginSource) {
+    // Two ways forward side by side (the lab's primary and outlined button), then what the registry has: the
+    // `action` slot is the empty state's own seam for an action that is not one button.
     return (
-      <EmptyState
-        layout="centered"
-        size="page"
-        scene="noPlugins"
-        title={t('capabilities.agentAdd.pluginsEmpty.title')}
-        subtitle={t('capabilities.agentAdd.pluginsEmpty.body')}
-        {...(props.onBrowseRegistry
-          ? {
-              primaryAction: {
-                label: t('capabilities.agentAdd.pluginsEmpty.browseRegistry'),
-                onPress: props.onBrowseRegistry,
-                testID: `${TEST_ID}.empty.browseRegistry`,
-              },
-            }
-          : {})}
-        secondaryAction={{
-          label: t('capabilities.agentAdd.pluginsEmpty.publish'),
-          onPress: () => openExternalUrl(PUBLISH_PLUGIN_DOCS_URL),
-          testID: `${TEST_ID}.empty.publish`,
-        }}
-        testID={`${TEST_ID}.empty.plugins`}
-      />
+      <View style={styles.pluginsEmpty}>
+        <EmptyState
+          layout="centered"
+          size="page"
+          scene="noPlugins"
+          title={t('capabilities.agentAdd.pluginsEmpty.title')}
+          subtitle={t('capabilities.agentAdd.pluginsEmpty.body')}
+          action={
+            <View style={styles.emptyActions}>
+              <View style={styles.emptyButtons}>
+                {props.onBrowseRegistry ? (
+                  <RoundButton
+                    size="normal"
+                    title={t('capabilities.agentAdd.pluginsEmpty.browseRegistry')}
+                    action={async () => props.onBrowseRegistry?.()}
+                    testID={`${TEST_ID}.empty.browseRegistry`}
+                  />
+                ) : null}
+                <RoundButton
+                  size="normal"
+                  display="secondary"
+                  title={t('capabilities.agentAdd.pluginsEmpty.publish')}
+                  trailing={<Icon name="arrow-square-out" size={ICON_SIZE.xs} color={theme.colors.text.primary} />}
+                  action={async () => openExternalUrl(PUBLISH_PLUGIN_DOCS_URL)}
+                  testID={`${TEST_ID}.empty.publish`}
+                />
+              </View>
+              {props.registryAgentCount !== undefined && props.onBrowseRegistry ? (
+                <Text variant="meta" style={{ color: theme.colors.text.tertiary }} testID={`${TEST_ID}.empty.registryCount`}>
+                  {t('capabilities.agentAdd.pluginsEmpty.registryReady', { count: props.registryAgentCount })}
+                </Text>
+              ) : null}
+            </View>
+          }
+          testID={`${TEST_ID}.empty.plugins`}
+        />
+      </View>
     );
   }
   return (
@@ -700,6 +730,10 @@ const styles = StyleSheet.create((theme) => ({
   where: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
   note: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
   noteText: { flex: 1, minWidth: 0, color: theme.colors.text.secondary },
+  // The plugin source's empty state is centred in the body the list leaves, as the lab draws it.
+  pluginsEmpty: { flex: 1, justifyContent: 'center' },
+  emptyActions: { alignItems: 'center', gap: theme.space.s12 },
+  emptyButtons: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: theme.space.s8 },
   empty: {
     alignItems: 'center',
     gap: theme.space.s12,

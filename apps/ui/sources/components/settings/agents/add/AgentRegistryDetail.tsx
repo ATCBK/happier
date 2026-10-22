@@ -27,6 +27,7 @@ import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
 
+import { AgentMachinesSection } from '../detail/AgentMachinesSection';
 import {
   AgentAddingProgress,
   formatMachineOs,
@@ -517,6 +518,9 @@ export function AgentBuiltInDetail(
     row: AgentAddRow;
     entry: ResolvedAgentCatalogEntry;
     sourceTitle: string;
+    /** The Account's server and the page's machine selection: the same "On your machines" the agent's own page shows. */
+    serverId: string | null;
+    targetSelection: MachineAdministrationTargetSelectionV1;
     onAddSeparate: () => void;
     testID: string;
   }>,
@@ -565,6 +569,16 @@ export function AgentBuiltInDetail(
           showChevron={false}
         />
       </ItemGroup>
+      {props.serverId ? (
+        <AgentMachinesSection
+          testID={`${props.testID}.detail.builtIn.machines`}
+          agentTitle={props.entry.title}
+          agentId={props.entry.agentId}
+          pinnedVersion={null}
+          serverId={props.serverId}
+          targetSelection={props.targetSelection}
+        />
+      ) : null}
       <View style={styles.alternative}>
         <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
         <View style={styles.alternativeText}>

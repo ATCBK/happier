@@ -411,6 +411,8 @@ describe('the alternate Add-an-agent branches', () => {
         }}
         entry={{ agentId: 'claude', title: 'Claude Code' } as never}
         sourceTitle="ACP Registry"
+        serverId={null}
+        targetSelection={createMachineAdministrationTargetSelectionFixture({ machines: [] })}
         onAddSeparate={onAddSeparate}
         testID="agents.add"
       />,

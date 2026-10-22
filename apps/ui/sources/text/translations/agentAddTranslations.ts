@@ -124,6 +124,10 @@ const en = {
     body: "A Happier plugin can bring an agent with more than a command: its own settings, sign-in and tools. None that add an agent have been published so far.",
     browseRegistry: 'Browse the ACP Registry',
     publish: 'How to publish a plugin',
+    registryReady: ({ count }: Readonly<{ count: number }>) =>
+      count === 1
+        ? '1 agent is ready to add from the ACP Registry.'
+        : `${count} agents are ready to add from the ACP Registry.`,
   },
   adding: {
     inYourAgents: ({ name }: Name) => `${name} is in your agents.`,
