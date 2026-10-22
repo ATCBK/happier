@@ -6,15 +6,59 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createCliActionDeps } from '../createCliActionDeps';
+import { createCliActionInventoryDeps } from './createCliActionInventoryDeps';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { AgentModelsProbeObservationSchema, AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { createCliCapabilitiesService } from '@/rpc/handlers/capabilities';
+import { z } from 'zod/mini';
+import { configuration } from '@/configuration';
 
 describe('native Action configuration discovery', () => {
+  it('uses the selected Machine producer for ordinary model and config reads and preserves its failures', async () => {
+    const agentId = 'acme.discovery/assistant';
+    const backendTargetKey = `agent:${agentId}`;
+    let unavailable = false;
+    let mismatch = false;
+    const inventory = createCliActionInventoryDeps({ token: 'fixture-token', sessionId: '', mode: 'plain', ctx: null,
+      rawSession: { machineId: 'mcp-host' },
+      callMachineAction: async input => {
+        expect(input.machineId).toBe('worker');
+        expect(input.method).toBe(RPC_METHODS.CAPABILITIES_INVOKE);
+        if (unavailable) return { ok: false, error: { code: 'connected-service-preflight-failed' } };
+        const request = input.request as { id: string; method: string };
+        expect(request.id).toBe(`cli.${agentId}`);
+        const observedAgentId = mismatch ? 'other.agent/assistant' : agentId;
+        if (request.method === 'probeModels') return { ok: true, result: AgentModelsProbeObservationSchema.parse({
+          agentId: observedAgentId, availableModels: [{ id: 'small', name: 'Small', modelOptions: [{ id: 'reasoning_effort',
+            name: 'Thinking', type: 'select', currentValue: 'private-current', options: [{ value: 'low', name: 'Low' }] }] }],
+          supportsFreeform: false, source: 'dynamic' }) };
+        expect(request.method).toBe('probeConfigOptions');
+        return { ok: true, result: AgentConfigOptionsProbeObservationSchema.parse({ agentId: observedAgentId, configOptions: [], source: 'dynamic' }) };
+      },
+    });
+    const args = { agentId, backendTargetKey, machineId: 'worker', modelId: 'small' };
+    expect(await inventory.agentsModelsList(args)).toMatchObject({ items: [{ id: 'small' }], source: 'dynamic' });
+    const config = await inventory.agentsConfigOptionsList!(args);
+    expect(config).toMatchObject({ items: [{ id: 'reasoning_effort', options: [{ value: 'low' }] }], source: 'dynamic' });
+    expect(JSON.stringify(config)).not.toContain('private-current');
+    expect(await inventory.agentsConfigOptionsList!({ ...args, modelId: 'other' })).toMatchObject({ items: [] });
+    mismatch = true;
+    expect(await inventory.agentsConfigOptionsList!(args)).toMatchObject({ items: [], source: 'unavailable' });
+    mismatch = false;
+    unavailable = true;
+    for (const read of [inventory.agentsModelsList, inventory.agentsConfigOptionsList!]) {
+      expect(await read(args)).toMatchObject({ ok: false, errorCode: 'connected-service-preflight-failed' });
+    }
+  });
+
   it('discovers selected-model and session-wide declarations for an external Agent through the real catalog', async () => {
     const pluginId = 'acme.discovery';
     const identity = { pluginId, localId: 'assistant' };
     const agentId = buildQualifiedPluginContributionKey(identity);
     // This physically admitted external plugin is the native observation boundary.
     // Action admission, catalog activation, preflight probes and projection are real.
-    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController, plugins: [{
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      happyHomeDir: configuration.happyHomeDir, plugins: [{
       manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { agents: [{ id: identity.localId,
         title: 'Discovery Assistant', runtime: { kind: 'custom' }, primary: 'sessions',
         capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
@@ -25,16 +69,24 @@ describe('native Action configuration discovery', () => {
         import { createRuntime } from './runtime.mjs';
         const effort = values => ({ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'private-current',
           options: values.map(value => ({ value, name: value })) });
+        let modelProbes = 0;
+        let configProbes = 0;
         export function activate(api) {
           api.agents.register('assistant', createRuntime, {
             sessionRunnerFactory: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
             preflightSessionControls: {
-            probeModels: async () => [
-              { id: 'small', name: 'Small', modelOptions: [effort(['low', 'high'])] },
+            probeModels: async () => {
+              const observation = ++modelProbes;
+              await Promise.resolve();
+              return [
+              { id: 'small', name: 'Small', description: 'model-probe-' + observation, modelOptions: [effort(['low', 'high'])] },
               { id: 'large', name: 'Large', modelOptions: [effort(['medium', 'ultra'])] }
-            ],
-            probeConfigOptions: async () => [effort(['session-only']),
-              { id: 'format', name: 'Format', type: 'select', currentValue: 'private-format', options: [{ value: 'text', name: 'Text' }] }]
+            ]; },
+            probeConfigOptions: async () => {
+              const observation = ++configProbes;
+              await Promise.resolve();
+              return [effort(['session-only']),
+              { id: 'format', name: 'Format', description: 'config-probe-' + observation, type: 'select', currentValue: 'private-format', options: [{ value: 'text', name: 'Text' }] }]; }
           } });
         }
       ` },
@@ -42,15 +94,27 @@ describe('native Action configuration discovery', () => {
     try {
       const activation = await fixture.registry.activateContributionsOnDemand([{ pluginId, family: 'agents', localId: identity.localId }]);
       expect(fixture.registry.agentRuntimesByAgentId.has(agentId), JSON.stringify(activation)).toBe(true);
+      const capabilities = await createCliCapabilitiesService();
       const inventory = createCliActionDeps({ token: 'fixture-token', sessionId: 'fixture-session', mode: 'plain', ctx: null,
-        rawSession: { machineId: 'machine', host: 'host', path: fixture.happyHomeDir } });
+        serverId: 'home', serverHttpBaseUrl: 'https://discovery.test',
+        rawSession: { machineId: 'machine', host: 'host', path: fixture.happyHomeDir },
+        machineActionDirectTargetTransport: { machineId: 'machine', invoke: async (method, request, options) => {
+          expect(method).toBe(RPC_METHODS.CAPABILITIES_INVOKE);
+          const input = z.object({ id: z.string(), method: z.string(), params: z.optional(z.record(z.string(), z.unknown())) }).parse(request);
+          expect(input.id).toBe(`cli.${agentId}`);
+          return capabilities.invoke({ id: `cli.${agentId}`, method: input.method,
+            params: { ...input.params, cwd: fixture.happyHomeDir } }, { signal: options?.signal });
+        } },
+      });
       const executor = createActionExecutor(inventory);
       const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId: 'home' };
       const backendTargetKey = `agent:${agentId}`;
-      const definitions = await executor.execute('agents.config_options.list', { agentId, backendTargetKey, modelId: 'small', machineId: 'machine' }, context);
+      const readDefinitions = () => executor.execute('agents.config_options.list', { agentId, backendTargetKey, modelId: 'small', machineId: 'machine' }, context);
+      const [definitions, concurrentDefinitions] = await Promise.all([readDefinitions(), readDefinitions()]);
+      expect(concurrentDefinitions).toEqual(definitions);
       expect(definitions, JSON.stringify(definitions)).toMatchObject({ ok: true, result: { items: [
         { id: 'reasoning_effort', type: 'select', options: [{ value: 'low' }, { value: 'high' }] },
-        { id: 'format', options: [{ value: 'text' }] },
+        { id: 'format', description: 'config-probe-1', options: [{ value: 'text' }] },
       ] } });
       if (!definitions.ok) throw new Error('Config inventory refused');
       expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['agents.config_options.list'].safeParse(definitions.result).success).toBe(true);
@@ -70,9 +134,19 @@ describe('native Action configuration discovery', () => {
       const otherModel = await inventory.agentsConfigOptionsList!({ agentId, backendTargetKey, modelId: 'large', machineId: 'machine' });
       expect(otherModel).toMatchObject({ items: [{ id: 'reasoning_effort', options: [{ value: 'medium' }, { value: 'ultra' }] }, { id: 'format' }] });
       const unselected = await inventory.agentsConfigOptionsList!({ agentId, backendTargetKey, machineId: 'machine' });
-      expect(unselected).toMatchObject({ items: [{ id: 'reasoning_effort', options: [{ value: 'session-only' }] }, { id: 'format' }] });
+      expect(unselected).toMatchObject({ items: [{ id: 'reasoning_effort', options: [{ value: 'session-only' }] },
+        { id: 'format', description: 'config-probe-1' }] });
+      // Observe the actual native hook's serial through its catalog. Concurrent
+      // and warm direct/options reads must reuse the existing probe owner.
+      expect(await inventory.agentsModelsList({ agentId, backendTargetKey, machineId: 'machine' }))
+        .toMatchObject({ items: expect.arrayContaining([
+          expect.objectContaining({ id: 'small', description: 'model-probe-1' }),
+        ]) });
       const unavailable = await inventory.agentsConfigOptionsList!({ agentId, backendTargetKey, modelId: 'small', machineId: 'other-machine' });
       expect(unavailable).toMatchObject({ items: [], source: 'unavailable' });
+      const foreignHome = await inventory.agentsConfigOptionsList!({ agentId, backendTargetKey, modelId: 'small',
+        machineId: 'machine', serverId: 'other-home' });
+      expect(foreignHome).toMatchObject({ items: [], source: 'unavailable' });
     } finally { await fixture.dispose(); }
   });
 });

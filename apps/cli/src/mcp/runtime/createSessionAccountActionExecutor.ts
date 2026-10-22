@@ -90,9 +90,14 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       const persistedRead = executionPlacement === 'machine'
         && (ACTION_ID_FAMILIES_V1.session_transcripts.some(id => id === actionId)
           || actionId === 'session.history.get' || actionId === 'session.messages.recent.get');
+      // Direct and dependent native inventories need the daemon's Machine
+      // transport and launch environment, not the restricted runner's process.
+      const nativeInventoryRead = !params.hasAccountAuthority
+        && (actionId === 'action.options.resolve' || actionId === 'agents.models.list' || actionId === 'agents.config_options.list'
+          || actionId === 'agents.session_modes.list');
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
-        && !sessionRead && !persistedRead && !sessionLifecycle
+        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead
         && builtIn.data !== 'session.spawn_new'
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.

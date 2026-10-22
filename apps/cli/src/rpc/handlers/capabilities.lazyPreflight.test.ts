@@ -351,7 +351,7 @@ describe('capability preflight with a cold Agent plugin', () => {
       });
       const inventory = createCliActionInventoryDeps({ token: 'fixture-token', sessionId: '', mode: 'plain', ctx: null,
         rawSession: { path: home, machineId: 'fixture-machine', metadata: {} } });
-      expect(await inventory.agentsModelsList({ agentId: inventoryArgs.agentId, machineId: 'fixture-machine' }))
+      expect(await inventory.agentsModelsList({ agentId: inventoryArgs.agentId }))
         .toMatchObject({ source: 'dynamic', items: expect.arrayContaining([{ id: 'reloaded-model', label: 'Discovered model' }]) });
       expect(await inventoryProbes.probeAgentModesBestEffort(inventoryArgs))
         .toMatchObject({ source: 'dynamic', availableModes: [{ id: 'review' }] });

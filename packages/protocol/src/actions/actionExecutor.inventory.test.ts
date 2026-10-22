@@ -1412,7 +1412,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       serverId: 'local',
       modelId: 'claude-opus-4-8',
       limit: 5,
-    });
+    }, { authority: 'present_user', surface: 'ui', serverId: 'local' });
     expect((res as any).result.items).toEqual([
       { id: 'reasoning_effort', label: 'Thinking', type: 'select' },
     ]);
@@ -1522,7 +1522,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
 
       expect(result.ok).toBe(true);
       const expectedInput = expect.objectContaining({ serverId: 'host-stamped' });
-      if (dependencyName === 'spawnConnectedServicesList' || dependencyName === 'agentsModelsList') {
+      if (dependencyName === 'spawnConnectedServicesList' || dependencyName === 'agentsModelsList' || dependencyName === 'agentsConfigOptionsList') {
         expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput, {
           authority: 'present_user', surface: 'ui', serverId: 'host-stamped',
         });
@@ -2429,7 +2429,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       serverId: 'local',
       modelId: 'claude-opus-4-8',
       limit: 10,
-    });
+      probe: { cwd: '/repo' },
+    }, { authority: 'present_user', surface: 'ui' });
     expect(deps.pathsListRecent).toHaveBeenCalledWith({ machineId: 'm1', limit: 10 });
     expect(deps.spawnCapabilitiesPreview).toHaveBeenCalledWith({
       agentId: 'claude',
@@ -2587,7 +2588,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       agentId: 'pi',
       backendTargetKey: 'agent:pi',
       modelId: 'zai/glm-5.3-flash',
-    }));
+    }), { authority: 'present_user', surface: 'ui' });
     expect(deps.spawnConnectedServicesList).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'pi',
       backendTargetKey: 'agent:pi',

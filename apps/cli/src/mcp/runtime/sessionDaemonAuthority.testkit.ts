@@ -34,12 +34,12 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
   const errors: unknown[] = [];
   const server = createServer(async (request, response) => {
     try {
-      // Local-service inventory probes loopback listeners without invoking Actions.
-      if (request.method === 'HEAD' && request.url === '/') {
+      // Match the control router: local-service discovery may inspect unrelated
+      // endpoints on this listener; only the daemon Action POST is registered.
+      if (request.method !== 'POST' || request.url !== AGENT_RUNTIME_DAEMON_SERVICES_PATH) {
         response.writeHead(404).end();
         return;
       }
-      if (request.url !== AGENT_RUNTIME_DAEMON_SERVICES_PATH) throw new Error('Unexpected daemon request');
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const parsed = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
@@ -77,7 +77,7 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
         identity.mockRestore();
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       }
-      if (errors.length > 0) throw new AggregateError(errors, 'Daemon Action boundary failed');
+      if (errors.length > 0) throw new AggregateError(errors, 'Daemon Action boundary failed', { cause: errors[0] });
     },
   };
 }

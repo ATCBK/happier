@@ -584,6 +584,14 @@ export async function resolveInputOptions(params: Readonly<{
     return { ok: true, result: normalizeResolvedOptions(result, { allowEmptyValue: true }) };
   }
 
+  const readInventoryProbe = () => AgentInventoryProbeInputSchema.safeParse({
+    ...readRecord(input.probe),
+    ...(directory ? { cwd: directory } : {}),
+    ...(hasOwn(input, 'profileId') && input.profileId != null ? { profileId: input.profileId } : {}),
+    ...(hasOwn(input, 'connectedServices') && input.connectedServices != null ? { connectedServices: input.connectedServices } : {}),
+    ...(hasOwn(input, 'runtimeDescriptorV1') && input.runtimeDescriptorV1 != null ? { runtimeDescriptorV1: input.runtimeDescriptorV1 } : {}),
+  });
+
   if (optionsSourceId === 'agents.models.available') {
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
     if ('ok' in selectionArgs) return selectionArgs;
@@ -593,13 +601,7 @@ export async function resolveInputOptions(params: Readonly<{
       ? { backendTargetKey: selectionArgs.backendTargetKey } : selectionArgs;
     // Use the native producer for this exact launch context, including the selected
     // Connected Account. A generic inventory read has no such account binding.
-    const probe = AgentInventoryProbeInputSchema.safeParse({
-      ...readRecord(input.probe),
-      ...(directory ? { cwd: directory } : {}),
-      ...(hasOwn(input, 'profileId') && input.profileId != null ? { profileId: input.profileId } : {}),
-      ...(hasOwn(input, 'connectedServices') && input.connectedServices != null ? { connectedServices: input.connectedServices } : {}),
-      ...(hasOwn(input, 'runtimeDescriptorV1') && input.runtimeDescriptorV1 != null ? { runtimeDescriptorV1: input.runtimeDescriptorV1 } : {}),
-    });
+    const probe = readInventoryProbe();
     if (!probe.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const result = await deps.agentsModelsList({
       ...modelInventorySelection,
@@ -645,13 +647,17 @@ export async function resolveInputOptions(params: Readonly<{
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
     if ('ok' in selectionArgs) return selectionArgs;
+    const probe = readInventoryProbe();
+    if (!probe.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const result = await deps.agentsConfigOptionsList({
       ...selectionArgs,
       ...(machineId === undefined ? {} : { machineId }),
       ...(serverId === undefined ? {} : { serverId }),
       ...(modelId === undefined ? {} : { modelId }),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
-    });
+      ...(machineId ? { probe: probe.data } : {}),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    }, ctx);
     const failure = params.readFailure(result);
     if (failure) return failure;
     return { ok: true, result: normalizeResolvedOptions(result) };

@@ -90,7 +90,7 @@ describe('createCliActionInventoryDeps', () => {
     })) } });
   });
 
-  it('lists built-in backend models through the canonical dynamic probe when scoped to the session machine', async () => {
+  it('lists unscoped built-in backend models through the canonical local dynamic probe', async () => {
     probeAgentModelsBestEffort.mockResolvedValue({
       provider: 'opencode',
       availableModels: [
@@ -117,7 +117,6 @@ describe('createCliActionInventoryDeps', () => {
     await expect(deps.agentsModelsList({
       agentId: 'opencode',
       backendTargetKey: 'agent:happier.agent.opencode/opencode',
-      machineId: 'local-machine',
       limit: 10,
     })).resolves.toEqual({
       agentId: 'opencode',
@@ -137,7 +136,7 @@ describe('createCliActionInventoryDeps', () => {
     }));
   });
 
-  it('keeps session metadata models when a local probe is unavailable', async () => {
+  it('keeps unscoped session metadata models when a local probe is unavailable', async () => {
     probeAgentModelsBestEffort.mockResolvedValue({
       provider: 'opencode',
       availableModels: [],
@@ -166,7 +165,6 @@ describe('createCliActionInventoryDeps', () => {
     await expect(deps.agentsModelsList({
       agentId: 'opencode',
       backendTargetKey: 'agent:happier.agent.opencode/opencode',
-      machineId: 'local-machine',
       limit: 10,
     })).resolves.toEqual({
       agentId: 'opencode',
@@ -221,7 +219,7 @@ describe('createCliActionInventoryDeps', () => {
     }));
   });
 
-  it('lists config option definitions through the canonical probe without returning current or secret values', async () => {
+  it('lists unscoped config option definitions through the canonical local probe without returning current or secret values', async () => {
     probeAgentConfigOptionsBestEffort.mockResolvedValue({
       provider: 'claude',
       source: 'dynamic',
@@ -262,7 +260,6 @@ describe('createCliActionInventoryDeps', () => {
     const result = await deps.agentsConfigOptionsList({
       agentId: 'claude',
       backendTargetKey: 'agent:happier.agent.claude/claude',
-      machineId: 'local-machine',
       modelId: 'claude-opus-4-8',
       limit: 10,
     });

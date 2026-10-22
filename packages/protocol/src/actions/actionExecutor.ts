@@ -9293,7 +9293,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
             ...(data.probe === undefined ? {} : { probe: AgentInventoryProbeInputSchema.parse(data.probe) }),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
+          }, ctx);
           return completeActionResult(res);
         }
 

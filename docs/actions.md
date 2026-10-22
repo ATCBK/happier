@@ -4426,6 +4426,15 @@ Actions bind their Home from authenticated host context: omit `serverId` in
 and `sessions.spawn.connected_services.list`. A supplied `serverId` is refused
 at that field; select the Home through the invoking transport instead.
 
+In 0.3 development, a selected `machineId` routes model and configuration
+inventories through that Machine's native capability producer, for both direct
+lists and dependent options. `probe` supplies optional launch context; it is not
+an opt-in to Machine discovery. Credentialless native MCP hosts use their
+existing Session-to-daemon Action channel for Agent inventory reads. Session and Run config lookup forward the same
+directory, profile, Connected Account and runtime descriptor context as model
+lookup. Unscoped local discovery retains its existing local probe and metadata
+behavior; it does not replace an unavailable selected-Machine observation.
+
 For execution Run model/config/Connected option lookup, set
 `draftInput.backendTargetKey` to the selected backend choice's string `value`;
 the start input's `backendTarget` object alone does not select an inventory.

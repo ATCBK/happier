@@ -5,6 +5,7 @@ import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, parseBackendTar
 import { isLegacyConfiguredAcpFlavorCarrier } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import type { AccountProfile, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import axios from 'axios';
+import type { z } from 'zod/mini';
 import { configuration } from '@/configuration';
 import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
@@ -420,6 +421,49 @@ export function createCliActionInventoryDeps(params: Readonly<{
     });
   };
 
+  // Machine-scoped discovery uses the same native producer for direct lists
+  // and dependent options. The MCP process is not the selected Machine's
+  // credential/runtime environment, even when both processes share a host.
+  const probeMachineInventory = async <T extends { agentId?: string; source?: 'static' | 'dynamic' | 'unavailable'; runtimeDescriptorV1Accepted?: boolean }>(input: Readonly<{
+    args: Parameters<ActionExecutorDeps['agentsModelsList']>[0];
+    context?: ActionExecutorContext;
+    agentId: string;
+    backendTarget: BackendTargetRefV2 | null;
+    method: 'probeModels' | 'probeConfigOptions';
+    schema: z.ZodMiniType<T>;
+  }>): Promise<T | ActionExecuteFailure | null> => {
+    if (!params.callMachineAction || !input.args.machineId) return null;
+    const { transportTimeoutMs, ...probe } = input.args.probe ?? {};
+    const signal = input.args.signal ?? input.context?.signal;
+    try {
+      const response = await params.callMachineAction({ machineId: input.args.machineId,
+        serverId: input.args.serverId ?? input.context?.serverId ?? params.serverId, method: RPC_METHODS.CAPABILITIES_INVOKE,
+        request: { id: `cli.${input.agentId}`, method: input.method, params: {
+          ...probe,
+          ...(input.backendTarget ? { backendTarget: convertBackendTargetRefV2ToV1(input.backendTarget) } : {}),
+        } }, context: input.context,
+        effectActionId: input.method === 'probeModels' ? 'agents.models.list' : 'agents.config_options.list',
+        ...(signal ? { signal } : {}),
+        ...(transportTimeoutMs === undefined ? {} : { timeoutMs: transportTimeoutMs }),
+      });
+      if (!response || typeof response !== 'object' || !('ok' in response)) return null;
+      if (response.ok === false) {
+        const error = 'error' in response ? response.error : null;
+        const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          ? error.code.trim() || 'agent_inventory_probe_failed' : 'agent_inventory_probe_failed';
+        return { ok: false, errorCode, error: errorCode };
+      }
+      if (response.ok !== true || !('result' in response)) return null;
+      const observation = input.schema.safeParse(response.result);
+      if (!observation.success || observation.data.agentId && observation.data.agentId !== input.agentId
+        || input.method === 'probeModels' && input.args.probe?.runtimeDescriptorV1 && observation.data.runtimeDescriptorV1Accepted !== true) return null;
+      return { ...observation.data, source: observation.data.source ?? 'dynamic' };
+    } catch {
+      signal?.throwIfAborted();
+      return null;
+    }
+  };
+
   const acpServerHttpBaseUrl = params.savedSecretOperationContext?.serverHttpBaseUrl
     ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const readAcpCatalogSnapshot = async (signal?: AbortSignal) => runWithServerHttpBaseUrl(acpServerHttpBaseUrl, async () => {
@@ -624,9 +668,9 @@ export function createCliActionInventoryDeps(params: Readonly<{
           })()
         : null;
       const usesConfiguredCompatBackend = backendTarget?.sourceKind === 'configured' || Boolean(backendTarget?.configuredBackendId);
-      const usesMachineProbe = Boolean(args.probe && args.machineId);
+      const usesMachineProbe = Boolean(args.machineId);
       const captured = usesConfiguredCompatBackend && !usesMachineProbe ? await readAcpInventorySnapshot(args.signal) : null;
-      const modelState = readSessionModelsState(await readSessionMetadataForId(params.sessionId));
+      const modelState = usesMachineProbe ? null : readSessionModelsState(await readSessionMetadataForId(params.sessionId));
       const provider = typeof modelState?.provider === 'string' ? modelState.provider.trim() : '';
       const availableModels = Array.isArray(modelState?.availableModels) ? modelState.availableModels : [];
       const shouldUseSessionMetadataModels = Boolean(
@@ -650,34 +694,11 @@ export function createCliActionInventoryDeps(params: Readonly<{
         const unavailable: ProbedAgentModelsResult = {
           agentId: probeAgentId, availableModels: [], supportsFreeform: false, source: 'unavailable',
         };
-        if (!params.callMachineAction || !args.machineId) return unavailable;
-        const { transportTimeoutMs, ...probe } = args.probe!;
-        try {
-          const response = await params.callMachineAction({ machineId: args.machineId,
-            serverId: args.serverId ?? context?.serverId ?? params.serverId, method: RPC_METHODS.CAPABILITIES_INVOKE,
-            request: { id: `cli.${probeAgentId}`, method: 'probeModels', params: {
-              ...probe,
-              ...(backendTarget ? { backendTarget: convertBackendTargetRefV2ToV1(backendTarget) } : {}),
-            } }, context, effectActionId: 'agents.models.list',
-            ...(args.signal ?? context?.signal ? { signal: args.signal ?? context?.signal } : {}),
-            ...(transportTimeoutMs === undefined ? {} : { timeoutMs: transportTimeoutMs }),
-          });
-          if (!response || typeof response !== 'object' || !('ok' in response)) return unavailable;
-          if (response.ok === false) {
-            const error = 'error' in response ? response.error : null;
-            const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-              ? error.code.trim() || 'agent_inventory_probe_failed' : 'agent_inventory_probe_failed';
-            return { ok: false, errorCode, error: errorCode };
-          }
-          if (response.ok !== true || !('result' in response)) return unavailable;
-          const observation = AgentModelsProbeObservationSchema.safeParse(response.result);
-          if (!observation.success || observation.data.agentId && observation.data.agentId !== probeAgentId
-            || args.probe?.runtimeDescriptorV1 && observation.data.runtimeDescriptorV1Accepted !== true) return unavailable;
-          return { ...observation.data, agentId: probeAgentId, source: observation.data.source ?? 'dynamic' };
-        } catch {
-          (args.signal ?? context?.signal)?.throwIfAborted();
-          return unavailable;
-        }
+        const observation = await probeMachineInventory({ args, context, agentId: probeAgentId, backendTarget,
+          method: 'probeModels', schema: AgentModelsProbeObservationSchema });
+        if (!observation) return unavailable;
+        if ('ok' in observation) return observation;
+        return { ...observation, agentId: probeAgentId, source: observation.source ?? 'dynamic' };
       })() : await probeActionModelsBestEffort({
         args,
         agentId: normalizedAgentId,
@@ -757,28 +778,38 @@ export function createCliActionInventoryDeps(params: Readonly<{
         ...(args.probe && probeResult ? { probeObservation: AgentSessionModesProbeObservationSchema.parse(probeResult) } : {}),
       };
     },
-    agentsConfigOptionsList: async (args) => {
+    agentsConfigOptionsList: async (args, context) => {
       const normalizedAgentId = normalizeStringValue((args as { agentId?: unknown }).agentId);
       const backendTargetKey = readBackendTargetKey(args as { backendTargetKey?: unknown });
       const backendTarget = readBackendTargetFromKey(backendTargetKey);
-      const captured = backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId
-        ? await readAcpInventorySnapshot() : null;
+      const usesMachineProbe = Boolean(args.machineId);
+      const captured = !usesMachineProbe && (backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId)
+        ? await readAcpInventorySnapshot(args.signal) : null;
+      const probeAgentId = resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
+      if (usesMachineProbe && !probeAgentId) return { items: [], source: 'unavailable' };
       const probeContext = {
         agentId: normalizedAgentId,
         backendTarget,
-        rawSession: await readCurrentSessionWorkspace(),
-        accountSettings: captured?.account.settings ?? await readAccountSettings(),
+        rawSession: usesMachineProbe ? null : await readCurrentSessionWorkspace(),
+        accountSettings: usesMachineProbe ? null : captured?.account.settings ?? await readAccountSettings(),
         credentials: params.savedSecretOperationContext?.credentials ?? params.credentials ?? null,
         acpCatalogSnapshot: captured?.catalog,
         savedSecretOperationContext: params.savedSecretOperationContext,
         probeDeps: params.probeDeps,
       };
-      const probeResult = await probeActionConfigOptionsBestEffort({ ...probeContext, args });
+      const probeResult = usesMachineProbe
+        ? await probeMachineInventory({ args, context, agentId: probeAgentId, backendTarget,
+          method: 'probeConfigOptions', schema: AgentConfigOptionsProbeObservationSchema })
+        : await probeActionConfigOptionsBestEffort({ ...probeContext, args });
+      if (probeResult && 'ok' in probeResult) return probeResult;
       // Model-scoped controls belong to the selected model's existing native
       // catalog, not the session-wide config probe. Do not combine choices
       // across models or expose their current selections in this public read.
-      const modelResult = args.modelId
-        ? await probeActionModelsBestEffort({ ...probeContext, args }) : null;
+      const modelResult = !args.modelId ? null : usesMachineProbe
+        ? await probeMachineInventory({ args, context, agentId: probeAgentId, backendTarget,
+          method: 'probeModels', schema: AgentModelsProbeObservationSchema })
+        : await probeActionModelsBestEffort({ ...probeContext, args });
+      if (modelResult && 'ok' in modelResult) return modelResult;
       await captured?.assertCurrent();
       const { items, source } = projectProbedConfigOptionDefinitions({
         configOptions: probeResult?.configOptions ?? [],
