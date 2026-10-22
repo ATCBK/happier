@@ -84,8 +84,12 @@ describe('process-tree generation safety', () => {
         const exited = once(parent, 'exit');
         let identityReads = 0;
         let fullReads = 0;
+        let commandEnvironmentReads = 0;
         const terminate = createProcessTreeTerminator({ censusDependencies: {
-            linuxBoundary: { readFile: readLinuxProcFile, readlink, readdir: async path => { if (path === '/proc') fullReads++; return readdir(path); } },
+            linuxBoundary: { readFile: async (path, encoding) => {
+                if (path.endsWith('/cmdline') || path.endsWith('/environ')) commandEnvironmentReads++;
+                return readLinuxProcFile(path, encoding);
+            }, readlink, readdir: async path => { if (path === '/proc') fullReads++; return readdir(path); } },
             helperExecutablePath: resolveProcessCustodySupportExecutable(process.platform),
             execFile: async (command, args, options) => {
                 if (args.includes('--identity-only=true')) identityReads++; else fullReads++;
@@ -104,9 +108,11 @@ describe('process-tree generation safety', () => {
             expect(parent.signalCode).toBeNull();
             expect(result.status, JSON.stringify(result)).toBe('complete');
             expect(result.outcomes.filter(row => row.outcome === 'ended')).toHaveLength(13);
+            if (process.platform === 'linux') expect(result.outcomes.every(row => (row.freedBytes ?? 0) > 0)).toBe(true);
             expect(process.kill(peer.pid!, 0)).toBe(true);
             if (process.platform === 'darwin') expect(identityReads).toBe(13);
-            console.info(`termination real platform=${process.platform} members=13 fullReads=${fullReads} nativeIdentityReads=${identityReads} elapsedMs=${Date.now() - started}`);
+            console.info(`termination real platform=${process.platform} members=13 fullReads=${fullReads} nativeIdentityReads=${identityReads} commandEnvironmentReads=${commandEnvironmentReads} elapsedMs=${Date.now() - started}`);
+            expect(commandEnvironmentReads).toBe(0);
         } finally {
             // Only fixture processes are owned; actual termination uses the same owner.
             await terminate({ targets: [parent.pid!, ...children, peer.pid!].map(pid => ({ pid })), tree: false, firstSignal: 'SIGKILL' });
@@ -149,9 +155,13 @@ describe('process-tree generation safety', () => {
             ...Array.from({ length: 20 }, (_, offset) => [root + offset, { parent: offset ? root : 1, start: 20 + offset }] as const),
             ...Array.from({ length: 300 }, (_, offset) => [5000 + offset, { parent: 1, start: 100 + offset }] as const)]);
         const statReads: string[] = [];
+        const enrichmentReads: string[] = [];
         const signals: number[] = [];
         const owner = fixture(rows, { kill(pid: number) { signals.push(pid); rows.delete(pid); } }, false,
-            path => { if (path.endsWith('/stat')) statReads.push(path); });
+            path => {
+                if (path.endsWith('/stat')) statReads.push(path);
+                else if (!path.endsWith('/status') && !path.endsWith('/auxv')) enrichmentReads.push(path);
+            });
         const result = await owner.terminateTargets({ targets: [{ pid: root }], waitForExit: false });
         expect(result.status).toBe('complete');
         expect(signals).toHaveLength(20);
@@ -160,6 +170,18 @@ describe('process-tree generation safety', () => {
         // Initial discovery, round discovery and final verification may enumerate
         // the machine; the immediate checks read only target/reader ancestry.
         expect(statReads.length).toBeLessThan(4 * 321);
+        expect(enrichmentReads).toHaveLength(0);
+    });
+    it('retains command observations when the lifecycle owner authorizes fresh snapshots', async () => {
+        const root = 4100;
+        const rows = new Map([[process.pid, { parent: 1, start: 10 }], [root, { parent: 1, start: 20 }]]);
+        const signals: number[] = [];
+        const owner = fixture(rows, { kill(pid: number) { signals.push(pid); rows.delete(pid); } });
+        const result = await owner.terminateTargets({ targets: [{ pid: root }],
+            authorizeSnapshot: snapshot => snapshot.rows.every(row => Array.isArray(row.argv)),
+        });
+        expect(result.status).toBe('complete');
+        expect(signals).toEqual([root]);
     });
     it.each([undefined, 'SIGTERM'] as const)('applies kill policy while retaining explicit firstSignal=%s precedence', async firstSignal => {
         const root = 4100;

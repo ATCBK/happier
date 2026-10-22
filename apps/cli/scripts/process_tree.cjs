@@ -23,10 +23,10 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     const incomplete = result => Object.assign(new Error('Process-tree termination could not be verified'), {
         code: 'plugin_exec_termination_incomplete', result,
     });
-    async function census(containment, targetPid, identityOnly = false) {
+    async function census(containment, targetPid, fields) {
         try {
             const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all',
-                ...(identityOnly || targetPid !== undefined ? { fields: [] } : {}),
+                ...(fields === undefined ? {} : { fields }),
                 ...(targetPid === undefined ? {} : { pids: [targetPid], includeAncestors: true }),
                 ...(containment?.kind === 'windows_job' ? { verifiedJobNames: [containment.name] } : {}) });
             if (snapshot.status !== 'ok' || new Set(snapshot.rows.map(row => row.pid)).size !== snapshot.rows.length) return null;
@@ -50,7 +50,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     async function captureTargets(root) {
         // Capture retains native identities and ancestry only. Commands, credentials,
         // containment and metrics are demanded separately by their actual consumers.
-        const table = await census(undefined, undefined, true);
+        const table = await census(undefined, undefined, []);
         if (!table) return { status: 'unavailable', reason: 'census_unavailable' };
         const row = table.index.byPid.get(root.pid);
         if (!present(row)) return { status: 'refused', reason: 'root_missing' };
@@ -65,7 +65,11 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     async function terminateTargets(input, options = {}) {
         let signalAuthorityRefused = false;
         const read = async () => {
-            const table = await census(input.containment);
+            // Ordinary teardown consumes identity/ancestry plus memory accounting,
+            // not every process's command or environment. Policy callbacks still
+            // receive the full fresh observations they use to authorize cleanup.
+            const table = await census(input.containment, undefined, input.authorizeSnapshot ? undefined
+                : ['memory', ...(input.containment?.kind === 'linux_unit' ? ['cgroup'] : [])]);
             if (table && input.authorizeSnapshot) {
                 try { table.authorityRefused = !await input.authorizeSnapshot(table.snapshot); }
                 catch { table.authorityRefused = true; }
@@ -151,7 +155,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
             // Descendants first; each signal follows its own fresh generation/protection check.
             for (const expected of [...captured.values()].reverse()) {
                 if (outcomes.has(expected.pid)) continue;
-                const fresh = await census(undefined, expected.pid);
+                const fresh = await census(undefined, expected.pid, []);
                 if (!fresh) { verificationUnavailable = true; outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason: 'census_unavailable' }); continue; }
                 const reason = refusal(fresh, expected);
                 if (reason) { outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason }); continue; }
@@ -281,7 +285,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     async function terminateProcessTree(proc, options) {
         if (!proc.pid) return;
         if ((proc.exitCode !== null && proc.exitCode !== undefined) || (proc.signalCode !== null && proc.signalCode !== undefined)) {
-            const table = await census();
+            const table = await census(undefined, undefined, []);
             if (!table || present(table.index.byPid.get(proc.pid))) throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'identity_changed' }] });
             if (options?.ownedProcessGroup && membersOfPgid(table.index, proc.pid).some(present)) {
                 throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'root_missing' }] });
