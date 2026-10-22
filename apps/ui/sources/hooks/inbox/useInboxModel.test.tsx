@@ -16,6 +16,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, compilePluginJs
     encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
     normalizePluginAccountCollectionContractV1, PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol';
 import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { resetActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
@@ -363,7 +364,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         artifactReadBoundary.request.mockImplementation(async (_path: string, init?: RequestInit) => {
             expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [artifact.id] });
             return Response.json({ items: [{ artifactId: artifact.id, ok: true, recipientCensus: null, artifact: {
-                id: artifact.id, kind: 'approval_request', ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+                id: artifact.id, kind: deriveArtifactCoarseKindV1(header), ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
                 publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                 header: encodePlainArtifactStoredContent(header),
                 body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }),
