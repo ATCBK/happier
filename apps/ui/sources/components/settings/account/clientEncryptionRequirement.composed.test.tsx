@@ -1,5 +1,6 @@
 // Match the mounted settings consumer's import order, avoiding a cold owner/catalog cycle.
 import '@/components/settings/catalog/runtime/useResolvedSettingsPageCatalog';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
@@ -156,6 +157,8 @@ describe('client encryption requirement through the Settings Action', () => {
             clientActionExecute: createClientActionReverseDispatcher(() => ({
                 hasConnectedClientRpcHandler: () => connected,
                 callConnectedClientRpc: async (_method, payload, options) => {
+                    // The server selects the receiver; a withdrawn App is typed absence before any client executes.
+                    if (!connected) return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
                     dispatches++;
                     options.onIssued();
                     return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };

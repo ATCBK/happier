@@ -44,6 +44,9 @@ import {
 } from '@/providers/authoring/state';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { resolveAgentNativeModels } from './agentModelVisibility';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { parseProviderContributionIdentityV1 } from '@happier-dev/protocol/providers/contribution-identity';
 
 describe('resolveAgentNativeModels', () => {
   it('uses the machine-observed Agent catalog instead of the static Default placeholder', () => {
@@ -313,6 +316,15 @@ describe('AgentModelsScreen provider settings safety', () => {
   });
   it('shows the saved gateway identity with its packaged mark or canonical gateway fallback in the model source heading', async () => {
     const contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
+    const declaration = readAccountProviderDeclarations({ kind: 'account' }).find(entry => entry.contributionKey === contributionKey)!;
+    const identity = parseProviderContributionIdentityV1(contributionKey)!.identity;
+    providerHarness.setResponse(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+      DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+        v: 2, generation: 1, familiesById: { providers: { family: 'providers', entriesById: {
+          [contributionKey]: { id: contributionKey, pluginId: identity.pluginId, definition: declaration.definition,
+            provenance: declaration.provenance, sourceKind: 'bundled' },
+        } } },
+      } }));
     const base = createModelPageCatalog();
     await account.restore({
       serverIdentityId: 'srv_agent_models',
@@ -450,7 +462,7 @@ describe('AgentModelsScreen provider settings safety', () => {
             pc_retired: [{ id: 'retired', name: 'Retired machine catalog model', addedAt: 1 }] },
           modelVisibilityByRef: { [serializeModelVisibilityRefV1(ModelVisibilityRefV1Schema.parse({ scope: 'agent', agentTargetKey,
             providerConnectionId: 'pc_a', modelId: 'model-a' }))]: 'hidden' } }),
-        definitions: readAccountProviderDeclarations(), agent: readAccountAgentProviderRequirements(agentTargetKey),
+        definitions: readAccountProviderDeclarations({ kind: 'account' }), agent: readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' }),
         request: { agentTargetKey, mode: 'management' },
       }));
     }
