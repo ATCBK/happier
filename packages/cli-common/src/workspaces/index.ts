@@ -1017,7 +1017,6 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
     }
   }
   const prepublicationRoots = availableRoots.filter(({ bundle }) => rootNames.has(bundle.packageName));
-  const assignedPackageNames = new Set(rootNames);
   for (const { bundle: rootBundle, rawPackageJson } of prepublicationRoots) {
     const declaredClosureNames = readDeclaredPrepublicationWorkspaceClosureNames(
       rawPackageJson,
@@ -1030,8 +1029,11 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
         );
       }
     }
+    // Public siblings share their selected root. Private dependencies must be
+    // nested beneath every importing root; a sibling's private copy is not
+    // reachable through Node's package resolution.
     const nestedBundles = declaredClosureNames
-      .filter((packageName) => !assignedPackageNames.has(packageName))
+      .filter((packageName) => !rootNames.has(packageName))
       .map((packageName) => {
         const bundle = bundlesByPackageName.get(packageName);
         if (!bundle) {
@@ -1041,7 +1043,6 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
         }
         return bundle;
       });
-    for (const nestedBundle of nestedBundles) assignedPackageNames.add(nestedBundle.packageName);
     const siblingRootNames = collectInternalRuntimeWorkspaceDepNames(rawPackageJson).filter((packageName) => (
       packageName !== rootBundle.packageName && rootNames.has(packageName)
     ));

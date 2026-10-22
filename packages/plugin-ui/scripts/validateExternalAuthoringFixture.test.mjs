@@ -4,7 +4,7 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
@@ -455,6 +455,18 @@ test('current-source install delegates to the canonical CLI dev build and stages
     const physicalSdkRoot = await realpath(sdkInstallRoot);
     const resolvedProtocol = await realpath(requireFromInstalledSdk.resolve('@happier-dev/protocol'));
     assert.equal(resolvedProtocol.startsWith(physicalSdkRoot), true);
+    const uiInstallRoot = await realpath(join(consumerRoot, 'node_modules', '@happier-dev', 'plugin-ui'));
+    const requireFromInstalledUi = createRequire(join(uiInstallRoot, 'package.json'));
+    // Public root/components imports reach the inert declarative renderer.
+    // Node must resolve its direct runtime dependencies from UI's own closure,
+    // not a sibling SDK's private node_modules or the repository checkout.
+    for (const specifier of [
+      '@happier-dev/protocol/plugins/contributions/ui/v2',
+      '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1',
+    ]) {
+      const resolved = await realpath(requireFromInstalledUi.resolve(specifier));
+      assert.equal(resolved.startsWith(`${uiInstallRoot}${sep}`), true);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

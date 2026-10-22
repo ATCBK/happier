@@ -111,8 +111,12 @@
     "api-declarations": "yarn -s api-governance",
     "check:api-declarations": "yarn -s check:api-governance"
   },
+  "bundledDependencies": [
+    "@happier-dev/protocol"
+  ],
   "dependencies": {
-    "@happier-dev/plugin-sdk": "0.0.0"
+    "@happier-dev/plugin-sdk": "0.0.0",
+    "@happier-dev/protocol": "0.0.0"
   },
   "peerDependencies": {
     "react": "19.2.0",

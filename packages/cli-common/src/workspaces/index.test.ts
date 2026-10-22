@@ -478,6 +478,38 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
 });
 
 describe('materializePrepublicationWorkspacePackageRoots', () => {
+  it('keeps a shared private runtime dependency resolvable from each public author root', () => {
+    const root = createTempRoot('workspace-public-author-shared-private-');
+    const bundle = createPrepublicationBundleWriter({ sourceRoot: join(root, 'source'), destinationRoot: join(root, 'author') });
+    const protocol = bundle('@happier-dev/protocol', 'protocol', {
+      happier: undefined,
+      exports: { './plugins/contributions/ui/v2': './dist/index.js' },
+    });
+    writeFileSync(join(protocol.srcDir, 'dist/index.js'), 'export const admitted = "canonical-node";\n');
+    const sdk = bundle('@happier-dev/plugin-sdk', 'sdk', {
+      dependencies: { '@happier-dev/protocol': '0.0.0' },
+      bundledDependencies: ['@happier-dev/protocol'],
+    });
+    const ui = bundle('@happier-dev/plugin-ui', 'ui', {
+      dependencies: { '@happier-dev/plugin-sdk': '0.0.0', '@happier-dev/protocol': '0.0.0' },
+      bundledDependencies: ['@happier-dev/protocol'],
+    });
+    // Physical distributed package bytes are the boundary. Both root modules
+    // exercise Node's real sibling/private dependency resolution after publication.
+    for (const entry of [sdk, ui]) {
+      writeFileSync(join(entry.srcDir, 'dist/index.js'), 'export { admitted } from "@happier-dev/protocol/plugins/contributions/ui/v2";\n');
+    }
+    materializePrepublicationWorkspacePackageRoots({ bundles: [sdk, ui, protocol],
+      rootPackageNames: ['@happier-dev/plugin-sdk', '@happier-dev/plugin-ui'] });
+    for (const entry of [sdk, ui]) {
+      expect(execFileSync(process.execPath, ['--input-type=module', '--eval',
+        `const value = await import(${JSON.stringify(pathToFileURL(join(entry.destDir, 'dist/index.js')).href)}); process.stdout.write(value.admitted);`],
+      { encoding: 'utf8' })).toBe('canonical-node');
+    }
+    expect(existsSync(protocol.destDir)).toBe(false);
+    expect(readPackageJson(ui.destDir).bundledDependencies).toEqual(['@happier-dev/protocol']);
+  });
+
   it('materializes reachable public author dependencies using the shared prepublication rule', () => {
     const root = createTempRoot('workspace-public-author-closure-');
     const destinationRoot = join(root, 'author');
