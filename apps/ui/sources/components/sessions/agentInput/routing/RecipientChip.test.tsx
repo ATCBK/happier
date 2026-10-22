@@ -305,6 +305,7 @@ describe('RecipientChip', () => {
             ],
             selectedIds: ['account:ana', 'session:sol'],
             selectedRecipients: [],
+            removedRecipients: [],
             toggle,
             clear: vi.fn(),
         };

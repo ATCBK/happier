@@ -1330,7 +1330,7 @@ function AgentTextBlock(props: {
   const answerText = selectableMessage?.text ?? null;
   const openDiscussionSource = React.useCallback((source: DiscussionSecondOpinionSourceV1, intent: 'second_opinion' | 'discuss') => {
     if (source.kind !== 'session' || answerText === null || !navigateFromTranscript) return;
-    presentDiscussionSecondOpinion({ source, intent, sourceText: answerText, onOpenDiscussion: navigateFromTranscript });
+    presentDiscussionSecondOpinion({ source, intent, sourceText: answerText, onNavigate: navigateFromTranscript });
   }, [answerText, navigateFromTranscript]);
 
   // Hidden thinking and filtered text keep the mounted row's hook order stable.
