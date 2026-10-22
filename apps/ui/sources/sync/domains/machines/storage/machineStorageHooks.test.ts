@@ -139,7 +139,7 @@ describe('machine storage hooks', () => {
             serverId: 'srv_storage_pile', accountId: 'owner', payload: { machineId: 'machine', serverId: 'srv_storage_pile', add: [served] } }));
         await hook.unmount();
     });
-    it('keeps the bound Home projection while a profile refresh rechecks its credential', async () => {
+    it('keeps the bound Home projection without rereading credentials when only its label changes', async () => {
         const serverUrl = 'https://storage-rebind.test';
         const serverId = await home.addHome({ name: 'Storage Home', serverUrl, serverIdentityId: 'srv_storage_rebind', accountId: 'owner' });
         home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
@@ -148,22 +148,18 @@ describe('machine storage hooks', () => {
         await act(async () => { await vi.waitFor(() => expect(transport.rpc).toHaveBeenCalled()); });
         expect(hook.getCurrent().summary?.revision).toBe(1);
         const known = hook.getCurrent().summary;
-        const held = createDeferred<void>();
-        const requestLock = navigator.locks.request.bind(navigator.locks);
-        // Let the profile transaction finish, then hold the credential recheck at the device lock boundary.
-        const credentialRead = vi.spyOn(navigator.locks, 'request')
-            .mockImplementationOnce(requestLock)
-            .mockImplementationOnce(async (...args: Parameters<typeof requestLock>) => {
-                await held.promise;
-                return await requestLock(...args);
-            });
+        const watchSignal: AbortSignal | undefined = transport.rpc.mock.calls.find(([input]) => input.method === RPC_METHODS.DAEMON_STORAGE_WATCH)?.[0].signal;
+        expect(watchSignal?.aborted).toBe(false);
+        // Only the profile transaction acquires the shared Home lock; a label change
+        // must preserve the existing credential binding without another device read.
+        const deviceLock = vi.spyOn(navigator.locks, 'request');
         try {
             await act(async () => { await upsertServerProfile({ serverUrl, name: 'Renamed Home' }); });
-            expect(credentialRead.mock.calls.length).toBeGreaterThan(1);
+            expect(deviceLock).toHaveBeenCalledOnce();
             expect(hook.getCurrent().summary).toBe(known);
+            expect(watchSignal?.aborted).toBe(false);
         } finally {
-            await act(async () => { held.resolve(); });
-            credentialRead.mockRestore();
+            deviceLock.mockRestore();
             await hook.unmount();
         }
     });

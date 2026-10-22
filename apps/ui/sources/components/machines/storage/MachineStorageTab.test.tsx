@@ -214,7 +214,9 @@ describe('MachineStorageTab', () => {
             : params.page === 'suggestions' ? 'machine-storage-suggestion-evidence'
             : params.page === 'worktrees' ? 'machine-storage-worktree-evidence'
             : 'machine-storage-top-suggestion-evidence';
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId(rowId)).not.toBeNull()); });
+        // Commit each render before polling: holding act open until the assertion
+        // passes can prevent credential-bound child effects from mounting at all.
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId(rowId)).not.toBeNull(); });
         const text = screen.getTextContent();
         for (const raw of evidence) expect(text).not.toContain(raw);
         expect(text).not.toContain('private-cache-detector');
@@ -503,7 +505,7 @@ describe('MachineStorageTab', () => {
             if (method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [], summary: SUMMARY.pile };
             return undefined;
         });
-        await act(async () => { await vi.waitFor(() => expect(pages.length).toBeGreaterThan(0)); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(pages.length).toBeGreaterThan(0); });
         const root = { nodeId: folder, name: '.cache', kind: 'folder', size: size(4096), logicalBytes: 4096, items: 0, changedAt: 1,
             flags: { happier: false, protection: 'none', atLeast: false, inUse: false }, childCount: 0 };
         await act(async () => { pages[0]!.resolve({ state: running, nodes: [], root, coverage: [], indexedAt: 4 }); });
@@ -828,7 +830,7 @@ describe('MachineStorageTab', () => {
         const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-wt-live')).not.toBeNull()); });
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
-        await act(async () => { await vi.waitFor(() => expect(sheet.getTextContent()).toContain('The session didn’t stop')); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(sheet.getTextContent()).toContain('The session didn’t stop'); });
         expect(holderMetadata.writes).toContain('sess-1');
         expect(calls.filter(call => call.method === RPC_METHODS.STOP_SESSION)).toHaveLength(failure === 'metadata write' ? 0 : 1);
         expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE)).toBe(false);
@@ -1090,7 +1092,7 @@ describe('MachineStorageTab', () => {
             ] };
             return undefined;
         });
-        await act(async () => { await vi.waitFor(() => expect(screen.getTextContent()).toContain('Users')); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.getTextContent()).toContain('Users'); });
         const rowActions = (key: string) => screen.findAllByProps({ testID: `machine-storage-disk-row-${key}` })
             .find(instance => typeof instance.props.onSecondaryAction === 'function');
         expect(rowActions('/small')).toBeUndefined();
@@ -1122,7 +1124,7 @@ describe('MachineStorageTab', () => {
             if (rpc.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY) return { outcomes: [], freedBytes: 34.5 * GB };
             return undefined;
         });
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-category-trash-empty')).not.toBeNull()); });
+        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId('machine-storage-category-trash-empty')).not.toBeNull(); });
         await act(async () => { screen.pressByTestId('machine-storage-category-trash-empty'); });
         await act(async () => { await vi.waitFor(() => expect(modal.current!.spies.confirm).toHaveBeenCalled()); });
         expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)).toBe(false);

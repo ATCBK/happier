@@ -4,7 +4,7 @@ import { MACHINE_STORAGE_ACTION_IDS } from '@happier-dev/protocol/actions/specs/
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema,
+import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema, MachineStorageScanGetResultV1Schema, DiskScanStateV1Schema,
     type HappierStorageSummaryV1, type MachineStorageCategoryListResultV1, type MachineStorageWatchResultV1 } from '@happier-dev/protocol/storage/storageV1';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineStorageStore, type MachineStorageStore } from './machineStorageStore';
@@ -82,6 +82,59 @@ function harness() {
 
 describe('machine storage subscription owner', () => {
     afterEach(() => { for (const store of stores.splice(0)) store.reset(); vi.useRealTimers(); });
+    it.each([
+        { source: 'action', staleStopped: false }, { source: 'watch', staleStopped: false },
+        { source: 'action', staleStopped: true }, { source: 'watch', staleStopped: true },
+    ] as const)('publishes the stopped retained total before a slow page refresh ($source; old stop: $staleStopped)', async ({ source, staleStopped }) => {
+        const running = DiskScanStateV1Schema.parse({ scanId: 'scan', target: { folderPath: '/cache' }, status: 'running', startedAt: 100,
+            progress: { sizedBytes: 100, items: 1, usedBytes: 0 }, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: '/fixture' } } });
+        const stopped = { ...running, status: 'cancelled' as const, finishedAt: 200, progress: { ...running.progress, sizedBytes: 1000, items: 10 } };
+        const page = MachineStorageScanGetResultV1Schema.parse({ state: staleStopped ? { ...running, status: 'cancelled', finishedAt: 150 } : running, nodes: [], coverage: [], indexedAt: 100,
+            root: { nodeId: '/cache', name: 'cache', kind: 'folder', logicalBytes: 100, items: 1, changedAt: 100, childCount: 0,
+                size: { allocatedBytes: 100, freesBytes: 0, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: true },
+                flags: { happier: false, protection: 'none', atLeast: true, inUse: false } } });
+        const report = { ...summary(), wholeDisk: { enabled: true, scans: [running] } };
+        const slow = createDeferred<Awaited<ReturnType<NonNullable<MachineStorageClients['scanClient']>>>>();
+        const watches: Array<ReturnType<typeof createDeferred<Awaited<ReturnType<MachineStorageClients['watchClient']>>>>> = [];
+        let reading = false; let cancelled = false;
+        const store = createMachineStorageStore({ summaryClient: async () => ({ ok: true, value: cancelled
+            ? { ...report, revision: 2, wholeDisk: { enabled: true, scans: [stopped] } } : report }),
+            categoryClient: async () => ({ ok: true, value: category() }), refreshClient: async () => ({ ok: true, value: report }),
+            watchClient: () => { const answer = createDeferred<Awaited<ReturnType<MachineStorageClients['watchClient']>>>(); watches.push(answer); return answer.promise; },
+            scanClient: async request => {
+                const response = reading ? await slow.promise : { ok: true as const, value: page };
+                return response.ok && request.view?.nodeId ? { ...response, value: { ...response.value,
+                    root: { ...page.root!, nodeId: request.view.nodeId, parentId: '/cache' } } } : response;
+            },
+            scanCancelClient: async () => { cancelled = true; return { ok: true, value: stopped }; } });
+        stores.push(store);
+        const input = { ...key, scanId: running.scanId, view: { tab: 'folders' as const, depth: 1 as const } };
+        const drill = { ...input, view: { ...input.view, nodeId: '/cache/child' } };
+        const release = store.demandScan(input);
+        const releaseDrill = store.demandScan(drill);
+        try {
+            await vi.waitFor(() => expect(store.getScan(input).page).toEqual(page));
+            await vi.waitFor(() => expect(store.getScan(drill).page?.root?.nodeId).toBe('/cache/child'));
+            await store.read(key);
+            reading = true; const staleRead = store.readScan(input);
+            if (source === 'action') await store.cancelScan({ ...key, scanId: running.scanId });
+            else {
+                cancelled = true;
+                watches[0]!.resolve({ ok: true, value: { changed: true, summary: { ...report, revision: 2, wholeDisk: { enabled: true, scans: [stopped] } } } });
+                await vi.waitFor(() => expect(store.getState(key).summary?.wholeDisk.scans[0]?.status).toBe('cancelled'));
+            }
+            expect(store.getState(key).summary?.wholeDisk.scans[0]).toEqual(stopped);
+            expect(store.getScan(input).page).toMatchObject({ state: stopped, root: { size: { allocatedBytes: 1000 }, items: 10 } });
+            expect(store.getScan(drill).page).toMatchObject({ state: stopped, root: { nodeId: '/cache/child', size: { allocatedBytes: 100 }, items: 1 } });
+            // A get dispatched before cancellation must not restore a running
+            // page after the authorized terminal answer has been published.
+            slow.resolve({ ok: true, value: page });
+            await staleRead;
+            await store.readScan(input);
+            expect(store.getScan(input).page).toMatchObject({ state: stopped, root: { size: { allocatedBytes: 1000 } } });
+        } finally { slow.resolve({ ok: true, value: page }); release(); releaseDrill(); }
+    });
     it('rearms a changed Storage watch before notifying the summary or refreshing category pages', async () => {
         type WatchAnswer = Awaited<ReturnType<MachineStorageClients['watchClient']>>;
         const watches: Array<ReturnType<typeof createDeferred<WatchAnswer>>> = [];

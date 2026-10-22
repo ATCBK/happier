@@ -47,6 +47,16 @@ function reconcileSummary(previous: HappierStorageSummaryV1 | null, incoming: Ha
         pile: retain(previous.pile, incoming.pile), trash: retain(previous.trash, incoming.trash), wholeDisk: retain(previous.wholeDisk, incoming.wholeDisk),
     });
 }
+function projectScanPageState(page: MachineStorageScanGetResultV1, scan: DiskScanStateV1): MachineStorageScanGetResultV1 {
+    if (page.state?.scanId !== scan.scanId) return page;
+    // A stopped target and its header receive one daemon-owned total.
+    // Drilled subfolders retain their own (different) subtree totals.
+    const root = page.root;
+    const targetRoot = root && ('folderPath' in scan.target ? root.nodeId === scan.target.folderPath : !root.parentId);
+    return { ...page, state: scan,
+        ...(targetRoot && scan.status !== 'running' ? { root: { ...root,
+            items: scan.progress.items, size: { ...root.size, allocatedBytes: scan.progress.sizedBytes } } } : {}) };
+}
 type Update = Readonly<{ kind: 'summary'; summary: HappierStorageSummaryV1 }> | Readonly<{ kind: 'error' | 'not_reported' }>;
 
 export function createMachineStorageStore(clients: MachineStorageClients) {
@@ -88,6 +98,7 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
         if (previous?.revision !== incoming.revision) refreshCategories(input);
     };
     const overlaySummary = (input: MachineStorageKey, incoming: HappierStorageSummaryV1) => {
+        for (const scan of incoming.wholeDisk.scans) if (scan.status !== 'running') publishScanState(input, scan);
         const queue = pileWrites.get(machineKey(input));
         return queue?.writes.length ? { ...incoming, pile: { ...incoming.pile,
             count: projectPile(input, queue.base).items.length } } : incoming;
@@ -179,12 +190,25 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             const response = await snapshotClient({ ...input, signal });
             if (signal?.aborted) return state;
             const current = scans.getState(input);
-            return response.ok ? retain(current, { status: 'ready', page: retain(current.page, response.value) })
+            const known = summaries.getState(input).summary?.wholeDisk.scans.find(scan => scan.scanId === (response.ok ? response.value.state?.scanId : undefined));
+            if (response.ok && current.page?.state?.scanId === response.value.state?.scanId
+                && current.page?.state?.status !== 'running' && response.value.state?.status === 'running'
+                && known?.status !== 'running') return current;
+            return response.ok ? retain(current, { status: 'ready', page: retain(current.page,
+                known && known.status !== 'running' ? projectScanPageState(response.value, known) : response.value) })
                 : retain(current, { ...current, status: response.reason === 'older_happier' ? 'not_reported' : 'error' });
         },
         failRefresh: state => retain(state, { ...state, status: 'error' }),
         applySnapshot: (state, page) => retain(state, { status: 'ready', page: retain(state.page, page) }),
     });
+    function publishScanState(input: MachineStorageKey, scan: DiskScanStateV1): void {
+        for (const entry of scanDemands.values()) {
+            if (machineKey(entry.input) !== machineKey(input)) continue;
+            const page = scans.getState(entry.input).page;
+            if (page?.state?.scanId !== scan.scanId) continue;
+            scans.publish(entry.input, projectScanPageState(page, scan));
+        }
+    }
     const itemsClient = clients.itemsClient ?? (async (input: MachineStorageItemsInput) => (await import('./machineRpc')).fetchMachineStorageItemsViaAction(input));
     const itemLists = createSharedSubscriptionStore<MachineStorageItemsInput, MachineStorageItemsState, MachineStorageItemsListResultV1, typeof itemsClient>({
         emptyState: EMPTY_ITEMS, createState: () => EMPTY_ITEMS, storeKey: itemsKey, defaultSnapshotClient: itemsClient, retainState: true,
@@ -246,6 +270,7 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             // The Action answer is already an authorized scan state. Do not make the mounted view
             // wait for the next summary/watch round trip to discover the scan it just started.
             summaries.invalidate(input);
+            publishScanState(input, response.value);
             const summary = summaries.getState(input).summary;
             if (summary) summaries.publish(input, { kind: 'summary', summary: { ...summary,
                 wholeDisk: { ...summary.wholeDisk, scans: [...summary.wholeDisk.scans.filter(scan => scan.scanId !== response.value.scanId), response.value] } } });
