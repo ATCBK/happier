@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as childProcess from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,6 +90,28 @@ describe('service manager availability before mutation', () => {
       expect(readFileSync(existing, 'utf8')).toBe('user definition');
       expect(existsSync(fresh)).toBe(false);
       expect(error).toMatchObject({ code: 'service_manager_unavailable' });
+    });
+  });
+
+  it('preserves existing bytes and leaves no new definition when systemctl exists without a user manager', async () => {
+    if (process.platform === 'win32') return;
+    await withConfiguredDaemonTestHome({ prefix: 'service-manager-unreachable-', env: { PATH: '' } }, async ({ homeDir }) => {
+      const systemctl = join(homeDir, 'systemctl');
+      writeFileSync(systemctl, '#!/bin/sh\nexit 1\n', 'utf8');
+      chmodSync(systemctl, 0o755);
+      process.env.PATH = homeDir;
+      const existing = join(homeDir, 'existing.service');
+      const fresh = join(homeDir, 'fresh.service');
+      writeFileSync(existing, 'user definition');
+      const error = await applyDaemonServiceInstallPlan({
+        platform: 'linux', files: [
+          { path: existing, content: 'replacement', mode: 0o644 },
+          { path: fresh, content: 'new definition', mode: 0o644 },
+        ], commands: [{ cmd: 'systemctl', args: ['--user', 'daemon-reload'] }],
+      }, { commandFailureMode: 'strict' }).then(() => null, (failure: unknown) => failure);
+      expect(error).toMatchObject({ code: 'service_manager_unavailable' });
+      expect(readFileSync(existing, 'utf8')).toBe('user definition');
+      expect(existsSync(fresh)).toBe(false);
     });
   });
 

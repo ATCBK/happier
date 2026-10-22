@@ -30,6 +30,16 @@ export function assertDaemonServiceCommandsAvailable(commands: readonly DaemonSe
   }
 }
 
+/** Prove Linux's selected systemd manager is reachable before writing its unit. */
+export function assertDaemonServiceManagerAvailable(commands: readonly DaemonServicePlannedCommand[]): void {
+  const reload = commands.find((command) => command.cmd === 'systemctl' && command.args.includes('daemon-reload'));
+  if (!reload) return;
+  const reloadIndex = reload.args.indexOf('daemon-reload');
+  const probe = { cmd: reload.cmd, args: [...reload.args.slice(0, reloadIndex), 'show-environment'] };
+  const result = runCommand(probe);
+  if (!result.ok) throw unavailableServiceCommand(probe);
+}
+
 type CommandResult = Readonly<{ ok: boolean; out: string | null; status: number | null }>;
 
 function runCommand(command: DaemonServicePlannedCommand): CommandResult {
@@ -211,6 +221,7 @@ export async function applyDaemonServiceInstallPlan(
 ): Promise<void> {
   if (options.runCommands !== false) {
     assertDaemonServiceCommandsAvailable(plan.commands);
+    assertDaemonServiceManagerAvailable(plan.commands);
   }
   for (const file of plan.files) {
     await mkdir(dirname(file.path), { recursive: true });
