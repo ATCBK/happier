@@ -11,6 +11,20 @@ import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSe
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it.each(['plugin_mcp_preparation_unavailable', 'agent_runtime_daemon_service_generation_not_current',
+    'native_agent_privileged_effect_authority_unavailable', 'skills_unavailable'])(
+    'publishes the closed preparation refusal %s without private plugin data', code => {
+      const error = Object.assign(new Error('PRIVATE_BODY'), { code, details: { secret: 'PRIVATE_TOKEN' } });
+      const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, occurredAt: 100 });
+      expect(issue).toMatchObject({ code, source: 'agent_session_error' });
+      expect(JSON.stringify(issue)).not.toContain('PRIVATE');
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+        code: issue.code, details: { v: 1, source: issue.source },
+      }, occurredAt: 100 })).toEqual(issue);
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+        code: `${code}_PRIVATE`,
+      } }).code).toBe('agent_session_error');
+    });
   it.each(['plugin_services_managed_provider_authority_unavailable', 'provider_endpoint_unavailable'])(
     'preserves the safe shared Provider startup cause %s through public issue publication', code => {
     const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error:

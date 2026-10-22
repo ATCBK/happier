@@ -26,6 +26,7 @@ import { createCliActionExecutorHarness } from '@/session/actions/createCliActio
 import { registerAccountHomeHttp, registerPlainArtifactRoutes } from '@/session/actions/widgetApproval.testkit';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 // Keep the filesystem real while exposing its write boundary as a configurable spy.
 vi.mock('node:fs/promises', async () => {
@@ -45,7 +46,7 @@ describe('registered workspace replace transport', () => {
     handlers = new Map();
     dispose = undefined;
     registerWorkspaceFileReplaceHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root, {
-      machineId: 'machine', actionExecutor: createActionExecutor({
+      machineId: 'machine', actionExecutor: createActionExecutor({ ...createUnavailableActionTransportDeps(),
         workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
           previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
       }),
@@ -76,7 +77,7 @@ describe('registered workspace replace transport', () => {
     const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
       'workspace.files.replace.preview': { approvalRequiredSurfaces: [surface] },
     } });
-    const executor = createActionExecutor({
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
       // The physical implementation is real; an approval refusal must prevent reaching it.
       workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
         previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
@@ -111,7 +112,7 @@ describe('registered workspace replace transport', () => {
     // Use the production composition for this seam test. Clearing the direct
     // owner registration makes removal/misbinding in registerSessionHandlers fail.
     handlers.clear();
-    const executor = createActionExecutor({
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
       workspaceFilesReplacePreview: ({ machineId: _machineId, ...request }, context) =>
         previewWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
       workspaceFilesReplace: async ({ machineId: _machineId, ...request }, context) =>
@@ -144,7 +145,7 @@ describe('registered workspace replace transport', () => {
   it.each(['replace', 'restore'] as const)('keeps %s behind agent approval at the Action boundary', async kind => {
     await writeFile(join(root, 'a.txt'), kind === 'replace' ? 'old' : 'new');
     const requests: unknown[] = [];
-    const executor = createActionExecutor({
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
       workspaceFilesReplace: async ({ machineId: _machineId, ...request }, context) =>
         applyWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
       // Approval Artifact persistence is the boundary; policy and dispatch stay real.
@@ -194,7 +195,8 @@ describe('registered workspace replace transport', () => {
       encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
     const runtime = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'replace-operation' });
-    const executor = createActionExecutor({ workspaceFilesReplace: client.createWorkspaceFileReplaceActionExecutor('home'),
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      workspaceFilesReplace: client.createWorkspaceFileReplaceActionExecutor('home'),
       workspaceFilesReplacePreview: client.createWorkspaceFileReplacePreviewActionExecutor('home'),
       runActionOperation: runtime.runActionOperation });
     client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),

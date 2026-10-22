@@ -22,6 +22,7 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/socketRpc';
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 describe('language intelligence registered Machine transport', () => {
   const roots: string[] = [];
@@ -49,7 +50,8 @@ describe('language intelligence registered Machine transport', () => {
     const handlers = new Map<string, RpcHandler>();
     const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
     const host = createLanguageServerHost({ readCurrentContributionRegistry: () => null });
-    const executor = createActionExecutor({ languageIntelligenceApply: ({ request }, context) => host.apply(request, { signal: context.signal }) });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      languageIntelligenceApply: ({ request }, context) => host.apply(request, { signal: context.signal }) });
     const request = { rootPath, path: 'a.ts', operation: { kind: 'rename', files: [{ path: 'a.ts',
       expectedHash: createHash('sha256').update('old').digest('hex'), edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'next' }],
     }] } };

@@ -140,8 +140,9 @@ describe('resolveWorkspaceFileUploadTarget', () => {
         const stagedPath = join(workspace, '.staged-upload');
         const destinationPath = join(workspace, 'nested', 'file.txt');
         writeFileSync(stagedPath, 'hello\n', 'utf8');
-        // The absent destination keeps this topology on the no-backup rollback path:
+        // No-overwrite publication copies exclusively to the absent destination:
         // source cleanup fails, then removing the newly published destination fails.
+        // Overwrite uses the guarded atomic writer's private staging path instead.
         expect(existsSync(destinationPath)).toBe(false);
         let faultArmed = true;
 
@@ -149,7 +150,7 @@ describe('resolveWorkspaceFileUploadTarget', () => {
             workingDirectory: workspace,
             path: 'nested/file.txt',
             sizeBytes: 6,
-            overwrite: true,
+            overwrite: false,
             finalizeFileOperations: ({ uploadId, tempPath, destPath }) => {
                 if (!faultArmed || uploadId !== 'upload-1' || tempPath !== stagedPath || destPath !== destinationPath) {
                     return null;
