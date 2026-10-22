@@ -131,7 +131,7 @@ function createUsageRowObserver(input: Readonly<{
                 const snapshot = readEntry()?.snapshot;
                 return snapshot ? snapshot.fetchedAtMs + snapshot.staleAfterMs + 1 : undefined;
             },
-            publish: () => { if (current()) updateProviderAccountUsageCacheEntries(input.credentialScope, entries => ({ ...entries })); },
+            publish: () => { if (current()) updateProviderAccountUsageCacheEntries(input.credentialScope, entries => entries); },
             read() {
                 if (reading) return reading;
                 if (!current()) return Promise.resolve();

@@ -212,7 +212,11 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
     refresh(keys?: readonly string[]): Promise<void>;
 }> {
     const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
-    const profile = useProfile();
+    const profile = useProfile((profile) => ({
+        connectedAccountsV4: profile.connectedAccountsV4,
+        connectedServicesV2: profile.connectedServicesV2,
+        connectedAccountGroupsV4: profile.connectedAccountGroupsV4,
+    }));
     const quotaSettings = useSettingsSelector((settings) => ({
         connectedServicesQuotaPinnedMeterIdsByKey: settings.connectedServicesQuotaPinnedMeterIdsByKey,
         connectedServicesQuotaSummaryStrategyByKey: settings.connectedServicesQuotaSummaryStrategyByKey,
@@ -443,10 +447,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         });
     }, [accountTransport, connectedServicesRegistrySnapshot.entries, localizePluginText, profile.connectedAccountsV4, labelsByKey]);
 
-    const groups = (profile as { connectedAccountGroupsV4?: ReadonlyArray<Readonly<{
-        ref: Readonly<{ service: PluginContributionIdentityV1 }>;
-        activeConnectedAccountId: string | null;
-    }>> }).connectedAccountGroupsV4;
+    const groups = profile.connectedAccountGroupsV4;
     const inUseAccountKeys = React.useMemo(() => new Set((groups ?? []).flatMap((group) => (
         group.activeConnectedAccountId
             ? [connectedServiceProfileKey({

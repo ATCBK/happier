@@ -102,6 +102,25 @@ describe('useProviderAccountUsageSnapshots', () => {
         expect(boundary.usageRead).toHaveBeenCalledWith(snapshot.recordId);
     });
 
+    it('ages retained usage once at its presentation deadline without another read', async () => {
+        vi.useFakeTimers();
+        const snapshot = { ...makeUsageSnapshot(), staleAfterMs: 100 };
+        boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(snapshot)));
+        const hook = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const fresh = hook.getCurrent();
+        expect(fresh.stateByRecordId[snapshot.recordId]).toBe('loaded_data');
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(hook.getCurrent()).toBe(fresh);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        const stale = hook.getCurrent();
+        expect(stale.stateByRecordId[snapshot.recordId]).toBe('stale_data');
+        expect(stale.snapshotsByRecordId[snapshot.recordId]).toBe(fresh.snapshotsByRecordId[snapshot.recordId]);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(hook.getCurrent()).toBe(stale);
+        expect(boundary.usageRead).toHaveBeenCalledTimes(1);
+    });
+
     it('treats a plaintext miss as authoritative without another representation read', async () => {
         const snapshot = makeUsageSnapshot();
         boundary.usageRead.mockImplementation(async () => new Response('{}', { status: 404 }));

@@ -1,4 +1,6 @@
 import type { ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { resolveProviderAccountUsageSnapshotState } from './providerAccountUsageSelectors';
 
 export type ProviderAccountUsageCacheEntry = Readonly<{
     snapshot: ProviderAccountUsageSnapshotV1 | null;
@@ -15,6 +17,8 @@ export type ProviderAccountUsageCacheState = Readonly<{
 let providerAccountUsageCacheState: ProviderAccountUsageCacheState = {
     entriesByCredentialScope: {},
 };
+// Equal data can age into a different presentation at the existing observer's deadline.
+let publishedAtMs = Date.now();
 
 const providerAccountUsageCacheListeners = new Set<() => void>();
 type RetainedUsageEntry = { count: number; observerCount: number; disposeObservation: (() => void) | null };
@@ -22,6 +26,7 @@ const providerAccountUsageCacheRetainCounts = new Map<string, Map<string, Retain
 
 function publishProviderAccountUsageCacheState(next: ProviderAccountUsageCacheState): void {
     providerAccountUsageCacheState = next;
+    publishedAtMs = Date.now();
     for (const listener of providerAccountUsageCacheListeners) listener();
 }
 
@@ -117,11 +122,29 @@ export function updateProviderAccountUsageCacheEntries(
     const currentEntries = providerAccountUsageCacheState.entriesByCredentialScope[credentialScope] ?? {};
     const updatedEntries = updater(currentEntries);
     const retained = providerAccountUsageCacheRetainCounts.get(credentialScope);
-    const nextEntries = retained && retained.size > 0
+    const incomingEntries = retained && retained.size > 0
         ? Object.fromEntries(
             Object.entries(updatedEntries).filter(([recordId]) => retained.has(recordId)),
         )
         : updatedEntries;
+    const nowMs = Date.now();
+    const nextEntries: Record<string, ProviderAccountUsageCacheEntry> = {};
+    let unchanged = Object.keys(currentEntries).length === Object.keys(incomingEntries).length;
+    for (const [recordId, incoming] of Object.entries(incomingEntries)) {
+        const previous = currentEntries[recordId];
+        const next = previous && incoming.snapshot !== previous.snapshot
+            && sameStrictJsonValue(previous.snapshot, incoming.snapshot)
+            ? { ...incoming, snapshot: previous.snapshot }
+            : incoming;
+        const equal = previous && previous.snapshot === next.snapshot && sameStrictJsonValue(previous, next)
+            && resolveProviderAccountUsageSnapshotState({ ...previous, nowMs: publishedAtMs })
+                === resolveProviderAccountUsageSnapshotState({ ...next, nowMs });
+        nextEntries[recordId] = equal ? previous : next === previous ? { ...next } : next;
+        if (nextEntries[recordId] !== previous) unchanged = false;
+    }
+    const scopes = Object.keys(providerAccountUsageCacheState.entriesByCredentialScope);
+    if (unchanged && (scopes.length === 0 && Object.keys(nextEntries).length === 0
+        || scopes.length === 1 && scopes[0] === credentialScope)) return;
     publishProviderAccountUsageCacheState({
         entriesByCredentialScope: { [credentialScope]: nextEntries },
     });

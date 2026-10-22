@@ -1,7 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -103,6 +103,60 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         await act(async () => { recordMachineRequestSucceeded({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
         await hook.getCurrent()('github', 'quota_read');
         expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-a');
+    });
+
+    it('keeps the selected admission quiet and its in-flight operation live when a non-elected Machine changes details', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
+        storage.getState().applyMachines([
+            createMachineFixture({ id: 'machine-a', activeAt: Date.now(), isShared: false }),
+            createMachineFixture({ id: 'machine-b', activeAt: Date.now(), isShared: false }),
+        ], true, { sourceServerId: serverId });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useConnectedServiceLegacyOperationAdmission();
+        });
+        const reply = described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' });
+        const heldReply = createDeferred<ConnectedAccountDaemonControlResponse>();
+        runControlMock.mockImplementationOnce(() => heldReply.promise);
+        let pending: Promise<void> | undefined;
+        let settled = false;
+        try {
+            await flushHookEffects();
+            const admit = hook.getCurrent();
+            pending = admit('github', 'quota_read');
+            // Observe cancellation without leaking an unhandled rejection when
+            // a faulty lifetime aborts the real transport before the assertion.
+            void pending.then(() => { settled = true; }, () => { settled = true; });
+            await vi.waitFor(() => expect(runControlMock).toHaveBeenCalledTimes(1));
+            expect(runControlMock.mock.calls[0]?.[0]).toMatchObject({ method: 'machine-a:daemon.connectedAccounts.control.command' });
+            const beforeRenders = renders;
+            const before = storage.getState();
+            const elected = before.machines['machine-a'];
+            const other = before.machines['machine-b'];
+            if (!elected || !other?.metadata) throw new Error('Expected both admitted Machine fixtures with opened metadata');
+            const nextMetadata = { ...other.metadata, happyCliVersion: '0.3.1' };
+            await act(async () => {
+                storage.getState().applyMachines([{ ...other, metadataVersion: other.metadataVersion + 1,
+                    metadata: nextMetadata }], false, { sourceServerId: serverId });
+            });
+            await flushHookEffects();
+            expect(storage.getState().machines['machine-b']).not.toBe(other);
+            expect(storage.getState().machines['machine-a']).toBe(elected);
+            expect(hook.getCurrent()).toBe(admit);
+            expect(settled).toBe(false);
+            expect(runControlMock).toHaveBeenCalledTimes(1);
+            heldReply.resolve(reply);
+            await expect(pending).resolves.toBeUndefined();
+            // The same real owner may inspect changing inventory, but its
+            // consumer only observes a changed elected target/lifetime.
+            expect(renders - beforeRenders).toBe(0);
+        } finally {
+            heldReply.resolve(reply);
+            await hook.unmount();
+            await pending?.catch(() => undefined);
+        }
     });
 
     it('keeps Account operation discovery on an owned Machine and refuses shared or unproven custody', async () => {

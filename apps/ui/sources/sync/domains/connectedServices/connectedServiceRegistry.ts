@@ -125,6 +125,7 @@ let connectedServiceRegistrySnapshot: ConnectedServiceRegistrySnapshot = {
   errorReason: null,
 };
 let connectedServiceRegistryAccountLifetime: ActiveServerAccountScopeLifetime | null = null;
+let connectedServiceRegistryDescriptorProjection: ConnectedAccountDescriptorProjectionState | null = null;
 const registryListeners = new Set<() => void>();
 
 export function subscribeConnectedServiceRegistry(listener: () => void): () => void {
@@ -228,6 +229,7 @@ export function installConnectedAccountDescriptorProjection(
   accountLifetime: ActiveServerAccountScopeLifetime | null = null,
 ): void {
   if (accountLifetime && !accountLifetime.isCurrent()) return;
+  if (connectedServiceRegistryDescriptorProjection === projection && connectedServiceRegistryAccountLifetime === accountLifetime) return;
   connectedServiceRegistrySnapshot = {
     scopeKey: projection.scopeKey,
     status: projection.status,
@@ -235,6 +237,7 @@ export function installConnectedAccountDescriptorProjection(
     errorReason: projection.errorReason,
   };
   connectedServiceRegistryAccountLifetime = accountLifetime;
+  connectedServiceRegistryDescriptorProjection = projection;
   for (const listener of registryListeners) listener();
 }
 
@@ -347,6 +350,7 @@ export function retireConnectedAccountDescriptorProjection(
     connectedServiceRegistrySnapshot.scopeKey,
   );
   connectedServiceRegistryAccountLifetime = null;
+  connectedServiceRegistryDescriptorProjection = null;
   for (const listener of registryListeners) listener();
 }
 

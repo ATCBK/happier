@@ -9,8 +9,12 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import {
     runConnectedAccountControlCommand,
 } from '@/sync/ops/connectedAccounts/connectedAccountDaemon';
-import { useAllMachines } from '@/sync/store/hooks';
-import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { getStorage } from '@/sync/domains/state/storage';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 
 function resolveQualifiedService(
     serviceId: ConnectedServiceId,
@@ -35,18 +39,28 @@ export function useConnectedAccountOperationAdmission(): (
     signal?: AbortSignal,
 ) => Promise<void> {
     const activeServer = useActiveServerSnapshot();
-    const machines = useAllMachines();
     const serverId = String(activeServer.serverId ?? '').trim();
     const activeServerGeneration = activeServer.generation;
-    const membership = useMachinePresenceMembership(serverId);
-    // This control endpoint reads the daemon Account's service/configuration
-    // state. Machine Use or Manage does not grant the caller that custody.
-    const selectableMachines = machines.filter(candidate => candidate.isShared === false
-        && membership.selectableMachineIds.includes(candidate.id));
-    const machine = selectableMachines.find(
-        (candidate) => candidate.active === true,
-    ) ?? selectableMachines[0] ?? null;
-    const machineId = machine?.id ?? '';
+    const store = getStorage();
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    // Subscribe to the elected target, not every detail of every visible Machine.
+    // The shared presence owner still delivers lease, custody and reachability changes.
+    const readMachines = React.useCallback(() => (
+        resolveVisibleMachinesForActiveServerFromState(store.getState())
+    ), [store, serverId]);
+    const readMachineId = React.useCallback((nowMs: number) => {
+        const resolveScopeId = captureServerProfileScopeResolver();
+        let firstSelectableId = '';
+        for (const candidate of readMachines()) {
+            // Account service/configuration reads require owned custody, not Machine Use or Manage.
+            if (candidate.isShared !== false || !isMachineSelectableForFleet(scope, candidate, nowMs, resolveScopeId)) continue;
+            if (candidate.active === true) return candidate.id;
+            if (!firstSelectableId) firstSelectableId = candidate.id;
+        }
+        return firstSelectableId;
+    }, [readMachines, scope]);
+    const machineId = useMachinePresenceSnapshot(readMachines, readMachineId);
     const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, machineId, serverId]);
     React.useEffect(() => {
         if (lifetime.controller.signal.aborted) lifetime.controller = new AbortController();

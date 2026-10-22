@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { storage } from '@/sync/domains/state/storageStore';
 import { createDeferredResponse, createLegacyQuotaAuthWrapper, createLegacyQuotaTestHarness, makeQuotaSnapshot,
     plainQuotaResponse, resetConnectedServiceQuotaSnapshotsTestState, stableCredentials } from './useConnectedServiceQuotaSnapshots.testkit';
 
@@ -10,6 +12,59 @@ describe('useConnectedServiceQuotaSnapshots credential authority', () => {
     const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
     beforeEach(async () => { await resetConnectedServiceQuotaSnapshotsTestState(); boundary = await createLegacyQuotaTestHarness(); });
     afterEach(async () => { standardCleanup(); await boundary.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+    it('does not render a mounted quota reader for unrelated Account profile changes', async () => {
+        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
+        const refs = [{ serviceId: 'anthropic', profileId: 'work' }] as const;
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders++;
+            return useConnectedServiceQuotaSnapshots(refs, { fetchPolicy: 'cache_only' });
+        }, { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const before = renders;
+        for (let index = 0; index < 5; index++) {
+            await act(async () => {
+                storage.setState(state => ({ profile: { ...state.profile, firstName: `name-${index}` } }));
+            });
+        }
+        expect(renders - before).toBe(0);
+        await hook.unmount();
+    });
+
+    it('does not render mounted quota summaries for unrelated Account profile changes', async () => {
+        const { useConnectedServiceQuotaSummaries } = await import('./useConnectedServiceQuotaSummaries');
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders++;
+            return useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' });
+        }, { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const before = renders;
+        for (let index = 0; index < 5; index++) {
+            await act(async () => storage.setState(state => ({ profile: { ...state.profile, firstName: `summary-${index}` } })));
+        }
+        expect(renders - before).toBe(0);
+        await hook.unmount();
+    });
+
+    it('observes the active pooled account and its replacement through the narrowed Profile subscription', async () => {
+        const { useConnectedServiceQuotaSummaries } = await import('./useConnectedServiceQuotaSummaries');
+        const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+        const group = QualifiedConnectedAccountGroupV4Schema.parse({
+            v: 1, ref: { service, groupId: 'work' }, displayName: 'Work', incarnation: 'work:1',
+            generation: 1, runtimeStateRevision: 1, policy: {}, activeConnectedAccountId: 'personal',
+            state: {}, members: [], createdAt: 0, updatedAt: 0,
+        });
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountGroupsV4: [group] } }));
+        const hook = await renderHook(() => useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' }), { wrapper: Wrapper });
+        expect(hook.getCurrent().inUseAccountKeys).toEqual(new Set(['happier.agent.codex%2Fopenai-codex/personal']));
+        await act(async () => storage.setState(state => ({ profile: { ...state.profile,
+            connectedAccountGroupsV4: [{ ...group, activeConnectedAccountId: 'work' }],
+        } })));
+        expect(hook.getCurrent().inUseAccountKeys).toEqual(new Set(['happier.agent.codex%2Fopenai-codex/work']));
+        await hook.unmount();
+    });
 
     it.each(['token', 'secret'] as const)('refetches and rejects an old in-flight read when %s changes', async field => {
         const held = createDeferredResponse();

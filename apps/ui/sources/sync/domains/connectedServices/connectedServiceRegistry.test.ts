@@ -11,6 +11,8 @@ import {
   getConnectedServiceRegistrySnapshot,
   getAccountConnectedServiceConfigurationMode,
   installConnectedAccountDescriptorProjection,
+  subscribeConnectedServiceRegistry,
+  retireConnectedAccountDescriptorProjection,
   canExecuteConnectedServiceAction,
   getConnectedServiceSetupPresentation,
   isConnectedServiceUsageCapable,
@@ -40,6 +42,29 @@ function manualAuthentication(fields: Array<Readonly<{
 }
 
 describe('connectedServiceRegistry', () => {
+  it('keeps a repeated descriptor publication stable while adopting replacement Account lifetimes', () => {
+    const projection = createConnectedAccountDescriptorProjectionLoadingState('publication-home');
+    const lifetime = { scope: { serverId: 'publication-home', accountId: 'account-a' }, isCurrent: () => true,
+      onRetire: () => ({ dispose() {} }) };
+    installConnectedAccountDescriptorProjection(projection, lifetime);
+    const snapshot = getConnectedServiceRegistrySnapshot();
+    const notify = vi.fn();
+    const stop = subscribeConnectedServiceRegistry(notify);
+    try {
+      installConnectedAccountDescriptorProjection(projection, lifetime);
+      expect(getConnectedServiceRegistrySnapshot()).toBe(snapshot);
+      expect(notify).not.toHaveBeenCalled();
+      installConnectedAccountDescriptorProjection(projection, { ...lifetime });
+      expect(notify).toHaveBeenCalledTimes(1);
+      installConnectedAccountDescriptorProjection({ ...projection, status: 'stale', errorReason: 'transport' }, lifetime);
+      expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'stale', errorReason: 'transport' });
+      expect(notify).toHaveBeenCalledTimes(2);
+      retireConnectedAccountDescriptorProjection(lifetime);
+      installConnectedAccountDescriptorProjection(projection);
+      expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ scopeKey: projection.scopeKey, status: 'loading' });
+      expect(notify).toHaveBeenCalledTimes(4);
+    } finally { stop(); }
+  });
   it('does not extend the released scalar service contract from a generated-only compatibility key', () => {
     expect(getGeneratedLegacyConnectedServiceRegistryFallback({
       pluginId: 'happier.agent.antigravity', localId: 'antigravity-account',

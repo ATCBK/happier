@@ -16,6 +16,7 @@ import {
     resolveConnectedServiceSettingsErrorMessage,
 } from '@/components/settings/connectedServices/connectedServiceSettingsErrors';
 import { getUsageProjectionNextReadAtMs, observeUsageProjection } from '@/sync/api/account/usageQueryInvalidation';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import {
     readQualifiedConnectedAccountQuota,
@@ -61,6 +62,7 @@ type InternalEntry = {
     observation: ReturnType<typeof observeUsageProjection> | null;
     pollContext: QualifiedQuotaSnapshotStoreContext | null;
     view: QualifiedQuotaSnapshotStoreEntry;
+    publishedAtMs: number;
 };
 
 const EMPTY_VIEW: QualifiedQuotaSnapshotStoreEntry = Object.freeze({
@@ -162,6 +164,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         observation: null,
         pollContext: null,
         view: EMPTY_VIEW,
+        publishedAtMs: Date.now(),
     };
     entries.set(key, created);
     ensureProfileChanges();
@@ -169,7 +172,9 @@ function getOrCreateEntry(key: string): InternalEntry {
 }
 
 function publish(key: string, entry: InternalEntry): void {
-    entry.view = Object.freeze({
+    const nowMs = Date.now();
+    if (sameStrictJsonValue(entry.snapshot, entry.view.snapshot)) entry.snapshot = entry.view.snapshot;
+    const next = {
         snapshot: entry.snapshot,
         usageRecordId: entry.usageRecordId,
         supported: entry.supported,
@@ -177,7 +182,14 @@ function publish(key: string, entry: InternalEntry): void {
         refreshing: entry.refreshing || entry.producerRefreshPending,
         error: entry.error,
         read: entry.loadAttempted && !entry.loading,
-    });
+    };
+    // The observer also publishes the time-derived stale transition without a GET.
+    const wasStale = Boolean(entry.view.snapshot
+        && entry.publishedAtMs > entry.view.snapshot.fetchedAt + entry.view.snapshot.staleAfterMs);
+    const isStale = Boolean(entry.snapshot && nowMs > entry.snapshot.fetchedAt + entry.snapshot.staleAfterMs);
+    if (entry.view.snapshot === next.snapshot && sameStrictJsonValue(entry.view, next) && wasStale === isStale) return;
+    entry.view = Object.freeze(next);
+    entry.publishedAtMs = nowMs;
     const listeners = listenersByKey.get(key);
     if (!listeners) return;
     for (const listener of listeners) listener();
@@ -203,7 +215,7 @@ function reconcilePolling(key: string, initialReadCompleted = false): void {
         read: () => { entry.loadAttempted = true; return runLoad(key, context); },
         busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
         nextReadAtMs: () => entry.nextFetchAtMs,
-        presentationDeadlineMs: () => entry.snapshot ? entry.snapshot.fetchedAt + entry.snapshot.staleAfterMs : undefined,
+        presentationDeadlineMs: () => entry.snapshot ? entry.snapshot.fetchedAt + entry.snapshot.staleAfterMs + 1 : undefined,
         publish: () => publish(key, entry),
     });
     entry.observation.reconcile();
