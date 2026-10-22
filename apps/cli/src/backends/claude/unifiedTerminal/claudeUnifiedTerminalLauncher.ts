@@ -718,7 +718,7 @@ export async function claudeUnifiedTerminalLauncher(
       return;
     }
     recoveryProbeInconclusiveEscalated = true;
-    logger.warn('[unified]: terminal host recovery probe inconclusive repeatedly; escalating to a durable attention state without disposing (no positive death evidence)', {
+    logger.warnFile('[unified]: terminal host recovery probe inconclusive repeatedly; escalating to a durable attention state without disposing (no positive death evidence)', {
       hostKind: error.hostKind,
       reason: error.reason,
       consecutiveInconclusiveProbes: consecutiveRecoveryProbeInconclusive,
