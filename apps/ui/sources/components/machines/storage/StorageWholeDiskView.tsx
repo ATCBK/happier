@@ -580,6 +580,8 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
           <DiskPath
             volume={volume}
             root={root}
+            // A folder scan's first page may still be on its way: the path already names the folder it reads.
+            targetPath={'folderPath' in scan.target ? scan.target.folderPath : null}
             homeDir={facts.homeDir}
             reading={reading}
             onOpen={open}
@@ -771,6 +773,8 @@ function DiskPath(
   props: Readonly<{
     volume: StorageVolume | null;
     root: DiskNodeV1 | null;
+    /** The folder a folder scan reads, named in the path until its page names the open level. */
+    targetPath: string | null;
     homeDir: string | undefined;
     /** The level is still being read: its size and count so far are not a result, so no figures yet. */
     reading: boolean;
@@ -784,11 +788,12 @@ function DiskPath(
     const items = [
       { key: '', label: name, nodeId: undefined as string | undefined },
     ];
-    if (props.root) {
-      const rest = props.root.nodeId.startsWith(mount)
-        ? props.root.nodeId.slice(mount.length)
-        : props.root.nodeId;
-      const separator = props.root.nodeId.includes('\\') ? '\\' : '/';
+    const levelPath = props.root?.nodeId ?? props.targetPath;
+    if (levelPath) {
+      const rest = levelPath.startsWith(mount)
+        ? levelPath.slice(mount.length)
+        : levelPath;
+      const separator = levelPath.includes('\\') ? '\\' : '/';
       let acc = mount.replace(/[\\/]+$/u, '');
       for (const part of rest.split(/[\\/]/u).filter(Boolean)) {
         acc = `${acc}${separator}${part}`;
@@ -796,7 +801,7 @@ function DiskPath(
       }
     }
     return items;
-  }, [mount, name, props.root]);
+  }, [mount, name, props.root, props.targetPath]);
   const last = crumbs.length - 1;
   const meta = props.root
     ? props.reading
@@ -805,7 +810,7 @@ function DiskPath(
         size: formatMachineBytes(props.root.size.allocatedBytes, 'storage'),
         count: props.root.childCount,
       })
-    : props.volume
+    : props.volume && !props.targetPath
       ? t('machineStorage.disk.volumeMeta', {
           used: formatMachineBytes(
             props.volume.totalBytes - props.volume.freeBytes,
@@ -1268,7 +1273,9 @@ function DiskList(
       }
       // The phone says its lower bound once, in the "≥" figure at the row's right; the table keeps the words.
       if (row.node.flags.atLeast && !props.compact) parts.push(t('machineStorage.disk.atLeast'));
-      if (row.node.flags.inUse) parts.push(t('machineStorage.disk.inUse'));
+      // A Keep row whose reason is "in use" already says so in its verdict.
+      if (row.node.flags.inUse && !(row.mark === 'protected' && row.node.reason?.code === 'in_use'))
+        parts.push(t('machineStorage.disk.inUse'));
       if (props.files !== 'folders')
         parts.push(
           t('machineStorage.page.changed', {
