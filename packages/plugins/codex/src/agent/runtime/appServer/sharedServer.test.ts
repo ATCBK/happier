@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -11,7 +11,15 @@ import { createCodexSharedAppServer } from './sharedServer.js';
 
 type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 
+const osBoundary = vi.hoisted(() => ({ home: '' }));
+vi.mock('node:os', async importOriginal => {
+  const os = await importOriginal<typeof import('node:os')>();
+  return { ...os, userInfo: () => ({ ...os.userInfo(), homedir: osBoundary.home }) };
+});
+
 describe('createCodexSharedAppServer', () => {
+  beforeEach(async () => { osBoundary.home = await mkdtemp(join(tmpdir(), 'codex-startup-home-')); });
+  afterEach(async () => { await rm(osBoundary.home, { recursive: true, force: true }); });
   it.skipIf(process.platform === 'win32').each(['ready', 'abort', 'exit'] as const)(
     'observes native startup %s without imposing the RPC budget on backfill', async outcome => {
     const directory = await mkdtemp(join('/tmp', 'codex-backfill-'));
@@ -95,9 +103,13 @@ describe('createCodexSharedAppServer', () => {
   ] as const)('%s', async (_name, firstInitializeFails, firstCleanupFails) => {
     const directory = await mkdtemp(join(tmpdir(), 'codex-shared-startup-'));
     const guard = join(directory, 'native-startup');
+    const sqliteHome = join(directory, 'sqlite');
+    const processEnv = { CODEX_HOME: join(directory, 'auth'), CODEX_SQLITE_HOME: sqliteHome };
     const nativeStartupLock = join(userInfo().homedir, '.happier-codex-native-startup.lock');
     const cleanupWasExclusive: boolean[] = [];
     let spawnCount = 0;
+    let releaseInitialization: () => void = () => undefined;
+    const initializationReady = new Promise<void>(resolve => { releaseInitialization = resolve; });
     const nativeLaunch = Object.freeze({}) as AgentNativeLaunchQualifier;
     const spawnOptions: Parameters<ExecService['spawn']>[1][] = [];
     const probeOptions: Parameters<ExecService['run']>[1][] = [];
@@ -120,6 +132,7 @@ describe('createCodexSharedAppServer', () => {
         const startupOwner = readFileSync(nativeStartupLock, 'utf8');
         await mkdir(guard);
         const args = request.args ?? [];
+        if (process.platform === 'linux') expect(args).toContain(`sqlite_home=${JSON.stringify(sqliteHome)}`);
         const endpoint = args[args.indexOf('--listen') + 1];
         if (!endpoint?.startsWith('unix://')) throw new Error('Expected native Unix endpoint');
         const socketPath = endpoint.slice('unix://'.length);
@@ -129,7 +142,7 @@ describe('createCodexSharedAppServer', () => {
         sockets.on('connection', socket => socket.on('message', async data => {
           const message = JSON.parse(String(data)) as { id?: number; method?: string };
           if (message.method === 'initialize') {
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await initializationReady;
             if (shouldFailInitialize) {
               socket.send(JSON.stringify({ id: message.id, error: { code: -32000, message: 'fixture initialize failed' } }));
               return;
@@ -164,10 +177,10 @@ describe('createCodexSharedAppServer', () => {
     } as unknown as ExecService; // A deliberately narrow fixture for the host-owned process boundary.
     const servers: NonNullable<Awaited<ReturnType<typeof createCodexSharedAppServer>>>[] = [];
     const clients: Awaited<ReturnType<(typeof servers)[number]['createClient']>>[] = [];
-    try {
-      const outcomes = await Promise.allSettled([0, 1].map(async index => {
+    const debug = vi.fn();
+    const opening = Promise.allSettled([0, 1].map(async index => {
         const server = await createCodexSharedAppServer({
-          exec, processEnv: {}, platform: 'linux', nativeLaunch,
+          exec, processEnv, platform: 'linux', nativeLaunch, logger: { debug },
           dependencies: {
             createRuntimeDirectory: async () => await mkdtemp(join('/tmp', `c-${index}-`)),
             removeRuntimeDirectory: async path => await rm(path, { recursive: true, force: true }),
@@ -175,10 +188,14 @@ describe('createCodexSharedAppServer', () => {
         });
         if (!server) throw new Error('Expected supported shared control');
         servers.push(server);
-        const client = await server.createClient({ cwd: directory, processEnv: {}, configOverrides: [], disableUserMcpServers: false });
+        const client = await server.createClient({ cwd: directory, processEnv, configOverrides: [], disableUserMcpServers: false });
         clients.push(client);
         return await client.request('test/ping');
-      }));
+    }));
+    try {
+      await vi.waitFor(() => expect(debug).toHaveBeenCalledTimes(1));
+      releaseInitialization();
+      const outcomes = await opening;
       expect(outcomes).toEqual(expect.arrayContaining([
         firstInitializeFails ? { status: 'rejected', reason: firstCleanupFails
           ? expect.objectContaining({ name: 'AggregateError', errors: [expect.objectContaining({ code: -32000 }), expect.objectContaining({ message: 'fixture native disposal failed' })] })
@@ -188,7 +205,13 @@ describe('createCodexSharedAppServer', () => {
       if (firstInitializeFails) expect(cleanupWasExclusive[0]).toBe(true);
       expect(spawnOptions).toEqual([{ nativeLaunch }, { nativeLaunch }]);
       expect(probeOptions.every(options => options === undefined)).toBe(true);
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(debug).toHaveBeenCalledWith(expect.any(String), {
+        pid: process.pid, heldForMs: expect.any(Number), waitedForMs: expect.any(Number),
+      });
     } finally {
+      releaseInitialization();
+      await opening;
       await Promise.all(clients.map(client => client.dispose()));
       await Promise.all(servers.map(server => server.dispose()));
       await rm(directory, { recursive: true, force: true });

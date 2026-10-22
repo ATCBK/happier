@@ -104,6 +104,8 @@ export async function withExclusiveFileLock<TResult>(
         lockPath: string;
         timeoutMs: number;
         signal?: AbortSignal;
+        /** Called once when admission observes contention; diagnostics cannot interrupt admission. */
+        onWait?: (info: Readonly<{ pid: number | null; heldForMs: number | null; waitedForMs: number }>) => void;
     }>,
     effect: () => Promise<TResult>,
 ): Promise<TResult> {
@@ -111,6 +113,7 @@ export async function withExclusiveFileLock<TResult>(
         lockPath: options.lockPath,
         timeoutMs: options.timeoutMs,
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onWait ? { onWait: options.onWait } : {}),
         staleAfterMs: 60_000,
         errorCode: 'exclusive_file_lock_timeout',
     }, effect);

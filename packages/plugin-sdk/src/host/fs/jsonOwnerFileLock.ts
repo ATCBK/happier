@@ -27,6 +27,7 @@ type JsonOwnerFileLockOptions = Readonly<{
    * It never interrupts an effect that already holds the lock.
    */
   signal?: AbortSignal;
+  onWait?: (info: Readonly<{ pid: number | null; heldForMs: number | null; waitedForMs: number }>) => void;
   pollIntervalMs?: number;
   readQuarantinedRaw?: (path: string) => Promise<string>;
   readProcessStartedAtMs?: (pid: number) => Promise<number | null>;
@@ -642,6 +643,7 @@ async function withPredecessorCompatibleDirectoryLock<TResult>(
   const predecessorOwner = options.predecessorCompatibleDirectoryOwner;
   if (!predecessorOwner) throw new Error('predecessor-compatible owner is required');
   const startedAtMs = Date.now();
+  const reportWait = createWaitReporter(options, startedAtMs);
   const pollIntervalMs = Math.max(1, Math.trunc(options.pollIntervalMs ?? 10));
   for (;;) {
     throwIfLockAdmissionCancelled(options.signal);
@@ -705,6 +707,7 @@ async function withPredecessorCompatibleDirectoryLock<TResult>(
       }
       if (!(await isOccupiedPathError(error, options.lockPath))) throw error;
       if (Date.now() - startedAtMs >= options.timeoutMs) throw new Error(options.errorCode);
+      reportWait(currentFile ? parseCurrentOwner(currentFile.raw) : null);
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   }
@@ -715,6 +718,25 @@ function throwIfLockAdmissionCancelled(signal: AbortSignal | undefined): void {
   const error = new Error('File-lock admission was cancelled');
   error.name = 'AbortError';
   throw error;
+}
+
+function createWaitReporter(options: JsonOwnerFileLockOptions, startedAtMs: number) {
+  let reported = false;
+  return (owner: JsonOwnerFileLockRecord | null): void => {
+    throwIfLockAdmissionCancelled(options.signal);
+    if (reported || !options.onWait) return;
+    reported = true;
+    const nowMs = Date.now();
+    try {
+      options.onWait({
+        pid: owner?.pid ?? null,
+        heldForMs: owner ? Math.max(0, nowMs - owner.createdAtMs) : null,
+        waitedForMs: Math.max(0, nowMs - startedAtMs),
+      });
+    } catch {
+      // A diagnostic sink must not alter lock ownership or admission.
+    }
+  };
 }
 
 function serializeOwner(nowMs: number, observedStartMs: number): string {
@@ -734,6 +756,7 @@ export async function withJsonOwnerFileLock<TResult>(
   effect: () => Promise<TResult>,
 ): Promise<TResult> {
   const startedAtMs = Date.now();
+  const reportWait = createWaitReporter(options, startedAtMs);
   const pollIntervalMs = Math.max(1, Math.trunc(options.pollIntervalMs ?? 10));
   const readQuarantinedRaw = options.readQuarantinedRaw ?? (async (path) => await readFile(path, 'utf8'));
   await mkdir(dirname(options.lockPath), { recursive: true });
@@ -822,6 +845,8 @@ export async function withJsonOwnerFileLock<TResult>(
       )) {
         const reclaim = await reclaimJsonOwnerFileLockSnapshot(options.lockPath, observed.raw, readQuarantinedRaw);
         if (reclaim === 'ownership_unknown') throw new Error(`${options.errorCode}_compromised`);
+      } else {
+        reportWait(observed ? parseCurrentOwner(observed.raw) : null);
       }
       if (Date.now() - startedAtMs >= options.timeoutMs) throw new Error(options.errorCode);
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

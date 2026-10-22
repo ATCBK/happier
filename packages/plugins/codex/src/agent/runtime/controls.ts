@@ -34,6 +34,7 @@ async function withControlClient<T>(
 ): Promise<T> {
   const client = await createCodexNativeAppServerClient({
     exec: context.services.exec,
+    logger: context.services.logger,
     cwd: context.session.cwd,
     processEnv: {},
     signal: context.signal,

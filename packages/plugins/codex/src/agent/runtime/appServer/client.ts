@@ -1,4 +1,4 @@
-import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError, type JsonValue, type LoggerService } from '@happier-dev/plugin-sdk';
 import type {
     ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 import type {
@@ -382,6 +382,7 @@ function buildNativeCodexAppServerClientSpec(params: Readonly<{
 
 type CodexNativeAppServerClientParams = Readonly<{
     exec: ExecService;
+    logger?: Pick<LoggerService, 'debug'>;
     nativeLaunch?: AgentNativeLaunchQualifier;
     processEnv?: CodexAppServerEnv;
     cwd?: string;
@@ -398,25 +399,40 @@ export async function createCodexNativeAppServerClient(params: CodexNativeAppSer
     if (params.transport && params.transport.kind !== 'stdio') {
         return await createUnlockedCodexNativeAppServerClient(params);
     }
+    const env = params.processEnv ?? process.env;
+    const resolvedSystemTool = await params.exec.systemTools.resolve({
+        toolId: 'codex-cli', purpose: 'Launch the Codex native app-server',
+    });
+    const readVersion = async () => await params.exec.run({
+        executable: resolvedSystemTool.executable,
+        args: ['--version'], cwd: { root: 'workspace', relativePath: '' },
+        env: buildCodexAppServerEnv(env),
+        timeoutMs: readCodexAppServerRpcTimeoutMs(env),
+    }, params.signal ? { signal: params.signal } : undefined).then(result =>
+        processExitedSuccessfully(result) && !result.stdoutTruncated
+            ? new TextDecoder().decode(result.stdout) : '',
+    ).catch(error => { if (params.signal?.aborted) throw error; return ''; });
     return await withCodexNativeStartupLock(
-        async () => await createUnlockedCodexNativeAppServerClient(params),
+        async configOverrides => await createUnlockedCodexNativeAppServerClient({ ...params, configOverrides }, resolvedSystemTool.executable),
         params.initializeRequestOptions?.signal ?? params.signal,
+        params.logger,
+        { processEnv: env, readVersion, configOverrides: params.configOverrides, cwd: params.cwd },
     );
 }
 
-async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppServerClientParams): Promise<DisposableCodexAppServerClient> {
+async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppServerClientParams, executable?: ManagedExecutableRef): Promise<DisposableCodexAppServerClient> {
     const env = params.processEnv ?? process.env;
-    const resolvedSystemTool = await params.exec.systemTools.resolve({
+    const resolvedExecutable = executable ?? (await params.exec.systemTools.resolve({
         toolId: 'codex-cli',
         purpose: 'Launch the Codex native app-server',
-    });
+    })).executable;
     const realtimeConversationAdvertised = params.transport?.kind === 'unixWebSocket'
         ? params.transport.realtimeConversationAdvertised
         : params.transport?.kind === 'daemonProxy'
           ? false
           : await probeCodexRealtimeConversationFeature({
             exec: params.exec,
-            executable: resolvedSystemTool.executable,
+            executable: resolvedExecutable,
             env,
             ...(params.signal ? { signal: params.signal } : {}),
         });
@@ -433,7 +449,7 @@ async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppSe
                 ...(params.signal ? { signal: params.signal } : {}),
             })
             : await params.exec.clients.spawn(buildNativeCodexAppServerClientSpec({
-                executable: resolvedSystemTool.executable,
+                executable: resolvedExecutable,
                 env,
                 configOverrides: params.configOverrides,
                 disableUserMcpServers: params.disableUserMcpServers,
@@ -491,7 +507,7 @@ async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppSe
                 throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'Codex has enabled MCP servers outside the host-selected recipe.' });
             }
             const result = await params.exec.run({
-                executable: resolvedSystemTool.executable,
+                executable: resolvedExecutable,
                 args: ['debug', 'models'],
                 cwd: { root: 'workspace', relativePath: '' },
                 env: buildCodexAppServerEnv(env),

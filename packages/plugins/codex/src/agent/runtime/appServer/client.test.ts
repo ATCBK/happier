@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
@@ -22,6 +22,14 @@ import { createCodexAppServerRealtimeConversation } from './realtime';
 import { PLUGIN_MANIFEST } from '../../../manifest.js';
 
 type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
+const osBoundary = vi.hoisted(() => ({ home: '' }));
+vi.mock('node:os', async importOriginal => {
+    const os = await importOriginal<typeof import('node:os')>();
+    return { ...os, userInfo: () => ({ ...os.userInfo(), homedir: osBoundary.home }) };
+});
+beforeEach(async () => { osBoundary.home = await mkdtemp(join(tmpdir(), 'codex-client-startup-home-')); });
+afterEach(async () => { await rm(osBoundary.home, { recursive: true, force: true }); });
 
 function processResult(stdout: string, options?: Readonly<{
     exitCode?: number;
@@ -119,6 +127,40 @@ function createCapturingExec(
 }
 
 describe('createCodexAppServerClient', () => {
+    it.skipIf(process.platform !== 'linux')('pins projected SQLite in the real stdio launch and admits both warm clients before either initializes', async () => {
+        const sqliteHome = join(osBoundary.home, 'shared-sqlite');
+        const processEnv = { CODEX_HOME: join(osBoundary.home, 'auth'), CODEX_SQLITE_HOME: sqliteHome };
+        await mkdir(sqliteHome);
+        const captures = [0, 1, 2].map(() => createCapturingExec());
+        for (const capture of captures) {
+            vi.spyOn(capture.exec, 'run').mockImplementation(async request => processResult(request.args[0] === '--version'
+                ? 'codex-cli 0.162.1\n' : ''));
+        }
+        await writeFile(join(sqliteHome, 'state_5.sqlite'), 'SQLite format 3\0');
+        const first = await createCodexNativeAppServerClient({ exec: captures[0]!.exec, processEnv, cwd: osBoundary.home });
+        await first.dispose();
+        let release = () => {};
+        const initialized = new Promise<void>(resolve => { release = resolve; });
+        const entered: number[] = [];
+        for (const [index, capture] of captures.slice(1).entries()) {
+            vi.spyOn(capture.exec.clients, 'spawn').mockImplementation(async (spec) => {
+                expect(spec.launch.args).toContain(`sqlite_home=${JSON.stringify(sqliteHome)}`);
+                const handle = createCapturingExec({ async request(method) {
+                    if (method === 'initialize') { entered.push(index); await initialized; }
+                    return { ok: true };
+                } });
+                return await handle.exec.clients.spawn(spec);
+            });
+        }
+        const opening = Promise.allSettled(captures.slice(1).map(capture => createCodexNativeAppServerClient({ exec: capture.exec, processEnv, cwd: osBoundary.home })));
+        try { await vi.waitFor(() => expect(entered).toHaveLength(2)); }
+        finally {
+            release();
+            const results = await opening;
+            await Promise.all(results.map(async result => { if (result.status === 'fulfilled') await result.value.dispose(); }));
+            expect(results.every(result => result.status === 'fulfilled')).toBe(true);
+        }
+    });
     it('accepts confinement on the exact runtime selected by the managed install recipe', async () => {
         const recipe = PLUGIN_MANIFEST.contributes.agents[0]?.cli.install.managed;
         expect(recipe).toMatchObject({ kind: 'github_release_binary', releaseTag: 'rust-v0.162.1' });
@@ -195,10 +237,12 @@ describe('createCodexAppServerClient', () => {
         // Exec is the host-owned process/protocol boundary. Simulate the native
         // SQLite startup exclusion there, retaining the plugin's real admission.
         let nativeInitializing = false;
+        let releaseInitialization: () => void = () => undefined;
+        const initializationReady = new Promise<void>(resolve => { releaseInitialization = resolve; });
         const captures = [0, 1].map(() => createCapturingExec({
             async request(method) {
                 if (method === 'initialize') {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await initializationReady;
                     nativeInitializing = false;
                 }
                 return { ok: true };
@@ -213,17 +257,27 @@ describe('createCodexAppServerClient', () => {
             });
         }
         const clients: Awaited<ReturnType<typeof createCodexNativeAppServerClient>>[] = [];
+        const debug = vi.fn();
+        const opening = Promise.allSettled(captures.map(async capture => {
+            const client = await createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {}, logger: { debug } });
+            clients.push(client);
+            return await client.request('test/ping');
+        }));
         try {
-            const outcomes = await Promise.allSettled(captures.map(async capture => {
-                const client = await createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {} });
-                clients.push(client);
-                return await client.request('test/ping');
-            }));
+            await vi.waitFor(() => expect(debug).toHaveBeenCalledTimes(1));
+            releaseInitialization();
+            const outcomes = await opening;
             expect(outcomes).toEqual([
                 { status: 'fulfilled', value: { ok: true } },
                 { status: 'fulfilled', value: { ok: true } },
             ]);
+            expect(debug).toHaveBeenCalledTimes(1);
+            expect(debug).toHaveBeenCalledWith(expect.any(String), {
+                pid: process.pid, heldForMs: expect.any(Number), waitedForMs: expect.any(Number),
+            });
         } finally {
+            releaseInitialization();
+            await opening;
             await Promise.all(clients.map(client => client.dispose()));
         }
     });
@@ -341,7 +395,6 @@ describe('createCodexAppServerClient', () => {
             toolId: 'codex-cli',
             purpose: 'Launch the Codex native app-server',
         });
-        expect(run).toHaveBeenCalledOnce();
         expect(spawn).toHaveBeenCalledOnce();
     });
 
@@ -611,7 +664,7 @@ describe('createCodexAppServerClient', () => {
         }));
     });
 
-    it('enables an advertised realtime feature without probing an exact Codex CLI version', async () => {
+    it('enables an advertised realtime feature independently of startup version probing', async () => {
         const capture = createCapturingExec(
             {},
             processResult('realtime_conversation                under development  false\n'),
@@ -631,7 +684,6 @@ describe('createCodexAppServerClient', () => {
             env: {},
             timeoutMs: 60_000,
         });
-        expect(capture.exec.run).toHaveBeenCalledTimes(1);
         expect(capture.specs[0]?.launch.args).toEqual([
             'app-server',
             '--listen',
@@ -708,7 +760,6 @@ describe('createCodexAppServerClient', () => {
         });
         await client.dispose();
 
-        expect(capture.exec.run).toHaveBeenCalledTimes(1);
         expect(capture.specs[0]?.launch.args).toEqual([
             'app-server',
             '--listen',

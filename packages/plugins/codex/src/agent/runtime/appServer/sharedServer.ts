@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { constants } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
+import type { LoggerService } from '@happier-dev/plugin-sdk';
 
 import type { ExecService, PluginProcessHandle, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 
@@ -82,7 +83,10 @@ async function readCodexVersion(
     maxStderrBytes: 4_096,
     timeoutMs: readCodexAppServerStartupRpcTimeoutMs(env),
   }, signal ? { signal } : undefined);
-  return new TextDecoder().decode(result.stdout);
+  return result.termination.requestedBy.kind === 'none'
+    && result.termination.observed.kind === 'exit' && result.termination.observed.exitCode === 0
+    && !result.stdoutTruncated && !result.stderrTruncated
+    ? new TextDecoder().decode(result.stdout) : '';
 }
 
 function supportsSharedControl(versionOutput: string, platform: NodeJS.Platform): boolean {
@@ -139,6 +143,7 @@ function defaultDependencies(): Dependencies {
 
 export async function createCodexSharedAppServer(params: Readonly<{
   exec: ExecService;
+  logger?: Pick<LoggerService, 'debug'>;
   nativeLaunch?: AgentNativeLaunchQualifier;
   processEnv: CodexAppServerEnv;
   platform?: NodeJS.Platform;
@@ -183,7 +188,7 @@ export async function createCodexSharedAppServer(params: Readonly<{
     toolRestrictionRequired?: boolean;
     toolRestrictionAllowedMcpServerKeys?: readonly string[];
   }>): Promise<void> => {
-    startPromise ??= withCodexNativeStartupLock(async () => {
+    startPromise ??= withCodexNativeStartupLock(async configOverrides => {
       try {
         const tool = await params.exec.systemTools.resolve({
           toolId: 'codex-cli',
@@ -200,7 +205,7 @@ export async function createCodexSharedAppServer(params: Readonly<{
           executable: tool.executable,
           args: buildCodexAppServerArgs({
             env: request.processEnv,
-            configOverrides: request.configOverrides,
+            configOverrides,
             disableUserMcpServers: request.disableUserMcpServers,
             enableRealtimeConversation: realtimeConversationAdvertised,
             listenUrl: endpoint,
@@ -242,7 +247,7 @@ export async function createCodexSharedAppServer(params: Readonly<{
         }
         throw error;
       }
-    }, params.signal);
+    }, params.signal, params.logger, { processEnv: request.processEnv, configOverrides: request.configOverrides, cwd: request.cwd, versionOutput });
     try {
       await startPromise;
     } catch (error) {

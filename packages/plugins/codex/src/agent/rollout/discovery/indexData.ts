@@ -203,7 +203,9 @@ async function readFirstLineFromHandle(
     bounds: CodexExternalSessionInvocationBounds,
 ): Promise<string | null> {
     const maxProbeBytes = 64 * 1024;
-    const chunkBytes = 4 * 1024;
+    // Use the existing probe allowance in one I/O. Long native instruction
+    // headers otherwise multiply filesystem round trips across the home scan.
+    const chunkBytes = maxProbeBytes;
     const decoder = new StringDecoder('utf8');
     const chunk = Buffer.allocUnsafe(chunkBytes);
     let readOffset = 0;

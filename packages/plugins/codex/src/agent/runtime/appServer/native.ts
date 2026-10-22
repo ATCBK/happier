@@ -216,6 +216,7 @@ export function createCodexNativeAppServerRuntimeHost(params: Readonly<{
       ? await params.sharedAppServer.createClient(clientRequest)
       : await createCodexNativeAppServerClient({
           exec: params.context.services.exec,
+          logger: params.context.services.logger,
           nativeLaunch: params.context.session.services.nativeLaunch,
           cwd: clientRequest.cwd,
           processEnv: clientRequest.processEnv,
@@ -317,6 +318,7 @@ export function createCodexNativeAppServerExecutionRunRuntimeHost(params: Readon
       ? await params.sharedAppServer.createClient(clientRequest)
       : await createCodexNativeAppServerClient({
           exec: params.context.services.exec,
+          logger: params.context.services.logger,
           nativeLaunch: params.context.executionRun.services.nativeLaunch,
           cwd: clientRequest.cwd,
           processEnv: clientRequest.processEnv,
@@ -1008,6 +1010,7 @@ export async function openCodexNativeAppServerSession(
   if (request.kind === 'fork') {
     const forkClient = await createCodexNativeAppServerClient({
       exec: context.services.exec,
+      logger: context.services.logger,
       nativeLaunch: context.session.services.nativeLaunch,
       cwd: request.cwd,
       processEnv,
@@ -1037,6 +1040,7 @@ export async function openCodexNativeAppServerSession(
     ? null
     : await createCodexSharedAppServer({
         exec: context.services.exec,
+        logger: context.services.logger,
         nativeLaunch: context.session.services.nativeLaunch,
         processEnv,
         signal: context.signal,
@@ -1185,6 +1189,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
     }
     const forkClient = await createCodexNativeAppServerClient({
       exec: context.services.exec,
+      logger: context.services.logger,
       cwd: request.cwd,
       processEnv,
       signal: context.signal,
@@ -1210,6 +1215,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
   const sharedAppServer = await createCodexSharedAppServer({
     nativeLaunch: context.executionRun.services.nativeLaunch,
     exec: context.services.exec,
+    logger: context.services.logger,
     processEnv,
     signal: context.signal,
   });

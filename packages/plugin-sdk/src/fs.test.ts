@@ -4,13 +4,15 @@ import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 type FsModule = Readonly<{
   withExclusiveFileLock<TResult>(
     input: Readonly<{
       lockPath: string;
       timeoutMs: number;
+      signal?: AbortSignal;
+      onWait?: (info: Readonly<{ pid: number | null; heldForMs: number | null; waitedForMs: number }>) => void;
     }>,
     effect: () => Promise<TResult>,
   ): Promise<TResult>;
@@ -120,6 +122,7 @@ describe('fs helpers', () => {
     ) as { exports?: Record<string, unknown> };
 
     expect(packageJson.exports).toHaveProperty('./fs', {
+      'happier-source': './src/fs/index.ts',
       types: './dist/fs/index.d.ts',
       default: './dist/fs/index.js',
     });
@@ -217,6 +220,53 @@ describe('fs helpers', () => {
       mode: 0o600,
     })).toBe(false);
     expect(await readFile(path, 'utf8')).toBe('export default {}\n');
+  });
+
+  it('reports one real lock wait with holder age and preserves cancellation', async () => {
+    const fs = await loadFs();
+    const root = await mkdtemp(join(tmpdir(), 'happier-plugin-sdk-lock-wait-'));
+    const lockPath = join(root, 'startup.lock');
+    const heldAtMs = Date.now() - 60_000;
+    const owner = JSON.stringify({ pid: process.pid, ownerToken: 'held-owner',
+      processStartedAtMs: heldAtMs, createdAtMs: heldAtMs, updatedAtMs: heldAtMs });
+    await writeFile(lockPath, owner);
+    const controller = new AbortController();
+    const onWait = vi.fn((_info: Readonly<{ pid: number | null; heldForMs: number | null; waitedForMs: number }>) => {
+      throw new Error('diagnostic sink unavailable');
+    });
+    let entered = false;
+    const waiting = fs.withExclusiveFileLock({ lockPath, timeoutMs: Infinity,
+      signal: controller.signal, onWait }, async () => { entered = true; });
+    const cancelled = expect(waiting).rejects.toMatchObject({ name: 'AbortError' });
+    try {
+      await vi.waitFor(() => expect(onWait).toHaveBeenCalledTimes(1));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(onWait).toHaveBeenCalledTimes(1);
+      expect(onWait.mock.calls[0]?.[0]).toEqual({ pid: process.pid,
+        heldForMs: expect.any(Number), waitedForMs: expect.any(Number) });
+      expect(onWait.mock.calls[0]?.[0].heldForMs).toBeGreaterThanOrEqual(60_000);
+      expect(onWait.mock.calls[0]?.[0].waitedForMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      controller.abort();
+      await cancelled;
+      expect(entered).toBe(false);
+      expect(await readFile(lockPath, 'utf8')).toBe(owner);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not report a wait for uncontended or already cancelled admission', async () => {
+    const fs = await loadFs();
+    const root = await mkdtemp(join(tmpdir(), 'happier-plugin-sdk-no-lock-wait-'));
+    const onWait = vi.fn();
+    const lockPath = join(root, 'startup.lock');
+    try {
+      await fs.withExclusiveFileLock({ lockPath, timeoutMs: Infinity, onWait }, async () => undefined);
+      await expect(fs.withExclusiveFileLock({ lockPath, timeoutMs: Infinity, onWait,
+        signal: AbortSignal.abort() }, async () => { throw new Error('must not enter'); }))
+        .rejects.toMatchObject({ name: 'AbortError' });
+      expect(onWait).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('excludes a second process and preserves a successor lock during exact-owner release', async () => {
