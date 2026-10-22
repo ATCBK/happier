@@ -133,17 +133,20 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                     readState = { status: 'ready', hasSnapshot: true };
                     notify();
                 }
-                const wanted = demand.has('all') || demand.size === 0
+                const wanted = demand.has('all')
                     ? summaries.map(item => item.id) : [...demand.keys()].filter(id => id.startsWith('board:')).map(id => id.slice(6));
                 // Join exact reads here; a slow body cannot hold its readable neighbours hostage.
                 const readBody = async (id: string): Promise<void> => {
+                    // Views can close while the inventory or an earlier body is pending.
+                    // Keep admitted content, but do not start another read without a reader.
+                    if (!shouldContinue() || !(demand.has('all') || demand.has(`board:${id}`))) return;
                     const running = inFlightBodies.get(id);
                     if (running) {
                         await running;
                         if (dirtyBodies.has(id)) await readBody(id);
                         return;
                     }
-                    if (demand.size > 0 && readBodies.has(id) && !dirtyBodies.has(id)) return;
+                    if (readBodies.has(id) && !dirtyBodies.has(id)) return;
                     dirtyBodies.delete(id);
                     setBodyReadState(id, { status: 'loading', hasSnapshot: readBodies.has(id) });
                     const beforeRevision = revisions.get(id);

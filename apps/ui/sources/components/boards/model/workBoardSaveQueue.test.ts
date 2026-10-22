@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildWorkBoardItemKeyV1, createWorkBoardV1, WorkBoardsV1Schema, type BoardItemRefV1, type WorkBoardArtifactV1 } from '@happier-dev/protocol';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createDeferred } from '@/dev/testkit';
 import { createWorkBoardAccountStore } from './workBoardAccountStore';
 import { projectDisplayedWorkBoards } from './workBoardSaveQueue';
 
@@ -15,7 +16,67 @@ function boundary() {
     return { store, ...persistence, retire: () => { current = false; } };
 }
 
+/** These recovery cases explicitly reopen/retry every Board, rather than demand a header refresh. */
+async function readBoards(store: ReturnType<typeof createWorkBoardAccountStore>) {
+    const release = store.retainView(() => () => {}, 'all');
+    store.invalidateBodies();
+    try { await store.refresh(); } finally { release(); }
+}
+
 describe('WorkBoard Account Artifact save queue', () => {
+    it('continues only the surviving exact Board demand after a delayed inventory', async () => {
+        const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [...base.boards, createWorkBoardV1({ id: 'b2', name: 'Other' })] });
+        const started = createDeferred<void>();
+        const response = createDeferred<void>();
+        const store = createWorkBoardAccountStore({ ...persistence.transport, list: async options => {
+            started.resolve();
+            await response.promise;
+            return persistence.transport.list(options);
+        } }, () => true);
+        const releaseFirst = store.retainView(() => () => {}, 'board:b1');
+        const releaseSecond = store.retainView(() => () => {}, 'board:b2');
+        const refreshing = store.refresh();
+        try {
+            await started.promise;
+            releaseFirst();
+            response.resolve();
+            await refreshing;
+            expect(persistence.reads).toEqual(['b2']);
+            expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
+        } finally { response.resolve(); releaseSecond(); await refreshing; }
+    });
+
+    it('retains an admitted body after close and postpones its invalidated follow-up until reopen', async () => {
+        const persistence = createWorkBoardArtifactBoundary(base);
+        const started = createDeferred<void>();
+        const response = createDeferred<WorkBoardArtifactV1>();
+        let reads = 0;
+        const store = createWorkBoardAccountStore({ ...persistence.transport, read: async (id, options) => {
+            if (++reads === 1) { started.resolve(); return response.promise; }
+            return persistence.transport.read(id, options);
+        } }, () => true);
+        const release = store.retainView(() => () => {}, 'board:b1');
+        const refreshing = store.refresh();
+        const original = persistence.rows.get('b1')!;
+        try {
+            await started.promise;
+            persistence.rows.set('b1', { ...original, body: JSON.stringify({ ...base.boards[0], name: 'Fresh after reopen' }),
+                revision: { headerVersion: 2, bodyVersion: 2 } });
+            store.invalidateBodies(['b1']);
+            release();
+            response.resolve(original);
+            await refreshing;
+            expect(reads).toBe(1);
+            expect(store.getBoard('b1')?.name).toBe('Overview');
+            const reopen = store.retainView(() => () => {}, 'board:b1');
+            try {
+                await store.refresh();
+                expect(reads).toBe(2);
+                expect(store.getBoard('b1')?.name).toBe('Fresh after reopen');
+            } finally { reopen(); }
+        } finally { response.resolve(original); release(); await refreshing; }
+    });
+
     it.each(['inputs', 'size'] as const)('does not acknowledge an older uncertain add as a changed %s request', async changed => {
         const b = boundary();
         let readable = true;
@@ -100,23 +161,23 @@ describe('WorkBoard Account Artifact save queue', () => {
             await writeGate;
             return b.transport.update(input);
         } }, () => true);
-        await store.refresh();
+        await readBoards(store);
         const saving = store.queue.dispatch({ kind: 'update', boardId: 'b1', patch: { source: { sections: ['my_machines'] } } });
         expect(projectDisplayedWorkBoards(store.getBoards(), store.queue.getState().pending).boards[0]?.source.sections)
             .toEqual(['my_machines']);
         const beforeAck = createWorkBoardAccountStore(b.transport, () => true);
         // Hold only the write boundary; a fresh reader still sees acknowledged bytes.
-        await beforeAck.refresh();
+        await readBoards(beforeAck);
         expect(beforeAck.getBoards().boards[0]?.source.sections ?? []).toEqual([]);
         release();
         expect(await saving).toMatchObject({ status: 'applied' });
         const afterAck = createWorkBoardAccountStore(b.transport, () => true);
-        await afterAck.refresh();
+        await readBoards(afterAck);
         expect(afterAck.getBoards().boards[0]?.source.sections).toEqual(['my_machines']);
         expect(store.queue.getState().pending).toEqual([]);
     });
     it('keeps an acknowledged add renderable while its pending intent is still being retired', async () => {
-        const b = boundary(); await b.store.refresh();
+        const b = boundary(); await readBoards(b.store);
         const surface = { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } } as const;
         const instance = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
         const observed: number[] = [];
@@ -131,7 +192,7 @@ describe('WorkBoard Account Artifact save queue', () => {
     });
     it('projects configured widgets, rolls back a failed input edit, retries and reloads without losing work', async () => {
         const b = boundary();
-        await b.store.refresh();
+        await readBoards(b.store);
         const surface = { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } } as const;
         const instance = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
         const ref = { surface, instanceId: instance.id };
@@ -144,7 +205,7 @@ describe('WorkBoard Account Artifact save queue', () => {
         expect(b.store.getBoards().boards[0]?.widgets?.[0]?.instance.bindings).toEqual({});
         b.offline(false); await b.store.queue.retry();
         const loaded = createWorkBoardAccountStore(b.transport, () => true);
-        await loaded.refresh();
+        await readBoards(loaded);
         expect(loaded.getBoards().boards[0]?.widgets).toMatchObject([{ instance: { id: 'copy', bindings: { session: { kind: 'value', value: 's2' } } }, size: 'full' }]);
         expect(loaded.getBoards().boards[0]?.source.picked).toEqual(base.boards[0]?.source.picked);
         expect(await b.store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance })).toMatchObject({ status: 'refused', code: 'widget_instance_already_exists' });
@@ -172,24 +233,24 @@ describe('WorkBoard Account Artifact save queue', () => {
 
     it('exposes an unavailable refresh with Retry while retaining the acknowledged record', async () => {
         const b = boundary();
-        await b.store.refresh(); b.offline(true);
-        await b.store.refresh();
+        await readBoards(b.store); b.offline(true);
+        await readBoards(b.store);
         expect(b.store.getReadState()).toMatchObject({ status: 'error', hasSnapshot: true });
         expect(b.store.getBoardReadState('b1')).toMatchObject({ status: 'error', hasSnapshot: true });
         expect(b.store.getBoards()).toEqual(base);
-        b.offline(false); await b.store.refresh();
+        b.offline(false); await readBoards(b.store);
         expect(b.store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
     });
 
     it('withdraws a malformed Board without overwriting its bytes and recovers when its content becomes readable', async () => {
         const b = boundary();
-        await b.store.refresh(); const original = b.rows.get('b1')!;
+        await readBoards(b.store); const original = b.rows.get('b1')!;
         b.rows.set('b1', { ...original, body: 'invalid-json' });
-        await b.store.refresh();
+        await readBoards(b.store);
         expect(b.store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
         expect(b.store.getBoards().boards).toEqual([]);
         expect(b.rows.get('b1')?.body).toBe('invalid-json');
-        b.rows.set('b1', original); await b.store.refresh();
+        b.rows.set('b1', original); await readBoards(b.store);
         expect(b.store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
     });
 
@@ -238,11 +299,11 @@ describe('WorkBoard Account Artifact save queue', () => {
     it('withdraws an unreadable Board projection without rewriting it or hiding readable neighbors', async () => {
         const persistence = createWorkBoardArtifactBoundary(WorkBoardsV1Schema.parse({ v: 1, boards: [...base.boards, createWorkBoardV1({ id: 'b2', name: 'Other' })] }));
         const store = createWorkBoardAccountStore(persistence.transport, () => true);
-        await store.refresh();
+        await readBoards(store);
         const row = persistence.rows.get('b1')!;
         const invalid = { ...row, body: JSON.stringify({ ...base.boards[0], name: 42 }), revision: { headerVersion: 2, bodyVersion: 2 } };
         persistence.rows.set('b1', invalid);
-        await store.refresh();
+        await readBoards(store);
         expect(store.getReadState().status).toBe('ready');
         expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
         expect(persistence.rows.get('b1')).toBe(invalid);
@@ -307,7 +368,7 @@ describe('WorkBoard Account Artifact save queue', () => {
                 return persistence.transport.read(id);
             },
         }, () => true);
-        const refresh = store.refresh();
+        const refresh = readBoards(store);
         await reading;
         await store.queue.dispatch({ kind: 'update', boardId: 'b1', patch: { name: 'Newer' } });
         resolveOld(original); await refresh;
@@ -325,7 +386,7 @@ describe('WorkBoard Account Artifact save queue', () => {
             if (first) { first = false; markReading(); return await new Promise(resolve => { resolveOld = resolve; }); }
             return persistence.transport.read(id);
         } }, () => true);
-        const refresh = store.refresh(); await reading;
+        const refresh = readBoards(store); await reading;
         await store.queue.dispatch({ kind: 'delete', boardId: 'b1' });
         resolveOld(original); await refresh;
         expect(store.getBoards().boards).toEqual([]);
@@ -390,7 +451,7 @@ describe('WorkBoard Account Artifact save queue', () => {
             const row = await persistence.transport.read(id);
             inFlight--; return row;
         } }, () => true);
-        const refresh = store.refresh(); await firstRequest;
+        const refresh = readBoards(store); await firstRequest;
         // Flush the other independent response; the first remains held at the persistence boundary.
         await new Promise<void>(resolve => { setTimeout(resolve, 0); });
         try {
@@ -439,7 +500,7 @@ describe('WorkBoard Account Artifact save queue', () => {
 
     it('projects an edit immediately and keeps it once the dedicated record acknowledges it', async () => {
         const b = boundary();
-        await b.store.refresh();
+        await readBoards(b.store);
         const release = b.hold();
         const key = buildWorkBoardItemKeyV1(session('s1'));
         const saving = b.store.queue.dispatch({ kind: 'set_positions', boardId: 'b1', positionsByItemRef: { [key]: { x: 48, y: 96 } } });
@@ -458,7 +519,7 @@ describe('WorkBoard Account Artifact save queue', () => {
 
     it('retains acknowledged data on unavailable writes and retries the same semantic intent', async () => {
         const b = boundary();
-        await b.store.refresh(); b.offline(true);
+        await readBoards(b.store); b.offline(true);
         await b.store.queue.dispatch({ kind: 'update', boardId: 'b1', patch: { mode: 'by_status' } });
         expect(b.store.queue.getState().failure?.reason).toBe('unavailable');
         expect(b.store.getBoards().boards[0]!.mode).toBe('canvas');
