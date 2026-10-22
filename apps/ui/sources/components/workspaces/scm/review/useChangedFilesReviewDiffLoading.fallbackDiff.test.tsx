@@ -1,4 +1,3 @@
-import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -74,13 +73,10 @@ describe('useChangedFilesReviewDiffLoading (fallback diff)', () => {
 
         await renderScreen(React.createElement(Probe));
 
-        for (let i = 0; i < 30; i++) {
-            await act(async () => {
-                await flushHookEffects({ cycles: 1, turns: 1 });
-            });
-            const current = diffStateSource?.getDiffState?.('src/new.txt');
-            if (typeof current?.diff === 'string' && current.diff.includes('diff --git')) break;
-        }
+        await act(async () => {
+            // The canonical workspace fallback lazily imports its file reader.
+            await vi.dynamicImportSettled();
+        });
 
         expect(machineScmDiffFileSpy).toHaveBeenCalledTimes(1);
         expect(workspaceReadFileSpy).toHaveBeenCalledTimes(1);
