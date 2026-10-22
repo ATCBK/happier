@@ -1,9 +1,11 @@
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 
 import {
+    defineProtocolArray,
     defineProtocolLiteral,
     defineProtocolNumber,
     defineProtocolObject,
+    defineProtocolString,
     defineProtocolUnion,
     defineProtocolUtf8String,
     defineProtocolUniqueArray,
@@ -57,14 +59,24 @@ const pairingDeepLinkTemplateV1 = defineProtocolUtf8String({
     pattern: '^(?:(?!\\{\\{token\\}\\})[\\s\\S])*\\{\\{token\\}\\}(?:(?!\\{\\{token\\}\\})[\\s\\S])*$',
 });
 
-/** @internal Bounded provider-neutral guidance for one external setup step. */
+const conversationSetupExternalUrlV1 = defineProtocolUtf8String({
+    maxUtf8Bytes: MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
+    minLength: 1,
+    pattern: '^https://[^\\s]+$',
+});
+
+/** @internal Provider-authored presentation; copyable values must never contain credentials. */
 export const ConversationProviderSetupGuidanceV1ProtocolSchema = defineProtocolObject({
-    externalUrl: defineProtocolUtf8String({
-        maxUtf8Bytes: MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
-        minLength: 1,
-        pattern: '^https://[^\\s]+$',
-    }),
+    externalUrl: conversationSetupExternalUrlV1,
     requiredPermissionsLabel: ConversationEndpointDisplayLabelV1ProtocolSchema,
+    steps: defineProtocolArray(defineProtocolObject({
+        title: ConversationEndpointDisplayLabelV1ProtocolSchema,
+        externalUrl: conversationSetupExternalUrlV1.optional(),
+        copyableValues: defineProtocolArray(defineProtocolObject({
+            label: ConversationEndpointDisplayLabelV1ProtocolSchema,
+            value: defineProtocolString({ minLength: 1 }),
+        }, { policy: 'closed' }), { minItems: 1 }).optional(),
+    }, { policy: 'closed' }), { minItems: 1 }).optional(),
 }, { policy: 'closed' });
 
 /**

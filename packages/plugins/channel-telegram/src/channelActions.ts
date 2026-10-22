@@ -596,6 +596,17 @@ export async function setupTelegramChannels(
     // The authenticated delivery truth travels with the connection instead of
     // being discarded into the opaque provider configuration.
     sharedEndpointInputModes: telegramSharedEndpointInputModes(identity),
+    setupGuidance: {
+      externalUrl: 'https://t.me/BotFather',
+      requiredPermissionsLabel: 'Create a bot with BotFather and store its token in a Telegram Bot Connected Account.',
+      steps: [
+        { title: 'Open the verified BotFather in Telegram', externalUrl: 'https://t.me/BotFather' },
+        { title: 'Create your bot and follow BotFather’s name and username prompts',
+          externalUrl: 'https://core.telegram.org/bots/tutorial#obtain-your-bot-token',
+          copyableValues: [{ label: 'BotFather command', value: '/newbot' }] },
+        { title: 'Paste the bot token into a Telegram Bot Connected Account, then select it and test the connection' },
+      ],
+    },
     pairingDeepLinkTemplate: `https://t.me/${identity.username}?start={{token}}`,
   });
 }
@@ -671,11 +682,20 @@ export async function testTelegramConnection(input: unknown, context: PluginInvo
 export async function resolveTelegramEndpoint(input: unknown, context: PluginInvocationContext): Promise<ConversationEndpointResolveResultV1> {
   assertTelegramChannelsCoreCaller(context);
   const request = ConversationEndpointResolveInputV1Schema.parse(input);
+  const query = request.query.trim();
+  const threadAddress = parseCanonicalTelegramThreadIdentity(query);
+  // getChat accepts exact IDs or public @usernames, not display-name search.
+  if (threadAddress === null && !/^-?[0-9]+$/.test(query) && !/^@[a-z0-9_]+$/i.test(query)) {
+    return {
+      kind: 'notReady',
+      reason: 'unsupported',
+      diagnostic: 'Telegram cannot search chats by name. Enter a numeric chat ID, a public @username, or chatId:topicId for a topic.',
+    };
+  }
   const ready = await readyConnection(context, request);
   if ('kind' in ready) return ready;
-  const threadAddress = parseCanonicalTelegramThreadIdentity(request.query);
   const chat = await ready.api.getChat({
-    chatId: threadAddress?.chatId ?? request.query,
+    chatId: threadAddress?.chatId ?? query,
   }, { signal: context.signal });
   context.signal.throwIfAborted();
   if ('kind' in chat) return readFailure(chat);

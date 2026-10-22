@@ -187,6 +187,18 @@ export function createDiscordSetupResult(
       requiredPermissionsLabel: DISCORD_REQUIRED_PERMISSIONS
         .map((permission) => permission.label)
         .join(', '),
+      steps: [
+        { title: 'Create an application in the Discord Developer Portal',
+          externalUrl: 'https://discord.com/developers/applications' },
+        { title: 'Create or reset its bot token and paste it into a Discord Bot Connected Account',
+          externalUrl: 'https://docs.discord.com/developers/quick-start/getting-started' },
+        { title: 'Invite the bot to your server with the required permissions',
+          externalUrl: buildDiscordInviteUrl(applicationId),
+          copyableValues: [
+            { label: 'Required permissions', value: DISCORD_REQUIRED_PERMISSIONS.map((permission) => permission.label).join(', ') },
+            { label: 'Permissions bitfield', value: requiredPermissionsBitfield().toString() },
+          ] },
+      ],
     },
   };
 }

@@ -143,7 +143,13 @@ describe('Channels first-party provider composition', () => {
         providerSelection: selection, providerRemediationInput: { credentialRef }, credentialRef,
       }, { services, surface: 'agent' })).toEqual({ kind: 'remediated' });
       expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface: 'mcp' }))
-        .toMatchObject({ kind: 'ready', recommendedTransport: 'checkpointedPull' });
+        .toMatchObject({ kind: 'ready', recommendedTransport: 'checkpointedPull', setupGuidance: {
+          steps: [
+            { title: expect.stringContaining('BotFather'), externalUrl: 'https://t.me/BotFather' },
+            { title: expect.any(String), copyableValues: [{ label: expect.any(String), value: '/newbot' }] },
+            { title: expect.stringContaining('Connected Account') },
+          ],
+        } });
       expect(request.mock.calls.filter(([request]) => request.url.endsWith('/deleteWebhook'))).toHaveLength(1);
     } finally {
       await core.dispose();
@@ -165,7 +171,10 @@ describe('Channels first-party provider composition', () => {
             const response = await context.services.http.request({ url: 'https://external.example.test/setup', method: 'GET', redirect: 'error' }, { signal: context.signal });
             return response.status === 200 ? { v: 1, credentialRef: null, providerConnectionKey: 'external-mailbox', providerConfigVersion: 1,
               providerConfig: {}, integrationPrincipal: { id: 'external-bot' }, supportedTransports: ['socket'], recommendedTransport: 'socket',
-              overlapSafety: 'safe', replayContinuity: 'none' } : { kind: 'requiresRemediation' };
+              overlapSafety: 'safe', replayContinuity: 'none', setupGuidance: {
+                externalUrl: 'https://external.example.test/setup', requiredPermissionsLabel: 'Read messages',
+                steps: [{ title: 'Enable the external app', copyableValues: [{ label: 'Scope', value: 'messages:read' }] }],
+              } } : { kind: 'requiresRemediation' };
           } },
         repair: { title: 'Repair', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
           resultSchema: roles.operations.setupRemediation.declaration.resultSchema.jsonSchema,
@@ -202,7 +211,8 @@ describe('Channels first-party provider composition', () => {
       expect(await core.invokeAction('connection/setup-remediate-v1', input,
         { surface: 'mcp', services: channelsTargetedContributionServices(core) })).toEqual({ kind: 'remediated' });
       expect(await core.invokeAction('connection/prepare-v1', { providerSelection: selection, providerSetupInput: {}, credentialRef: null },
-        { services: channelsTargetedContributionServices(core) })).toMatchObject({ kind: 'ready', recommendedTransport: 'socket' });
+        { services: channelsTargetedContributionServices(core) })).toMatchObject({ kind: 'ready', recommendedTransport: 'socket',
+          setupGuidance: { steps: [{ title: 'Enable the external app', copyableValues: [{ label: 'Scope', value: 'messages:read' }] }] } });
       const beforeStaleSelection = request.mock.calls.length;
       await expect(core.invokeAction('connection/setup-remediate-v1', {
         ...input, providerSelection: { ...selection, contributor: { ...selection.contributor,
@@ -269,6 +279,9 @@ describe('Channels first-party provider composition', () => {
         // must carry that authenticated truth rather than drop it.
         sharedEndpointInputModes: ['directMentionsOnly', 'addressedMessages'],
         destinationLabel: 'Happier Bot',
+        setupGuidance: expect.objectContaining({ steps: expect.arrayContaining([
+          expect.objectContaining({ externalUrl: 'https://t.me/BotFather' }),
+        ]) }),
       });
       expect(telegramAccounts.materialize).toHaveBeenCalledWith(
         'telegram-bot-credential',
@@ -347,6 +360,11 @@ describe('Channels first-party provider composition', () => {
             + '?client_id=application-1&scope=bot&permissions=274877975552',
           requiredPermissionsLabel:
             'View Channels, Send Messages, Send Messages in Threads, Read Message History',
+          steps: expect.arrayContaining([
+            expect.objectContaining({ externalUrl: 'https://discord.com/developers/applications' }),
+            expect.objectContaining({ externalUrl: 'https://discord.com/oauth2/authorize'
+              + '?client_id=application-1&scope=bot&permissions=274877975552' }),
+          ]),
         },
       });
       expect(discordAccounts.materialize).toHaveBeenCalledWith(

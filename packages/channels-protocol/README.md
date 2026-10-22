@@ -7,6 +7,21 @@ schemas, role contracts, contribution-point definitions, and public
 conformance fixtures. It does not contain a runtime, provider implementation,
 registry, UI, polling loop, persistence, or credential materialization.
 
+## Provider setup guidance (unreleased 0.3)
+
+The setup result's optional `setupGuidance` is projected unchanged by
+`connection/prepare-v1`, including for independently installed providers.
+Alongside `externalUrl` and `requiredPermissionsLabel`, providers may supply
+`steps` in display order. Each step has a nonempty `title`, an optional HTTPS
+`externalUrl`, and optional `copyableValues: [{ label, value }]`. Copyable
+values are public configuration such as scopes, commands or ports; never
+include credentials. Credential entry remains in Connected Accounts.
+
+Setup and preparation derive their strict readers and manifest JSON Schema
+from the same guidance schema. Steps, copyable values and guidance reject
+unknown fields. Providers author their own instructions and official links;
+Channels needs no built-in provider identifier branch to consume them.
+
 ## Public imports
 
 Import the explicit protocol epoch and testkit paths:

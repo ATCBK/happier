@@ -4,9 +4,39 @@ import {
     ConversationProviderSetupOutcomeV1Schema,
     ConversationProviderSetupRemediationResultV1Schema,
     ConversationProviderSetupResultV1Schema,
+    ConversationProviderSetupGuidanceV1ProtocolSchema,
 } from './setup.js';
 
 describe('Channels V1 provider setup outcomes', () => {
+    it('reads ordered provider-authored setup steps and derives the same strict manifest shape', () => {
+        const guidance = {
+            externalUrl: 'https://provider.example.test/install',
+            requiredPermissionsLabel: 'Read messages',
+            steps: [
+                { title: 'Create an application', externalUrl: 'https://provider.example.test/apps' },
+                { title: 'Configure its scope', copyableValues: [{ label: 'Scope', value: 'messages:read' }] },
+                { title: 'Store the credential in Connected Accounts' },
+            ],
+        };
+        expect(ConversationProviderSetupGuidanceV1ProtocolSchema.parse(guidance)).toEqual(guidance);
+        for (const step of [
+            { title: '' },
+            { title: 'Open setup', externalUrl: 'javascript:alert(1)' },
+            { title: 'Open setup', token: 'undeclared' },
+            { title: 'Configure', copyableValues: [{ label: 'Scope', value: 'read', secret: true }] },
+        ]) {
+            expect(ConversationProviderSetupGuidanceV1ProtocolSchema.safeParse({ ...guidance, steps: [step] }).success).toBe(false);
+        }
+        expect(ConversationProviderSetupGuidanceV1ProtocolSchema.jsonSchema).toMatchObject({
+            additionalProperties: false,
+            properties: { steps: { type: 'array', items: {
+                additionalProperties: false,
+                required: ['title'],
+                properties: { copyableValues: { items: { additionalProperties: false } } },
+            } } },
+        });
+    });
+
     it('keeps setup facts structural while setup admission owns durable transport compatibility', () => {
         const durablePush = {
             v: 1,

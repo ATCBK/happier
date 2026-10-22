@@ -325,6 +325,31 @@ describe('Telegram Channel provider actions', () => {
     expect(http.request).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['qa', '@qa group', '@'])('explains an unsupported Telegram chat query without looking it up (%s)', async (query) => {
+    const http = {
+      request: vi.fn(async (input: TelegramHttpRequestInput) => input.url.endsWith('/getMe')
+        ? response(botIdentity())
+        : response({ ok: false, error_code: 400, description: 'Bad Request: chat not found' })),
+    };
+
+    await expect(resolveTelegramEndpoint({ ...connection, query }, coreContext(http)))
+      .resolves.toMatchObject({ kind: 'notReady', reason: 'unsupported', diagnostic: expect.any(String) });
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it.each(['-100456', '@qa_group'])('resolves an exact Telegram chat identifier (%s)', async (query) => {
+    const http = {
+      async request(input: TelegramHttpRequestInput) {
+        if (input.url.endsWith('/getMe')) return response(botIdentity());
+        expect(JSON.parse(new TextDecoder().decode(input.body))).toEqual({ chat_id: query });
+        return response({ ok: true, result: { id: -100456, type: 'supergroup', title: 'QA group' } });
+      },
+    };
+
+    await expect(resolveTelegramEndpoint({ ...connection, query }, coreContext(http)))
+      .resolves.toMatchObject({ kind: 'resolved', candidates: [{ kind: 'shared', id: '-100456' }] });
+  });
+
   it('resolves an observed Telegram topic identity through its authenticated parent chat', async () => {
     const http = {
       request: vi.fn(async (input: TelegramHttpRequestInput) => {

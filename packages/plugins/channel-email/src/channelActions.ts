@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError, PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { isPluginActionHandlerInvocationNotStartedAdvisory } from '@happier-dev/plugin-sdk/actions';
 import {
   assertConversationChannelsCoreCallerV1, rethrowConversationProviderLifecycleFailureV1,
@@ -58,12 +58,17 @@ async function fetchMail(ref: string, config: EmailConfig, request: Conversation
 }
 
 async function parseProviderEmail(raw: Uint8Array, options: Parameters<typeof parseEmail>[1],
-  context: PluginInvocationContext): Promise<ParsedEmail | ConversationProviderFailureV1> {
+  context: PluginInvocationContext): Promise<ParsedEmail | PluginError> {
   try {
     return await parseEmail(raw, options);
   } catch (error) {
     rethrowConversationProviderLifecycleFailureV1(error, context.signal);
-    return { kind: 'notReady', reason: 'network', diagnostic: 'The Email parser is temporarily unavailable.' };
+    const missingModule = error !== null && typeof error === 'object' && 'code' in error
+      && (error.code === 'ERR_MODULE_NOT_FOUND' || error.code === 'MODULE_NOT_FOUND');
+    // Project only known runtime categories, never exception text or custom names.
+    return new PluginError({ code: missingModule ? 'email_parser_module_not_found'
+      : error instanceof SyntaxError ? 'email_parser_syntax_error' : 'email_parser_runtime_failed',
+      message: 'The Email parser is temporarily unavailable.', retryable: true });
   }
 }
 
@@ -90,6 +95,28 @@ export async function setupEmailChannels(input: unknown, context: PluginInvocati
     providerConfig: config, integrationPrincipal: { id: mailbox, label: mailbox },
     supportedTransports: ['checkpointedPull'], recommendedTransport: 'checkpointedPull',
     overlapSafety: 'safe', replayContinuity: 'checkpointed',
+    setupGuidance: {
+      externalUrl: 'https://www.rfc-editor.org/rfc/rfc8314.html',
+      requiredPermissionsLabel: 'Authenticated IMAP and SMTP access, verified TLS, and receiving-server authentication markers for the selected trust strategy.',
+      steps: [
+        { title: 'Get your mailbox address and IMAP and SMTP host names from your mail administrator' },
+        { title: 'Use verified TLS: IMAP implicit TLS, and SMTP STARTTLS or implicit TLS as supported by your host',
+          externalUrl: 'https://www.rfc-editor.org/rfc/rfc8314.html',
+          copyableValues: [
+            { label: 'IMAP TLS port', value: '993' },
+            { label: 'SMTP STARTTLS port', value: '587' },
+            { label: 'SMTP implicit TLS port', value: '465' },
+          ] },
+        { title: 'Save the hosts, ports, TLS mode and mailbox authentication in an Email IMAP + SMTP Connected Account; supply a custom CA certificate when your host requires it' },
+        { title: 'Choose a trust strategy supported and protected by your receiving mail server',
+          copyableValues: [
+            { label: 'Authentication-Results strategy', value: 'authenticationResults' },
+            { label: 'Exchange strategy', value: 'exchangeOrganization' },
+          ] },
+        { title: 'Copy the actual receiving server’s authserv-id into authservId, or its Exchange AuthSource into authSource; never guess these values',
+          externalUrl: 'https://www.rfc-editor.org/rfc/rfc8601.html' },
+      ],
+    },
   });
 }
 
@@ -172,7 +199,7 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
         request.bindings?.some(binding => binding.endpoint.kind === 'thread' && binding.endpoint.id === emailThreadKey(identity)
           && binding.endpoint.parentId === config.mailbox
           && (identity.messageId === null || !binding.excludedMessageIds?.includes(identity.messageId))) ?? false }, context);
-    if ('kind' in mail) return mail;
+    if (isPluginError(mail)) throw mail;
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
     const identity = mail.messageId ?? ref;
@@ -225,7 +252,7 @@ export async function deliverEmailMessage(input: unknown, context: PluginInvocat
       ? { kind: 'notDelivered', retry: 'after', retryAfterMs: raw.retryAfterMs, code: raw.reason }
       : { kind: 'notDelivered', retry: raw.reason === 'network' || raw.reason === 'rateLimited' ? 'safe' : 'never', code: raw.reason };
     const mail = await parseProviderEmail(Buffer.from(raw.mimeBase64, 'base64'), { quotedHistory: 'never', stripSignatures: false, bodyFormat: 'text' }, context);
-    if ('kind' in mail) return { kind: 'notDelivered', retry: 'safe', code: 'network' };
+    if (isPluginError(mail)) return { kind: 'notDelivered', retry: 'safe', code: mail.code };
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
     const candidate = mail.from === null ? null : normalizeEmailAddress(mail.from);
@@ -294,7 +321,7 @@ export async function fetchEmailAttachment(input: unknown, context: PluginInvoca
   const raw = await fetchMail(request.messageId, config, request, transport, context);
   if (raw.kind !== 'raw') return raw;
   const mail = await parseProviderEmail(Buffer.from(raw.mimeBase64, 'base64'), { ...config, knownThread: true }, context);
-  if ('kind' in mail) return mail;
+  if (isPluginError(mail)) throw mail;
   const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
   const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
   if (mail.messageId !== request.messageId || !trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf) {

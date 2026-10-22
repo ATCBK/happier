@@ -1,5 +1,11 @@
 # Telegram Channels
 
+In unreleased 0.3 development source, conversation lookup accepts a numeric chat
+ID, a public `@username`, or an exact `chatId:topicId`. Telegram's
+[`getChat`](https://core.telegram.org/bots/api#getchat) does not search chat
+display names. Use an exact address or the Channels pairing flow to prove a
+conversation; a display-name query returns typed `notReady` / `unsupported`.
+
 In unreleased 0.3 development source, inbound photos, documents, audio, voice,
 video and animations use the shared Channels attachment materializer. Captions
 and caption entities retain the same addressing and provenance rules as text.

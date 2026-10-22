@@ -107,7 +107,21 @@ export async function setupSlackChannels(input: unknown, context: PluginInvocati
     supportedTransports: ['socket'], recommendedTransport: 'socket', overlapSafety: 'safe', replayContinuity: 'sessionBound',
     outboundTextLimit: { maximum: SLACK_MAX_MESSAGE_CODE_POINTS, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
     setupGuidance: { externalUrl: 'https://api.slack.com/apps',
-      requiredPermissionsLabel: 'Enable Socket Mode and message events; bot: chat:write, users:read, conversation read/history scopes; app token: connections:write. Invite the bot to each conversation.' },
+      requiredPermissionsLabel: 'Enable Socket Mode and message events; bot: chat:write, users:read, conversation read/history scopes; app token: connections:write. Invite the bot to each conversation.',
+      steps: [
+        { title: 'Create a Slack app in the workspace that will own this connection', externalUrl: 'https://api.slack.com/apps' },
+        { title: 'Enable Socket Mode for the app', externalUrl: 'https://docs.slack.dev/apis/events-api/using-socket-mode/' },
+        { title: 'Generate an app-level token with the connections:write scope',
+          externalUrl: 'https://docs.slack.dev/reference/scopes/connections.write/',
+          copyableValues: [{ label: 'App-level token scope', value: 'connections:write' }] },
+        { title: 'Configure bot scopes and subscribe to message events', externalUrl: 'https://docs.slack.dev/reference/app-manifest/',
+          copyableValues: [
+            { label: 'Bot scopes', value: 'chat:write, users:read, channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history' },
+            { label: 'Bot events', value: 'message.channels, message.groups, message.im, message.mpim' },
+          ] },
+        { title: 'Install the app, invite its bot to each conversation, and save the bot and app-level tokens in a Slack Bot Connected Account' },
+      ],
+    },
   });
 }
 
