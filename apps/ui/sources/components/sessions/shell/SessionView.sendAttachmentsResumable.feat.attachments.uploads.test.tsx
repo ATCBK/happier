@@ -11,7 +11,7 @@ import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessi
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
@@ -817,10 +817,11 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 }
                 return Response.json(response);
             }
-            if (path === '/v1/machines' || path === '/v1/machines/m1') {
+            if (path === '/v1/machines' || path === '/v1/machines/m1' || path === '/v1/machines/read-batch') {
                 // An inactive Home's inventory is not the selected Home's bare-id map.
                 const home = resolveUniqueServerProfileByUrl(url.origin, { includeCanonicalServerUrl: true });
                 const machine = home ? resolveServerScopedMachine(originalStorageModule.storage.getState(), resolveServerProfileScopeId(home), 'm1') : null;
+                if (!machine && path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(JSON.parse(String(init?.body)), () => null);
                 if (!machine) return Response.json(path === '/v1/machines' ? [] : { error: 'Machine not found' },
                     { status: path === '/v1/machines' ? 200 : 404 });
                 const row = {
@@ -834,6 +835,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 };
                 // Runtime wake performs a fresh Home census; it must see the
                 // same admitted Machine/transfer declaration as the by-ID read.
+                if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(JSON.parse(String(init?.body)), id => id === row.id ? row : null);
                 return Response.json(path === '/v1/machines' ? [row] : { machine: row });
             }
             if (path === '/v1/machines/peer/mediation/route-grants') {

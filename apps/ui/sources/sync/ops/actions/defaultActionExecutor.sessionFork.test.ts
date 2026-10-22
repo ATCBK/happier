@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { AgentNativeResumeIdentityV1Schema, buildQualifiedPluginContributionKey, computeWorkspaceSyncPolicyDigest, deriveSessionCreationTagV1, MACHINE_PLAIN_DATA_KEY_MARKER,
+import { AgentNativeResumeIdentityV1Schema, buildQualifiedPluginContributionKey, computeWorkspaceSyncPolicyDigest, deriveSessionCreationTagV1,
   PluginManifestV2Schema, PluginProjectionV2Schema, SessionCreationCorrespondenceV1Schema, SessionForkRpcParamsSchema,
   normalizeActionsSettingsV1, type ActionExecutorContext, type SessionRollbackTarget } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -21,6 +21,7 @@ import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccount
 import { installSessionActionRpcBoundary, installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { getAgentCore, publishRuntimeCapabilities } from '@happier-dev/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
@@ -128,7 +129,7 @@ describe('default Action executor Session lifecycle contracts', () => {
       createPlainMachineRowFixture({ id: 'machine_2', accountId: 'alice' }),
     ] });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://session-actions.test', accountId: 'alice',
-      request: homes.request });
+      request: createSessionReadBatchFetchBoundary(homes.request) });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
@@ -139,17 +140,18 @@ describe('default Action executor Session lifecycle contracts', () => {
     machineCensus = machines;
     storage.setState({ machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
       machineListByServerId: { [serverId]: machines } });
-    homes.answer(serverId, '/v1/machines?includeRevoked=true', { select: () => ({
-      body: machineCensus.map(machine => ({
+    const publishedMachine = (machine: Machine) => ({
         ...createPlainMachineRowFixture({ id: machine.id, accountId: 'alice' }),
         metadata: encodePlainMachineStoredContent(machine.metadata),
         daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
         daemonStateVersion: machine.daemonStateVersion,
         active: machine.active, replacedByMachineId: machine.replacedByMachineId ?? null,
-      })),
+    });
+    homes.answer(serverId, '/v1/machines?includeRevoked=true', { select: () => ({
+      body: machineCensus.map(publishedMachine),
     }) });
     for (const machine of machines) homes.answer(serverId, `/v1/machines/${machine.id}`, {
-      body: { machine: { id: machine.id, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+      select: () => ({ body: { machine: publishedMachine(machineCensus.find(row => row.id === machine.id) ?? machine) } }),
     });
     outgoing.length = 0;
     daemonAnswer = () => { throw new Error('Unexpected daemon request'); };
@@ -482,7 +484,7 @@ describe('default Action executor Session lifecycle contracts', () => {
     connection = await restoreServerAccountForTest({ serverUrl: 'https://other-session-actions.test', accountId: 'bob' });
     // The connection harness installs the focused Account's transport token.
     // Reclaim the canonical per-Home credential boundary for this scoped call.
-    installHomeGovernanceBoundaries(homes);
+    installHomeGovernanceBoundaries({ ...homes, request: createSessionReadBatchFetchBoundary(homes.request) });
     // Disconnect retires the source Home's local projection. Rehydrate it from
     // its real Home response rather than restoring the retired row by hand.
     const hydration = await sync.ensureSessionVisibleForMessageRoute('sess_parent', {
@@ -497,7 +499,9 @@ describe('default Action executor Session lifecycle contracts', () => {
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3)[0]?.params).toHaveProperty('accountServerId', parentServerId);
     expect(homes.requestsFor('/v1/machines?includeRevoked=true')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
-    expect(homes.requestsFor('/v1/machines/machine_1')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
+    expect(homes.requestsFor('/v1/machines/read-batch')).toContainEqual(expect.objectContaining({
+      serverId: parentServerId, input: expect.objectContaining({ machineIds: expect.arrayContaining(['machine_1']) }),
+    }));
   });
 
   it('reaches the source daemon when the owner metadata projection is unavailable on this device', async () => {
@@ -516,8 +520,8 @@ describe('default Action executor Session lifecycle contracts', () => {
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3)[0]?.params)
       .toMatchObject({ sessionId: 'sess_parent', targetMachineId: 'machine_2', accountServerId: serverId });
-    expect(homes.requestsFor('/v1/machines/machine_1'))
-      .toContainEqual(expect.objectContaining({ serverId }));
+    expect(homes.requestsFor('/v1/machines/read-batch'))
+      .toContainEqual(expect.objectContaining({ serverId, input: expect.objectContaining({ machineIds: expect.arrayContaining(['machine_1']) }) }));
   });
 
   it('sends the exact approved target receipt and Action input through the real handoff adapter', async () => {

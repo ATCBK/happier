@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -162,7 +163,7 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
     serverUrl: 'https://inline-live.test',
     serverIdentityId: 'srv_inline-live',
     accountId: 'reader',
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
       if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
@@ -182,8 +183,9 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
         return Response.json(SessionBoardMutationResultV1Schema.parse({ operation: mutation.operation,
           itemId: mutation.itemId, outcome: 'created', itemRevision: record.revision }));
       }
+      if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
       return await artifacts.handle(`${path}${new URL(String(url)).search}`, init) ?? fixture.request(url);
-    },
+    }),
   });
   onTestFinished(async () => {
     standardCleanup();

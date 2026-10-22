@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, createPlainSessionByIdResponseFixture, createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { ExecutionRunGetResponseSchema, ReviewFindingsV2Schema } from '@happier-dev/protocol';
@@ -63,13 +64,13 @@ async function setup(detached = true, actionError?: Error, beforeActionReply?: P
         });
         if (request.method === 'scm.diffSummary.refine') return { success: false, errorCode: 'revision_conflict', error: 'Saved result changed', latestRevision: 3 };
         return undefined;
-    }, request: async url => {
+    }, request: createSessionReadBatchFetchBoundary(async url => {
         const path = new URL(String(url)).pathname;
         if (path === '/v2/sessions/s1') return Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({ id: 's1', active: true })));
         return path === ACP_CATALOG_ROWS_ROUTE_V1
             ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } }))
-            : Response.json({}, { status: 404 });
-    },
+            : Response.json({ error: 'not_found' }, { status: 404 });
+    }),
     });
     if (detached) fixture.storage.setState({ sessions: {} });
 }

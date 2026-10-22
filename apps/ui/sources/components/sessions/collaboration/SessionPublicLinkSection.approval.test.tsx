@@ -15,6 +15,7 @@ import {
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createUiApprovalRequest } from '@/dev/testkit/harness/approvalInbox';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import {
     createHomeGovernanceHarness,
     installHomeGovernanceBoundaries,
@@ -50,7 +51,8 @@ vi.mock('@/modal', async () => {
 });
 
 const harness = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(harness);
+const httpBoundary = { ...harness, request: createSessionReadBatchFetchBoundary(harness.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 // Load the real approval owner after installing only its transport/platform boundaries.
 const { useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
 
@@ -183,6 +185,7 @@ function answerPublicVisual(serverId: string, network: 'none' | 'open') {
 describe('SessionPublicLinkSection deferred approval', () => {
     beforeEach(async () => {
         await harness.reset();
+        installHomeGovernanceBoundaries(httpBoundary);
         modal.update.mockReset();
         modal.hide.mockReset();
         modal.alert.mockReset();

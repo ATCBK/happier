@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, SessionForkRpcResultSchema } from '@happier-dev/protocol';
@@ -120,7 +121,7 @@ beforeEach(async () => {
     storage.setState(originalState, true);
     await homes.reset();
     serverId = await homes.addHome({ name: 'Fork Home', serverUrl: 'https://fork-modal.test', accountId: 'alice' });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://fork-modal.test', accountId: 'alice', request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://fork-modal.test', accountId: 'alice', request: createSessionReadBatchFetchBoundary(homes.request) });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

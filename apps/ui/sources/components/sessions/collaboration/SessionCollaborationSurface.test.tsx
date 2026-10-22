@@ -14,6 +14,7 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { SessionCollaborationSurface } from './SessionCollaborationSurface';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { publishSessionCollaborationIntent, resetSessionCollaborationIntentsForTests } from './sessionCollaborationIntent';
@@ -179,7 +180,7 @@ beforeEach(async () => {
     // HTTP is the one replaced boundary: the mounted surface, its controllers,
     // scope resolution and the released publication projection stay real, so a
     // request can only reach the Home this surface actually bound itself to.
-    setRuntimeFetch(async (url, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
         const parsed = new URL(String(url));
         transport.requests.push({
             origin: parsed.origin,
@@ -198,8 +199,8 @@ beforeEach(async () => {
         }
         return await network.route({ url: parsed, path: parsed.pathname, method: init?.method ?? 'GET',
             body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined, accountId })
-            ?? new Response('{}', { status: 404 });
-    });
+            ?? Response.json({ error: 'not_found' }, { status: 404 });
+    }));
     // The app entry installs this real facade; the discussion owner reaches it
     // to resolve its Session runtime before issuing the actual HTTP read.
     await loadSyncSingletonForTests();

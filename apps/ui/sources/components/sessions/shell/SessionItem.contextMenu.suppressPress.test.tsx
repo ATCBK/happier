@@ -1,4 +1,5 @@
 import React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -146,7 +147,7 @@ describe('SessionItem context menu press suppression', () => {
         previousStorageState = storage.getState();
         metadataRequests.length = 0;
         wireSession = undefined;
-        account = await restoreServerAccountForTest({ serverUrl: 'https://server_a', accountId: 'row-account', request: async (input, init) => {
+        account = await restoreServerAccountForTest({ serverUrl: 'https://server_a', accountId: 'row-account', request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const url = new URL(String(input));
 
 
@@ -185,8 +186,8 @@ describe('SessionItem context menu press suppression', () => {
             }
             const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(url.pathname, init);
                 if (bootstrapResponse) return bootstrapResponse;
-                return Response.json({}, { status: 404 });
-        } });
+                return Response.json({ error: 'not_found' }, { status: 404 });
+        }) });
         await vi.waitFor(() => expect(storage.getState().profile.id).toBe('row-account'));
         storage.setState({ sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} });
     });
