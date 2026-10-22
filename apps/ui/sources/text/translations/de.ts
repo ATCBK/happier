@@ -9417,6 +9417,7 @@ settingsSession: {
             checking: 'Wird geprüft…',
             failedGeneric: 'Das Update wurde nicht abgeschlossen. Versuch es noch einmal.',
             remoteUnsupported: 'Dieser Rechner kann seine Kommandozeile nicht aus der Ferne aktualisieren. Aktualisiere sie direkt auf dem Rechner.',
+            archiveExpandedByteLimit: "Die heruntergeladene Laufzeit überschreitet die Größenbegrenzung beim Entpacken. Aktualisiere Happier, bevor du es erneut versuchst.",
             updateNotVerified: 'Das Update lief, aber die Version hat sich nicht geändert.',
             rolledBackLocal: 'Das Update ist nicht gestartet, daher ist dieser Computer zur vorherigen Version zurückgekehrt.',
             smokeFailed: 'Die neue Version lief auf diesem Computer nicht, daher hat sich nichts geändert.',

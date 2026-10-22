@@ -45,6 +45,21 @@ graph TB
 - **Persistence/config:** `src/persistence.ts` + `src/configuration.ts` manage local state in `~/.happy`.
 - **Agents:** `src/claude`, `src/codex`, `src/gemini` provide provider-specific runners.
 
+## Direct-session JSONL read progress (development)
+
+The shared readers in `api/directSessions/filePaging` own byte paging for native
+JSONL sources. If their existing read allowance cannot complete the next record
+and no source has been consumed, they throw `JsonlRecordTooLargeError` with code
+`JSONL_RECORD_TOO_LARGE`. Transcript paging, follow and full import fail explicitly
+rather than repeating an unchanged cursor, skipping the record or claiming complete
+history. A larger caller allowance can read the record intact. Incomplete JSON at
+EOF remains pending for its writer to finish.
+
+Display-title scans are advisory: their shared title-page adapter logs allowance
+exhaustion through the default logger and retains the bounded fallback. An oversized
+record therefore does not hide the session from discovery. These changes are in
+development source; they do not establish preview or stable availability.
+
 ## Streamed transcript recovery (development)
 
 `api/session/streamedTranscriptWriter` owns segment text, identity, and durable
@@ -1013,6 +1028,15 @@ Local state lives under `~/.happier` (or `HAPPIER_HOME_DIR`):
 - `daemon.state.json`: daemon PID + control port + version.
 - `logs/`: CLI/daemon logs.
 
+In current development source, protected local files and MCP runtime
+configuration use the shared Windows ACL boundary in
+`packages/cli-common/src/fs/windowsProtectedAcl.ts`. It grants only the current
+user and SYSTEM access and verifies the resulting ACL. Its PowerShell children
+use the selected Windows PowerShell installation's own modules, with a
+child-only `PSModulePath`; the launching shell's environment stays unchanged.
+Both ACL scripts terminate on errors, and malformed inspection output retains
+bounded stderr diagnostics without including stdout.
+
 Configuration lives in `src/configuration.ts`:
 - `HAPPIER_SERVER_URL` and `HAPPIER_WEBAPP_URL` override defaults.
 - `HAPPIER_VARIANT`, `HAPPIER_EXPERIMENTAL`, `HAPPIER_DISABLE_CAFFEINATE` control behavior.
@@ -1028,6 +1052,14 @@ Antigravity's isolated-state policy still refuses continuation across different
 accounts, including a pool rotation; the storage change does not relax it.
 Configuration inheritance remains a separate policy. Discovery probes and other
 temporary materializers retain disposable roots.
+
+Direct linking recovers a connected-service runtime snapshot only from a marker
+for the same Agent and native conversation. A matching working directory does
+not authorize borrowing another Session's binding or materialization identity,
+including when refreshing an existing link. Exact-conversation recovery remains
+valid across working-directory changes. Historical identities are retained:
+their stored shape does not identify a donor, so linking does not blindly remint
+them or move private state.
 
 When isolated history is imported into shared state and the same file already
 exists with different bytes, the existing importer preserves the destination
@@ -1597,6 +1629,14 @@ than waking an automatic continuation during pre-admission revalidation; the
 existing dispatcher suppresses obsolete continuation when newer input is queued.
 Cancellation, newer user input, and disabled automatic
 resume take precedence, and the original interrupted input is never replayed.
+
+Protocol's `buildUsageLimitIssueFingerprint` owns usage-limit issue identity for
+the CLI and UI. Runtime-auth reporting captures that identity from the actual
+failed issue and projects it separately from `runtimeAuthRecoveryAttemptId`.
+Presentation uses recovery timing, cancellation, and action identity only when
+its fingerprint matches the current issue. Older opaque attempt fingerprints
+remain readable, but cannot establish that association; the UI shows the current
+issue's supported recovery actions without attaching historical wait state.
 
 ### Model-capacity recovery (development)
 

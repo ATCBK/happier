@@ -853,6 +853,7 @@ export class ApiClient {
       kind: 'oauth' | 'token';
       providerEmail?: string | null;
       providerAccountId?: string | null;
+      providerOrganizationId?: string | null;
       expiresAt?: number | null;
     };
     expectedCredentialRevision?: ConnectedServiceCredentialRevisionV1 | null;

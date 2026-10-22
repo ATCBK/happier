@@ -8037,6 +8037,7 @@ settingsSession: {
             checking: '正在檢查…',
             failedGeneric: '更新未完成，請再試一次。',
             remoteUnsupported: '這台機器無法遠端更新其命令列工具。請直接在該機器上更新。',
+            archiveExpandedByteLimit: "下載的執行環境超過了解壓縮大小限制。請更新 Happier 後重試。",
             updateNotVerified: '更新已執行，但版本沒有變更。',
             rolledBackLocal: '更新未能啟動，因此這台電腦已回復到先前的版本。',
             smokeFailed: '新版本無法在這台電腦上執行，因此沒有任何變更。',
