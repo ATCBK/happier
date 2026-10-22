@@ -213,7 +213,7 @@ describe('pre-session composer catalog snapshot', () => {
             text: applied.text, mentions: mention ? [mention] : [],
         });
         expect(meta.happierStructuredInputV1).toMatchObject({
-            mentions: [{ kind: 'happier.skill', ref: 'skill:%20reviewer%20', token: '$project-check' }],
+            mentions: [{ kind: 'happier.skill', ref: 'skill:%20reviewer%20', token: skill.text }],
             skillMentions: [{ name: 'project-check', origin: 'vendor', path: nativeCatalogs.skills.items[0]!.path }],
         });
         expect(machineRpc).toHaveBeenCalledTimes(1);

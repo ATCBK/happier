@@ -38,7 +38,13 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key) => key });
 });
 
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
+import { EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY } from '@/sync/domains/skills/pluginSkillSourceIdentity';
+
+vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/appShell/plugins/AppShellPluginUiProjection')>(),
+    useAppShellPluginUiDeclarationSources: () => ({
+        projection: appShellProjectionState.value, skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, accountLifetime: null, ready: true,
+    }),
     useAppShellPluginUiProjection: () => ({
         pluginUiProjection: appShellProjectionState.value,
         machineId: null,

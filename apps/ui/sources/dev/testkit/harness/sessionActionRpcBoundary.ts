@@ -73,6 +73,8 @@ export function installSessionActionFixture(params: Readonly<{
     storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: session },
         sessionListRowsByServerId: { ...storage.getState().sessionListRowsByServerId,
             [serverId]: { ...storage.getState().sessionListRowsByServerId[serverId], [session.id]: session } } });
+    // An encrypted Session has no plaintext Home projection to serve; only its local hydrated state is seeded.
+    if (session.encryptionMode !== 'plain') return session;
     const wire = createPlainSessionByIdResponseFixture(session).session;
     homes.answer(serverId, `/v2/sessions/${session.id}`, { body: { session: wire } });
     homes.answer(serverId, `/v2/sessions/${session.id}?accessProjectionVersion=1`, { body: { session: wire } });

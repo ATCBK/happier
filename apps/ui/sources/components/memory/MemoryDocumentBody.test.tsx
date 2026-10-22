@@ -59,6 +59,9 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ confirmResult: true }).module;
 });
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 // HTTP, persistence, device credentials and the reachable cold Socket transport are the boundaries.
 // The memory hook, Actions front door, codecs, admission and Artifact CAS owners stay real.
 installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSocketBoundary(socket); });

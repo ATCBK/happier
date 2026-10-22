@@ -139,7 +139,8 @@ vi.mock('expo-linear-gradient', () => ({
     LinearGradient: 'LinearGradient',
 }));
 
-vi.mock('expo-modules-core', () => ({
+vi.mock('expo-modules-core', async (importOriginal) => ({
+    ...await importOriginal<typeof import('expo-modules-core')>(),
     requireNativeModule: () => ({}),
     requireOptionalNativeModule: () => null,
 }));
