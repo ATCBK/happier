@@ -50,7 +50,8 @@ import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import { resolveWidgetSizeChoicesV1, canPromoteSessionWidgetDefinitionSourceV1, projectWidgetDefinitionPromotionBindingsV1, type WidgetInputBindingsV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import { renderWidgetSizeMenuSection, stepWidgetSizeControl, type WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
 import { useWidgetInstanceDescriptor } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
-import { useActiveServerAccountScope, useUser } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useUser } from '@/sync/domains/state/storage';
+import { useDiscussionParticipantProfiles } from '@/components/discussions/useDiscussionParticipantProfiles';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -290,6 +291,7 @@ function actionLabel(kind: SessionBoardItemActionKind): string {
 
 export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactElement {
     const viewerScope = useActiveServerAccountScope();
+    const viewerLifetime = useActiveServerAccountScopeLifetime();
     const appRuntime = useAppShellPluginUiProjection();
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -376,7 +378,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         entityDrag.onLayout();
     }, [entityDrag]);
     const sameHome = !!viewerScope && (!props.serverId || areServerProfileIdentifiersEquivalent(viewerScope.serverId, props.serverId));
-    const poster = useUser(sameHome && state.kind === 'ready' ? state.item.snapshot?.postedByAccountId : undefined);
+    const posterId = sameHome && state.kind === 'ready' ? state.item.snapshot?.postedByAccountId : undefined;
+    const cachedPoster = useUser(posterId);
+    // Shared viewers need not be friends with the author. Reuse the captured-Home people
+    // reader used by Discussions, including its unavailable-profile and retirement handling.
+    const posterProfiles = useDiscussionParticipantProfiles({
+        scope: viewerScope ?? { serverId: '', accountId: '' },
+        roster: null,
+        accountIds: posterId ? [posterId] : [],
+        enabled: !!posterId && cachedPoster === undefined && posterId !== viewerScope?.accountId,
+        accountLifetime: viewerLifetime,
+    });
+    const poster = cachedPoster ?? posterProfiles.accounts.get(posterId ?? '')?.profile;
     const provenance = itemProvenance(props.item, props.pluginRuntime, sameHome ? viewerScope?.accountId : undefined,
         poster ? formatAccountDisplayName(poster) : null);
     // One header grammar at every density (F1): mark · title · source · meta · controls.
