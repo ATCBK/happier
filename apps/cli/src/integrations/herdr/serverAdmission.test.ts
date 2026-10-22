@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { handleHerdrCliCommand } from '@/cli/commands/herdr';
 import { runHerdrAttach } from '@/terminal/attachment/herdrAttach';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { withTempDir } from '@/testkit/fs/tempDir';
+import { withSocketTempDir } from '@/testkit/fs/tempDir';
 import { createHerdrClient } from './client';
 import { withHerdrApi } from './herdrApi.testkit';
 
@@ -44,7 +44,7 @@ afterEach(() => envScope.restore());
 describe('Herdr CLI entrypoint admission', () => {
   it.skipIf(process.platform === 'win32').each([['work', 0], ['default', 0], ['work', 5_100]] as const)('opens only the recorded restored pane after cold %s startup despite a different ambient root (delay=%s)', async (sessionName, delayMs) => {
     const relativeSessionDir = sessionName === 'default' ? 'herdr' : `herdr/sessions/${sessionName}`;
-    await withTempDir('herdr-cold-recorded-', async root => await withHerdrApi(async (api) => {
+    await withSocketTempDir(async root => await withHerdrApi(async (api) => {
       executable.socketPath = api.socketPath;
       await api.stop();
       api.panes.add('managed');
@@ -77,11 +77,11 @@ describe('Herdr CLI entrypoint admission', () => {
       expect(launches).toContainEqual({ args: ['terminal', 'attach', 'terminal_1'], socketPath: api.socketPath, sessionName });
       expect(api.requests.some((request) => request.method === 'pane.close' || request.method === 'layout.apply')).toBe(false);
       } finally { await startup; }
-    }, { socketPath: join(root, relativeSessionDir, 'herdr.sock') }), '/tmp');
+    }, { socketPath: join(root, relativeSessionDir, 'herdr.sock') }));
   });
 
   it.skipIf(process.platform === 'win32').each(['custom_socket', 'mismatched_inventory'])('refuses unverified cold roots without contacting a live ambient server (%s)', async evidence => {
-    await withTempDir('herdr-unverified-root-', async root => await withHerdrApi(async ambient => {
+    await withSocketTempDir(async root => await withHerdrApi(async ambient => {
       executable.sessionList.mockReturnValue([{ name: 'work', socket_path: ambient.socketPath,
         session_dir: join(root, 'foreign/herdr/sessions/work'), running: true }]);
       const socketPath = evidence === 'custom_socket' ? join(root, 'custom.sock') : join(root, 'herdr/sessions/work/herdr.sock');
@@ -90,7 +90,7 @@ describe('Herdr CLI entrypoint admission', () => {
       } } })).rejects.toMatchObject({ code: 'recorded_server_root_unavailable' });
       expect(executable.spawn).not.toHaveBeenCalled();
       expect(ambient.requests).toEqual([]);
-    }), '/tmp');
+    }));
   });
 
   it('preserves a selected live endpoint without querying a same-name ambient server', async () => {

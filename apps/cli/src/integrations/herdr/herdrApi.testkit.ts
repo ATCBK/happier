@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 
-import { withTempDir } from '@/testkit/fs/tempDir';
+import { withSocketTempDir } from '@/testkit/fs/tempDir';
 
 type ApiFault = 'error' | 'disconnect' | 'timeout';
 
@@ -21,7 +21,7 @@ export async function withHerdrApi<T>(run: (api: Readonly<{
   start(): Promise<void>;
   stop(): Promise<void>;
 }>) => Promise<T>, options: Readonly<{ maxInitialRequestBytes?: number; socketPath?: string }> = {}): Promise<T> {
-  return await withTempDir('herdr-api-', async (directory) => {
+  return await withSocketTempDir(async (directory) => {
     const socketPath = options.socketPath ?? (process.platform === 'win32'
       ? `\\\\.\\pipe\\happier-herdr-test-${randomUUID()}`
       : join(directory, 'api.sock'));
