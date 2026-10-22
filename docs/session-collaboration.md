@@ -230,6 +230,13 @@ and execution budgets. A failed observation returns a typed failure without
 advancing Follow progress, so a later invalidation or reconnect can observe the
 same retained original again.
 
+The development daemon's `/session-activity-changed` notification likewise
+waits for its source reconciliation without a shorter generic control deadline;
+explicit caller cancellation and deadlines still apply. It reports a committed
+personal Session occurrence, not a Discussion receiver binding. Removing a
+Discussion participant detaches that Discussion's Follow edge but does not
+disable unrelated personal Session follows or their original notifications.
+
 In development source, configured Execution Run and Workflow Run follows read
 the Run's own original through the Follow occurrence-route owner.
 Execution Runs retain their terminal occurrence id, including recovered host

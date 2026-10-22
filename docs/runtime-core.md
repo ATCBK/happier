@@ -1404,6 +1404,13 @@ startup skips the server and publishes the existing capability notice. Strict
 MCP policy still refuses startup, and explicitly selected Saved Secrets retain
 their typed refusal even under non-strict policy.
 
+In 0.3 development, these selected-server startup notices await durable local
+transcript admission, not the Home delivery ACK. The existing mutation journal
+retains and retries the same notice; captured Account scope is still rechecked
+before prepared MCP configuration returns. Other Session events keep their
+existing delivery waits, and an explicit required-delivery admission cannot be
+overridden by an optional diagnostic wait preference.
+
 Coding prompt preparation may omit unavailable optional Account library,
 Artifact and automatic plugin-asset augmentation, publishing one private-safe
 Prompt Library notice from the full-plan producer. A remembered required
@@ -1621,8 +1628,14 @@ across heartbeats until a later successful request or an authenticated socket
 reconnect clears that exact scope. An admitted Machine reconnect clears only that
 Machine; re-establishing an Account socket clears only its captured Home and
 Account. Missing optional RPC methods remain capability gaps, and a timeout is
-reachability evidence only when the caller's own deadline expires without a
-reply. Explicit Retry and refresh still issue the request that can establish
+not Machine-offline evidence; only an explicit target-unavailable response
+records that failure. If this client's Account transport drops, retained Machine
+presence becomes unknown until an authenticated presence update or admitted
+Machine-presence census re-observes that Machine in the same Home and Account. Reconnecting
+alone does not renew a retained heartbeat. The shared presence projection keeps
+the Machine's identity, while execution admission remains closed for unknown
+presence. A fresh observation restores the ordinary verdict, including offline;
+the heartbeat grace is unchanged. Explicit Retry and refresh still issue the request that can establish
 recovery, while retaining identity, credential-currentness and content-access
 guards. Registry changes retain their existing currentness notifications.
 These development-source contracts do not certify loaded-runtime performance.
@@ -1688,6 +1701,16 @@ The same closed startup-diagnostic owner preserves
 Session issue and public status. Its fixed preview directs the reader to check
 the Gateway and its Machine connection before retrying; private authority or
 lease details never become the public error message.
+
+In 0.3 development source, the runner diagnostic and primary Session issue also
+retain the host's closed MCP preparation, runner-generation, daemon-authority,
+unknown-outcome and shared skill-delivery refusal codes. Arbitrary plugin codes,
+messages and details remain excluded. If the runner exits before native open,
+the original launch operation uses the same requester-aware Home failure reader
+as startup recovery. Only a known primary Session failure observed at or after
+that runner's birth supplies its existing `launch_error` code and fixed preview;
+stale, unknown or unreadable evidence retains `SPAWN_FAILED`. This diagnostic
+projection does not change admission, Stop, retry policy or native-open authority.
 
 System-tool grants pin the selected absolute executable and captured arguments;
 they do not clear the inherited host `PATH` used by an Agent's descendants.
