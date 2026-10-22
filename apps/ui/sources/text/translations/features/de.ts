@@ -14228,11 +14228,12 @@ const de: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Auslöser hinzufügen',
-        emptyTitle: 'Keine Auslöser',
+        emptyTitle: "Noch keine Gewohnheiten",
         emptyBody: 'Füge einen hinzu, um jeden Zug zu prüfen oder auf ein Ziel hinzuarbeiten.',
         loadFailed: 'Die Auslöser dieser Sitzung konnten nicht geladen werden.',
         accountLoadFailed: 'Deine Auslöser konnten nicht geladen werden.',
         habitsHere: 'Gewohnheiten hier',
+        startsHere: "Startet hier",
         title: 'Auslöser',
         countOn: ({ count }) => `${count} an`,
         info: 'Was von dieser Sitzung aus startet und was hierhin schreibt. Das bleibt bei dieser Sitzung und erscheint nicht in deiner Bibliothek.',

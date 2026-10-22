@@ -14735,11 +14735,12 @@ const pt: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Adicionar um gatilho',
-        emptyTitle: 'Nenhum gatilho',
+        emptyTitle: "Ainda não há hábitos",
         emptyBody: 'Adicione um para revisar cada turno ou continuar em direção a um objetivo.',
         loadFailed: 'Não foi possível carregar os gatilhos desta sessão.',
         accountLoadFailed: 'Não foi possível carregar seus gatilhos.',
         habitsHere: 'Hábitos aqui',
+        startsHere: "Começa aqui",
         title: 'Gatilhos',
         countOn: ({ count }) => `${count} ligados`,
         info: 'O que começa a partir desta sessão e o que escreve nela. Fica com esta sessão e não aparece na sua biblioteca.',

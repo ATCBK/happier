@@ -14718,11 +14718,12 @@ const zhHans: WorkflowTriggersCopy = {
     },
     section: {
         add: '添加触发器',
-        emptyTitle: '没有触发器',
+        emptyTitle: "还没有习惯",
         emptyBody: '添加一个，用于审查每一轮或持续推进目标。',
         loadFailed: '无法加载此会话的触发器。',
         accountLoadFailed: '无法加载你的触发器。',
         habitsHere: '此处的习惯',
+        startsHere: "从此处开始",
         title: '触发器',
         countOn: ({ count }) => `${count} 个已开启`,
         info: '从此会话启动的内容，以及写入此会话的内容。它们保留在此会话中，不会出现在你的库中。',

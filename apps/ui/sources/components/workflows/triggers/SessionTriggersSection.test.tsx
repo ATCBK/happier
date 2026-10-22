@@ -113,6 +113,8 @@ describe('SessionTriggersSectionView', () => {
         const screen = await renderScreen(<SessionTriggersSectionView groups={[]} status="ready"
             pendingKeys={new Set()} onToggle={vi.fn()} onOpen={vi.fn()} onAdd={onAdd} onRetry={vi.fn()} />);
         expect(screen.findByTestId('session-work-triggers-empty')).not.toBeNull();
+        // The empty starts group is labelled like its "Writes here" sibling.
+        expect(screen.findByTestId('session-work-triggers-starts-label')).not.toBeNull();
         expect(screen.getTextContent()).not.toContain('workflows.triggers.section.add');
         expect(screen.findByTestId('session-work-triggers-add')).not.toBeNull();
     });

@@ -14754,11 +14754,12 @@ const pl: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Dodaj wyzwalacz',
-        emptyTitle: 'Brak wyzwalaczy',
+        emptyTitle: "Brak nawyków",
         emptyBody: 'Dodaj jeden, aby przeglądać każdą turę lub dążyć do celu.',
         loadFailed: 'Nie udało się wczytać wyzwalaczy tej sesji.',
         accountLoadFailed: 'Nie udało się wczytać twoich wyzwalaczy.',
         habitsHere: 'Nawyki tutaj',
+        startsHere: "Startuje tutaj",
         title: 'Wyzwalacze',
         countOn: ({ count }) => `${count} włączone`,
         info: 'To, co startuje z tej sesji, i to, co w niej zapisuje. Zostaje przy tej sesji i nie pojawia się w Twojej bibliotece.',

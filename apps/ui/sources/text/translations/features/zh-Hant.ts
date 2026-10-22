@@ -14718,11 +14718,12 @@ const zhHant: WorkflowTriggersCopy = {
     },
     section: {
         add: '新增觸發器',
-        emptyTitle: '沒有觸發器',
+        emptyTitle: "還沒有習慣",
         emptyBody: '新增一個，用於審查每一輪或持續推進目標。',
         loadFailed: '無法載入此工作階段的觸發器。',
         accountLoadFailed: '無法載入你的觸發器。',
         habitsHere: '此處的習慣',
+        startsHere: "從此處開始",
         title: '觸發器',
         countOn: ({ count }) => `${count} 個已開啟`,
         info: '從此工作階段啟動的內容，以及寫入此工作階段的內容。它們會保留在此工作階段中，不會出現在你的資料庫中。',

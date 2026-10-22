@@ -385,12 +385,14 @@ describe('the Session Info page Triggers section', () => {
       failAutomationReads = true;
     }
 
-    it('leaves the unreachable Machine to the page\'s own offline status instead of saying the read failed again', async () => {
+    it('keeps a settled Habit read failure and its retry visible even when the Machine is offline', async () => {
       await seedSessionMachine(false);
       failReads();
       const screen = await renderScreen(<SessionInfoSetup sessionId="session-1" />);
       await settle();
-      expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
+      // DIAG-HABITS: Machine reachability does not turn a settled Account read failure into loading.
+      expect(screen.findByTestId('session-work-triggers-failed')).not.toBeNull();
+      expect(screen.findByTestId('session-work-triggers-failed-action')).not.toBeNull();
     });
 
     it('still says a failed read when the Machine is reachable', async () => {

@@ -14782,11 +14782,12 @@ const fr: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Ajouter un déclencheur',
-        emptyTitle: 'Aucun déclencheur',
+        emptyTitle: "Aucune habitude pour l'instant",
         emptyBody: 'Ajoutes-en un pour relire chaque tour ou avancer vers un objectif.',
         loadFailed: 'Impossible de charger les déclencheurs de cette session.',
         accountLoadFailed: 'Impossible de charger tes déclencheurs.',
         habitsHere: 'Habitudes ici',
+        startsHere: "Démarre ici",
         title: 'Déclencheurs',
         countOn: ({ count }) => `${count} actifs`,
         info: 'Ce qui démarre depuis cette session et ce qui y écrit. Cela reste avec cette session et n’apparaît pas dans ta bibliothèque.',

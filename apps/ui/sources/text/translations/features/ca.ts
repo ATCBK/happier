@@ -14758,11 +14758,12 @@ const ca: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Afegeix un activador',
-        emptyTitle: 'Cap activador',
+        emptyTitle: "Encara no hi ha hàbits",
         emptyBody: 'Afegeix-ne un per revisar cada torn o continuar cap a un objectiu.',
         loadFailed: "No s'han pogut carregar els activadors d'aquesta sessió.",
         accountLoadFailed: "No s'han pogut carregar els teus activadors.",
         habitsHere: "Hàbits aquí",
+        startsHere: "Comença aquí",
         title: 'Activadors',
         countOn: ({ count }) => `${count} actius`,
         info: 'El que s’inicia des d’aquesta sessió i el que hi escriu. Es queda amb aquesta sessió i no apareix a la teva biblioteca.',

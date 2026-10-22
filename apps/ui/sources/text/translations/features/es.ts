@@ -14785,11 +14785,12 @@ const es: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Añadir un disparador',
-        emptyTitle: 'Sin disparadores',
+        emptyTitle: "Aún no hay hábitos",
         emptyBody: 'Añade uno para revisar cada turno o seguir hacia un objetivo.',
         loadFailed: 'No se pudieron cargar los disparadores de esta sesión.',
         accountLoadFailed: 'No se pudieron cargar tus disparadores.',
         habitsHere: 'Hábitos aquí',
+        startsHere: "Empieza aquí",
         title: 'Disparadores',
         countOn: ({ count }) => `${count} activos`,
         info: 'Lo que se inicia desde esta sesión y lo que escribe en ella. Se queda con esta sesión y no aparece en tu biblioteca.',

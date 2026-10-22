@@ -14722,11 +14722,12 @@ const ja: WorkflowTriggersCopy = {
     },
     section: {
         add: 'トリガーを追加',
-        emptyTitle: 'トリガーはありません',
+        emptyTitle: "まだ習慣はありません",
         emptyBody: '各ターンのレビューや、目標に向けた継続のために追加しましょう。',
         loadFailed: 'このセッションのトリガーを読み込めませんでした。',
         accountLoadFailed: 'あなたのトリガーを読み込めませんでした。',
         habitsHere: 'ここでの習慣',
+        startsHere: "ここから開始",
         title: 'トリガー',
         countOn: ({ count }) => `${count} 件オン`,
         info: 'このセッションから始まるものと、ここに書き込むもの。これらはこのセッションに残り、ライブラリには表示されません。',

@@ -114,12 +114,23 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                 />
             ) : null}
             {empty && props.status === 'ready' ? (
-                <EmptyState
-                    testID="session-work-triggers-empty"
-                    layout="line"
-                    title={t('workflows.triggers.section.emptyTitle')}
-                    subtitle={t('workflows.triggers.section.emptyBody')}
-                />
+                // What starts here is a group like "Writes here", labelled the same way even while it is empty.
+                <HappierPageSheetGroup
+                    header={(
+                        <CollectionListGroupLabel
+                            testID="session-work-triggers-starts-label"
+                            title={t('workflows.triggers.section.startsHere')}
+                            mark={<Icon name="sign-out" size={16} color={theme.colors.text.secondary} />}
+                        />
+                    )}
+                >
+                    <EmptyState
+                        testID="session-work-triggers-empty"
+                        layout="line"
+                        title={t('workflows.triggers.section.emptyTitle')}
+                        subtitle={t('workflows.triggers.section.emptyBody')}
+                    />
+                </HappierPageSheetGroup>
             ) : props.groups.map((group) => (
                 <HappierPageSheetGroup
                     key={group.id}

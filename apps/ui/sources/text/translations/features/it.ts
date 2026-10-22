@@ -14735,11 +14735,12 @@ const it: WorkflowTriggersCopy = {
     },
     section: {
         add: 'Aggiungi un trigger',
-        emptyTitle: 'Nessun trigger',
+        emptyTitle: "Ancora nessuna abitudine",
         emptyBody: 'Aggiungine uno per rivedere ogni turno o continuare verso un obiettivo.',
         loadFailed: 'Impossibile caricare i trigger di questa sessione.',
         accountLoadFailed: 'Impossibile caricare i tuoi trigger.',
         habitsHere: 'Abitudini qui',
+        startsHere: "Parte da qui",
         title: 'Trigger',
         countOn: ({ count }) => `${count} attivi`,
         info: 'Ciò che parte da questa sessione e ciò che vi scrive. Resta con questa sessione e non compare nella tua libreria.',
