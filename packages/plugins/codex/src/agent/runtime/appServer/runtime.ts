@@ -2270,6 +2270,7 @@ export function createCodexAppServerRuntime(
         turnId: errorTurnId,
         willRetry: record?.willRetry === true,
         runtimeIssueSource: resolveCodexRuntimeIssueSource(providerError),
+        ...readCodexAppServerTurnFailureDiagnostic(providerError),
         providerErrorSummary: isCodexAppServerWorkspaceRoutingUnauthorizedError(providerError)
           ? CODEX_APP_SERVER_WORKSPACE_ROUTING_ERROR_SUMMARY
           : 'Codex provider error',

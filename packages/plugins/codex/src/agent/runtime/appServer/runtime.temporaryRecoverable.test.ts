@@ -1311,13 +1311,22 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     }
   });
 
-  it('retains structured HTTP failure diagnostics through terminal turn settlement without provider text', async () => {
+  it('retains structured HTTP failure diagnostics through retry notifications and terminal settlement without provider text', async () => {
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const runtime = createRuntime({ ctx: { logger } });
     const events: CodexAppServerEvent[] = [];
     runtime.events.subscribe(event => events.push(event));
     try {
       await runtime.send({ v: 1, text: 'prompt' }, { turnId: 'host-turn-http-refusal' });
+      emitNotification('error', { threadId: 'thread-1', turnId: 'turn-1', willRetry: true, error: {
+        message: 'PRIVATE_PROVIDER_BODY_AND_CREDENTIAL', additionalDetails: 'PRIVATE_PROMPT',
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } },
+      } });
+      expect(logger.debug).toHaveBeenCalledWith(
+        'Codex app-server awaiting terminal notification after provider error', expect.objectContaining({
+          providerErrorCode: 'HttpConnectionFailed', httpStatus: 403, willRetry: true,
+        }),
+      );
       emitNotification('turn/completed', { threadId: 'thread-1', turn: {
         id: 'turn-1', status: 'failed', error: {
           message: 'PRIVATE_PROVIDER_BODY_AND_CREDENTIAL', additionalDetails: 'PRIVATE_PROMPT',
@@ -1331,7 +1340,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-failed', issue: expect.objectContaining({
         code: 'codex_app_server_turn_failed', sanitizedPreview: 'Codex app-server turn failed.',
       }) }));
-      expect(JSON.stringify({ events, diagnostics: logger.warn.mock.calls })).not.toContain('PRIVATE_');
+      expect(JSON.stringify({ events, diagnostics: [...logger.debug.mock.calls, ...logger.warn.mock.calls] })).not.toContain('PRIVATE_');
     } finally { await runtime.dispose(); }
   });
 
