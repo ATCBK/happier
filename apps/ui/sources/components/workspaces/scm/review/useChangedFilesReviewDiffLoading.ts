@@ -1,24 +1,18 @@
 import * as React from 'react';
 
-import type { ScmDiffArea } from '@happier-dev/protocol';
+import type { ScmComparisonFile, ScmDiffArea } from '@happier-dev/protocol';
 
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import type { ScmDiffCache } from '@/scm/diffCache/scmDiffCache';
 import { fetchSessionUnifiedDiffForPath } from '@/scm/diff/fetchSessionUnifiedDiffForPath';
 import type { ScmReviewUnifiedDiffFetcher } from '@/components/workspaces/scm/review/scmReviewDiffFetcher';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
 
 import {
     createChangedFilesReviewDiffStateSource,
     type ChangedFilesReviewDiffStateSource,
 } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffStore';
-
-type DiffState = {
-    status: 'idle' | 'loading' | 'loaded' | 'error';
-    diff: string;
-    error: string | null;
-    /** Loaded: a new file with no bytes (nothing to diff, and nothing changed inside it). */
-    emptyFile?: boolean;
-};
 
 function resolveReviewDiffPathsToEnsure(input: Readonly<{
     requestedPaths: readonly string[] | null;
@@ -61,6 +55,9 @@ export function useChangedFilesReviewDiffLoading(input: {
     refreshToken?: number;
     providerDiffByPath?: ReadonlyMap<string, string | null> | null;
     fetchUnifiedDiffForPath?: ScmReviewUnifiedDiffFetcher;
+    findContext?: boolean;
+    workspaceScope?: WorkspaceScopeBase | null;
+    comparisonFiles?: readonly ScmComparisonFile[];
     normalizeError: (input: unknown) => string;
     fallbackError: string;
 }) {
@@ -108,6 +105,18 @@ export function useChangedFilesReviewDiffLoading(input: {
         diffStateSourceRef.current = createChangedFilesReviewDiffStateSource();
     }
     const diffStateSource = diffStateSourceRef.current;
+    const findContext = input.findContext === true;
+    const { serverId, machineId, rootPath } = input.workspaceScope ?? {};
+    const comparisonFiles = input.comparisonFiles;
+
+    React.useEffect(() => {
+        if (findContext) return;
+        for (const [path, state] of diffStateSource.getSnapshot()) {
+            if (!state.context) continue;
+            const { context: _context, ...withoutContext } = state;
+            diffStateSource.setDiffState(path, withoutContext);
+        }
+    }, [diffStateSource, findContext]);
 
     const lastFetchAtMsByPathRef = React.useRef<Record<string, number>>({});
     const inFlightPathsRef = React.useRef<Set<string>>(new Set());
@@ -174,8 +183,33 @@ export function useChangedFilesReviewDiffLoading(input: {
         if (reviewFiles.length === 0) return;
 
         let cancelled = false;
+        const contextRead = new AbortController();
         const inFlightPaths = new Set<string>();
         inFlightPathsRef.current = inFlightPaths;
+
+        const ensureFindContext = async (path: string) => {
+            const state = diffStateSource.getDiffState(path);
+            if (!findContext || state.status !== 'loaded' || (state.context && state.context.status !== 'loading') || !state.diff) return;
+            const file = fileStatusByPath.get(path);
+            if (file?.isBinary) return;
+            const captured = comparisonFiles?.find(file => file.path === path);
+            const scope = machineId && rootPath ? input.workspaceScope : resolveWorkspaceTargetForSession(sessionId);
+            diffStateSource.setDiffState(path, { ...state, context: { status: 'loading' } });
+            let baseText: string | null = null;
+            try {
+                if (file?.status === 'added' || file?.status === 'untracked') baseText = '';
+                else if (scope && (!hasScopedDiffs || captured?.beforeBlobId)) {
+                    const { fetchWorkspaceFileAtRevision } = await import('@/scm/files/fetchWorkspaceFileAtRevision');
+                    const read = await fetchWorkspaceFileAtRevision({ scope, path: captured?.previousPath ?? path,
+                        selector: captured?.beforeBlobId ? { blobId: captured.beforeBlobId } : { side: 'before', area: diffArea },
+                        signal: contextRead.signal });
+                    if (read.success && !read.bytes.includes(0)) baseText = new TextDecoder('utf-8', { fatal: true }).decode(read.bytes);
+                }
+            } catch { /* The patch remains searchable; unreadable context is partial coverage. */ }
+            if (cancelled) return;
+            diffStateSource.updateDiffState(path, current => current.diff !== state.diff ? current : { ...current,
+                context: baseText === null ? { status: 'unavailable' } : { status: 'loaded', baseText } });
+        };
 
         const loadDiff = async (path: string) => {
             const existing = diffStateSource.getDiffState(path);
@@ -188,9 +222,11 @@ export function useChangedFilesReviewDiffLoading(input: {
                     // A snapshot's lifetime is owned by SCM invalidation, not render
                     // timing. Equal status counts alone are not its signature.
                     if (snapshotSignature || minRefetchMsResolved === null) {
+                        await ensureFindContext(path);
                         return;
                     }
                     if (minRefetchMsResolved > 0 && (nowMs - lastFetchAtMs) < minRefetchMsResolved) {
+                        await ensureFindContext(path);
                         return;
                     }
                 }
@@ -210,6 +246,7 @@ export function useChangedFilesReviewDiffLoading(input: {
                     error: null,
                 });
                 lastFetchAtMsByPathRef.current[path] = Date.now();
+                await ensureFindContext(path);
                 return;
             }
             inFlightPaths.add(path);
@@ -257,6 +294,7 @@ export function useChangedFilesReviewDiffLoading(input: {
 
                 diffStateSource.setDiffState(path, { status: 'loaded', diff: response.diff ?? '', error: null,
                     ...('emptyFile' in response && response.emptyFile ? { emptyFile: true } : {}) });
+                await ensureFindContext(path);
 
             } catch (err) {
                 if (cancelled) return;
@@ -305,6 +343,7 @@ export function useChangedFilesReviewDiffLoading(input: {
         run();
         return () => {
             cancelled = true;
+            contextRead.abort();
         };
     }, [
         diffArea,
@@ -324,6 +363,7 @@ export function useChangedFilesReviewDiffLoading(input: {
         snapshotSignature,
         tooLarge,
         providerDiffByPath,
+        findContext, serverId, machineId, rootPath, comparisonFiles,
     ]);
 
     return {

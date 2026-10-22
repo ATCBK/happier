@@ -36,6 +36,9 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     // Pierre has no per-line gutter slot (only hover utilities and after-line annotations), so a caller
     // that asks for one is served by the renderer that draws it: the same column View shows.
     const pierreAllowed = wantsPierre
+        // Find uses the canonical line corpus and reversible context folds, including
+        // revision text absent from a patch. Pierre's patch-only corpus cannot reveal it.
+        && !(props.findActive && props.mode === 'unified' && props.precomputedLines)
         && !props.renderLeadingLane
         && isPierreDiffKillSwitchEnabled()
         && supportsPierreRuntime();

@@ -50,6 +50,8 @@ export type ReviewDiffState = Readonly<{
     error: string | null;
     /** Loaded: a new file with no bytes. */
     emptyFile?: boolean;
+    /** Find-only bytes of this patch's before revision; never working-tree substitution. */
+    context?: Readonly<{ status: 'loading' | 'unavailable' }> | Readonly<{ status: 'loaded'; baseText: string }>;
 }>;
 
 export type ChangedFilesReviewDiffBlockProps = Readonly<{
@@ -211,10 +213,12 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const { theme, sessionId, filePath, snapshotSignature } = props;
     const registerFindRefold = React.useCallback((refold: NonNullable<FindController['refold']>) =>
         props.findModel?.registerRefold(filePath, refold), [filePath, props.findModel]);
-    const findRangesByLineId = React.useSyncExternalStore(
+    const findSnapshot = React.useSyncExternalStore(
         React.useCallback((listener) => props.findModel?.subscribeFile(filePath, listener) ?? (() => {}), [filePath, props.findModel]),
-        () => props.findModel?.getFileSnapshot(filePath).ranges,
+        () => props.findModel?.getFileSnapshot(filePath),
     );
+    const findRangesByLineId = findSnapshot?.ranges;
+    const findLines = props.findActive ? findSnapshot?.lines : undefined;
     const state = React.useSyncExternalStore(
         React.useCallback((listener) => props.diffStateSource.subscribe(filePath, listener), [filePath, props.diffStateSource]),
         React.useCallback(() => props.diffStateSource.getDiffState(filePath), [filePath, props.diffStateSource]),
@@ -411,6 +415,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             {svgPictures}
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
+                    precomputedLines={findLines}
+                    registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}
                     reviewUnits={props.reviewUnits}
@@ -439,6 +445,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     findActive={props.findActive}
+                    precomputedLines={findLines}
                     registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}

@@ -4,13 +4,15 @@ import type { ChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiff
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { expandUnifiedDiffContext } from '@/components/ui/code/model/expandUnifiedDiffContext';
 
 export type ReviewFindTarget = Readonly<{ filePath: string; lineId: string }>;
-type FileSnapshot = Readonly<{ count: number; ranges: ReadonlyMap<string, readonly FindTextRange[]> }>;
+type FileSnapshot = Readonly<{ count: number; ranges: ReadonlyMap<string, readonly FindTextRange[]>; lines?: readonly CodeLine[] }>;
 export type ReviewFindSnapshot = Readonly<{ open: boolean; query: string; options: FindOptions; status: FindStatus }>;
 type Input = Readonly<{
     paths: readonly string[];
     binaryPaths?: ReadonlySet<string>;
+    intraLineDiff?: Parameters<typeof buildCodeLinesFromUnifiedDiff>[0]['intraLineDiff'];
     diffStateSource: ChangedFilesReviewDiffStateSource;
     reveal(target: ReviewFindTarget | null): void;
 }>;
@@ -18,7 +20,7 @@ const EMPTY_FILE: FileSnapshot = { count: 0, ranges: new Map() };
 type Match = ReviewFindTarget & Readonly<{ start: number; end: number }>;
 
 function sameFile(left: FileSnapshot, right: FileSnapshot): boolean {
-    if (left.count !== right.count || left.ranges.size !== right.ranges.size) return false;
+    if (left.count !== right.count || left.ranges.size !== right.ranges.size || left.lines !== right.lines) return false;
     for (const [id, ranges] of left.ranges) {
         const other = right.ranges.get(id);
         if (!other || ranges.length !== other.length || ranges.some((range, index) => (
@@ -37,7 +39,10 @@ export function createChangedFilesReviewFind() {
     const files = new Map<string, FileSnapshot>();
     const parsed = new Map<string, {
         diff: string;
+        baseText: string | undefined;
+        intraLineDiff: Input['intraLineDiff'];
         lines: readonly CodeLine[];
+        incomplete: boolean;
         matched?: Readonly<{ query: string; options: FindOptions; matches: readonly Match[] }>;
     }>();
     let input: Input | null = null;
@@ -57,7 +62,10 @@ export function createChangedFilesReviewFind() {
         }
         for (const path of new Set([...files.keys(), ...(input?.paths ?? [])])) {
             const ranges = rangesByPath.get(path) ?? EMPTY_FILE.ranges;
-            const next = ranges.size === 0 ? EMPTY_FILE : { count: [...ranges.values()].reduce((sum, line) => sum + line.length, 0), ranges };
+            const lines = snapshot.open ? parsed.get(path)?.lines : undefined;
+            const next = ranges.size === 0 && !lines ? EMPTY_FILE : {
+                count: [...ranges.values()].reduce((sum, line) => sum + line.length, 0), ranges, ...(lines ? { lines } : {}),
+            };
             if (sameFile(files.get(path) ?? EMPTY_FILE, next)) continue;
             if (next === EMPTY_FILE) files.delete(path);
             else files.set(path, next);
@@ -80,11 +88,17 @@ export function createChangedFilesReviewFind() {
                 if (state.status === 'error' || /^Binary files .* differ$/m.test(state.diff) || /^GIT binary patch$/m.test(state.diff)) {
                     partial = true; continue;
                 }
+                if (state.context?.status === 'loading') pending = true;
+                if (state.context?.status === 'unavailable') partial = true;
+                const baseText = state.context?.status === 'loaded' ? state.context.baseText : undefined;
                 let projection = parsed.get(path);
-                if (!projection || projection.diff !== state.diff) {
-                    projection = { diff: state.diff, lines: buildCodeLinesFromUnifiedDiff({ unifiedDiff: state.diff, hideFilePrelude: true }) };
+                if (!projection || projection.diff !== state.diff || projection.baseText !== baseText || projection.intraLineDiff !== input.intraLineDiff) {
+                    const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: state.diff, hideFilePrelude: true, intraLineDiff: input.intraLineDiff });
+                    const expanded = baseText === undefined ? lines : expandUnifiedDiffContext({ unifiedDiff: state.diff, baseText, lines });
+                    projection = { diff: state.diff, baseText, intraLineDiff: input.intraLineDiff, lines: expanded ?? lines, incomplete: expanded === null };
                     parsed.set(path, projection);
                 }
+                if (projection.incomplete) partial = true;
                 const cached = projection.matched;
                 if (!cached || cached.query !== snapshot.query || cached.options.regex !== snapshot.options.regex
                     || cached.options.matchCase !== snapshot.options.matchCase) {
@@ -154,13 +168,13 @@ export function createChangedFilesReviewFind() {
             input?.reveal({ filePath: current!.filePath, lineId: current!.lineId });
         },
         stop() {},
-        close() { snapshot = { ...snapshot, open: false }; observe(); refresh(); input?.reveal(null); },
+        close() { snapshot = { ...snapshot, open: false }; parsed.clear(); observe(); refresh(); input?.reveal(null); },
     };
 }
 
 export type ChangedFilesReviewFindModel = ReturnType<typeof createChangedFilesReviewFind>;
 export function useChangedFilesReviewFind(input?: Input) {
     const [model] = React.useState(createChangedFilesReviewFind);
-    React.useEffect(() => input ? model.connect(input) : undefined, [model, input?.paths, input?.binaryPaths, input?.diffStateSource, input?.reveal]);
+    React.useEffect(() => input ? model.connect(input) : undefined, [model, input?.paths, input?.binaryPaths, input?.intraLineDiff, input?.diffStateSource, input?.reveal]);
     return model;
 }

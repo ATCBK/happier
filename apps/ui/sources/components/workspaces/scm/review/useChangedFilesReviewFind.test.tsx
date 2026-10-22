@@ -11,6 +11,46 @@ const patch = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, i) => ` co
 const paths = ['a.ts', 'unloaded.ts', 'image.png', 'failed.ts'];
 
 describe('review Find', () => {
+    it('keeps pending, unreadable and mismatched revision context out of complete-empty results', () => {
+        const source = createChangedFilesReviewDiffStateSource();
+        const model = createChangedFilesReviewFind();
+        const disconnect = model.connect({ paths: ['a.ts'], diffStateSource: source, reveal() {} });
+        source.setDiffState('a.ts', { status: 'loaded', diff: patch, error: null, context: { status: 'loading' } });
+        model.open(); model.setQuery('absent');
+        expect(model.status.kind).toBe('searching');
+        source.setDiffState('a.ts', { status: 'loaded', diff: patch, error: null, context: { status: 'unavailable' } });
+        expect(model.status).toMatchObject({ kind: 'results', total: 0, coverage: 'partialErrors' });
+        source.setDiffState('a.ts', { status: 'loaded', diff: patch, error: null, context: { status: 'loaded', baseText: 'another revision\n' } });
+        expect(model.status).toMatchObject({ kind: 'results', total: 0, coverage: 'partialErrors' });
+        disconnect();
+    });
+    it('searches omitted context from the compared revision without changing hunk identities', () => {
+        const baseText = Array.from({ length: 160 }, (_, index) => `coast ${index === 47 || index === 111 ? 'hidden cedar' : index}`).join('\n') + '\n';
+        const diff = '@@ -5,3 +5,3 @@\n coast 4\n-coast 5\n+changed 5\n coast 6\n@@ -154,3 +154,3 @@\n coast 153\n-coast 154\n+changed 154\n coast 155\n';
+        const source = createChangedFilesReviewDiffStateSource();
+        source.setDiffState('coast.ts', { status: 'loaded', diff, error: null, ...{ context: { status: 'loaded', baseText } } });
+        const model = createChangedFilesReviewFind();
+        const reveal = vi.fn();
+        const disconnect = model.connect({ paths: ['coast.ts'], diffStateSource: source, reveal,
+            ...{ intraLineDiff: { enabled: true, maxLines: 100, maxLineLength: 100, maxPairs: 10 } } });
+        model.open(); model.setQuery('hidden cedar');
+        expect(model.status).toMatchObject({ kind: 'results', total: 2, current: 1, coverage: 'complete' });
+        const first = reveal.mock.lastCall?.[0];
+        model.step(1);
+        expect(reveal.mock.lastCall?.[0]).not.toEqual(first);
+        expect(model.getFileSnapshot('coast.ts').count).toBe(2);
+        model.setQuery('changed');
+        expect([...model.getFileSnapshot('coast.ts').ranges.keys()]).toEqual(['a:3', 'a:8']);
+        expect(model.getFileSnapshot('coast.ts').lines?.find(line => line.id === 'a:3')?.renderIntraLineDiffSegments).toBeTruthy();
+        model.setQuery('coast 0');
+        expect(model.status).toMatchObject({ total: 1, coverage: 'complete' });
+        model.setQuery('coast 159');
+        expect(model.status).toMatchObject({ total: 1, coverage: 'complete' });
+        model.close();
+        expect(model.getFileSnapshot('coast.ts')).not.toHaveProperty('lines');
+        disconnect();
+    });
+
     it('keeps snapshot-declared binary files partial even without a known extension or binary patch marker', () => {
         const source = createChangedFilesReviewDiffStateSource();
         source.setDiffState('binary.asset', { status: 'loaded', diff: '', error: null });

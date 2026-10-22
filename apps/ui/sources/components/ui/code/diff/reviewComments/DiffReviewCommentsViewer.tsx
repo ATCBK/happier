@@ -14,7 +14,7 @@ import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLi
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
 import { useSetting } from '@/sync/store/settingsReadHooks';
-import type { DiffViewerBaseProps } from '../diffViewerTypes';
+import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
 
 const DISABLED_INTRA_LINE_WORD_DIFF = {
     enabled: false,
@@ -23,7 +23,7 @@ const DISABLED_INTRA_LINE_WORD_DIFF = {
     maxPairs: 0,
 } as const;
 
-export type DiffReviewCommentsViewerProps = Pick<DiffViewerBaseProps, 'findActive' | 'findRangesByLineId' | 'hunks' | 'reviewUnits'> & Readonly<{
+export type DiffReviewCommentsViewerProps = Pick<UnifiedDiffViewerProps, 'findActive' | 'findRangesByLineId' | 'registerFindRefold' | 'precomputedLines' | 'hunks' | 'reviewUnits'> & Readonly<{
     filePath: string;
     unifiedDiff: string;
     scrollToLineId?: string;
@@ -56,6 +56,8 @@ function areDiffReviewCommentsViewerPropsEqual(
     return previous.scrollToLineId === next.scrollToLineId
         && previous.findActive === next.findActive
         && previous.findRangesByLineId === next.findRangesByLineId
+        && previous.precomputedLines === next.precomputedLines
+        && previous.registerFindRefold === next.registerFindRefold
         && previous.hunks === next.hunks
         && previous.reviewUnits === next.reviewUnits
         && previous.highlightLineId === next.highlightLineId
@@ -101,11 +103,11 @@ function DiffReviewCommentsViewerInner(props: DiffReviewCommentsViewerProps) {
         : true;
     const lineModelIntraLineDiff = virtualized ? DISABLED_INTRA_LINE_WORD_DIFF : intraLineDiff;
 
-    const lines = React.useMemo(() => buildCodeLinesFromUnifiedDiff({
+    const lines = React.useMemo(() => props.precomputedLines ?? buildCodeLinesFromUnifiedDiff({
         unifiedDiff: props.unifiedDiff,
         hideFilePrelude: true,
         intraLineDiff: lineModelIntraLineDiff,
-    }), [lineModelIntraLineDiff, props.unifiedDiff]);
+    }), [lineModelIntraLineDiff, props.unifiedDiff, props.precomputedLines]);
 
     const draftsForFile = React.useMemo(() => {
         return filterReviewCommentDraftsForFile({
@@ -139,6 +141,7 @@ function DiffReviewCommentsViewerInner(props: DiffReviewCommentsViewerProps) {
                 hunks={props.hunks}
                 reviewUnits={props.reviewUnits}
                 findActive={props.findActive}
+                registerFindRefold={props.registerFindRefold}
                 findRangesByLineId={props.findRangesByLineId}
                 scrollToLineId={props.scrollToLineId}
                 highlightLineId={props.highlightLineId}

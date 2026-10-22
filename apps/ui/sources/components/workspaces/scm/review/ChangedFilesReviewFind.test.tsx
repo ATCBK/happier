@@ -24,15 +24,16 @@ const patch = '@@ -1 +1 @@\n-needle needle\n+needle';
 const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true });
 
 describe('mounted review Find', () => {
-    it('refolds a revealed context match through the Action and button without changing Find or preferences', async () => {
+    it.each([false, true])('refolds omitted revision context through the Action and button (comments=%s)', async (reviewCommentsEnabled) => {
         const settings = storage.getState().settings;
         storage.setState({ settings: { ...settings, filesDiffFoldingEnabled: true,
-            filesDiffFoldingContextThreshold: 4, filesDiffFoldingContextRadius: 1, filesDiffRendererMode: 'happier' } });
+            filesDiffFoldingContextThreshold: 4, filesDiffFoldingContextRadius: 1, filesDiffRendererMode: 'pierre' } });
         const container = document.createElement('div'); document.body.appendChild(container);
         const root = createRoot(container);
         const source = createChangedFilesReviewDiffStateSource();
-        const diff = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, index) => ` context ${index}`), '-old', '+new'].join('\n');
-        source.setDiffState('a.ts', { status: 'loaded', diff, error: null });
+        const baseText = Array.from({ length: 160 }, (_, i) => i === 47 ? 'hidden cedar one' : i === 111 ? 'hidden cedar two' : `coast ${i}`).join('\n') + '\n';
+        const diff = '@@ -5,3 +5,3 @@\n coast 4\n-coast 5\n+changed 5\n coast 6\n@@ -154,3 +154,3 @@\n coast 153\n-coast 154\n+changed 154\n coast 155\n';
+        source.setDiffState('a.ts', { status: 'loaded', diff, error: null, context: { status: 'loaded', baseText } });
         const model = createChangedFilesReviewFind();
         function Review() {
             const { theme } = useUnistyles();
@@ -42,7 +43,7 @@ describe('mounted review Find', () => {
             React.useEffect(() => model.connect({ paths: ['a.ts'], diffStateSource: source, reveal }), []);
             return <View ref={surfaceRef}>
                 <ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature={null} filePath="a.ts"
-                    diffStateSource={source} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
+                    diffStateSource={source} reviewCommentsEnabled={reviewCommentsEnabled} reviewCommentDrafts={[]}
                     findModel={model} findActive={snapshot.open} scrollToLineId={target?.lineId} />
                 <ChangedFilesReviewFindSurface model={model} surfaceId="review:refold" surfaceRef={surfaceRef} presented />
             </View>;
@@ -53,10 +54,10 @@ describe('mounted review Find', () => {
             await act(async () => { root.render(<KeyboardShortcutProvider handlers={{}}>
                 <PluginSurfaceFocusEligibilityProvider active><Review /></PluginSurfaceFocusEligibilityProvider>
             </KeyboardShortcutProvider>); });
-            await act(async () => { model.open(); model.setOptions({ regex: true, matchCase: false }); model.setQuery('context [56]'); });
+            await act(async () => { model.open(); model.setOptions({ regex: true, matchCase: false }); model.setQuery('hidden cedar (one|two)'); });
             const mark = () => container.querySelector('[data-testid="find-match-current"]');
             const markedText = () => Array.from(container.querySelectorAll('[data-testid="find-match-current"]')).map(node => node.textContent).join('');
-            expect(markedText()).toBe('context 5');
+            expect(markedText()).toBe('hidden cedar one');
             const before = await execute('read');
             let result: Awaited<ReturnType<typeof execute>> | undefined;
             await act(async () => { result = await execute('refold'); });
@@ -64,11 +65,11 @@ describe('mounted review Find', () => {
             expect(result).toEqual(before);
             expect(mark()).toBeNull();
             expect(container.querySelector('[data-testid="diff-find-fold-again"]')).toBeNull();
-            expect(model.query).toBe('context [56]');
+            expect(model.query).toBe('hidden cedar (one|two)');
             expect(model.getSnapshot().open).toBe(true);
             expect(model.getFileSnapshot('a.ts').ranges.size).toBe(2);
             await act(async () => { await execute('step'); });
-            expect(markedText()).toBe('context 6');
+            expect(markedText()).toBe('hidden cedar two');
             const afterStep = await execute('read');
             await act(async () => { container.querySelector<HTMLElement>('[data-testid="diff-find-fold-again"]')!.click(); });
             expect(mark()).toBeNull();
@@ -77,6 +78,7 @@ describe('mounted review Find', () => {
             expect(storage.getState().settings.filesDiffFoldingEnabled).toBe(true);
             expect(storage.getState().settings.filesDiffFoldingContextThreshold).toBe(4);
             expect(storage.getState().settings.filesDiffFoldingContextRadius).toBe(1);
+            expect(storage.getState().settings.filesDiffRendererMode).toBe('pierre');
         } finally { await act(async () => { root.unmount(); }); container.remove(); storage.setState({ settings }); }
     });
     it.each(['binary', 'unreadable'] as const)('explains incomplete zero-hit results from a %s file', async (kind) => {

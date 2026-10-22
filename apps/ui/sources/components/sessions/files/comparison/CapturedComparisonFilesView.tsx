@@ -76,6 +76,7 @@ export function CapturedComparisonFilesView(props: Readonly<{
             maxFiles={props.maxFiles} maxChangedLines={props.maxChangedLines} onFilePress={doNotOpenWorkingFile}
             evidenceOnly workspaceScope={props.workspaceScope} hunkReview={hunkReview}
             comparisonChrome={chrome} providerDiffByPath={projected.diffByPath} fetchUnifiedDiffForPath={fetchCapturedDiff}
+            comparisonFiles={props.comparison.inventory.files}
             initialCollapsedPaths={initiallyCollapsed} onCollapsedPathsChange={props.onCollapsedPathsChange}
             initialScrollTop={props.initialScrollTop} onScrollTopChange={props.onScrollTopChange} rowDensity="compact" />;
     return <View testID="captured-comparison-files" style={{ flex: 1, minHeight: 0 }}>

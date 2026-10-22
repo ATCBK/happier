@@ -77,6 +77,7 @@ import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { resolveScmDiffAreaLabels, resolveScmDiffAreaVocabulary } from '@/scm/diff/diffAreaLabels';
 import { useChangedFilesReviewFind, type ReviewFindTarget } from './useChangedFilesReviewFind';
+import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { ChangedFilesReviewFindSurface, ChangedFilesReviewFindButton, ChangedFilesReviewFindCount } from './ChangedFilesReviewFind';
 
 const ViewWithClick = View as unknown as React.ComponentType<
@@ -186,6 +187,7 @@ type ChangedFilesReviewProps = {
     diffAutoRefreshIntervalMs?: number;
     diffRefreshToken?: number;
     providerDiffByPath?: ReadonlyMap<string, string | null> | null;
+    comparisonFiles?: readonly import('@happier-dev/protocol').ScmComparisonFile[];
     reviewCommentsEnabled?: boolean;
     reviewCommentDrafts?: readonly ReviewCommentDraft[];
     onUpsertReviewCommentDraft?: (draft: ReviewCommentDraft) => void;
@@ -551,6 +553,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const allKeys = React.useMemo(() => diffFiles.map((f) => f.key), [diffFiles]);
     const binaryReviewPaths = React.useMemo(() => new Set(reviewFiles.filter((file) => file.isBinary === true).map((file) => file.fullPath)), [reviewFiles]);
     const reviewFind = useChangedFilesReviewFind();
+    const intraLineDiff = useIntraLineWordDiffConfig();
     const findOpen = React.useSyncExternalStore(reviewFind.subscribe, () => reviewFind.getSnapshot().open);
     const [findTarget, setFindTarget] = React.useState<ReviewFindTarget | null>(null);
     const findSurfaceRef = React.useRef<View | null>(null);
@@ -931,6 +934,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         fetchUnifiedDiffForPath: props.fetchUnifiedDiffForPath,
         normalizeError: plugin.errorNormalizer,
         fallbackError,
+        findContext: findOpen,
+        workspaceScope,
+        comparisonFiles: props.comparisonFiles,
     });
 
     const scrollToPath = React.useCallback((path: string) => {
@@ -948,8 +954,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         setFindTarget((previous) => previous?.filePath === target?.filePath && previous?.lineId === target?.lineId ? previous : target);
         if (target) scrollToPath(target.filePath);
     }, [scrollToPath]);
-    React.useEffect(() => reviewFind.connect({ paths: allKeys, binaryPaths: binaryReviewPaths, diffStateSource, reveal: revealFindTarget }),
-        [reviewFind, allKeys, binaryReviewPaths, diffStateSource, revealFindTarget]);
+    React.useEffect(() => reviewFind.connect({ paths: allKeys, binaryPaths: binaryReviewPaths, intraLineDiff, diffStateSource, reveal: revealFindTarget }),
+        [reviewFind, allKeys, binaryReviewPaths, intraLineDiff, diffStateSource, revealFindTarget]);
     React.useEffect(() => { reviewFind.close(); }, [reviewFind, sessionId, changedFilesViewMode, diffArea]);
     React.useEffect(() => { if (props.activeReviewFile?.presented === false) reviewFind.close(); }, [reviewFind, props.activeReviewFile?.presented]);
     const findExpandedKeys = React.useMemo(() => findTarget && findOpen

@@ -27,12 +27,13 @@ import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 
 function applyReviewSeparators(lines: readonly CodeLine[], unifiedDiff: string): readonly CodeLine[] {
     const hunks = parseUnifiedDiffHunks(unifiedDiff);
+    const hasRevisionContext = lines.some(candidate => candidate.hunkIndex === null && candidate.kind === 'context');
     return lines.map((line) => {
         if (line.kind !== 'header' || line.hunkIndex === null) return line;
         const hunk = hunks[line.hunkIndex];
         if (!hunk) return line;
         const previous = hunks[line.hunkIndex - 1];
-        const hidden = Math.max(0, hunk.newStart - (previous ? previous.newStart + previous.newLines : 1));
+        const hidden = hasRevisionContext ? 0 : Math.max(0, hunk.newStart - (previous ? previous.newStart + previous.newLines : 1));
         const text = hidden > 0
             ? [t('hunkReview.unchangedLines', { count: hidden }), hunk.sectionHeading].filter(Boolean).join('  ')
             : '';
