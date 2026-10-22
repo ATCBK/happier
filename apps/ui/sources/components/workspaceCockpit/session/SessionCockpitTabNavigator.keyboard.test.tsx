@@ -192,7 +192,7 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
                     historyRef.current = [...historyRef.current, name];
                     return name;
                 });
-            }, [routeNamesKey, routes]);
+            }, [routeNamesKey]);
             const goBack = React.useCallback(() => {
                 setActiveName((current) => {
                     if (historyRef.current.length <= 1) return current;
@@ -457,6 +457,17 @@ describe('SessionCockpitTabNavigator keyboard behavior', () => {
         expect(navigatorState.navigationContainerLinking).toEqual({ enabled: false, prefixes: [] });
         expect(navigatorState.backBehavior).toBe('history');
         expect(navigatorState.screenOptions?.tabBarHideOnKeyboard).toBe(false);
+    });
+
+    it('retains surface commands when only transcript presentation changes', async () => {
+        const { SessionCockpitTabNavigator } = await import('./SessionCockpitTabNavigator');
+        const screen = await renderScreen(<SessionCockpitTabNavigator initialSurface="chat" scopeId="session:s1" sessionId="s1" terminalTabAvailable />);
+        const before = navigatorState.registeredChrome?.switchSurface;
+        expect(before).toBeTypeOf('function');
+        await screen.update(<SessionCockpitTabNavigator initialSurface="chat" scopeId="session:s1" sessionId="s1" terminalTabAvailable jumpToSeq={1} />);
+        expect(navigatorState.registeredChrome?.switchSurface).toBe(before);
+        await act(async () => { navigatorState.registeredChrome?.switchSurface('browser'); });
+        expect(navigatorState.activeRouteName).toBe('browser');
     });
 
     it('paints its scenes with the app navigation theme instead of the nested container default', async () => {

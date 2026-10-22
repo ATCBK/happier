@@ -310,20 +310,10 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                                 <Tab.Screen key={surface} name={surface}>
                                     {({ navigation }) => (
                                         <SessionCockpitSceneActivityBoundary surface={surface}>
-                                            <SessionCockpitSurfaceNavigationProvider
-                                                value={cockpit ? {
-                                                    returnToPreviousSurface: () => {
-                                                        if (navigation.canGoBack()) {
-                                                            navigation.goBack();
-                                                        } else {
-                                                            navigation.navigate('chat');
-                                                        }
-                                                    },
-                                                    switchSurface: (targetSurface) => {
-                                                        navigation.navigate(targetSurface);
-                                                        commitNavigatorSurface(targetSurface);
-                                                    },
-                                                } : null}
+                                            <SessionCockpitSceneNavigationBoundary
+                                                cockpit={cockpit}
+                                                navigation={navigation}
+                                                commitSurface={commitNavigatorSurface}
                                             >
                                                 <SessionCockpitPanePresentationBoundary
                                                     scopeId={props.scopeId}
@@ -341,7 +331,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                                                         onRequestOpenWorkState={requestOpenWorkState}
                                                     />
                                                 </SessionCockpitPanePresentationBoundary>
-                                            </SessionCockpitSurfaceNavigationProvider>
+                                            </SessionCockpitSceneNavigationBoundary>
                                         </SessionCockpitSceneActivityBoundary>
                                     )}
                                 </Tab.Screen>
@@ -353,6 +343,25 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
         </SessionBoardControllerProvider>
     );
 });
+
+function SessionCockpitSceneNavigationBoundary({ cockpit, navigation, commitSurface, children }: React.PropsWithChildren<Readonly<{
+    cockpit: boolean;
+    navigation: Pick<BottomTabBarProps['navigation'], 'navigate' | 'canGoBack' | 'goBack'>;
+    commitSurface: (surface: SessionMobileSurface) => void;
+}>>) {
+    const { navigate, canGoBack, goBack } = navigation;
+    const switchSurface = React.useCallback((surface: SessionMobileSurface) => {
+        navigate(surface);
+        commitSurface(surface);
+    }, [commitSurface, navigate]);
+    const returnToPreviousSurface = React.useCallback(() => {
+        if (canGoBack()) goBack();
+        else navigate('chat');
+    }, [canGoBack, goBack, navigate]);
+    const value = React.useMemo(() => cockpit ? { switchSurface, returnToPreviousSurface } : null,
+        [cockpit, returnToPreviousSurface, switchSurface]);
+    return <SessionCockpitSurfaceNavigationProvider value={value}>{children}</SessionCockpitSurfaceNavigationProvider>;
+}
 
 function SessionCockpitPanePresentationBoundary(props: React.PropsWithChildren<Readonly<{
     cockpit: boolean;
