@@ -1,3 +1,4 @@
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -135,6 +136,8 @@ describe('pet selection through the canonical Action', () => {
                     hasConnectedClientRpcHandler: () => connected,
                     // Only the Machine-to-App network hop is substituted; both real executors and the carrier stay live.
                     callConnectedClientRpc: async (_method, payload, options) => {
+                        // The server selects the receiver; a withdrawn App is typed absence before any client executes.
+                        if (!connected) return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
                         options.onIssued();
                         return { ok: true, result: await receive(JSON.parse(JSON.stringify(payload)), { signal: new AbortController().signal }) };
                     },

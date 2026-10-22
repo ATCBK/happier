@@ -65,6 +65,7 @@ import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '@/
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { WorkspaceRouteBody as ManagedMachineRouteBody } from '@/app/(app)/machines/managed/[id]';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { resolveActionTitle } from '@/text/actionTitles';
 
 const operationRpcBoundary = vi.hoisted(() => ({ answer: null as unknown, registryAnswer: null as unknown, schemaAnswer: null as unknown,
     requests: [] as Array<Readonly<{ serverId?: string | null; accountId?: string | null; machineId: string; method: string }>> }));
@@ -1441,7 +1442,13 @@ describe('managed Machine detail', () => {
         expect(nativeRequests).toEqual([expect.objectContaining({ input: { homeId: machine.homeId, managedId: machine.id,
             when: 'now', expectedRevision: 8, intent: 'delete', reviewedDependencies: true } })]);
         expect(screen.tree.findByType(ManagedCreationProgress).props.machine.observation.availability).toBe('present');
-        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.approval').length).toBeGreaterThan(0);
+        const pendingDelete = screen.tree.findAll(node => node.props?.testID === 'managed-machine.approval')[0];
+        expect(pendingDelete?.props).toMatchObject({
+            title: resolveActionTitle('machines.managed.delete', null),
+            description: t('approvals.waitingForYou'),
+            action: { label: t('approvals.review') },
+        });
+        expect(screen.findByTestId('managed-machine.delete-confirm')?.props.loading).toBe(false);
     });
     it.each(['approval-pending', 'saved'] as const)('resets live Keep from the fresh parent, clearing a failed proposal only on success (%s)', async outcome => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-reset-parent.test', scope: 'tab' });
@@ -2359,5 +2366,52 @@ describe('managed Machine detail', () => {
         const redirect = screen.tree.findByType('Redirect' as never);
         // Rendered inside Settings (no door set), the enrolled machine opens in the Settings door.
         expect(resolveHref(redirect.props.href)).toBe(`/settings/machines/machine-joined?serverId=${encodeURIComponent(target.id)}`);
+    });
+    it('keeps the list inventory identity in the header while the saved-resource read is pending', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-detail-identity.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_detail_identity');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner') });
+        const machine = ManagedMachineV1Schema.parse({ id: 'pending-identity', homeId: 'srv_detail_identity', custodianAccountId: 'owner',
+            launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Known Cua resource', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
+            resource: { contributionRef: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, value: { resourceId: 'native-id' } },
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+        const detail = createDeferred<Response>();
+        setRuntimeFetch(async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/machines/managed/actions/list') return Response.json({ machines: [machine] });
+            if (path === '/v1/machines/managed/actions/get') return detail.promise;
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        try {
+            await flushHookEffects({ cycles: 20 });
+            expect(screen.tree.findByType(ManagedReceiptPageLayout).props.header.title).toBe(machine.launch.name);
+            expect(screen.findByTestId('managed-machine.read-state')?.props.kind).toBe('loading');
+        } finally {
+            detail.resolve(Response.json(machine));
+            await flushHookEffects({ cycles: 20 });
+        }
+    });
+    it('shows the existing missing state when the detail read fails after the current inventory confirms absence', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-detail-deleted.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_detail_deleted');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner') });
+        setRuntimeFetch(async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/machines/managed/actions/list') return Response.json({ machines: [] });
+            if (path === '/v1/machines/managed/actions/get') return Response.json({ error: 'not_found' }, { status: 404 });
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId="deleted" serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 25 });
+        expect(screen.getTextContent()).toContain(t('managedMachines.detail.missing'));
+        expect(screen.getTextContent()).not.toContain(t('managedMachines.detail.loadFailed'));
     });
 });

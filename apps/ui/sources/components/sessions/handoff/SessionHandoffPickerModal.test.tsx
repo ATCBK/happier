@@ -1223,7 +1223,13 @@ describe('SessionHandoffPickerModal', () => {
                     machineId: 'machine_source',
                     path: '/Users/tester',
                     homeDir: '/Users/tester',
-                    externalSessionV1: { source: 'claudeConfig' },
+                    externalSessionV1: {
+                        v: 1,
+                        agentId: 'claude',
+                        machineId: 'machine_source',
+                        remoteSessionId: 'claude_session_1',
+                        source: { kind: 'claudeConfig', configDir: '/Users/tester/.claude' },
+                    },
                 },
             },
         };
@@ -1235,7 +1241,13 @@ describe('SessionHandoffPickerModal', () => {
                     machineId: 'machine_source',
                     path: '/Users/tester',
                     homeDir: '/Users/tester',
-                    externalSessionV1: { source: 'claudeConfig' },
+                    externalSessionV1: {
+                        v: 1,
+                        agentId: 'claude',
+                        machineId: 'machine_source',
+                        remoteSessionId: 'claude_session_1',
+                        source: { kind: 'claudeConfig', configDir: '/Users/tester/.claude' },
+                    },
                 },
             },
         ];
