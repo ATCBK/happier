@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Text } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
@@ -41,6 +42,20 @@ describe('managed provisioner presentation', () => {
         const screen = await renderScreen(<PresetMark />);
         expect(screen.tree.findAll(node => node.props.name === 'puzzle-piece')).toHaveLength(0);
         expect(screen.tree.findAll(node => node.props.style?.width === 17 && node.props.style?.height === 17).length).toBeGreaterThan(0);
+        await screen.unmount();
+    });
+    it('uses the bundled provisioner declaration immediately while the controller projection resolves', async () => {
+        function CuaPresentation() {
+            const presentation = useManagedProvisionerPresentation({ serverId: 'srv_resolving', schemaVersion: 1,
+                controller: { machineId: 'controller', installationId: 'installation' },
+                provider: { pluginId: 'happier.machine.cua', localId: 'local-sandbox' } });
+            return <>{presentation.mark}<Text>{presentation.title}</Text><Text>{presentation.kindTitle}</Text></>;
+        }
+        const screen = await renderScreen(<CuaPresentation />);
+        expect(screen.getTextContent()).toContain('Cua');
+        expect(screen.getTextContent()).toContain('sandbox');
+        expect(screen.tree.findAll(node => node.props.name === 'desktop').length).toBeGreaterThan(0);
+        expect(screen.tree.findAll(node => node.props.name === 'puzzle-piece')).toHaveLength(0);
         await screen.unmount();
     });
 });

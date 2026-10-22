@@ -17,6 +17,7 @@ import { createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui
 import type { ManagedPrerequisiteV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { BUNDLED_MACHINE_PROVISIONER_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 
 type Provisioner = MachineProvisionersListResultV1['provisioners'][number];
 /**
@@ -71,10 +72,14 @@ export function useManagedProvisionerPresentation(input: Readonly<{
         ...(input.refreshKey === undefined ? {} : { refreshKey: input.refreshKey }) });
     const uiProjection = projection.inputs?.pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
     const locale = getPreferredLanguage();
-    const projected = input.provider ? projection.inputs?.pluginProjectionV2?.familiesById.machineProvisioners?.entriesById[
-        buildQualifiedPluginContributionKey(input.provider)] : undefined;
+    const qualifiedProviderKey = input.provider ? buildQualifiedPluginContributionKey(input.provider) : null;
+    const projected = qualifiedProviderKey
+        ? projection.inputs?.pluginProjectionV2?.familiesById.machineProvisioners?.entriesById[qualifiedProviderKey]
+        : undefined;
+    const bundled = qualifiedProviderKey ? BUNDLED_MACHINE_PROVISIONER_DECLARATIONS[qualifiedProviderKey] : undefined;
     const provisioner = input.provisioner ?? (projected && projected.definition.schemaVersion === input.schemaVersion
-        ? { contribution: { pluginId: projected.pluginId, localId: projected.definition.id }, descriptor: projected.definition } : undefined);
+        ? { contribution: { pluginId: projected.pluginId, localId: projected.definition.id }, descriptor: projected.definition }
+        : bundled?.descriptor.schemaVersion === input.schemaVersion ? bundled : undefined);
     const localized = React.useMemo(() => createPluginLocalizedTextResolver({
         projection: uiProjection,
         locale,
