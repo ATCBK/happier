@@ -693,8 +693,8 @@ export function readMachineTunnelFeatureEnv(env: NodeJS.ProcessEnv): MachineTunn
 
 export function readLocalServicesFeatureEnv(env: NodeJS.ProcessEnv): LocalServicesFeatureEnv {
   // PRV-1: private preview is the user's OWN dev server reached over loopback — there is no
-  // internet exposure, proxy, or tunnel involved — so it defaults ON (VS Code/Codespaces
-  // "private auto-forward"). `publicPreview` (real internet exposure) stays fail-closed
+  // internet exposure, proxy, or tunnel involved — so it defaults ON.
+  // `publicPreview` (real internet exposure) stays fail-closed
   // default-off below: that is the explicit, per-use line.
   const previewEnabled = readFeatureConfig(env, 'localServicesPreviewEnabled');
   const publicPreviewEnabled = readFeatureConfig(env, 'localServicesPublicPreviewEnabled');
