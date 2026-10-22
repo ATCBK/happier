@@ -33,15 +33,6 @@ import {
     SessionTranscriptObservationAckV1Schema,
     SessionTranscriptObservationInputSchema,
 } from "@happier-dev/protocol/sessions/messages/transcriptObservationV1";
-import { reloadConfiguration } from "../../../../../cli/src/configuration";
-import { prepareSessionEventMessageViaPort } from "../../../../../cli/src/api/session/client/transcript/sendMessages";
-import { createRuntimeSessionClientDurableMutationOutbox } from "../../../../../cli/src/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox";
-import { loadSessionClientDurableMutationOutbox } from "../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationPersistence";
-import {
-    resolveTranscriptMessageAppendMutationId,
-    type SessionClientDurableMutationSocket,
-    type TranscriptMessageAppendMutationV1,
-} from "../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationTypes";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -61,11 +52,42 @@ describe("session update handler on SQLite", () => {
     afterAll(async () => await harness.close());
 
     it("recovers the original capability notice after Home commits but its ACK is lost", async () => {
+        type TranscriptObservation = ReturnType<typeof SessionTranscriptObservationInputSchema.parse>;
+        const noticeEvent = {
+            type: "message" as const, message: "An optional MCP server could not be prepared.",
+            [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1 as const, items: [{
+                kind: "mcp_server" as const, itemId: "optional-tracker", name: "Tracker",
+                code: "mcp_unavailable", detail: "catalog_unavailable",
+            }] },
+        };
+        // Load the actual CLI modules through Vitest's cross-package boundary,
+        // as the Follow compositions do. Server compilation keeps its own alias
+        // and rootDir; runtime still exercises the real producer and disk journal.
+        const [
+            { reloadConfiguration },
+            { prepareSessionEventMessageViaPort },
+            { loadSessionClientDurableMutationOutbox },
+            { resolveTranscriptMessageAppendMutationId },
+        ] = await Promise.all([
+            vi.importActual<{ reloadConfiguration(): void }>("../../../../../cli/src/configuration"),
+            vi.importActual<{
+                prepareSessionEventMessageViaPort(
+                    port: { buildOutboundSessionMessagePayload(content: unknown): TranscriptObservation["content"] },
+                    event: typeof noticeEvent,
+                ): { payload: TranscriptObservation["content"]; localId: string; messageRole: NonNullable<TranscriptObservation["messageRole"]> };
+            }>("../../../../../cli/src/api/session/client/transcript/sendMessages"),
+            vi.importActual<{
+                loadSessionClientDurableMutationOutbox(sessionId: string): Promise<readonly unknown[]>;
+            }>("../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationPersistence"),
+            vi.importActual<{
+                resolveTranscriptMessageAppendMutationId(input: { sessionId: string; localId: string }): string;
+            }>("../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationTypes"),
+        ]);
         const previousCliHome = process.env.HAPPIER_HOME_DIR;
         process.env.HAPPIER_HOME_DIR = join(harness.baseDir, "capability-notice-cli");
         process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = "optional";
         reloadConfiguration();
-        const handles: ReturnType<typeof createRuntimeSessionClientDurableMutationOutbox>[] = [];
+        const handles: { close(): Promise<void> }[] = [];
         let releaseLostAck!: () => void;
         const loseAck = new Promise<void>(resolve => { releaseLostAck = resolve; });
         let committedAtHome!: () => void;
@@ -99,7 +121,11 @@ describe("session update handler on SQLite", () => {
                 })]);
                 // Only Socket.IO transport is substituted. The registered Home
                 // handler, publisher admission, transcript writer and SQL dedup stay real.
-                const transport = {
+                const transport: {
+                    connected: boolean;
+                    emit(): void;
+                    emitWithAck(event: string, payload: unknown): Promise<unknown>;
+                } = {
                     connected: true,
                     emit: () => undefined,
                     async emitWithAck(event: string, payload: unknown) {
@@ -118,40 +144,48 @@ describe("session update handler on SQLite", () => {
                         }
                         return ack;
                     },
-                } satisfies SessionClientDurableMutationSocket;
+                };
                 return transport;
             };
             const firstSocket = await connectPublisher(true);
-            const contract = (socket: SessionClientDurableMutationSocket, epoch: number) => ({
+            const contract = (socket: typeof firstSocket, epoch: number) => ({
                 mode: "session_sync_v2_pending_input_v1" as const,
                 runtimeActivity: "v2" as const, pendingInput: "v1" as const,
                 publisherAuthority: "indeterminate" as const, sessionConnectionEpoch: epoch, socket,
                 transcriptTransport: { mode: "session_transcript_observation_v1" as const },
             });
-            const first = createRuntimeSessionClientDurableMutationOutbox({
+            const outboxParams = {
                 token: "transport-fixture", sessionId: session.id, flushOnReady: false,
                 getSocket: () => firstSocket, requestReconnect: () => undefined,
-            });
-            handles.push(first);
-            await first.setSessionSyncPendingInputServerContract(contract(firstSocket, 1));
+            };
             const prepareNotice = () => prepareSessionEventMessageViaPort({
                 buildOutboundSessionMessagePayload: content => ({ t: "plain", v: content }),
-            }, {
-                type: "message", message: "An optional MCP server could not be prepared.",
-                [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1, items: [{
-                    kind: "mcp_server", itemId: "optional-tracker", name: "Tracker",
-                    code: "mcp_unavailable", detail: "catalog_unavailable",
-                }] },
-            });
+            }, noticeEvent);
             const prepared = prepareNotice();
             const now = Date.now();
             const mutation = {
-                v: 1, sessionId: session.id,
+                v: 1 as const, sessionId: session.id,
                 mutationId: resolveTranscriptMessageAppendMutationId({ sessionId: session.id, localId: prepared.localId }),
-                source: "transcript_message_append", localId: prepared.localId, sidechainId: null,
+                source: "transcript_message_append" as const, localId: prepared.localId, sidechainId: null,
                 messageRole: prepared.messageRole, content: prepared.payload, createdAt: now, updatedAt: now,
-                provenance: { kind: "non_dependent", source: "background" },
-            } satisfies TranscriptMessageAppendMutationV1;
+                provenance: { kind: "non_dependent" as const, source: "background" as const },
+            };
+            type NoticeOutbox = {
+                enqueueTranscriptMessage(input: typeof mutation, options: { awaitDelivery: boolean }): Promise<{
+                    persisted: boolean; delivered: boolean; localId?: string;
+                }>;
+                setSessionSyncPendingInputServerContract(input: ReturnType<typeof contract>): Promise<void>;
+                activateDelivery(): Promise<void>;
+                awaitReady(): Promise<void>;
+                flush(reason: "flush"): Promise<void>;
+                close(): Promise<void>;
+            };
+            const { createRuntimeSessionClientDurableMutationOutbox } = await vi.importActual<{
+                createRuntimeSessionClientDurableMutationOutbox(params: typeof outboxParams & { initiallyActive?: boolean }): NoticeOutbox;
+            }>("../../../../../cli/src/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox");
+            const first = createRuntimeSessionClientDurableMutationOutbox(outboxParams);
+            handles.push(first);
+            await first.setSessionSyncPendingInputServerContract(contract(firstSocket, 1));
 
             // The optional caller resumes from durable custody while the real
             // Home ACK is still unavailable; it installs no delivery observer.
@@ -184,8 +218,7 @@ describe("session update handler on SQLite", () => {
 
             const recoveredSocket = await connectPublisher(false);
             const recovered = createRuntimeSessionClientDurableMutationOutbox({
-                token: "transport-fixture", sessionId: session.id, initiallyActive: false, flushOnReady: false,
-                getSocket: () => recoveredSocket, requestReconnect: () => undefined,
+                ...outboxParams, initiallyActive: false, getSocket: () => recoveredSocket,
             });
             handles.push(recovered);
             await recovered.awaitReady();

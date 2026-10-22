@@ -30,6 +30,7 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, sealEnc
 import { decodeBase64 } from 'privacy-kit';
 import { machinesRoutes } from '../machines/machinesRoutes';
 import { machineUpdateHandler } from '@/app/api/socket/machineUpdateHandler';
+import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { auth } from '@/app/auth/auth';
 import { SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/messages/sessionTranscriptPageLimits';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
@@ -69,6 +70,29 @@ describe('original Session input reply custody', () => {
             meta: withSessionInputRequest({}, request) } };
         const admission = { accountId: account.id, sourceMachineId: machine.id, targetMachineId: machine.id, sessionId: session.id,
             localId, content, reply: { mode: 'wait' as const }, requestedAction: { v: 1 as const, kind: 'enqueue' as const } };
+        if (outcomeKind === 'pass') {
+            await db.machine.update({ where: { id: machine.id }, data: {
+                operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+            } });
+            expect(await enqueuePendingMessageByAuthenticatedMachine(admission)).toMatchObject({
+                status: 'rejected', code: 'session_input_target_update_required',
+            });
+            expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId } } })).toBeNull();
+            // Recover through the actual authenticated publication handler;
+            // admission below must read its acknowledged durable projection.
+            const machineSocket = Object.assign(createAuthenticatedFakeSocket({ data: { clientType: 'machine-scoped',
+                machineId: machine.id, verifiedMachineInstallationId: machine.installationId } }), {
+                handshake: { auth: { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }) } },
+            });
+            machineUpdateHandler(account.id, machineSocket as never, {
+                operationSocketBatchLimits: { ok: true, limits: { maxItems: 200, maxSerializedBytes: 524288 } },
+            });
+            let publication: unknown;
+            await getSocketHandler(machineSocket, MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1)({
+                machineId: machine.id, capabilities: machine.operationProtocolCapabilities,
+            }, (value: unknown) => { publication = value; });
+            expect(publication).toMatchObject({ v: 1, result: 'success', revision: 2 });
+        }
         expect(await enqueuePendingMessageByAuthenticatedMachine(admission)).toEqual({ status: 'accepted', localId });
         const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } });
         const authority = settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: pending.inputAdmissionReceipt });

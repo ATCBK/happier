@@ -3,6 +3,7 @@ import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { bindDirectoryProvisionedIdentitiesInTx } from "./provisionedIdentityBinding";
+import { createGitHubAppRegistrationConfigV1, encryptGitHubAppRegistrationSecretsV1 } from "@/app/integrations/github/githubManagedApp";
 
 describe("directory provisioned identity binding", () => {
     let harness: LightSqliteHarness;
@@ -11,6 +12,7 @@ describe("directory provisioned identity binding", () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: "happier-directory-binding-",
             initAuth: false,
+            initEncrypt: true,
             env: { HAPPIER_FEATURE_TEAMS__ENABLED: "1" },
         });
         await db.homeGovernancePolicy.create({
@@ -41,6 +43,7 @@ describe("directory provisioned identity binding", () => {
                 ownerTeamId: params.teamId,
                 kind: "workos_sso",
                 displayName: "WorkOS",
+                enabled: true,
                 config: { v: 1, kind: "workos_sso" },
             },
         });
@@ -48,8 +51,8 @@ describe("directory provisioned identity binding", () => {
             data: {
                 teamId: params.teamId,
                 providerInstanceId: provider.id,
-                externalReference: { v: 1 },
-                settings: { v: 1 },
+                externalReference: { v: 1, kind: "workos_sso", organizationId: `org_${params.suffix}`, connectionId: null },
+                settings: { v: 1, kind: "workos_sso" },
             },
         });
         const source = await db.teamDirectorySource.create({
@@ -256,14 +259,17 @@ describe("directory provisioned identity binding", () => {
     it("binds a GitHub organization person by immutable numeric id", async () => {
         const team = await db.team.create({ data: { name: "GitHub Binding Team" } });
         const creator = await db.account.create({ data: { publicKey: `github-binding-creator-${Date.now()}` } });
+        const registrationId = `github-binding-registration-${team.id}`;
         const registration = await db.gitHubAppRegistration.create({
             data: {
+                id: registrationId,
                 ownerTeamId: team.id,
-                githubHost: "github.com",
+                githubHost: "https://github.com",
                 githubAppId: 4242n,
                 githubClientId: `client-${team.id}`,
-                config: { v: 1 },
-                encryptedSecrets: new Uint8Array([1]),
+                config: createGitHubAppRegistrationConfigV1({ v: 1, privateKey: "test-directory-key" }),
+                encryptedSecrets: encryptGitHubAppRegistrationSecretsV1({ registrationId,
+                    secrets: { v: 1, privateKey: "test-directory-key" } }),
                 state: "verified",
                 createdByAccountId: creator.id,
             },
@@ -274,6 +280,7 @@ describe("directory provisioned identity binding", () => {
                 githubInstallationId: 909n,
                 githubOrganizationId: 808n,
                 githubOrganizationLogin: "acme",
+                verifiedPermissions: { members: "read" },
                 repositorySelection: "all",
                 state: "verified",
             },
@@ -305,6 +312,7 @@ describe("directory provisioned identity binding", () => {
                 githubInstallationId: 910n,
                 githubOrganizationId: 809n,
                 githubOrganizationLogin: "other",
+                verifiedPermissions: { members: "read" },
                 repositorySelection: "all",
                 state: "verified",
             },

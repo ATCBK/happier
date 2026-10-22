@@ -83,11 +83,20 @@ describe("Team credential broker Machine eligibility", () => {
         {},
         { irohMachineEndpoint: capabilities.irohMachineEndpoint },
         { providerBrokerIngress: { protocolVersions: [2] } },
-        { providerBrokerIngress: { protocolVersions: [1], ready: true } },
     ])("requires explicit valid broker protocol support for %j", async (projection) => {
         const f = await fixture({ operationProtocolCapabilities: projection });
         await expect(f.save()).resolves.toEqual({ ok: false, error: "update_required" });
         await expect(f.open([f.socket])).resolves.toEqual({ ok: false, error: "update_required" });
+    });
+
+    it("reads supported broker capability from retained metadata with an extra field", async () => {
+        const f = await fixture({ operationProtocolCapabilities: {
+            ...capabilities, providerBrokerIngress: { protocolVersions: [1], ready: true },
+        } });
+        await expect(f.save()).resolves.toEqual({ ok: true, machineId: f.machine.id });
+        await expect(f.open([f.socket])).resolves.toEqual({
+            ok: true, machineId: f.machine.id, endpointAuthority: { endpointId, revision: 3 },
+        });
     });
 
     it("opens only against current authenticated presence and rereads endpoint and capability changes", async () => {

@@ -717,7 +717,7 @@ describe('Team credential resource usage query', () => {
     const managerView = await queryTeamCredentialUsage(manager.id, { resourceId: resource.id, ...range }, TEST_AUTHENTICATION);
     expect('ok' in managerView).toBe(false);
   });
-  it('retains monetary columns without blending kinds or pricing an incompletely priced population', async () => {
+  it('sums best-available monetary contributions while strict modes refuse an incompletely priced population', async () => {
     const manager = await db.account.create({ data: { encryptionMode: 'plain' } });
     const team = await db.team.create({ data: { name: 'Mixed provenance team' } });
     await db.teamMembership.create({ data: { teamId: team.id, accountId: manager.id, role: 'admin' } });
@@ -754,9 +754,9 @@ describe('Team credential resource usage query', () => {
     const automatic = await queryTeamCredentialUsage(manager.id, input, TEST_AUTHENTICATION);
     if ('ok' in automatic) throw new Error('expected usage result');
     expect(automatic.totals.cost).toMatchObject({ reportedUsd: 2, estimatedUsd: 3, costSource: 'none' });
-    expect(automatic.totals.cost.effectiveUsd).toBeUndefined();
-    expect(automatic.series[0]?.totals.cost.effectiveUsd).toBeUndefined();
-    expect(automatic.breakdown?.[0]?.totals.cost.effectiveUsd).toBeUndefined();
+    expect(automatic.totals.cost.effectiveUsd).toBe(5);
+    expect(automatic.series[0]?.totals.cost.effectiveUsd).toBe(5);
+    expect(automatic.breakdown?.[0]?.totals.cost.effectiveUsd).toBe(5);
 
     const reportedOnly = await queryTeamCredentialUsage(manager.id, { ...input, costMode: 'reported' }, TEST_AUTHENTICATION);
     if ('ok' in reportedOnly) throw new Error('expected usage result');
@@ -779,7 +779,7 @@ describe('Team credential resource usage query', () => {
     const invoiceView = await queryTeamCredentialUsage(manager.id, { ...input, resourceId: invoiceResource.id }, TEST_AUTHENTICATION);
     if ('ok' in invoiceView) throw new Error('expected usage result');
     expect(invoiceView.totals.cost).toMatchObject({ invoiceUsd: 1, reportedUsd: 2, costSource: 'none' });
-    expect(invoiceView.totals.cost.effectiveUsd).toBeUndefined();
+    expect(invoiceView.totals.cost.effectiveUsd).toBe(3);
   });
 
   it.each([

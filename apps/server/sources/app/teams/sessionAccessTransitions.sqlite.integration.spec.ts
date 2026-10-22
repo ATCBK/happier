@@ -141,12 +141,14 @@ describe("Team mutations compose Session access transitions", () => {
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: f.member.id, sessionId: f.session.id } } })).toBeNull();
     });
 
-    it("applies opt-in Team Follow on canonical admission and rolls back effects with the mutation", async () => {
+    it("admits opted-in Team access without enrolling a personal Follow and rolls back effects with the mutation", async () => {
         const f = await fixture();
         const newcomer = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", sessionAutoFollowTeam: true } });
         await inTx(tx => admitTeamMemberInTx(tx, { teamId: f.team.id, accountId: newcomer.id, role: "member", historyAccess: "all_existing" }));
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: newcomer.id, sessionId: f.session.id } } }))
-            .toMatchObject({ following: true });
+            .toBeNull();
+        expect(await resolveEffectiveSessionAccess(db, { sessionId: f.session.id, accountId: newcomer.id,
+            authentication: createPresentUserSessionAccessAuthentication() })).not.toBeNull();
         await expect(inTx(async tx => {
             await removeTeamMemberForActorInTx(tx, f.memberInput);
             throw new Error("abort membership mutation");
