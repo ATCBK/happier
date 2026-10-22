@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { symbols, type DestinationStream } from 'pino';
 
 import { logger } from './logging/log';
 import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
@@ -12,6 +13,30 @@ afterEach(() => {
 });
 
 describe('web latency request correlation', () => {
+    it('keeps successful database span detail at trace while debug retains request summaries and failures', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const originalLevel = logger.level;
+        const records: { phase?: string; level?: string }[] = [];
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation(message => {
+            records.push(JSON.parse(message));
+        });
+        try {
+            logger.level = 'debug';
+            await withWebLatencyTrace('23b2ed82-2ef7-4e4e-af0f-f64d599a08c6', async () => {
+                await timeWebLatencyPhase('db.Session.findMany', () => 'ok');
+                await timeWebLatencyPhase('db.transaction.callback', () => 'ok');
+                await timeWebLatencyPhase('http.GET./v2/changes', () => 'ok');
+                await expect(timeWebLatencyPhase('db.transaction.attempt', () => { throw new Error('private'); })).rejects.toThrow();
+            });
+            expect(records.map(record => record.phase)).toEqual(['http.GET./v2/changes', 'db.transaction.attempt']);
+            logger.level = 'trace';
+            await timeWebLatencyPhase('db.Session.findMany', () => 'ok');
+            expect(records.at(-1)).toMatchObject({ phase: 'db.Session.findMany', level: 'trace' });
+        } finally {
+            logger.level = originalLevel;
+        }
+    });
     it('links nested database spans and records safe failure outcomes without exception content', async () => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
@@ -86,14 +111,15 @@ describe('web latency request correlation', () => {
         }), '[web-latency]');
     });
 
-    it('keeps per-attempt diagnostics at debug severity, including failed attempts', async () => {
+    it('keeps failed attempts at debug and successful database detail at trace', async () => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         const debug = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        const trace = vi.spyOn(logger, 'trace').mockImplementation(() => undefined);
         const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
         await timeWebLatencyPhase('db.transaction.attempt', () => 'ok');
         const failure = Object.assign(new Error('private database input'), { code: 'P2024' });
         await expect(timeWebLatencyPhase('db.transaction.attempt', () => { throw failure; })).rejects.toBe(failure);
-        expect(debug).toHaveBeenCalledWith(expect.objectContaining({
+        expect(trace).toHaveBeenCalledWith(expect.objectContaining({
             module: 'web-latency', phase: 'db.transaction.attempt', status: 'completed',
         }), '[web-latency]');
         expect(debug).toHaveBeenCalledWith(expect.objectContaining({
