@@ -57,6 +57,27 @@ function readOpenApprovalInboxArtifact(artifact: DecryptedArtifact) {
     return parsed?.request.status === 'open' ? parsed : null;
 }
 
+/**
+ * The open Ask already filed for one managed resource's Action (a Delete waiting in Inbox). Read from the
+ * Inbox's strict private request, newest first; the header prefilter keeps unrelated artifacts unparsed.
+ */
+export function readOpenManagedMachineApprovalId(
+    artifacts: Iterable<DecryptedArtifact>,
+    target: Readonly<{ homeId: string; managedId: string; actionId: string }>,
+): string | null {
+    let found: { id: string; createdAtMs: number } | null = null;
+    for (const artifact of artifacts) {
+        if (artifact.header?.actionId !== target.actionId || artifact.header?.approvalStatus !== 'open') continue;
+        const parsed = readOpenApprovalInboxArtifact(artifact);
+        if (parsed?.family !== 'built_in') continue;
+        const args = parsed.request.actionArgs;
+        if (!args || typeof args !== 'object' || !('managedId' in args) || args.managedId !== target.managedId
+            || !('homeId' in args) || args.homeId !== target.homeId) continue;
+        if (!found || parsed.request.createdAtMs > found.createdAtMs) found = { id: artifact.id, createdAtMs: parsed.request.createdAtMs };
+    }
+    return found?.id ?? null;
+}
+
 export type ApprovalDiscussionAddress = Readonly<{ serverId: string; discussionId: string }>;
 export type OpenApprovalDiscussionAttention = ApprovalDiscussionAddress & Readonly<{
     reason: 'approval_pending' | 'draft_waiting';

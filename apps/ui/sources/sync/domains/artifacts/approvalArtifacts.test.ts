@@ -6,6 +6,7 @@ import {
     collectOpenApprovalSessionReferences,
     isOpenApprovalInboxArtifact,
     readOpenApprovalDiscussionAttention,
+    readOpenManagedMachineApprovalId,
     listOpenApprovalArtifactsForSession,
     listTranscriptApprovalArtifactsForSession,
     resolveOpenApprovalSessionKeys,
@@ -48,6 +49,26 @@ function approvalBody(sessionId: string, actionId = 'session.list') {
         summary: 'List sessions',
     };
 }
+
+describe('readOpenManagedMachineApprovalId', () => {
+    const deleteBody = (managedId: string, status = 'open') => ({ ...approvalBody('session-1', 'machines.managed.delete'), status,
+        summary: 'Delete managed machine',
+        actionArgs: { homeId: 'home-1', managedId, when: 'now', expectedRevision: 3, intent: 'delete', reviewedDependencies: true },
+        ...(status === 'rejected' ? { decision: { kind: 'reject', decidedAtMs: 2 } } : {}) });
+    const stored = (id: string, body: ReturnType<typeof deleteBody>) => artifact(id,
+        buildApprovalRequestArtifactHeaderV1(ApprovalRequestV1Schema.parse(body)), body);
+
+    it('finds the open Ask already filed for this managed resource and Action, so the page shows it instead of filing another', () => {
+        const artifacts = [stored('other-resource', deleteBody('managed-2')), stored('settled', deleteBody('managed-1', 'rejected')),
+            stored('pending', deleteBody('managed-1'))];
+        expect(readOpenManagedMachineApprovalId(artifacts, { homeId: 'home-1', managedId: 'managed-1', actionId: 'machines.managed.delete' }))
+            .toBe('pending');
+        expect(readOpenManagedMachineApprovalId(artifacts, { homeId: 'home-2', managedId: 'managed-1', actionId: 'machines.managed.delete' }))
+            .toBeNull();
+        expect(readOpenManagedMachineApprovalId(artifacts.slice(0, 2), { homeId: 'home-1', managedId: 'managed-1',
+            actionId: 'machines.managed.delete' })).toBeNull();
+    });
+});
 
 function durableApprovalBody(sessionId: string) {
     return {
