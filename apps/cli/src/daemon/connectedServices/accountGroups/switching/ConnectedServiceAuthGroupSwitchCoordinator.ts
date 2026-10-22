@@ -1719,9 +1719,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator<
                 return this.completeStaleFailureContext(lease, loaded);
             }
             if (
-                (input.reason === 'usage_limit'
-                    || input.reason === 'rate_limit'
-                    || input.reason === 'same_provider_account_exhausted')
+                input.reason === 'same_provider_account_exhausted'
                 && input.providerLimitId != null
                 && !isConnectedServiceAuthGroupProviderLimitSelected({
                     policy: loaded.policy,

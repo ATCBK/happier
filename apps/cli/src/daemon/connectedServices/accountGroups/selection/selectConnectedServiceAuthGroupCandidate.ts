@@ -453,9 +453,7 @@ export function hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason(
   params: ConnectedServiceAuthGroupSwitchReasonEvidenceInput,
 ): boolean {
   if (
-    (params.reason === 'usage_limit'
-      || params.reason === 'rate_limit'
-      || params.reason === 'same_provider_account_exhausted')
+    params.reason === 'same_provider_account_exhausted'
     &&
     params.policy
     && params.providerLimitId != null

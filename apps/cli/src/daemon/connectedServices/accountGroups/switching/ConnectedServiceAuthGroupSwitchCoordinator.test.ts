@@ -1,3 +1,5 @@
+import { ConnectedServiceQuotaMeterV1Schema } from '@happier-dev/protocol';
+import { buildConnectedServiceAuthGroupRuntimeStateFromMeters } from '../quotas/projection';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '../selection/selectConnectedServiceAuthGroupCandidate';
@@ -47,6 +49,38 @@ class TestGenerationConflictError extends Error {
 }
 
 describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
+  it('recovers an actual rejection on an unselected allowance while retaining selected-meter candidate eligibility', async () => {
+    let current: ConnectedServiceAuthGroupSwitchState = {
+      ...state('primary', 1),
+      policy: {
+        ...state('primary', 1).policy,
+        quotaLimitSelection: { mode: 'selected', providerLimitIds: ['five_hour', 'seven_day_opus'] },
+      },
+      memberStatesByProfileId: new Map(['primary', 'backup'].map((profileId) => [profileId,
+        buildConnectedServiceAuthGroupRuntimeStateFromMeters({
+          capturedAtMs: 999,
+          selection: { mode: 'selected', providerLimitIds: ['five_hour', 'seven_day_opus'] },
+          meters: [
+            ConnectedServiceQuotaMeterV1Schema.parse({ meterId: 'five_hour', label: 'Session', providerLimitId: 'five_hour', remainingPct: 80, used: null, limit: null, unit: 'unknown', utilizationPct: 20, resetsAt: null, status: 'ok' }),
+            ConnectedServiceQuotaMeterV1Schema.parse({ meterId: 'overage', label: 'Extra usage', providerLimitId: 'overage', remainingPct: 0, used: null, limit: null, unit: 'unknown', utilizationPct: 100, resetsAt: null, status: 'ok' }),
+          ],
+        }),
+      ])),
+    };
+    const applied: string[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(), nowMs: () => 1_000, quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      commitSwitch: async ({ toProfileId }) => (current = { ...current, activeProfileId: toProfileId, generation: 2 }),
+      applyGeneration: async ({ activeProfileId }) => { applied.push(activeProfileId!); return { ok: true, mode: 'hot_apply' }; },
+    });
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex', groupId: 'main', observedProfileId: 'primary',
+      reason: 'usage_limit', providerLimitId: 'overage',
+    })).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup' });
+    expect(applied).toEqual(['backup']);
+  });
+
   it('waits for the owning switch beyond 30 seconds when no containing deadline is supplied', async () => {
     vi.useFakeTimers();
     try {
@@ -272,7 +306,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     })).resolves.toMatchObject({ status: 'switch_limit_reached', generation: 1 });
   });
 
-  it('does not poison or rotate a pool for an exact unselected quota-family failure', async () => {
+  it('does not poison or rotate a pool for derived exhaustion of an unselected quota family', async () => {
     const current = {
       ...state('primary', 7),
       policy: {
@@ -297,7 +331,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       serviceId: 'openai-codex',
       groupId: 'main',
       observedProfileId: 'primary',
-      reason: 'usage_limit',
+      reason: 'same_provider_account_exhausted',
       providerLimitId: 'spark',
     })).resolves.toEqual({ status: 'switch_reason_disabled', generation: 7 });
     expect(recordObservedFailureState).not.toHaveBeenCalled();
@@ -2518,7 +2552,8 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       });
       const common = { serviceId: 'openai-codex', groupId: 'main', reason: 'usage_limit' as const, observedProfileId: 'primary' };
       const owner = coordinator.switchAfterClassifiedFailure({
-        ...common, sessionId: 'owner', providerLimitId: ownerProviderLimitId, sessionSwitchesThisHour: ownerSwitchesThisHour,
+        ...common, reason: ownerStatus === 'switch_reason_disabled' ? 'same_provider_account_exhausted' : common.reason,
+        sessionId: 'owner', providerLimitId: ownerProviderLimitId, sessionSwitchesThisHour: ownerSwitchesThisHour,
       });
       await ownerLoadStarted;
       const waiter = trigger === 'classified_failure'

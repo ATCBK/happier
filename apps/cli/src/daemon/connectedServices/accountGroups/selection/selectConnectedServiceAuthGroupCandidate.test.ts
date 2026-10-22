@@ -302,7 +302,7 @@ describe('pool quota-limit selection', () => {
     });
   });
 
-  it('rejects hard-switch evidence for an unselected provider limit', () => {
+  it('uses selected candidate meters after an actual rejection on an unselected allowance', () => {
     expect(hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason({
       reason: 'usage_limit',
       providerLimitId: 'spark',
@@ -311,7 +311,7 @@ describe('pool quota-limit selection', () => {
       nowMs: 1_000,
       quotaFreshnessMs: 60_000,
       memberStatesByProfileId: new Map([['candidate', quotaState(40, 100)]]),
-    })).toBe(false);
+    })).toBe(true);
     expect(hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason({
       reason: 'usage_limit',
       providerLimitId: 'weekly',
