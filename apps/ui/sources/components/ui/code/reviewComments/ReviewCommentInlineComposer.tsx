@@ -14,6 +14,8 @@ export function ReviewCommentInlineComposer(props: {
     onSave: () => void;
     onCancel: () => void;
     onDelete?: () => void;
+    /** Take the keyboard on open: a host whose Comment came from a toolbar, not a typed line. */
+    autoFocus?: boolean;
 }) {
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
@@ -26,6 +28,7 @@ export function ReviewCommentInlineComposer(props: {
                 placeholder={t('files.reviewComments.placeholder')}
                 placeholderTextColor={theme.colors.text.secondary}
                 multiline
+                autoFocus={props.autoFocus}
                 style={styles.input}
             />
             <View style={styles.actions}>

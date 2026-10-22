@@ -42,6 +42,7 @@ import { FileViewerFindSurface } from './FileViewerFindSurface';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { FileEditorPanel, FileMarkdownEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { FileEditorAskControls } from '@/components/workspaces/files/file/editor/FileEditorAskControls';
+import { useFileEditorInlineComment } from '@/components/workspaces/files/file/editor/FileEditorInlineComment';
 import { FileReadAskControls } from '@/components/workspaces/files/file/FileReadAskControls';
 import { useAskSelectionTargetContext } from '@/components/ui/code/selection/useAskSelection';
 import { FileEditorNoticeLine } from '@/components/workspaces/files/file/editor/FileEditorNoticeLine';
@@ -987,6 +988,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         setReadyEditorHandle(editorHandleRef.current);
         bindCodeIntelligenceEditor.current();
     }, [editorHandleRef, onEditorReady]);
+    // The selection toolbar's Comment in Edit: the page's inline composer under the selected lines.
+    const editorComment = useFileEditorInlineComment({ enabled: reviewCommentsEnabled === true && isEditingFile, scope: scope ?? null,
+        filePath, handle: readyEditorHandle, savedText: fileContent?.isBinary ? undefined : fileContent?.content,
+        onError: reviewDraftHandlers.onReviewCommentError });
     // View → Edit swaps in one frame once the engine reports ready (P4 §3.5): until then the editor mounts unseen beneath
     // the read view, so a cold engine load never shows a half-made editor. A remounted engine reports ready again.
     const codeEditorMounted = displayMode === 'file' && isEditorSelected && fileViewer.kind !== 'markdown';
@@ -1766,11 +1771,13 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         changeMarkers={changeMarkers}
                         accessory={editorAccessory}
                         peek={editorPeek}
+                        inlineComment={editorComment.comment}
                     />
                     <FileEditorAgentPresence handle={readyEditorHandle} presence={agentPresence} />
                     {scope ? (
                         <FileEditorAskControls handle={readyEditorHandle} scopeId={props.scopeId} scope={scope} filePath={filePath}
-                            savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive} />
+                            savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive}
+                            onCommentSelection={editorComment.onCommentSelection} />
                     ) : null}
                     {/* Blame in Edit: the gutter markers open the same run card (a portal popover at the run's line). */}
                     {blameRegion.card}

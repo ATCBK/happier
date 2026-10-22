@@ -158,6 +158,47 @@ describe('File page View → Edit swap', () => {
         } finally { await screen.unmount(); }
     });
 
+    it('opens the inline comment composer at an editor selection and anchors a dirty buffer to the saved bytes', async () => {
+        fixture.storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true,
+            'files.reviewComments': true, 'files.diffSyntaxHighlighting': false, 'files.editor': true } });
+        const screen = await fixture.render(<ModalProvider>
+            <WorkspaceFileDetailsView scopeId="project:editor-comment" scope={fixture.scope} filePath={filePath}
+                sessionIdForAugmentation={null} />
+        </ModalProvider>);
+        try {
+            const { FilePageHeader } = await import('../file/FilePageHeader');
+            const { FileEditorPanel } = await import('../file/editor/FileEditorPanel');
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            await flushHookEffects({ cycles: 4 });
+            await vi.waitFor(() => expect(screen.findByType(FilePageHeader).props.edit?.kind).toBe('edit'));
+            await act(async () => { screen.findByType(FilePageHeader).props.edit.onPress(); });
+            await flushHookEffects({ cycles: 4 });
+            await vi.waitFor(() => expect(screen.findAllByType(FileEditorPanel)).toHaveLength(1));
+            // The editor engine is the platform boundary: a dirty buffer with a line typed above the selection.
+            const live = `// typed above\n${svg}`;
+            const selection = { startLine: 2, endLine: 2, text: 'export const attempts = 3;', rect: { x: 40, y: 60, width: 120, height: 18 } };
+            const panel = screen.findByType(FileEditorPanel);
+            (panel.props.editorRef as { current: unknown }).current = { getValue: () => live, flushPendingChange: async () => {},
+                getSelection: () => selection, subscribeSelection: () => () => {} };
+            await act(async () => { panel.props.onReady?.(); });
+            await flushHookEffects({ cycles: 2 });
+            await vi.waitFor(() => expect(screen.findAllByType(SelectionToolbar)).toHaveLength(1));
+            const toolbar = screen.findByType(SelectionToolbar);
+            expect(toolbar.props.onComment).toEqual(expect.any(Function));
+            await act(async () => { toolbar.props.onComment(); });
+            // The page's one inline composer opens in the editor, which stays mounted with its buffer.
+            await vi.waitFor(() => expect(screen.findAllByType(ReviewCommentInlineComposer)).toHaveLength(1));
+            expect(screen.findAllByType(FileEditorPanel)).toHaveLength(1);
+            await act(async () => { screen.findByType(ReviewCommentInlineComposer).props.onChange('Why three?'); });
+            await act(async () => { screen.findByType(ReviewCommentInlineComposer).props.onSave(); });
+            const drafts = fixture.storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[buildWorkspaceCacheKey(fixture.scope)];
+            expect(drafts).toEqual([expect.objectContaining({ source: 'file', filePath, body: 'Why three?',
+                anchor: expect.objectContaining({ startLine: 1, endLine: 1 }),
+                snapshot: expect.objectContaining({ selectedLines: ['export const attempts = 3;'] }) })]);
+            expect(screen.findAllByType(ReviewCommentInlineComposer)).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
     it('keeps the read view up until the editor reports ready, then swaps to the editor', async () => {
         const screen = await fixture.render(<ModalProvider>
             <WorkspaceFileDetailsView scopeId="project:edit-swap" scope={fixture.scope} filePath={filePath}
