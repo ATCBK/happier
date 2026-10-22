@@ -65,6 +65,12 @@ const execute: MountedAuthoringActionExecute = async (_actionId, input) => {
   return answer;
 };
 
+/** The title of the found list's one group, as the Collection model carries it. */
+function groupTitle(screen: { findAll: (predicate: (node: any) => boolean) => any[] }): string | undefined {
+  const collection = screen.findAll((node) => node.props?.testID === 'skills.add:collection' && node.props?.model !== undefined)[0];
+  return collection?.props.model.sections?.[0]?.group?.title;
+}
+
 type Callbacks = Readonly<{ onAdded?: (id: string) => void; onSelectAdded?: (id: string) => void; onDone?: () => void }>;
 
 /**
@@ -422,6 +428,8 @@ describe('SkillLinkInput skills the library already holds', () => {
   it('offers Done, not an ambiguous Open, when several roots are held and none is new', async () => {
     const { screen, installs, opened, done } = await renderFound([held, heldSibling]);
     expect(screen.getTextContent()).toContain('Done');
+    // Nothing is left to choose, so no "Choose which to add" heading stands over held rows.
+    expect(groupTitle(screen)).toBeUndefined();
     expect(screen.findByTestId('link.add')).toBeNull();
     await screen.pressByTestIdAsync('link.done');
     expect(done).toEqual(['done']);
@@ -441,6 +449,7 @@ describe('SkillLinkInput skills the library already holds', () => {
   it('adds only the roots that are new when some are held, and a held one\'s details open it by its returned id', async () => {
     const { screen, open, pressPrimary, installs, selected } = await renderFound([held, fresh]);
     expect(screen.getTextContent()).toContain('Add 1 skill');
+    expect(groupTitle(screen)).toBe('Choose which to add');
     await screen.pressByTestIdAsync('link.add');
     expect(installs).toEqual([expect.objectContaining({ selectPaths: ['skills/orm-setup'] })]);
     await open('skills/grill-me');

@@ -431,7 +431,8 @@ export function SkillFoundAdd(
     ...(props.field === undefined ? {} : { field: props.field }),
     items,
     itemKey: keyOf,
-    ...(items.length > 0 ? { groups: [{ key: 'found', title: props.groupTitle, itemKeys: items.map(keyOf) }] } : {}),
+    // Nothing left to choose, so no "Choose which to add" heading over rows that are all held.
+    ...(items.length > 0 && !allHeld ? { groups: [{ key: 'found', title: props.groupTitle, itemKeys: items.map(keyOf) }] } : {}),
     anatomy,
     empty: props.empty,
     ...(footer === undefined ? {} : { footer }),
