@@ -23,7 +23,7 @@ export type ResolvedGeneratedReactNativeArtifactOwner = Readonly<{
 }>;
 
 /**
- * A client executable remains owned by the contribution that selected it.
+ * A portable executable remains owned by the contribution that selected it.
  * This is deliberately separate from renderer and Voice owner discovery:
  * sharing a generated bundle never grants one contribution another family's
  * activation or byte-read authority.
@@ -72,9 +72,9 @@ type ResolvedGeneratedReactNativeExecutableArtifactOwner =
   | ResolvedGeneratedReactNativeClientContributionArtifactOwner
   | ResolvedGeneratedReactNativeCollectionMigrationArtifactOwner;
 
-function readClientActionExecution(execution: unknown) {
+function readPortableActionExecution(execution: unknown) {
   const parsed = PluginActionExecutionV2Schema.safeParse(execution);
-  return parsed.success && parsed.data.target === 'client' ? parsed.data : null;
+  return parsed.success && parsed.data.target !== 'daemon' ? parsed.data : null;
 }
 
 export function collectResolvedGeneratedReactNativeArtifactOwners(
@@ -134,9 +134,9 @@ export function findResolvedGeneratedReactNativeArtifactOwner(input: Readonly<{
 }
 
 /**
- * Resolve exactly one current Action declaration to its generated client
+ * Resolve exactly one current Action declaration to its generated portable
  * Artifact. The action's qualified identity anchors the lookup; its declared
- * client target supplies every artifact/module/platform fact. No renderer or
+ * execution target supplies every artifact/module/platform fact. No renderer or
  * Voice registration participates in this resolution.
  */
 export function findResolvedGeneratedReactNativeClientContributionArtifactOwner(input: Readonly<{
@@ -148,12 +148,13 @@ export function findResolvedGeneratedReactNativeClientContributionArtifactOwner(
     && action.identity?.pluginId === input.action.pluginId
     && action.identity.localId === input.action.localId
     && action.definition.id === input.action.localId
-    && readClientActionExecution(action.definition.execution) !== null
+    && readPortableActionExecution(action.definition.execution) !== null
   ));
   if (matching.length !== 1) return null;
   const action = matching[0]!;
-  const execution = readClientActionExecution(action.definition.execution);
+  const execution = readPortableActionExecution(action.definition.execution);
   if (!execution) return null;
+  const artifact = execution.target === 'account' ? execution.account : execution.client;
   const manifestPath = action.manifestPath?.trim();
   if (!manifestPath) return null;
   return Object.freeze({
@@ -163,15 +164,17 @@ export function findResolvedGeneratedReactNativeClientContributionArtifactOwner(
     ...(action.pluginVersion ? { pluginVersion: action.pluginVersion } : {}),
     contributionId: input.action.localId,
     contributionIdentity: input.action,
-    artifactId: execution.client.artifactId,
+    artifactId: artifact.artifactId,
     ...(action.pluginRootPath ? { pluginRootPath: action.pluginRootPath } : {}),
     manifestPath,
     ...(action.generatedUiArtifactsManifest
       ? { generatedUiArtifactsManifest: action.generatedUiArtifactsManifest }
       : {}),
-    declaredPlatforms: Object.freeze([...execution.platforms]),
+    declaredPlatforms: execution.target === 'account'
+      ? Object.freeze(['web', 'ios', 'android'] as const)
+      : Object.freeze([...execution.platforms]),
     expectedExecutable: Object.freeze({
-      exportName: execution.client.exportName,
+      exportName: artifact.exportName,
     }),
   });
 }

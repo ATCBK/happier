@@ -9,8 +9,16 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import { reconcileProjectedPluginUiClientExecutables, retainProjectedPluginUiClientExecutables } from './clientExecutableActivation';
 import { createPluginUiExecutableModuleHost } from './executableModuleHost';
 import { getPluginUiClientExecutableComposition } from './clientExecutableContributions';
+import { resolveProjectedPluginUiClientExecutables } from './clientExecutableProjection';
+import { createPluginUiCommonJsLoaderBackend } from './commonJsLoaderBackend';
+import { encodeBase64 } from '@/encryption/base64';
+import { PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { DaemonPluginUiArtifactBytesReadRequestSchema, DaemonPluginUiArtifactBytesReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 const assetIo = vi.hoisted(() => ({ read: vi.fn<(id: number) => Promise<Uint8Array>>() }));
+const rpcIo = vi.hoisted(() => ({ request: vi.fn<(input: Readonly<{
+    machineId: string; serverId?: string | null; method: string; payload: unknown;
+}>) => Promise<unknown>>(async () => ({ ok: false, code: 'artifact_unavailable', diagnostics: [] })) }));
 
 // Only packaged inventory and asset IO are replaced. Projection, Availability,
 // verification, cache materialization and complete-set registration stay real.
@@ -38,10 +46,35 @@ vi.mock('expo-file-system', () => ({ File: class {
 } }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return createServerScopedMachineRpcBoundaryMock(async () => ({
-        ok: false, code: 'artifact_unavailable', diagnostics: [],
-    }));
+    return createServerScopedMachineRpcBoundaryMock(rpcIo.request);
 });
+
+// Compile the maintained external author fixture once during collection. Its
+// bytes are not part of the packaged app inventory or any preseeded cache.
+const authoredAccountArtifact = await (async () => {
+    const { resolve, join } = await import('node:path');
+    const { readFile } = await import('node:fs/promises');
+    const { compileUniversalPluginUiCommonJs } = await import('../../../../../../packages/plugin-sdk/src/ui/build/universalCommonJsCompiler');
+    const { readWorkspacePackages, packageNameOfSpecifier, resolveWorkspaceSource } = await import('../../../../../../packages/cli-common/sourceRuntimeEntries.mjs');
+    const { manifest } = await import('../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index');
+    const { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1,
+        PluginUiArtifactsManifestEntryV2Schema } = await import('@happier-dev/protocol/plugins/ui');
+    const root = resolve(process.cwd(), '../..');
+    const projectRoot = join(root, 'packages/plugin-sdk/fixtures/account-actions');
+    const packageJson: { exports: Record<string, string> } = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'));
+    const packages = await readWorkspacePackages(root);
+    const compiled = await compileUniversalPluginUiCommonJs({ projectRoot,
+        entryPath: resolve(projectRoot, packageJson.exports['./happier-plugin-ui/account-runtime']!),
+        artifactId: 'account-runtime', requestedExports: ['activate'], exportConditions: ['happier-source'],
+        resolveSourceImport: specifier => packages.has(packageNameOfSpecifier(specifier))
+            ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined,
+    });
+    const graph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: compiled.artifactId, tier: 'reactNative',
+        entry: compiled.relativePath, digest: computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: compiled.relativePath, bytes: compiled.bytes }]),
+        files: [{ relativePath: compiled.relativePath, digest: computePluginUiArtifactSha256DigestV1(compiled.bytes), byteSize: compiled.bytes.length }],
+        builtWith: { bundler: 'esbuild', version: compiled.esbuildVersion }, executable: { exports: compiled.exports }, hostUiApiRange: '^1.0.0' });
+    return { manifest, graph, bytes: compiled.bytes };
+})();
 
 function fixture() {
     let current = true;
@@ -95,7 +128,74 @@ function fixture() {
         retire: () => { current = false; for (const listener of [...listeners]) listener(); } };
 }
 
-afterEach(() => { assetIo.read.mockReset(); });
+afterEach(() => {
+    assetIo.read.mockReset();
+    rpcIo.request.mockReset().mockImplementation(async () => ({ ok: false, code: 'artifact_unavailable', diagnostics: [] }));
+});
+
+it('registers a selected external Account release from its advertised byte supplier without a Machine execution target', async () => {
+    const { manifest, graph, bytes } = authoredAccountArtifact;
+    const scope = { serverId: 'account-byte-home', accountId: 'account-byte-owner' };
+    let current = true;
+    const cancellations = new Set<() => void>();
+    const lifetime: ActiveServerAccountScopeLifetime = { scope, isCurrent: () => current,
+        onRetire: cancel => { cancellations.add(cancel); return { dispose: () => { cancellations.delete(cancel); } }; } };
+    const slots = manifest.contributes.actions.flatMap(action => (['web', 'ios', 'android'] as const).map(platform => ({
+        contributionId: action.id, artifactId: graph.artifactId, tier: 'reactNative' as const, platform,
+        artifactDigest: graph.digest, hostUiApiRange: graph.hostUiApiRange, artifactGraph: graph,
+    })));
+    const release = PluginReleaseFactsV1Schema.parse({ ref: { pluginId: manifest.id, version: manifest.version },
+        archiveDigestSha256: `sha256:${'f'.repeat(64)}`, normalizedManifest: manifest,
+        collectionContracts: [], uiSlots: slots, packageAssetArchive: { archiveDigestSha256: `sha256:${'e'.repeat(64)}`, resources: [] } });
+    const materialization = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_account_byte_supplier',
+        machineId: 'installed-byte-supplier', materializationId: 'external-installation', pluginId: manifest.id,
+        version: manifest.version, sourceClass: 'versionedArchive', portableRelease: true,
+        archiveDigestSha256: release.archiveDigestSha256, uiArtifacts: slots.map(({ artifactGraph: _graph, ...slot }) => slot),
+        enabled: true, trustState: 'trusted', observedAt: 1 });
+    const store = createPluginAccountAvailabilityReaderStore();
+    store.replace({ scope, snapshot: { availabilityCursor: 1,
+        materializations: [materialization], snapshots: [{ serverIdentityId: materialization.serverIdentityId,
+            machineId: materialization.machineId, materializations: [materialization] }],
+        intentReads: [{ pluginId: manifest.id, response: { availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId: manifest.id, desiredVersion: manifest.version, enabled: true, offlineUiHosting: 'disabled',
+                writableCollections: [], revision: 'selected-1' }, release, uiArtifacts: [], packageAssets: [] } }],
+    } });
+    const reader = store.bind(scope);
+    const projection = reader.readAccountUiProjection();
+    if (!projection) throw new Error('Expected selected Account declarations');
+    const targets = resolveProjectedPluginUiClientExecutables({ actionProjection: { projection }, platform: 'web' });
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({ authority: { kind: 'account' }, executionOrigin: null });
+    const byteResponse = DaemonPluginUiArtifactBytesReadResponseSchema.parse({ ok: true, artifactFamily: 'reactNative',
+        cacheIdentity: { artifactDigest: graph.digest }, artifact: { artifactKind: 'reactNativeBundle',
+            digest: graph.digest, format: 'plainJs', byteSize: bytes.length },
+        files: graph.files.map(file => ({ ...file, bytesBase64: encodeBase64(bytes) })) });
+    rpcIo.request.mockImplementation(async input => {
+        expect(input.machineId).toBe(materialization.machineId);
+        const request = DaemonPluginUiArtifactBytesReadRequestSchema.parse(input.payload);
+        expect(request.cacheIdentity.artifactDigest).toBe(graph.digest);
+        return byteResponse;
+    });
+    const host = createPluginUiExecutableModuleHost();
+    const composition = getPluginUiClientExecutableComposition(host);
+    try {
+        const attempts = await reconcileProjectedPluginUiClientExecutables({ actionProjection: { projection }, platform: 'web',
+            accountLifetime: lifetime, reader, executableHost: host, loaderBackend: createPluginUiCommonJsLoaderBackend() });
+        expect(rpcIo.request).toHaveBeenCalled();
+        expect(attempts).toMatchObject([{ result: { ok: true } }]);
+        for (const action of manifest.contributes.actions) {
+            expect(composition.read({ family: 'actions', pluginId: manifest.id, localId: action.id,
+                occurrenceId: targets[0]!.occurrenceId, executionOrigin: null, target: targets[0]!.target }))
+                .toMatchObject({ authority: { kind: 'account' } });
+        }
+        expect(rpcIo.request).toHaveBeenCalled();
+    } finally {
+        current = false;
+        for (const cancel of [...cancellations]) cancel();
+        await composition.unload();
+        expect(cancellations.size).toBe(0);
+    }
+});
 
 it('starts both cold preparations before either completes and commits in target order', async () => {
     const state = fixture();

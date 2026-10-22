@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 import {
   PluginUiArtifactDigestV1Schema,
+  PluginUiArtifactsManifestEntryV2Schema,
+  computePluginUiArtifactSha256DigestV1,
+  computePluginUiArtifactFileSetSha256DigestV1,
   type PluginUiArtifactsManifestEntryV2,
 } from '@happier-dev/protocol/plugins/ui';
 
 import {
   collectResolvedGeneratedReactNativeCollectionMigrationArtifactOwners,
+  collectResolvedGeneratedReactNativeClientContributionArtifactOwners,
   findGeneratedReactNativeArtifactEntry,
   findGeneratedReactNativeCollectionMigrationsModule,
   type ResolvedGeneratedReactNativeCollectionMigrationArtifactOwner,
   type ResolvedGeneratedReactNativeArtifactOwner,
 } from './generatedUiArtifactOwners';
 import type { ResolvedContributionRegistry } from '../types';
+import { createResolvedContributionRegistry } from '../createResolvedContributionRegistry';
+import { projectLoadedPluginContributes } from '../resolvePluginContributions';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 const digest = PluginUiArtifactDigestV1Schema.parse(`sha256:${'a'.repeat(64)}`);
 
@@ -49,6 +58,52 @@ function createOwner(
 }
 
 describe('findGeneratedReactNativeArtifactEntry', () => {
+  it('discovers the authored Account Action generated graph without a renderer or client Action', async () => {
+    const { compileUniversalPluginUiCommonJs } = await import('../../../../../../../packages/plugin-sdk/src/ui/build/universalCommonJsCompiler');
+    const { readWorkspacePackages, packageNameOfSpecifier, resolveWorkspaceSource } = await import('../../../../../../../packages/cli-common/sourceRuntimeEntries.mjs');
+    const { manifest: authoredManifest } = await import('../../../../../../../packages/plugin-sdk/fixtures/account-actions/src/index');
+    const manifest = normalizePluginManifestV2(authoredManifest);
+    const projectRoot = resolve(import.meta.dirname, '../../../../../../../packages/plugin-sdk/fixtures/account-actions');
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as { exports: Record<string, string> };
+    const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../../../..'));
+    const compiled = await compileUniversalPluginUiCommonJs({
+      projectRoot,
+      entryPath: resolve(projectRoot, packageJson.exports['./happier-plugin-ui/account-runtime']!),
+      artifactId: 'account-runtime', requestedExports: ['activate'], exportConditions: ['happier-source'],
+      resolveSourceImport: specifier => packages.has(packageNameOfSpecifier(specifier))
+        ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined,
+    });
+    const artifact = PluginUiArtifactsManifestEntryV2Schema.parse({
+      artifactId: compiled.artifactId, tier: 'reactNative', entry: compiled.relativePath,
+      files: [{ relativePath: compiled.relativePath, digest: computePluginUiArtifactSha256DigestV1(compiled.bytes), byteSize: compiled.bytes.length }],
+      digest: computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: compiled.relativePath, bytes: compiled.bytes }]),
+      builtWith: { bundler: 'esbuild', version: compiled.esbuildVersion },
+      executable: { exports: compiled.exports }, hostUiApiRange: '^1.0.0',
+    });
+    const registry = createResolvedContributionRegistry(projectLoadedPluginContributes({
+      provenance: 'external',
+      loadResult: {
+        loadedPlugins: [{
+          pluginId: manifest.id, pluginRootPath: projectRoot,
+          manifestPath: join(projectRoot, '.happier-plugin/plugin.json'),
+          daemonEntryPath: join(projectRoot, 'dist/index.js'), devDaemonEntryPath: null, manifest,
+          sourceSpec: { kind: 'archive', locator: '/test/account-actions.tgz', resolvedPath: projectRoot,
+            resolvedVersion: manifest.version, trustPolicy: 'prompt', installPolicy: 'copy' },
+          generatedUiArtifactsManifest: { version: 2, entries: [artifact] },
+        }], diagnosticsByPluginId: {},
+      },
+    }));
+    const owners = collectResolvedGeneratedReactNativeClientContributionArtifactOwners(registry);
+    expect(owners.map(owner => owner.contributionId).sort()).toEqual(
+      manifest.contributes.actions.map(action => action.id).sort(),
+    );
+    for (const owner of owners) {
+      expect(owner).toMatchObject({ pluginId: manifest.id, artifactId: 'account-runtime',
+        declaredPlatforms: ['web', 'ios', 'android'], expectedExecutable: { exportName: 'activate' } });
+      expect(findGeneratedReactNativeArtifactEntry({ owner, platform: 'web' })).toEqual({ entry: artifact, failure: null });
+    }
+  });
+
   it('resolves one universal executable artifact for every host platform', () => {
     const entry = createEntry();
     const owner = createOwner(entry);

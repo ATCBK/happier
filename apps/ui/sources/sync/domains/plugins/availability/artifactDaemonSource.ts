@@ -15,6 +15,7 @@ import type {
     PluginArtifactSourceCandidate,
 } from './artifactLease';
 import { PluginArtifactSourceError } from './artifactLease';
+import type { PluginAccountAvailabilityReader } from './reader';
 
 export type PluginArtifactDaemonFamily = 'reactNative' | 'hostedWeb';
 
@@ -92,21 +93,30 @@ function decodeDaemonFileSet(
 export function createPluginArtifactDaemonSource(input: Readonly<{
     family: PluginArtifactDaemonFamily;
     fetchArtifactBytes?: PluginArtifactDaemonByteFetcher;
+    /** Current Account advertisements supply byte routes, never execution authority. */
+    availability?: Readonly<{ reader: PluginAccountAvailabilityReader; serverId: string }>;
 } & (
     | { transport: PluginArtifactDaemonTransport; transports?: never }
     | { transports: readonly PluginArtifactDaemonTransport[]; transport?: never }
 )>): PluginArtifactSourceCandidate {
     const fetchArtifactBytes = input.fetchArtifactBytes ?? fetchPluginArtifactBytesViaMachineRpc;
-    const seen = new Set<string>();
-    const transports = (input.transports ?? [input.transport]).filter((transport) => {
-        const key = JSON.stringify([transport.serverId, transport.machineId]);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
     return Object.freeze({
         kind: 'daemon' as const,
         fetch: async ({ artifact, signal }) => {
+            const availability = input.availability;
+            const inventory = availability?.reader.readMaterializations();
+            const advertised = availability && inventory?.kind === 'available' ? inventory.materializations.filter(materialization => (
+                materialization.pluginId === artifact.pluginId
+                && materialization.uiArtifacts.some(slot => slot.artifactId === artifact.artifactId
+                    && slot.tier === artifact.tier && slot.platform === artifact.platform && slot.artifactDigest === artifact.digest)
+            )).map(materialization => ({ machineId: materialization.machineId, serverId: availability.serverId })) : [];
+            const seen = new Set<string>();
+            const transports = [...(input.transports ?? [input.transport]), ...advertised].filter(transport => {
+                const key = JSON.stringify([transport.serverId, transport.machineId]);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
             let failure: PluginArtifactSourceError | undefined;
             for (const transport of transports) {
                 if (signal?.aborted) return null;

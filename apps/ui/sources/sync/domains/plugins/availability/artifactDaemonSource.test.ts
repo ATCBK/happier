@@ -11,7 +11,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => 
 import { encodeBase64 } from '@/encryption/base64';
 
 import type { PluginSelectedArtifactIdentity } from './artifactLease';
-import { createPluginArtifactDaemonSource } from './artifactDaemonSource';
+import { createPluginArtifactDaemonSource, type PluginArtifactDaemonByteFetcher } from './artifactDaemonSource';
+import { createPluginAccountAvailabilityReaderStore } from './reader';
+import { PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability';
 
 const digest = `sha256:${'a'.repeat(64)}` as const;
 const transport = { machineId: 'machine-a', serverId: 'server-a' } as const;
@@ -52,6 +54,43 @@ function okResponse(family: 'hostedWeb' | 'reactNative', responseDigest: string 
 
 describe('daemon Artifact byte source', () => {
     beforeEach(() => guardedMachineRpc.mockReset());
+
+    it('uses all exact byte advertisements only within the captured Account Home', async () => {
+        const scope = { serverId: 'captured-home', accountId: 'owner' };
+        const selectedArtifact = { ...artifact, tier: 'reactNative' as const };
+        const materialization = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_advertised_identity',
+            machineId: 'first-supplier', materializationId: 'installation', pluginId: artifact.pluginId,
+            version: '0.9.0', sourceClass: 'versionedArchive', portableRelease: true,
+            archiveDigestSha256: `sha256:${'f'.repeat(64)}`, enabled: false, trustState: 'untrusted', observedAt: 1,
+            uiArtifacts: [{ contributionId: artifact.contributionId, artifactId: artifact.artifactId, tier: selectedArtifact.tier,
+                platform: artifact.platform, artifactDigest: artifact.digest, hostUiApiRange: artifact.hostUiApiRange }] });
+        const advertisement = materialization.uiArtifacts[0]!;
+        const materializations = [materialization,
+            { ...materialization, machineId: 'wrong-plugin', pluginId: 'other.plugin' },
+            { ...materialization, machineId: 'wrong-platform', uiArtifacts: [{ ...advertisement, platform: 'ios' as const }] },
+            { ...materialization, machineId: 'wrong-digest', uiArtifacts: [{ ...advertisement, artifactDigest: `sha256:${'e'.repeat(64)}` as const }] },
+            { ...materialization, machineId: 'second-supplier', serverIdentityId: 'srv_foreign_claim' },
+        ];
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: { availabilityCursor: 1, intentReads: [], materializations, snapshots: [] } });
+        const fetchArtifactBytes = vi.fn<PluginArtifactDaemonByteFetcher>(async () => ({ ok: false, code: 'artifact_unavailable', diagnostics: [] }));
+        const source = createPluginArtifactDaemonSource({ transports: [], family: 'reactNative', fetchArtifactBytes,
+            availability: { reader: store.bind(scope), serverId: scope.serverId } });
+        expect(await source.fetch({ artifact: selectedArtifact })).toBeNull();
+        expect(fetchArtifactBytes.mock.calls.map(([request]) => request.transport)).toEqual([
+            { machineId: 'first-supplier', serverId: scope.serverId },
+            { machineId: 'second-supplier', serverId: scope.serverId },
+        ]);
+    });
+
+    it('keeps an explicit byte route when the Account inventory is unavailable', async () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const fetchArtifactBytes = vi.fn(async () => okResponse('hostedWeb'));
+        const source = createPluginArtifactDaemonSource({ transport, family: 'hostedWeb', fetchArtifactBytes,
+            availability: { reader: store.bind({ serverId: 'missing-home', accountId: 'owner' }), serverId: transport.serverId } });
+        expect(await source.fetch({ artifact })).toEqual(new Map([['index.html', entryBytes]]));
+        expect(fetchArtifactBytes).toHaveBeenCalledWith(expect.objectContaining({ transport }));
+    });
 
     it('cancels a held daemon byte read when its acquisition retires', async () => {
         const lifetime = new AbortController();

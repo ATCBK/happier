@@ -48,6 +48,27 @@ function acquire(input: Omit<PluginHostedWebArtifactLeaseInput, 'accountLifetime
     return acquirePluginHostedWebArtifactLease({ ...input, accountLifetime });
 }
 
+it('bootstraps an Account hosted-web lease from advertised bytes without an explicit Machine target', async () => {
+    const current = fixture({ materialized: true });
+    const store = createPluginAccountAvailabilityReaderStore();
+    store.replace({ scope, snapshot: { ...current.snapshot, intentReads: current.snapshot.intentReads.map(row => ({
+        ...row, response: { ...row.response, uiArtifacts: [] },
+    })) } });
+    const fetchArtifactBytes = vi.fn(async () => current.daemonResponse);
+    const result = await acquire({ reader: store.bind(scope), artifactGraph: current.graph,
+        cacheIdentity: current.cacheIdentity, fetchDaemonArtifactBytes: fetchArtifactBytes });
+    try {
+        expect(result).toMatchObject({ kind: 'available', lease: { sourceKind: 'daemon' } });
+        expect(fetchArtifactBytes).toHaveBeenCalledWith(expect.objectContaining({
+            transport: { serverId: scope.serverId, machineId: current.origin.materializationRef.machineId },
+            family: 'hostedWeb', digest: current.graph.digest,
+        }));
+        if (result.kind === 'available') {
+            expect(await result.lease.readFile(current.graph.entry)).toMatchObject({ kind: 'available' });
+        }
+    } finally { if (result.kind === 'available') result.lease.dispose(); }
+});
+
 function fixture(input: Readonly<{
     materialized?: boolean;
 }> = {}) {

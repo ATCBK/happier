@@ -125,13 +125,12 @@ export async function acquirePluginHostedWebArtifactLease(
     }
     const daemonTransport = input.daemonProjectionSelection?.transport ?? input.daemon;
     const daemonTransports = [...(daemonTransport ? [daemonTransport] : []), ...(input.daemons ?? [])];
-    if (daemonTransports.length > 0) {
-        sources.push(createPluginArtifactDaemonSource({
-            transports: daemonTransports,
-            family: 'hostedWeb',
-            ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
-        }));
-    }
+    sources.push(createPluginArtifactDaemonSource({
+        transports: daemonTransports,
+        family: 'hostedWeb',
+        availability: { reader: input.reader, serverId: input.accountLifetime.scope.serverId },
+        ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
+    }));
     if (input.accountHosted) sources.push(input.accountHosted);
 
     const daemonProjectionSelection: PluginDaemonProjectionArtifactSelection | undefined =

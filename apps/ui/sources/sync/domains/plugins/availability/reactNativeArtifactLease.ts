@@ -227,13 +227,12 @@ export async function acquirePluginReactNativeArtifactLease(
     }
     const daemonTransport = input.daemonProjectionSelection?.transport ?? input.daemon;
     const daemonTransports = [...(daemonTransport ? [daemonTransport] : []), ...(input.daemons ?? [])];
-    if (daemonTransports.length > 0) {
-        sources.push(createPluginArtifactDaemonSource({
-            transports: daemonTransports,
-            family: 'reactNative',
-            ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
-        }));
-    }
+    sources.push(createPluginArtifactDaemonSource({
+        transports: daemonTransports,
+        family: 'reactNative',
+        availability: { reader: input.reader, serverId: input.accountLifetime.scope.serverId },
+        ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
+    }));
     sources.push(createActivePluginAccountHostedArtifactSourceCandidate({
         accountLifetime: input.accountLifetime,
     }));
