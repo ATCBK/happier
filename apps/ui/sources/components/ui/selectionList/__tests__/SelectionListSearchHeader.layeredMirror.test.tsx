@@ -17,8 +17,7 @@ vi.mock('react-native', async () => {
  * its container width, so the ghost continued to render at the FAR RIGHT of
  * the row, next to the browse-folder suffix.
  *
- * The correct approach (used by GitHub's command palette and VS Code's
- * quick-open) is a layered mirror:
+ * A layered mirror keeps the ghost aligned with the input:
  *
  *   - A mirror `<View>` ("input-cell") contains:
  *     - A `<SelectionListInputMirror>` that paints the typed value + ghost
