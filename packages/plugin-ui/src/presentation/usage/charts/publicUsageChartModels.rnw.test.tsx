@@ -7,9 +7,13 @@ import { renderSurface, publicSnapshotTemplate } from '../../../../fixtures/exte
 import { act } from 'react';
 import { defineUiSurface } from '@happier-dev/plugin-ui';
 import { PublicProfileLayoutV1Schema } from '@happier-dev/protocol/widgets/widgetPublicSnapshotV1';
+import * as publicSnapshotPreparation from '@happier-dev/protocol/widgets';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '@happier-dev/protocol/account/publicProfile';
 import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
-import { projectPublicProfile } from '@happier-dev/protocol/account/projectPublicProfile';
+import { projectPublicProfile, projectPublicProfileSnapshot } from '@happier-dev/protocol/account/projectPublicProfile';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarationProjection';
+import { externalAuthoringPlugin } from '../../../../fixtures/external-authoring/src/index.js';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
 
 const base: PublicProfileSnapshotV1 = {
   v: 1, computedAtMs: 1, period: { startMs: Date.UTC(2026, 8, 1), endMs: Date.UTC(2026, 8, 8), timeZoneOffsetMinutes: 0 },
@@ -17,9 +21,66 @@ const base: PublicProfileSnapshotV1 = {
 };
 
 describe('public Usage chart producer', () => {
+  it('produces period-sized planet calendars, clipped ordinal weeks and independently disclosed moons', () => {
+    const models = components.projectPublicUsageChartModels({ ...base, facts: {
+      calendar: [{ date: '2026-09-01', level: 4 }, { date: '2026-09-02', level: 0 }], currentStreakDays: 0,
+      agentMix: [{ agentId: 'codex', share: 1, coverage: base.coverage }],
+    } });
+    expect(models.calendarArt?.days).toHaveLength(7);
+    expect(models.calendarArt?.days[2]).toEqual({ date: '2026-09-03', level: null });
+    expect(models.calendarArt?.currentStreakDays).toBe(0);
+    expect(models.calendarArt).not.toHaveProperty('bestStreakDays');
+    expect(models.moons).toEqual({ agents: [{ agentId: 'codex', share: 1 }], periodDays: 7 });
+    expect(models.moons?.agents[0]).not.toHaveProperty('activeDays');
+    expect(models.atmosphere).toBeNull();
+    expect(models.machines).toEqual({ kinds: null, coverage: { status: 'unavailable', method: 'unknown' } });
+    const withoutCalendar = components.projectPublicUsageChartModels({ ...base, facts: { activeDays: 7, bestStreakDays: 7 } });
+    expect(withoutCalendar.calendarArt).toBeNull();
+  });
+  it('preserves actual weekly peaks, unavailable kinds and SCM-admitted links without derived private facts', () => {
+    const weeklyPeakParallel = [{ startMs: base.period.startMs, endMs: base.period.endMs, peak: 3, coverage: base.coverage }];
+    const models = components.projectPublicUsageChartModels({ ...base, fieldCoverage: { machineKinds: base.coverage }, facts: {
+      peakParallel: 3, weeklyPeakParallel, agentActiveDays: [{ agentId: 'claude', days: 2, coverage: base.coverage }],
+      machineKinds: [{ kind: 'unknown', count: 2, agentTimeShare: 1, coverage: base.coverage }],
+      sessionDurations: [{ agentId: 'codex', durationMs: 12 }],
+    } }, { projects: [{ label: 'Public project', url: 'https://example.com/project' }] });
+    expect(models.atmosphere).toEqual({ weeks: weeklyPeakParallel, peakParallel: 3 });
+    expect(models.moons).toEqual({ agents: [{ agentId: 'claude', share: null, activeDays: 2 }], periodDays: 7 });
+    expect(models.projects).toEqual({ links: [{ label: 'Public project', url: 'https://example.com/project' }] });
+    expect(models.machines.kinds).toEqual([{ kind: 'unknown', count: 2, agentTimeShare: 1, coverage: base.coverage }]);
+    expect(models.galaxy).toEqual(models.runLength);
+  });
+  it('feeds original forms independently admitted scalars and aggregate coverage without inventing private detail', () => {
+    const models = components.projectPublicUsageChartModels({ ...base, facts: {
+      activeDays: 0, mergedPrs: 0, agentTimeMs: 60000,
+      footprint: { status: 'insufficient_basis', reason: 'no_applicable_versioned_method' },
+      sourceSplit: [{ execution: 'unknown', share: 1 }],
+    } });
+    expect(models.summary).toEqual({ activeDays: 0, mergedPrs: 0, agentTimeMs: 60000 });
+    expect(models.coverage).toEqual(base.coverage);
+    expect(models.footprint).toEqual({});
+    expect(models.sourceShares).toEqual([{ execution: 'unknown', share: 1 }]);
+    expect(models.agentMix).toBeNull();
+    expect(models.summary).not.toHaveProperty('tokens');
+    expect(models.sky).toBeNull();
+  });
   it('admits the external inert template and renders only its policy-projected shared fact', async () => {
-    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'external-copy', size: 'medium',
-      title: 'An external block', frameStyle: 'card', presentation: publicSnapshotTemplate }] });
+    const entries = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse(externalAuthoringPlugin.manifest));
+    const selected = Object.values(entries).find(entry => entry.contributionKind === 'surfacePlacement'
+      && entry.binding?.kind === 'inline' && entry.binding.role === 'widget'
+      && entry.binding.surface.localId === 'external-public-chart');
+    expect(selected?.publicPresentation).toEqual(publicSnapshotTemplate);
+    if (!selected || selected.binding?.kind !== 'inline') throw new Error('Expected installed public widget selection');
+    const surface = selected.binding.surface;
+    const layout = await publicSnapshotPreparation.compileWidgetAreaPublicProfileLayoutV1({ v: 1,
+      surface: { serverId: 'garden', accountId: 'owner', owner: { kind: 'corePage', pageId: 'public-profile', area: 'main' } },
+      items: [{ kind: 'widget', instance: { v: 1, id: 'external-copy',
+        definition: { kind: 'installed', surface }, bindings: {} }, size: 'medium', frameStyle: 'card' }] }, {
+      resolveDefinition: async () => null,
+      resolveInstalledView: async candidate => candidate.localId === surface.localId
+        ? { ...selected, title: 'An external block' } : null,
+    });
+    expect(PublicProfileLayoutV1Schema.parse(layout)).toMatchObject({ items: [{ presentation: publicSnapshotTemplate }] });
     const view = projectPublicProfile({ context: { handle: 'garden', identity: {}, service: { displayName: 'Garden service', publicBaseUrl: 'https://garden.example' },
       urls: { page: 'https://garden.example/@garden', json: 'https://garden.example/v1/public/profiles/garden', badgeBase: 'https://garden.example/@garden/badge',
         card: 'https://garden.example/@garden/card.svg', og: 'https://garden.example/@garden/og.png', report: 'mailto:operator@garden.example' } },
@@ -43,6 +104,9 @@ describe('public Usage chart producer', () => {
       adapter: createPluginUiRnwSemanticSurfaceAdapter(), handlers: { executeAction: async () => null } });
     try {
       expect(document.querySelector('[data-testid="external-harvest"]')?.textContent).toContain('Tomatoes');
+      const daily = document.querySelector('[data-testid="external-harvest-daily.chart"]');
+      expect(daily?.getAttribute('aria-label')).toContain('Monday: Vegetables 42');
+      expect(daily?.getAttribute('aria-label')).toContain('Tuesday: Vegetables —');
       const button = document.querySelector<HTMLElement>('[data-testid="external-harvest-hours-values-toggle"]')!;
       act(() => button.click());
       const values = document.querySelector('[data-testid="external-harvest-hours-values"]')?.textContent;
@@ -61,7 +125,8 @@ describe('public Usage chart producer', () => {
       { date: '2026-09-01', state: 'active', level: 4 }, { date: '2026-09-02', state: 'unknown' }, { date: '2026-09-03', state: 'inactive' },
     ], current: { days: 3 } });
     expect(models.portrait).toEqual({ streak: { current: 3, best: null } });
-    expect(models.river).toMatchObject({ width: 'share', weeks: [{ total: null, shares: { codex: 0.75 } }] });
+    expect(models.river).toMatchObject({ width: 'share', weeks: [{ start: '2026-09-01', end: '2026-09-07', partial: true,
+      total: null, shares: [{ agentId: 'codex', share: 0.75 }] }] });
     expect(models.peak).toBeNull();
     expect(models.runLength).toBeNull();
   });
@@ -103,6 +168,15 @@ describe('public Usage chart producer', () => {
       { agentId: 'codex', days: 2, coverage: { status: 'partial', method: 'runtime' } },
     ] } });
     expect(models.agentShares).toEqual([{ agentId: 'codex', share: null, activeDays: 2 }]);
+  });
+  it('keeps Moons phases neutral under default consent even when the producer knows Agent days', () => {
+    const projected = projectPublicProfileSnapshot({ ...base, facts: { activeDays: 5,
+      agentMix: [{ agentId: 'codex', share: 1, coverage: base.coverage }],
+      agentActiveDays: [{ agentId: 'codex', days: 2, coverage: base.coverage }],
+    } }, DEFAULT_PUBLIC_PROFILE_POLICY_V1);
+    const moons = components.projectPublicUsageChartModels(projected).moons;
+    expect(moons).toEqual({ agents: [{ agentId: 'codex', share: 1 }], periodDays: 7 });
+    expect(JSON.stringify(moons)).not.toContain('activeDays');
   });
 
   it('formats public Personal records from the independently shared scalars, without private record positions', () => {

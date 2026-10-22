@@ -1,8 +1,60 @@
-import { resolveUsageCalendarInstant, summarizeUsageRunLengthObservations, type PublicProfileSnapshotV1 } from '@happier-dev/plugin-sdk';
+import { resolveUsageCalendarInstant, summarizeUsageRunLengthObservations,
+  type PublicProfileSnapshotV1, type PublicProfileViewV1 } from '@happier-dev/plugin-sdk';
 import type { UsageAgentShare, UsageConstellationModel, UsageRiverModel, UsageShippedModel } from './UsageAgentsCharts.js';
 import type { UsageDaylightModel, UsageWeekHourModel } from './UsageRhythmEncodings.js';
 import type { UsageSkyModel } from './UsageSkyOfDays.js';
 import type { UsagePortraitModel, UsageRecordsModel, UsageRunLengthModel } from './UsageWorkCharts.js';
+import { countUsageChartCalendarDates, projectUsageRiverWeekRange } from './usageChartCalendar.js';
+
+/** Shared private/public calendar art: ordinal levels only, never daily amounts or Agent winners. */
+export type UsageCalendarArtModel = Readonly<{
+  period: PublicProfileSnapshotV1['period'];
+  days: readonly Readonly<{ date: string; level: 0 | 1 | 2 | 3 | 4 | null }>[];
+  /** Numeric annotations are independent of the calendar, which itself reveals run positions. */
+  currentStreakDays?: number;
+  bestStreakDays?: number;
+}>;
+export type UsageNinetyPlanetsModel = UsageCalendarArtModel;
+export type UsageStreakThreadModel = UsageCalendarArtModel;
+export type UsageDaysOnSurfaceModel = UsageCalendarArtModel;
+export type UsageRingedStreaksModel = UsageCalendarArtModel;
+export type UsageAroundPeriodModel = UsageCalendarArtModel;
+/** The shared skyline body arranges these ordinal days into calendar weeks, retaining unknown marks. */
+export type UsageWeeksSkylineModel = UsageCalendarArtModel;
+export type UsageMoonsModel = Readonly<{
+  agents: readonly UsageAgentShare[];
+  /** Phase denominator is the public period's calendar-day count, never a hidden activeDays value. */
+  periodDays: number;
+}>;
+export type UsageMachinesModel = Readonly<{
+  /** Null is unavailable evidence, [] is a witnessed empty population; no machine identities. */
+  kinds: readonly Readonly<{ kind: string; count: number; agentTimeShare: number; coverage: PublicProfileSnapshotV1['coverage'] }>[] | null;
+  coverage: PublicProfileSnapshotV1['coverage'];
+}>;
+export type UsageProjectsModel = Readonly<{
+  /** Already SCM-admitted links only. Equal stars carry no per-project metric. */
+  links: readonly Readonly<{ label: string; url: string }>[] | null;
+}>;
+export type UsageAtmosphereModel = Readonly<{
+  weeks: readonly Readonly<{ startMs: number; endMs: number; peak: number; coverage: PublicProfileSnapshotV1['coverage'] }>[];
+  /** Absent means no separately disclosed period figure, not zero. */
+  peakParallel?: number;
+}>;
+/** Same anonymous observations/distribution as Run length, without private chronological order. */
+export type UsageGalaxyModel = UsageRunLengthModel;
+
+/** Complete the selected period with unknown dates; never infer a missing day to be inactive. */
+export function projectUsageCalendarArtModel(input: UsageCalendarArtModel): UsageCalendarArtModel {
+  const { period } = input;
+  const supplied = new Map(input.days.map(day => [day.date, day.level]));
+  const days: UsageCalendarArtModel['days'][number][] = [];
+  for (let instant = resolveUsageCalendarInstant(period.startMs, period.timeZoneOffsetMinutes).bucketStartMs;
+    instant < period.endMs; instant = resolveUsageCalendarInstant(instant, period.timeZoneOffsetMinutes).bucketEndMs) {
+    const date = resolveUsageCalendarInstant(instant, period.timeZoneOffsetMinutes).date;
+    days.push({ date, level: supplied.get(date) ?? null });
+  }
+  return { ...input, days };
+}
 
 export type PublicUsageRecordKind = 'activeDays' | 'currentStreakDays' | 'bestStreakDays' | 'peakParallel' | 'longestTurnMs';
 
@@ -26,6 +78,12 @@ export function projectPublicUsageRecords(snapshot: PublicProfileSnapshotV1,
 }
 
 export type PublicUsageChartModels = Readonly<{
+  summary: Readonly<Pick<PublicProfileSnapshotV1['facts'], 'tokens' | 'activeDays' | 'agentTimeMs' | 'mergedPrs' | 'currentStreakDays' | 'bestStreakDays' | 'peakParallel'>>;
+  coverage: PublicProfileSnapshotV1['coverage'];
+  highlights: NonNullable<PublicProfileSnapshotV1['facts']['highlights']> | null;
+  footprint: Readonly<{ accountedTokens?: number }> | null;
+  sourceShares: NonNullable<PublicProfileSnapshotV1['facts']['sourceSplit']> | null;
+  agentMix: NonNullable<PublicProfileSnapshotV1['facts']['agentMix']> | null;
   sky: UsageSkyModel | null;
   weekHours: UsageWeekHourModel | null;
   daylight: UsageDaylightModel | null;
@@ -35,6 +93,12 @@ export type PublicUsageChartModels = Readonly<{
   constellation: UsageConstellationModel | null;
   portrait: UsagePortraitModel;
   runLength: UsageRunLengthModel | null;
+  calendarArt: UsageCalendarArtModel | null;
+  moons: UsageMoonsModel | null;
+  machines: UsageMachinesModel;
+  projects: UsageProjectsModel;
+  atmosphere: UsageAtmosphereModel | null;
+  galaxy: UsageGalaxyModel | null;
   /** Only the approved aggregate. There is no public day, lane, clock or peak attribution. */
   peak: number | null;
 }>;
@@ -44,7 +108,8 @@ export type PublicUsageChartModels = Readonly<{
  * the publication owner must project before calling it. Optional facts remain independent, including
  * geometry denominators. Public ordinal levels are never converted back into amounts or leaders.
  */
-export function projectPublicUsageChartModels(snapshot: PublicProfileSnapshotV1): PublicUsageChartModels {
+export function projectPublicUsageChartModels(snapshot: PublicProfileSnapshotV1,
+  metadata?: Pick<PublicProfileViewV1['metadata'], 'projects'>): PublicUsageChartModels {
   const { facts, period } = snapshot;
   const sky: UsageSkyModel | null = facts.calendar === undefined ? null : {
     encoding: 'ordinal', colourBy: 'intensity',
@@ -71,9 +136,27 @@ export function projectPublicUsageChartModels(snapshot: PublicProfileSnapshotV1)
   for (const cell of facts.punch ?? []) if (cell.level !== null) hours[cell.hour] = Math.max(hours[cell.hour] ?? 0, cell.level);
   const night = facts.dayNightActivity;
   const distribution = facts.sessionDurations === undefined ? null : summarizeUsageRunLengthObservations(facts.sessionDurations);
-  const firstDay = resolveUsageCalendarInstant(period.startMs, period.timeZoneOffsetMinutes);
-  const lastDay = resolveUsageCalendarInstant(period.endMs - 1, period.timeZoneOffsetMinutes);
+  const calendarArt = facts.calendar === undefined ? null : projectUsageCalendarArtModel({ period, days: facts.calendar,
+    ...(facts.currentStreakDays === undefined ? {} : { currentStreakDays: facts.currentStreakDays }),
+    ...(facts.bestStreakDays === undefined ? {} : { bestStreakDays: facts.bestStreakDays }),
+  });
+  const runLength: UsageRunLengthModel | null = distribution === null ? null : { rows: distribution.byAgent.map(row => ({ agentId: row.agentId,
+    samples: row.sampleCount, medianMs: row.medianMs, p90Ms: row.p90Ms, durationsMs: row.durationsMs })), openCount: null, croppedCount: null };
   return {
+    summary: {
+      ...(facts.tokens === undefined ? {} : { tokens: facts.tokens }),
+      ...(facts.activeDays === undefined ? {} : { activeDays: facts.activeDays }),
+      ...(facts.agentTimeMs === undefined ? {} : { agentTimeMs: facts.agentTimeMs }),
+      ...(facts.mergedPrs === undefined ? {} : { mergedPrs: facts.mergedPrs }),
+      ...(facts.currentStreakDays === undefined ? {} : { currentStreakDays: facts.currentStreakDays }),
+      ...(facts.bestStreakDays === undefined ? {} : { bestStreakDays: facts.bestStreakDays }),
+      ...(facts.peakParallel === undefined ? {} : { peakParallel: facts.peakParallel }),
+    },
+    coverage: snapshot.coverage,
+    highlights: facts.highlights ?? null,
+    footprint: facts.footprint === undefined ? null : { ...(facts.tokens === undefined ? {} : { accountedTokens: facts.tokens }) },
+    sourceShares: facts.sourceSplit ?? null,
+    agentMix: facts.agentMix ?? null,
     sky,
     weekHours: facts.punch === undefined ? null : { encoding: 'ordinal', grid },
     daylight: facts.punch === undefined && !night ? null : { encoding: 'ordinal', hours,
@@ -81,19 +164,26 @@ export function projectPublicUsageChartModels(snapshot: PublicProfileSnapshotV1)
     agentShares,
     // Equal width explicitly means composition only. Tokens and calendar cannot become a hidden width channel.
     river: facts.weeklyAgentMix === undefined ? null : { width: 'share', weeks: facts.weeklyAgentMix.map(week => ({
-      start: resolveUsageCalendarInstant(week.startMs, period.timeZoneOffsetMinutes).date, total: null,
-      shares: Object.fromEntries(week.mix.filter(row => row.coverage.method !== 'context_only').map(row => [row.agentId, row.share])),
+      ...projectUsageRiverWeekRange(week, period.timeZoneOffsetMinutes), total: null,
+      shares: week.mix.filter(row => row.coverage.method !== 'context_only').map(row => ({ agentId: row.agentId, share: row.share })),
     })) },
     shipped: facts.mergedPrs === undefined ? null : { mode: 'count', total: facts.mergedPrs },
     constellation: agentShares === null ? null : { nodes: agentShares, edges: null, unknownStarts: null },
     portrait: {
       ...(facts.activeDays === undefined ? {} : { activeDays: { active: facts.activeDays,
-        of: 1 + Math.round((lastDay.bucketStartMs - firstDay.bucketStartMs) / 86_400_000) } }),
+        of: countUsageChartCalendarDates(period, period.timeZoneOffsetMinutes) } }),
       ...(facts.peakParallel === undefined ? {} : { peakParallel: facts.peakParallel }),
       ...(facts.currentStreakDays === undefined ? {} : { streak: { current: facts.currentStreakDays, best: facts.bestStreakDays ?? null } }),
     },
-    runLength: distribution === null ? null : { rows: distribution.byAgent.map(row => ({ agentId: row.agentId,
-      samples: row.sampleCount, medianMs: row.medianMs, p90Ms: row.p90Ms, durationsMs: row.durationsMs })), openCount: null, croppedCount: null },
+    runLength,
+    calendarArt,
+    moons: agentShares === null ? null : { agents: agentShares, periodDays: countUsageChartCalendarDates(period, period.timeZoneOffsetMinutes) },
+    machines: { kinds: facts.machineKinds ?? null,
+      coverage: snapshot.fieldCoverage.machineKinds ?? { status: 'unavailable', method: 'unknown' } },
+    projects: { links: metadata?.projects ?? null },
+    atmosphere: facts.weeklyPeakParallel === undefined ? null : { weeks: facts.weeklyPeakParallel,
+      ...(facts.peakParallel === undefined ? {} : { peakParallel: facts.peakParallel }) },
+    galaxy: runLength,
     peak: facts.peakParallel ?? null,
   };
 }

@@ -10,8 +10,10 @@ import {
 import type { UsagePlanetSlot } from './usagePlanetSlot.js';
 
 type AgentsProps = UsageChartBaseProps & Readonly<{ agents: readonly UsageChartAgent[] }>;
-const agentOf = (agents: readonly UsageChartAgent[], id: string) => agents.find((agent) => agent.id === id);
-const shortName = (agents: readonly UsageChartAgent[], id: string) => agentOf(agents, id)?.shortName ?? agentOf(agents, id)?.name ?? id;
+const agentOf = (agents: readonly UsageChartAgent[], id: string | null) => agents.find((agent) => agent.id === id);
+/** An Agent's display name; a member the owner could not attribute is the host's neutral, localized Unknown. */
+const shortName = (agents: readonly UsageChartAgent[], id: string | null, unknown: string) => id === null ? unknown : agentOf(agents, id)?.shortName ?? agentOf(agents, id)?.name ?? id;
+const fullName = (agents: readonly UsageChartAgent[], id: string | null, unknown: string) => id === null ? unknown : agentOf(agents, id)?.name ?? id;
 
 /* ═════ Score (new body): the selected week, a staff line per Agent, equal round dots ═════ */
 
@@ -20,13 +22,14 @@ export type UsageScoreModel = Readonly<{
   weekStart: string;
   /** `minutes`: dot strength = busy minutes in that hour (private). `presence`: busy in the hour only. */
   encoding: 'minutes' | 'presence';
-  rows: readonly Readonly<{ agentId: string; hours: readonly (readonly (number | null)[])[] }>[];
+  rows: readonly Readonly<{ agentId: string | null; hours: readonly (readonly (number | null)[])[] }>[];
 }>;
 export type UsageScoreLabels = Readonly<{
   /** "Mon 7". */
   day: (dayIndex: number) => string;
   clock: (hour: number) => string;
   key: Readonly<{ light: string; medium: string; strong: string; presence: string; presenceNote: string }>;
+  unknownAgent: string;
   values: UsageChartValuesLabels & Readonly<{ agentColumn: string; dayColumn: string; hoursColumn: string; formatHours: (minutesByHour: readonly (number | null)[]) => string }>;
 }>;
 const scoreOpacity = (encoding: UsageScoreModel['encoding'], minutes: number) => encoding === 'presence' ? (minutes ? 0.9 : 0)
@@ -38,13 +41,13 @@ export function UsageScore(props: AgentsProps & Readonly<{ model: UsageScoreMode
   const svgText = useUsageChartSvgText(props.theme);
   const phone = width !== null && width < 560;
   const rows = props.model.rows;
-  const colour = (id: string) => agentOf(props.agents, id)?.color ?? ink.neutral;
+  const colour = (id: string | null) => agentOf(props.agents, id)?.color ?? ink.neutral;
   const keyItems: UsageChartKeyItem[] = props.model.encoding === 'presence'
     ? [{ id: 'p', label: props.labels.key.presence, swatch: { kind: 'dot', color: ink.text } }]
     : [{ id: 'l', label: props.labels.key.light, swatch: { kind: 'dot', color: ink.neutral } },
       { id: 'm', label: props.labels.key.medium, swatch: { kind: 'dot', color: props.theme.colors.secondaryText } },
       { id: 's', label: props.labels.key.strong, swatch: { kind: 'dot', color: ink.text } }];
-  const table = rows.flatMap((row) => row.hours.map((hours, day) => [agentOf(props.agents, row.agentId)?.name ?? row.agentId, props.labels.day(day),
+  const table = rows.flatMap((row) => row.hours.map((hours, day) => [fullName(props.agents, row.agentId, props.labels.unknownAgent), props.labels.day(day),
     props.labels.values.formatHours(hours)] as const)).filter((row) => row[2] !== '');
   let chart: ReactNode = <View style={{ height: rows.length * 26 + 26 }} />;
   if (width !== null && !phone) {
@@ -53,9 +56,9 @@ export function UsageScore(props: AgentsProps & Readonly<{ model: UsageScoreMode
       {Array.from({ length: 8 }, (_, day) => <Path key={`v${day}`} d={`M${r1(label + day * 24 * step)},2V${height - 18}`} stroke={ink.grid} strokeWidth={1} />)}
       {rows.map((row, index) => {
         const y = index * rowHeight + rowHeight / 2 + 2;
-        return <G key={row.agentId}>
+        return <G key={JSON.stringify(row.agentId)}>
           <Path d={`M${label},${y}H${width}`} stroke={ink.grid} strokeWidth={1} />
-          {svgText.draw({ x: 0, y: y + 4, text: shortName(props.agents, row.agentId), tone: 'secondary', size: 'body' })}
+          {svgText.draw({ x: 0, y: y + 4, text: shortName(props.agents, row.agentId, props.labels.unknownAgent), tone: 'secondary', size: 'body' })}
           {row.hours.flatMap((hours, day) => hours.map((minutes, hour) => minutes ? <Circle key={`${day}-${hour}`} cx={r1(label + (day * 24 + hour + 0.5) * step)} cy={y}
             r={r1(radius)} fill={colour(row.agentId)} fillOpacity={scoreOpacity(props.model.encoding, minutes)} /> : null))}
         </G>;
@@ -88,8 +91,8 @@ export function UsageScore(props: AgentsProps & Readonly<{ model: UsageScoreMode
 /* ═════ Agent mix (Orbit, Crew): every Agent, its share and how it is measured ═════ */
 
 export type UsageAgentShare = Readonly<{
-  agentId: string;
-  /** Null = not measured (context only) or not shared: drawn as "—", never estimated. */
+  agentId: string | null;
+  /** Null = no measured denominator or not shared: drawn as "—", never a source-method claim. */
   share: number | null;
   /** How this Agent's usage is measured, as the host names it ("Measured · Happier and its logs"). */
   coverage?: Readonly<{ long: string; short: string }>;
@@ -97,7 +100,7 @@ export type UsageAgentShare = Readonly<{
   activeDays?: number | null;
 }>;
 
-export type UsageOrbitLabels = Readonly<{ percent: (share: number) => string; unknown: (names: string) => string }>;
+export type UsageOrbitLabels = Readonly<{ percent: (share: number) => string; unknown: (names: string) => string; unknownAgent: string }>;
 
 /** Orbit (new body): the closer orbit did more (rank by share); the dot's area is its share; unknown shares sit apart. */
 export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly UsageAgentShare[]; labels: UsageOrbitLabels; renderPlanet?: UsagePlanetSlot }>) {
@@ -122,11 +125,11 @@ export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly Usage
             {known.map((entry, index) => {
               const rx = rx0 + index * step, ry = rx * aspect, t = angles[index % angles.length]!;
               const x = cx + rx * Math.cos(t), y = cy + ry * Math.sin(t), radius = 3 + Math.sqrt(entry.share) * 13, right = Math.cos(t) >= 0;
-              return <G key={entry.agentId}>
+              return <G key={JSON.stringify(entry.agentId)}>
                 <Circle cx={r1(x)} cy={r1(y)} r={r1(radius)} fill={agentOf(props.agents, entry.agentId)?.color ?? ink.neutral} />
                 {(() => {
                   // A label beside its planet, kept inside the body on a narrow width (it moves to the edge, never off it).
-                  const text = `${shortName(props.agents, entry.agentId)} ${props.labels.percent(entry.share)}`;
+                  const text = `${shortName(props.agents, entry.agentId, props.labels.unknownAgent)} ${props.labels.percent(entry.share)}`;
                   const span = text.length * (svgText.styles.body.fontSize ?? 13) * 0.7;
                   const at = x + (right ? radius + 6 : -radius - 6);
                   return right ? svgText.draw({ x: Math.min(at, width - span), y: y + 4, anchor: 'start', tone: 'secondary', size: 'body', halo: props.paint.paper, text })
@@ -134,7 +137,7 @@ export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly Usage
                 })()}
               </G>;
             })}
-            {unknown.length ? svgText.draw({ x: width, y: height - 4, anchor: 'end', text: props.labels.unknown(unknown.map((entry) => shortName(props.agents, entry.agentId)).join(', ')) }) : null}
+            {unknown.length ? svgText.draw({ x: width, y: height - 4, anchor: 'end', text: props.labels.unknown(unknown.map((entry) => shortName(props.agents, entry.agentId, props.labels.unknownAgent)).join(', ')) }) : null}
           </Svg>
           {props.renderPlanet ? <View pointerEvents="none" style={{ position: 'absolute', left: r1(cx - 36), top: r1(cy - 36), width: 72, height: 72 }}>
             {props.renderPlanet({ size: 72, radius: 20, halo: 0.5, tail: 0, rise: 1, rotate: -0.6, style: 'rich' })}
@@ -145,7 +148,7 @@ export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly Usage
   </UsageChartColumn>;
 }
 
-export type UsageCrewLabels = Readonly<{ percent: (share: number) => string; days: (activeDays: number) => string }>;
+export type UsageCrewLabels = Readonly<{ percent: (share: number) => string; days: (activeDays: number) => string; unknownAgent: string }>;
 
 /** Crew (Breakdowns · Style Crew): every Agent with its share, how it is measured and (when shared) its active days. */
 export function UsageCrew(props: AgentsProps & Readonly<{ model: readonly UsageAgentShare[]; labels: UsageCrewLabels }>) {
@@ -158,11 +161,12 @@ export function UsageCrew(props: AgentsProps & Readonly<{ model: readonly UsageA
   return <View testID={props.testID} onLayout={onLayout} accessibilityLabel={props.label} style={{ minWidth: 0 }}>
     {props.model.map((entry, index) => {
       const agent = agentOf(props.agents, entry.agentId);
-      return <View key={entry.agentId} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 9,
+      return <View key={JSON.stringify(entry.agentId)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 9,
         borderTopWidth: index === 0 ? 0 : 1, borderColor: ink.grid }}>
-        <View style={{ width: 18, alignItems: 'center' }}>{agent?.mark ?? null}</View>
+        <View style={{ width: 18, alignItems: 'center' }}>{entry.agentId === null
+          ? <View style={{ width: 8, height: 8, borderRadius: 4, borderWidth: 1.2, borderColor: ink.neutral }} /> : agent?.mark ?? null}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <HappierText style={text.strong} numberOfLines={1}>{compact ? agent?.shortName ?? agent?.name ?? entry.agentId : agent?.name ?? entry.agentId}</HappierText>
+          <HappierText style={text.strong} numberOfLines={1}>{compact ? shortName(props.agents, entry.agentId, props.labels.unknownAgent) : fullName(props.agents, entry.agentId, props.labels.unknownAgent)}</HappierText>
           {entry.coverage ? <HappierText style={text.caption} numberOfLines={1}>{compact ? entry.coverage.short : entry.coverage.long}</HappierText> : null}
         </View>
         {!compact ? <View style={{ width: 100, height: 4, borderRadius: 2, backgroundColor: ink.track, overflow: 'hidden' }}>
@@ -182,21 +186,27 @@ export type UsageRiverModel = Readonly<{
   /** `amount`: width = the week's metric total; `level`: width = the week's labelled intensity (public), never an amount. */
   width: 'amount' | 'level' | 'share';
   /** Null in composition-only mode: equal width, with no implied weekly amount. */
-  weeks: readonly Readonly<{ start: string; total: number | null; shares: Readonly<Record<string, number>> }>[];
+  weeks: readonly Readonly<{ start: string; end: string; partial: boolean; total: number | null;
+    shares: readonly Readonly<{ agentId: string | null; share: number }>[] }>[];
 }>;
-export type UsageRiverLabels = Readonly<{ week: (start: string) => string; inline: (name: string, share: number) => string; caption: string;
+export type UsageRiverLabels = Readonly<{ week: (start: string) => string; inline: (name: string, share: number) => string; caption: string; unknownAgent: string;
+  /** A week the period clips, named by the days it covers ("13–15 Jul · part week"); its shares are of those days only. */
+  partialWeek: (start: string, end: string) => string;
   values: UsageChartValuesLabels & Readonly<{ weekColumn: string; totalColumn: string; formatTotal: (total: number) => string; percent: (share: number) => string }> }>;
 
 export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRiverModel; labels: UsageRiverLabels }>) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const svgText = useUsageChartSvgText(props.theme);
   const weeks = props.model.weeks;
+  const shareOf = (week: UsageRiverModel['weeks'][number], id: string | null) => week.shares.find(entry => entry.agentId === id)?.share ?? 0;
   const weight = (week: UsageRiverModel['weeks'][number]) => props.model.width === 'share' ? 1 : week.total ?? 0;
   const height = width !== null && width < 480 ? 150 : 190;
-  const order = props.agents.map((agent) => agent.id).filter((id) => weeks.some((week) => (week.shares[id] ?? 0) > 0))
-    .sort((a, b) => weeks.reduce((sum, week) => sum + (week.shares[a] ?? 0) * weight(week), 0) - weeks.reduce((sum, week) => sum + (week.shares[b] ?? 0) * weight(week), 0));
-  const rows = weeks.map((week) => [props.labels.week(week.start), week.total === null ? '—' : props.labels.values.formatTotal(week.total),
-    ...order.slice().reverse().map((id) => props.labels.values.percent(week.shares[id] ?? 0))] as const);
+  // Every member with a share, the unattributed one included (it is part of the composition, never dropped).
+  const members: (string | null)[] = [...props.agents.map((agent) => agent.id), ...(weeks.some((week) => shareOf(week, null) > 0) ? [null] : [])];
+  const order = members.filter((id) => weeks.some((week) => shareOf(week, id) > 0))
+    .sort((a, b) => weeks.reduce((sum, week) => sum + shareOf(week, a) * weight(week), 0) - weeks.reduce((sum, week) => sum + shareOf(week, b) * weight(week), 0));
+  const rows = weeks.map((week) => [week.partial ? props.labels.partialWeek(week.start, week.end) : props.labels.week(week.start), week.total === null ? '—' : props.labels.values.formatTotal(week.total),
+    ...order.slice().reverse().map((id) => props.labels.values.percent(shareOf(week, id)))] as const);
   return <UsageChartColumn testID={props.testID} onLayout={onLayout}>
     <View style={{ height }} accessible accessibilityRole="image" accessibilityLabel={props.label}>
       {width !== null && weeks.length >= 2 ? (() => {
@@ -205,17 +215,17 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
         let floor = weeks.map((week) => -(weight(week) / max) * half);
         const bands = order.map((id) => {
           const low = floor.slice();
-          const high = weeks.map((week, index) => low[index]! + ((week.shares[id] ?? 0) * weight(week) / max) * half * 2);
+          const high = weeks.map((week, index) => low[index]! + (shareOf(week, id) * weight(week) / max) * half * 2);
           floor = high;
           return { id, low, high };
         });
-        const colour = (id: string) => agentOf(props.agents, id)?.color ?? props.theme.colors.mutedText;
+        const colour = (id: string | null) => agentOf(props.agents, id)?.color ?? props.theme.colors.mutedText;
         const leaders = order.slice(-2).reverse();
         return <Svg width={width} height={height}>
           {bands.map((band) => {
             const top = band.high.map((value, index) => [x(index), mid - value] as const);
             const bottom = band.low.map((value, index) => [x(index), mid - value] as const).reverse();
-            return <Path key={band.id} d={`${usageSmoothPath(top)}L${r1(bottom[0]![0])},${r1(bottom[0]![1])}${usageSmoothPath(bottom).replace(/^M[^C]*/u, '')}Z`} fill={colour(band.id)} fillOpacity={0.9} />;
+            return <Path key={band.id ?? "unknown"} d={`${usageSmoothPath(top)}L${r1(bottom[0]![0])},${r1(bottom[0]![1])}${usageSmoothPath(bottom).replace(/^M[^C]*/u, '')}Z`} fill={colour(band.id)} fillOpacity={0.9} />;
           })}
           {(() => {
             // Each leading Agent is named where its band is thickest (never the same week twice), kept inside the plot.
@@ -229,10 +239,10 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
               for (let at = 0; at < weeks.length; at++) if (!used.has(at) && (index < 0 || room(at) > room(index))) index = at;
               if (index < 0 || band.high[index]! - band.low[index]! < 16) return null;
               used.add(index);
-              const text = props.labels.inline(shortName(props.agents, id), weeks[index]!.shares[id] ?? 0);
+              const text = props.labels.inline(shortName(props.agents, id, props.labels.unknownAgent), shareOf(weeks[index]!, id));
               const half = (text.length * (svgText.styles.strong.fontSize ?? 13) * 0.7) / 2;
               const y = mid - (band.low[index]! + band.high[index]!) / 2;
-              return <G key={`l${id}`}>{svgText.draw({ x: Math.min(width - half - 4, Math.max(half + 4, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
+              return <G key={`l${id ?? "unknown"}`}>{svgText.draw({ x: Math.min(width - half - 4, Math.max(half + 4, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
             });
           })()}
           {weeks.map((week, index) => index % 3 === 0 || index === weeks.length - 1 ? svgText.draw({ x: x(index), y: height - 3,
@@ -243,7 +253,7 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
     <UsageChartCaption theme={props.theme}>{props.labels.caption}</UsageChartCaption>
     <UsageChartValues theme={props.theme} label={props.label} labels={props.labels.values} testID={props.testID}
       table={{ columns: [{ label: props.labels.values.weekColumn }, { label: props.labels.values.totalColumn },
-        ...order.slice().reverse().map((id) => ({ label: shortName(props.agents, id), priority: 'secondary' as const }))], rows }} />
+        ...order.slice().reverse().map((id) => ({ label: shortName(props.agents, id, props.labels.unknownAgent), priority: 'secondary' as const }))], rows }} />
   </UsageChartColumn>;
 }
 
@@ -319,36 +329,44 @@ export function UsageShipped(props: AgentsProps & Readonly<{ model: UsageShipped
 export type UsageCollaborationKind = 'spawn' | 'run' | 'native' | 'review' | 'plan' | 'report' | 'replay' | 'handoff';
 export type UsageConstellationModel = Readonly<{
   /** Each Agent's share sizes its planet; null = unknown share (drawn small, never estimated). */
-  nodes: readonly Readonly<{ agentId: string; share: number | null }>[];
+  nodes: readonly Readonly<{ agentId: string | null; share: number | null }>[];
   /** Null = no collaboration summary: nodes only, said plainly; never co-running time as a stand-in. */
   edges: readonly Readonly<{ from: string; to: string; kind: 'session' | 'run' | 'native'; count: number }>[] | null;
   unknownStarts: number | null;
 }>;
 export type UsageConstellationLabels = Readonly<{ kinds: Readonly<{ session: string; run: string; native: string }>; arrowNote: string;
-  unknownStarts: (count: number) => string; nodesOnly: string }>;
+  unknownStarts: (count: number) => string; nodesOnly: string; unknownAgent: string }>;
 const EDGE_DASH = { session: undefined, run: '5 3', native: '1.5 3' } as const;
+const CONSTELLATION_SLOTS = 7;
 
 export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageConstellationModel; labels: UsageConstellationLabels; renderPlanet?: UsagePlanetSlot }>) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
   const phone = width !== null && width < 600;
-  const height = phone ? 340 : 330;
-  const nodes = props.model.nodes.slice(0, 7);
+  // Every member is placed. Up to seven sit on the composed slots; more go round one ring, planets scaled to fit.
+  const nodes = props.model.nodes;
+  const crowded = nodes.length > CONSTELLATION_SLOTS;
+  const scale = crowded ? Math.sqrt(CONSTELLATION_SLOTS / nodes.length) : 1;
+  const height = crowded ? (phone ? 380 : 360) : phone ? 340 : 330;
   const slots = phone ? [[0.32, 0.3], [0.74, 0.4], [0.3, 0.78], [0.72, 0.82], [0.12, 0.56], [0.86, 0.14], [0.55, 0.6]]
     : [[0.34, 0.4], [0.68, 0.38], [0.5, 0.8], [0.14, 0.74], [0.88, 0.78], [0.12, 0.2], [0.9, 0.16]];
-  const colour = (id: string) => agentOf(props.agents, id)?.color ?? ink.neutral;
+  const colour = (id: string | null) => agentOf(props.agents, id)?.color ?? ink.neutral;
   const keyItems: UsageChartKeyItem[] = props.model.edges ? (['session', 'run', 'native'] as const).map((kind) => ({ id: kind, label: props.labels.kinds[kind],
     swatch: { kind: 'line' as const, color: ink.text, dashed: kind === 'run', dotted: kind === 'native' } })) : [];
   return <UsageChartColumn testID={props.testID} onLayout={onLayout}>
     <View style={{ height }} accessible accessibilityRole="image" accessibilityLabel={props.label}>
       {width !== null ? (() => {
-        const position = new Map(nodes.map((node, index) => [node.agentId, [slots[index]![0]! * width, slots[index]![1]! * height] as const]));
-        const radius = (id: string) => 9 + Math.sqrt(nodes.find((node) => node.agentId === id)?.share ?? 0.02) * (phone ? 22 : 30);
+        const ring = (index: number) => {
+          const angle = -Math.PI / 2 + (index / nodes.length) * 2 * Math.PI;
+          return [width / 2 + Math.cos(angle) * width * 0.38, height * 0.46 + Math.sin(angle) * height * 0.36] as const;
+        };
+        const position = new Map(nodes.map((node, index) => [node.agentId, crowded ? ring(index) : [slots[index]![0]! * width, slots[index]![1]! * height] as const]));
+        const radius = (id: string | null) => (9 + Math.sqrt(nodes.find((node) => node.agentId === id)?.share ?? 0.02) * (phone ? 22 : 30)) * scale;
         const edges = (props.model.edges ?? []).filter((edge) => position.has(edge.from) && position.has(edge.to));
         return <>
           <Svg width={width} height={height}>
-            <Defs>{nodes.map((node) => <Marker key={node.agentId} id={`usage-const-arrow-${node.agentId}`} viewBox="0 0 8 8" refX={7} refY={4} markerWidth={9} markerHeight={9}
+            <Defs>{nodes.map((node) => <Marker key={JSON.stringify(node.agentId)} id={`usage-const-arrow-${node.agentId}`} viewBox="0 0 8 8" refX={7} refY={4} markerWidth={9} markerHeight={9}
               markerUnits="userSpaceOnUse" orient="auto-start-reverse"><Path d="M0,0L8,4L0,8Z" fill={colour(node.agentId)} /></Marker>)}</Defs>
             {edges.map((edge, index) => {
               const stroke = 1 + Math.sqrt(edge.count) * 0.28;
@@ -375,7 +393,7 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
             })}
             {nodes.map((node) => { const [x, y] = position.get(node.agentId)!; return <G key={`n${node.agentId}`}>
               {!props.renderPlanet ? <Circle cx={r1(x)} cy={r1(y)} r={r1(radius(node.agentId) * 0.8)} fill={colour(node.agentId)} /> : null}
-              {svgText.draw({ x, y: y + radius(node.agentId) + 15, anchor: 'middle', tone: 'strong', size: 'body', text: shortName(props.agents, node.agentId) })}
+              {svgText.draw({ x, y: y + radius(node.agentId) + 15, anchor: 'middle', tone: 'strong', size: 'body', text: shortName(props.agents, node.agentId, props.labels.unknownAgent) })}
             </G>; })}
           </Svg>
           {props.renderPlanet ? nodes.map((node) => {

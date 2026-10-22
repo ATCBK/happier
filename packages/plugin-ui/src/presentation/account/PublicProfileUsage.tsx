@@ -13,11 +13,22 @@ import {
   type UsageConstellationLabels, type UsageCrewLabels, type UsageOrbitLabels, type UsageRiverLabels, type UsageShippedLabels,
 } from '../usage/charts/UsageAgentsCharts.js';
 import { UsagePersonalRecords, UsagePlanetPortrait, UsageRunLength, type UsagePortraitLabels, type UsageRecordsModel, type UsageRunLengthLabels } from '../usage/charts/UsageWorkCharts.js';
+import {
+  UsageAroundThePeriod, UsageDaysOnSurface, UsageNinetyPlanets, UsageRingedByStreaks, UsageStreakThread, UsageWeeksSkyline,
+  type UsageCalendarLabels,
+} from '../usage/charts/UsageCalendarForms.js';
+import {
+  UsageAgentMoons, UsageAtmosphere, UsageMachines, UsageProjects,
+  type UsageAtmosphereLabels, type UsageMachinesLabels, type UsageMoonsLabels, type UsageProjectsLabels,
+} from '../usage/charts/UsagePlanetFamily.js';
+import { publicProfileUsageOriginalBody, type PublicUsageOriginalLabels } from './PublicProfileUsageOriginal.js';
+export type { PublicUsageOriginalLabels, PublicUsageMetricId } from './PublicProfileUsageOriginal.js';
 
 /** Host localization for the same chart bodies used by private Usage. */
 export type HappierPublicProfileUsageLabels = Readonly<{
   chartLabel: (widgetId: BuiltinUsagePublicPresentationV1['widgetId']) => string;
   unavailable: string;
+  original?: PublicUsageOriginalLabels;
   sky?: UsageSkyLabels;
   parallel?: UsageDayLabels;
   records?: Readonly<{ format: Parameters<typeof projectPublicUsageRecords>[1]; caption: string }>;
@@ -30,6 +41,12 @@ export type HappierPublicProfileUsageLabels = Readonly<{
   constellation?: UsageConstellationLabels;
   planet?: UsagePortraitLabels;
   runLength?: UsageRunLengthLabels;
+  /** The calendar Styles (Ninety planets, Streak thread, Weeks, Around the period, Days on the surface, Rings). */
+  calendar?: UsageCalendarLabels & Readonly<{ lit: (active: number, days: number) => string; noRuns: string }>;
+  moons?: UsageMoonsLabels;
+  machines?: UsageMachinesLabels;
+  projects?: UsageProjectsLabels;
+  atmosphere?: UsageAtmosphereLabels;
 }>;
 
 export type HappierPublicProfileUsageHost = Readonly<{
@@ -55,7 +72,9 @@ export function PublicProfileUsageBody({ presentation, models, records, host, te
   const theme = useHappierUiTheme();
   const { labels } = host;
   const base = { theme, paint: host.paint, width: host.width, label: labels.chartLabel(presentation.widgetId), testID };
-  const agents = (ids: readonly string[]) => [...new Set(ids)].map(host.agent);
+  const agents = (ids: readonly (string | null)[]) => [...new Set(ids)].flatMap(id => id === null ? [] : [host.agent(id)]);
+  const original = publicProfileUsageOriginalBody({ presentation, models, records, host, testID }, theme);
+  if (original) return original;
   switch (presentation.widgetId) {
     case 'usage_recap':
       if (presentation.inputs.style === 'personalRecords' && records?.length && labels.records)
@@ -76,6 +95,18 @@ export function PublicProfileUsageBody({ presentation, models, records, host, te
         case 'daylight':
           if (models.daylight && labels.daylight) return <UsageDaylight {...base} model={models.daylight} labels={labels.daylight} />;
           break;
+        default:
+          if (models.calendarArt && labels.calendar) {
+            const calendar = { ...base, model: models.calendarArt, labels: labels.calendar, renderPlanet: host.renderPlanet };
+            switch (presentation.inputs.style) {
+              case 'ninetyPlanets': return <UsageNinetyPlanets {...calendar} />;
+              case 'streakThread': return <UsageStreakThread {...calendar} />;
+              case 'weeksSkyline': return <UsageWeeksSkyline {...calendar} />;
+              case 'daysOnSurface': return <UsageDaysOnSurface {...calendar} />;
+              case 'ringedStreaks': return <UsageRingedByStreaks {...calendar} />;
+              case 'aroundPeriod': return <UsageAroundThePeriod {...calendar} />;
+            }
+          }
       }
       break;
     case 'usage_breakdowns':
@@ -83,12 +114,17 @@ export function PublicProfileUsageBody({ presentation, models, records, host, te
         return <UsageCrew {...base} model={models.agentShares} labels={labels.crew} agents={agents(models.agentShares.map(row => row.agentId))} />;
       break;
     case 'usage_orbit':
+      if (presentation.inputs.style === 'moons') {
+        if (models.moons && labels.moons) return <UsageAgentMoons {...base} model={models.moons} labels={labels.moons}
+          agents={agents(models.moons.agents.map(row => row.agentId))} renderPlanet={host.renderPlanet} />;
+        break;
+      }
       if (models.agentShares && labels.orbit) return <UsageOrbit {...base} model={models.agentShares} labels={labels.orbit}
         agents={agents(models.agentShares.map(row => row.agentId))} renderPlanet={host.renderPlanet} />;
       break;
     case 'usage_flow':
       if (models.river && labels.river) return <UsageAgentRiver {...base} model={models.river} labels={labels.river}
-        agents={agents(models.river.weeks.flatMap(week => Object.keys(week.shares)))} />;
+        agents={agents(models.river.weeks.flatMap(week => week.shares.map(row => row.agentId)))} />;
       break;
     case 'usage_outcomes':
       if (presentation.inputs.style === 'shipped' && models.shipped && labels.shipped)
@@ -100,6 +136,15 @@ export function PublicProfileUsageBody({ presentation, models, records, host, te
       break;
     case 'usage_planet':
       if (labels.planet) return <UsagePlanetPortrait {...base} model={models.portrait} labels={labels.planet} renderPlanet={host.renderPlanet} />;
+      break;
+    case 'usage_machines':
+      if (labels.machines) return <UsageMachines {...base} model={models.machines} labels={labels.machines} renderPlanet={host.renderPlanet} />;
+      break;
+    case 'usage_projects':
+      if (labels.projects) return <UsageProjects {...base} model={models.projects} labels={labels.projects} />;
+      break;
+    case 'usage_atmosphere':
+      if (models.atmosphere && labels.atmosphere) return <UsageAtmosphere {...base} model={models.atmosphere} labels={labels.atmosphere} renderPlanet={host.renderPlanet} />;
       break;
     case 'usage_run_length':
       if (models.runLength && labels.runLength) return <UsageRunLength {...base} model={models.runLength} labels={labels.runLength}

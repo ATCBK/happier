@@ -458,6 +458,7 @@ export {
 export {
   HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
+  HappierPublicProfileWidget,
   type HappierPublicProfileHeroGeometry,
   type HappierPublicProfileLabels,
   type HappierPublicProfileOwner,
@@ -466,6 +467,8 @@ export {
 export type {
   HappierPublicProfileUsageHost,
   HappierPublicProfileUsageLabels,
+  PublicUsageOriginalLabels,
+  PublicUsageMetricId,
 } from './account/PublicProfileUsage.js';
 export {
   HappierPageChromeProvider,

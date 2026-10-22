@@ -14,6 +14,7 @@ import type {
   JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
+import { publicSnapshotTemplate } from './publicWidget.js';
 export { readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
   requestExternalDocAcceptance, requestExternalDocDecline } from './docReview.js';
 
@@ -154,6 +155,11 @@ export const externalAuthoringPlugin = definePlugin({
       container: 'appPage',
       target: { kind: 'app' },
       renderer: 'external-authoring-semantic-renderer',
+    }, {
+      id: 'external-public-chart', title: 'An external block', container: 'widget',
+      target: { kind: 'app' }, renderer: 'external-project-renderer',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      publicPresentation: publicSnapshotTemplate,
     }, {
       id: 'external-project-checkout', title: 'Checkout identity', container: 'widget',
       target: { kind: 'app' }, renderer: 'external-project-renderer',

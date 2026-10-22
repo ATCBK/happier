@@ -74,7 +74,15 @@ type PublishedPublicProfileProps = Readonly<{
   testID?: string;
 }>;
 
-export type HappierPublicProfileOwner = Readonly<{ hiddenBlockIds: ReadonlySet<string>; onlyYou: string }>;
+export type HappierPublicProfileOwner = Readonly<{
+  hiddenBlockIds: ReadonlySet<string>;
+  onlyYou: string;
+  /**
+   * The owner's editable widget area in place of the projected blocks (Edit), so the page keeps its
+   * header, period and footer while blocks are added, sized and arranged. Never passed to visitors.
+   */
+  renderBlocks?: () => ReactNode;
+}>;
 
 export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
   /** Withdrawal states have no fabricated snapshot, period, coverage or applied blocks. */
@@ -108,7 +116,7 @@ export function HappierPublicProfile(props: HappierPublicProfileProps) {
 function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const theme = useHappierUiTheme();
   const { view, labels } = props;
-  const usageModels = useMemo(() => projectPublicUsageChartModels(view.snapshot), [view.snapshot]);
+  const usageModels = useMemo(() => projectPublicUsageChartModels(view.snapshot, view.metadata), [view.snapshot, view.metadata]);
   const formatRecord = props.usage?.labels.records?.format;
   const usageRecords = useMemo(() => formatRecord ? projectPublicUsageRecords(view.snapshot, formatRecord) : null,
     [view.snapshot, formatRecord]);
@@ -199,7 +207,9 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
             {labels.periodDetail}
           </HappierText>
         </View>
-        {bands.length === 0 ? (
+        {props.owner?.renderBlocks ? (
+          props.owner.renderBlocks()
+        ) : bands.length === 0 ? (
           <HappierText
             variant="body"
             tone="secondary"
@@ -364,6 +374,23 @@ function PublicProfileItem(
       ))}
     </HappierWidgetFrame>
   );
+}
+
+/** The same placed block in an authenticated setup/frame; the host supplies an already masked view. */
+export function HappierPublicProfileWidget(props: Readonly<{
+  view: PublishedPublicProfileProps['view'];
+  widgetId: string;
+  labels: HappierPublicProfileLabels;
+  usage?: HappierPublicProfileUsageHost;
+  testID: string;
+}>) {
+  const models = useMemo(() => projectPublicUsageChartModels(props.view.snapshot), [props.view.snapshot]);
+  const format = props.usage?.labels.records?.format;
+  const records = useMemo(() => format ? projectPublicUsageRecords(props.view.snapshot, format) : null, [props.view.snapshot, format]);
+  const widget = props.view.layout.items.flatMap(item => item.kind === 'widget' ? [item] : item.children)
+    .find(item => item.id === props.widgetId);
+  return widget ? <PublicProfileBlock widget={widget} labels={props.labels} usageModels={models} usageRecords={records}
+    usage={props.usage} testID={props.testID} bare /> : null;
 }
 
 function PublicProfileBlock(

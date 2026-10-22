@@ -4,6 +4,30 @@ import { usePluginTheme } from './PluginUiProvider.js';
 
 // These are theme adapters, not another chart implementation or widget registry. The caller supplies
 // finite models, labels, identities and paint; private Usage and public profiles draw the same bodies.
+export function UsageDailyChart(props: Omit<ComponentProps<typeof Charts.UsageDailyChart>, 'theme'>) {
+  return <Charts.UsageDailyChart {...props} theme={usePluginTheme()} />;
+}
+export function UsageRhythmChart(props: Omit<ComponentProps<typeof Charts.UsageRhythmChart>, 'theme'>) {
+  return <Charts.UsageRhythmChart {...props} theme={usePluginTheme()} />;
+}
+export function UsagePeriodSummaryBody(props: Omit<ComponentProps<typeof Charts.UsagePeriodSummaryBody>, 'theme'>) {
+  return <Charts.UsagePeriodSummaryBody {...props} theme={usePluginTheme()} />;
+}
+export function UsageFootprintBody(props: Omit<ComponentProps<typeof Charts.UsageFootprintBody>, 'theme'>) {
+  return <Charts.UsageFootprintBody {...props} theme={usePluginTheme()} />;
+}
+export function UsageSourceCoverageBody(props: Omit<ComponentProps<typeof Charts.UsageSourceCoverageBody>, 'theme'>) {
+  return <Charts.UsageSourceCoverageBody {...props} theme={usePluginTheme()} />;
+}
+export function UsageBreakdownsBody(props: Omit<ComponentProps<typeof Charts.UsageBreakdownsBody>, 'theme'>) {
+  return <Charts.UsageBreakdownsBody {...props} theme={usePluginTheme()} />;
+}
+export function UsageOutcomesBody(props: Omit<ComponentProps<typeof Charts.UsageOutcomesBody>, 'theme'>) {
+  return <Charts.UsageOutcomesBody {...props} theme={usePluginTheme()} />;
+}
+export function UsageRecapBody(props: Omit<ComponentProps<typeof Charts.UsageRecapBody>, 'theme'>) {
+  return <Charts.UsageRecapBody {...props} theme={usePluginTheme()} />;
+}
 export function UsageSkyOfDays(props: Omit<ComponentProps<typeof Charts.UsageSkyOfDays>, 'theme'>) {
   return <Charts.UsageSkyOfDays {...props} theme={usePluginTheme()} />;
 }
@@ -46,7 +70,39 @@ export function UsageSteeringTide(props: Omit<ComponentProps<typeof Charts.Usage
 export function UsageRunLength(props: Omit<ComponentProps<typeof Charts.UsageRunLength>, 'theme'>) {
   return <Charts.UsageRunLength {...props} theme={usePluginTheme()} />;
 }
+export function UsageNinetyPlanets(props: Omit<ComponentProps<typeof Charts.UsageNinetyPlanets>, 'theme'>) {
+  return <Charts.UsageNinetyPlanets {...props} theme={usePluginTheme()} />;
+}
+export function UsageStreakThread(props: Omit<ComponentProps<typeof Charts.UsageStreakThread>, 'theme'>) {
+  return <Charts.UsageStreakThread {...props} theme={usePluginTheme()} />;
+}
+export function UsageWeeksSkyline(props: Omit<ComponentProps<typeof Charts.UsageWeeksSkyline>, 'theme'>) {
+  return <Charts.UsageWeeksSkyline {...props} theme={usePluginTheme()} />;
+}
+export function UsageAroundThePeriod(props: Omit<ComponentProps<typeof Charts.UsageAroundThePeriod>, 'theme'>) {
+  return <Charts.UsageAroundThePeriod {...props} theme={usePluginTheme()} />;
+}
+export function UsageDaysOnSurface(props: Omit<ComponentProps<typeof Charts.UsageDaysOnSurface>, 'theme'>) {
+  return <Charts.UsageDaysOnSurface {...props} theme={usePluginTheme()} />;
+}
+export function UsageRingedByStreaks(props: Omit<ComponentProps<typeof Charts.UsageRingedByStreaks>, 'theme'>) {
+  return <Charts.UsageRingedByStreaks {...props} theme={usePluginTheme()} />;
+}
+export function UsageAgentMoons(props: Omit<ComponentProps<typeof Charts.UsageAgentMoons>, 'theme'>) {
+  return <Charts.UsageAgentMoons {...props} theme={usePluginTheme()} />;
+}
+export function UsageMachines(props: Omit<ComponentProps<typeof Charts.UsageMachines>, 'theme'>) {
+  return <Charts.UsageMachines {...props} theme={usePluginTheme()} />;
+}
+export function UsageProjects(props: Omit<ComponentProps<typeof Charts.UsageProjects>, 'theme'>) {
+  return <Charts.UsageProjects {...props} theme={usePluginTheme()} />;
+}
+export function UsageAtmosphere(props: Omit<ComponentProps<typeof Charts.UsageAtmosphere>, 'theme'>) {
+  return <Charts.UsageAtmosphere {...props} theme={usePluginTheme()} />;
+}
 export type {
+  UsageSummaryMetric, UsageFootprintLabels, UsageSourceCoverageRow, UsageBreakdownBlock, UsageBreakdownsModel,
+  UsageOutcomesModel, UsageRecapHighlight, UsageRecapModel,
   UsageChartAgent, UsageChartPaint, UsageChartValuesLabels, UsagePlanetSlot, UsagePlanetSpec,
   UsageSkyModel, UsageSkyDay, UsageSkyLeader, UsageSkyRun, UsageSkyLabels,
   UsageWeekHourModel, UsageWeekTideLabels, UsageDaylightModel, UsageDaylightLabels,
@@ -55,4 +111,7 @@ export type {
   UsageConstellationModel, UsageConstellationLabels, UsageCollaborationKind,
   UsagePortraitModel, UsagePortraitLabels, UsageRecordsModel, UsageSteeringTideModel, UsageSteeringTideLabels,
   UsageRunLengthModel, UsageRunLengthLabels,
+  UsageCalendarArtModel, UsageCalendarLevel, UsageCalendarLabels, UsageSurfaceLabels, UsageRingsLabels,
+  UsageMoonsModel, UsageMoonsLabels, UsageMachinesModel, UsageMachinesLabels, UsageProjectsModel, UsageProjectsLabels,
+  UsageAtmosphereModel, UsageAtmosphereLabels,
 } from '../presentation/usage/charts/index.js';
