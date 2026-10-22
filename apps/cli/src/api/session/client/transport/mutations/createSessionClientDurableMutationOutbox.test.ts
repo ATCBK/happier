@@ -219,6 +219,45 @@ function createStorageExhaustedError(): NodeJS.ErrnoException {
 }
 
 describe('createRuntimeSessionClientDurableMutationOutbox', () => {
+    it('shares flush preparation across concurrent transcript posts and preserves ordered exact acknowledgements', async () => {
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const normal = createConnectedSocket();
+        const sent: string[] = [];
+        const socket = { ...normal, emitWithAck: async (event: string, payload: unknown) => {
+            if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 && payload && typeof payload === 'object' && 'localId' in payload) {
+                const localId = String(payload.localId);
+                sent.push(localId);
+                if (localId === 'batch-1') {
+                    firstStarted.resolve();
+                    await releaseFirst.promise;
+                }
+            }
+            return normal.emitWithAck(event, payload);
+        } };
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId: 'session-1',
+            flushOnReady: false, getSocket: () => socket, requestReconnect: () => undefined });
+        await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        const recoveriesBeforePosts = persistenceMocks.recover.mock.calls.length;
+        const publish = (index: number) => outbox.enqueueTranscriptMessage(createTranscriptMutation({
+            localId: `batch-${index}`, sidechainId: null, text: `Report ${index}`,
+        }));
+        const first = publish(1);
+        await firstStarted.promise;
+        const later = [2, 3, 4, 5].map(publish);
+        try {
+            await drainAsyncWork();
+            // The pending batch shares one real recovery scan rather than queuing one per caller.
+            expect(persistenceMocks.recover.mock.calls.length - recoveriesBeforePosts).toBe(1);
+            expect(sent).toEqual(['batch-1']);
+        } finally {
+            releaseFirst.resolve();
+            const results = await Promise.all([first, ...later]);
+            expect(results.every(result => result.delivered)).toBe(true);
+            expect(sent).toEqual([1, 2, 3, 4, 5].map(index => `batch-${index}`));
+            await outbox.close();
+        }
+    });
     it('returns each acknowledged transcript without waiting for later publications in the shared flush', async () => {
         const firstStarted = createDeferred();
         const releaseFirst = createDeferred();
@@ -746,7 +785,7 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
             const admission = { signal: controller.signal, requireDelivery: true };
             const pending = outbox.enqueueTranscriptMessage(createTranscriptMutation({
                 localId: 'ordered-output', sidechainId: null, text: 'before the steer',
-            }), { admission }).then((result) => {
+            }), { admission, awaitDelivery: false }).then((result) => {
                 order.push('input-may-accept');
                 return result;
             });

@@ -121,6 +121,7 @@ type EnqueueCommittedTranscriptMessageParams = Readonly<{
     surfaceItemReference?: SessionTranscriptSurfaceItemReferencesV1;
     admission?: CommittedTranscriptAdmission;
     observeCommitSignal?: AbortSignal;
+    awaitDelivery?: boolean;
 }>;
 
 type EnqueueCommittedVoiceAgentTranscriptTurnParams = Readonly<{
@@ -399,6 +400,7 @@ export type SessionClientTranscriptApi = Readonly<{
         id?: string,
         meta?: Record<string, unknown>,
         observeCommitSignal?: AbortSignal,
+        options?: Readonly<{ awaitDelivery?: boolean }>,
     ) => Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number;
         whenCommitted?: Promise<CommittedTranscriptOriginal | null> }>>;
     keepAlive: (thinking: boolean, mode: SessionAliveMode) => void;
@@ -918,7 +920,7 @@ export function createSessionClientTranscriptApi(
         },
 
 
-        async enqueueSessionEventCommitted(event, id, meta, observeCommitSignal) {
+        async enqueueSessionEventCommitted(event, id, meta, observeCommitSignal, options) {
             const prepared = prepareSessionEventMessageViaPort(getTranscriptSendPort(), event, id, meta);
             const now = Date.now();
             return await deps.enqueueCommittedTranscriptMessage({
@@ -931,6 +933,7 @@ export function createSessionClientTranscriptApi(
                 updatedAt: now,
                 provenance: { kind: 'non_dependent', source: 'background' },
                 ...(observeCommitSignal ? { observeCommitSignal } : {}),
+                ...(options?.awaitDelivery === undefined ? {} : { awaitDelivery: options.awaitDelivery }),
             });
         },
 

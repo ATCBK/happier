@@ -495,7 +495,7 @@ export function registerSessionClientRuntimeHandlers(
                     sessionId: parentSessionForTools.sessionId,
                     rpcHandlerManager: params.rpcHandlerManager,
                     updateMetadata: (updater) => parentSessionForTools.updateMetadata(updater),
-                    enqueueSessionEventCommitted: (event, id) => parentSessionForTools.enqueueSessionEventCommitted(event, id),
+                    enqueueSessionEventCommitted: (...args) => parentSessionForTools.enqueueSessionEventCommitted(...args),
                     getMetadataSnapshot: () => parentSessionForTools.getMetadataSnapshot(),
                     getBackendTarget: () => parentSessionForTools.getBackendTarget?.() ?? null,
                     getPluginMcpRuntimeRegistry: () => parentSessionForTools.getPluginMcpRuntimeRegistry?.() ?? null,

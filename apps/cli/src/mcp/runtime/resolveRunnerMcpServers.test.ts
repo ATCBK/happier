@@ -409,7 +409,7 @@ describe('resolveRunnerMcpServers catalog admission', () => {
         capabilityNoticeV1: { v: 1, items: [{
           kind: 'mcp_server', name: 'linear', itemId: 'linear', code: 'missing_value_ref', detail: 'env:LINEAR_API_KEY',
         }] },
-      })]]);
+      }), undefined, { awaitDelivery: false }]]);
     } finally { resolved.happierMcpServer.stop(); }
   });
   it('does not claim a supplied runtime server was skipped because its Account config could not materialize', async () => {

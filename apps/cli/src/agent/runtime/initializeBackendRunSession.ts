@@ -1,4 +1,5 @@
 import type { ApiClient } from '@/api/api'
+import { logger } from '@/ui/logger'
 import type { ApiSessionClient } from '@/api/session/sessionClient'
 import type { AgentState, Metadata, SessionCreationOutcome } from '@/api/types'
 import type { SessionAttachMetadataIdentityPolicy } from '@happier-dev/protocol'
@@ -181,6 +182,18 @@ export async function initializeBackendRunSession(
   opts: InitializeBackendRunSessionOptions,
   deps: InitializeBackendRunSessionDeps = {},
 ): Promise<InitializeBackendRunSessionResult> {
+  const startupStartedAt = performance.now()
+  let startupPhaseStartedAt = startupStartedAt
+  const recordStartupPhase = (phase: 'entered' | 'birth_skills' | 'session_create' | 'runner_ownership' | 'session_client' | 'startup_side_effects'): void => {
+    const now = performance.now()
+    try {
+      logger.infoFile('[session-construction] Startup phase', { phase,
+        durationMs: Math.round(now - startupPhaseStartedAt), elapsedMs: Math.round(now - startupStartedAt),
+        processUptimeMs: Math.round(process.uptime() * 1000) })
+    } catch { /* Diagnostics cannot change Session custody. */ }
+    startupPhaseStartedAt = now
+  }
+  recordStartupPhase('entered')
   const createBaseSessionForAttachFn = deps.createBaseSessionForAttachFn ?? createBaseSessionForAttach
   const applyStartupMetadataUpdateToSessionFn = deps.applyStartupMetadataUpdateToSessionFn ?? applyStartupMetadataUpdateToSession
   const reportSessionToDaemonIfRunningFn = deps.reportSessionToDaemonIfRunningFn ?? reportSessionToDaemonIfRunning
@@ -505,6 +518,7 @@ export async function initializeBackendRunSession(
   throwIfAborted()
   const preparedBirthSkills = opts.credentials ? await prepareSessionStackSkillMigration(opts.metadata,
     { credentials: opts.credentials, signal: opts.signal }) : undefined
+  recordStartupPhase('birth_skills')
   const birthSkillMigration = preparedBirthSkills?.status === 'ready' ? preparedBirthSkills.migration : undefined
   const birthMetadata = birthSkillMigration ? mergeSessionMetadataForStartup({
     current: opts.metadata, next: opts.metadata, nowMs: nowFn(), mode: 'start', stackSkillMigration: birthSkillMigration,
@@ -555,10 +569,12 @@ export async function initializeBackendRunSession(
   if (!response) {
     throw new BackendRunSessionUnavailableError()
   }
+  recordStartupPhase('session_create')
 
   const reportedSessionId = response.id
   await claimSessionRunnerOwnership(reportedSessionId)
   throwIfAborted()
+  recordStartupPhase('runner_ownership')
   let ranStartupSideEffects = false
   const runStartupSideEffectsOnce = async (
     sessionToUse: ApiSessionClient,
@@ -579,6 +595,7 @@ export async function initializeBackendRunSession(
 
   const session = opts.api.sessionSyncClient(response)
   opts.configureSessionClient?.(session)
+  recordStartupPhase('session_client')
 
   let acquiredResourceCleanupPromise: Promise<void> | null = null
   const disposeAcquiredResources = (): Promise<void> => {
@@ -619,6 +636,7 @@ export async function initializeBackendRunSession(
       }
     }
 
+    recordStartupPhase('startup_side_effects')
     initializationCompleted = true
     return {
       session,

@@ -22,6 +22,7 @@ import {
 import { resolveConnectedServicesLaunchAuthWithInventory } from '@/cli/connectedServicesLaunchAuth';
 import { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
 import { cmd, fail } from '@happier-dev/cli-common/output';
+import { logger } from '@/ui/logger';
 
 const SESSION_CREATE_USAGE = `Usage: ${SESSION_HELP_LINES.create}`;
 
@@ -89,8 +90,21 @@ export async function cmdSessionCreate(
   const { json, backendRaw, backendTargetKey, spawnAttemptId, resumeSpawnAttempt } = parsedOptions;
   const structuredCreationOutput = json || jsonl;
   const effectiveSpawnAttemptId = spawnAttemptId ?? randomUUID();
+  const startupStartedAt = performance.now();
+  let startupPhaseStartedAt = startupStartedAt;
+  const recordStartupPhase = (phase: 'entered' | 'credentials' | 'normalization' | 'connected_services' | 'spawn_dispatch'): void => {
+    const now = performance.now();
+    try {
+      logger.infoFile('[session-create] Startup phase', { phase, spawnAttemptId: effectiveSpawnAttemptId,
+        durationMs: Math.round(now - startupPhaseStartedAt), elapsedMs: Math.round(now - startupStartedAt),
+        processUptimeMs: Math.round(process.uptime() * 1000) });
+    } catch { /* Diagnostics cannot change Session admission. */ }
+    startupPhaseStartedAt = now;
+  };
+  recordStartupPhase('entered');
 
   const credentials = await deps.readCredentialsFn();
+  recordStartupPhase('credentials');
   if (!credentials) {
     if (structuredCreationOutput) {
       await printJsonEnvelope({ ok: false, kind: 'session_create', error: { code: 'not_authenticated' } });
@@ -134,12 +148,14 @@ export async function cmdSessionCreate(
   let actionRes;
   try {
     const normalizedSpawn = await normalizeSessionCreateSpawnRequest(spawnRequest);
+    recordStartupPhase('normalization');
     const resolvedActionInput = await resolveSessionCreateConnectedServices({
       executor,
       parsedOptions,
       input: normalizedSpawn.input,
       agentId: normalizedSpawn.agentId,
     });
+    recordStartupPhase('connected_services');
     actionRes = await executor.execute(
       'session.spawn_new',
       resolvedActionInput,
@@ -150,6 +166,7 @@ export async function cmdSessionCreate(
         ...(resumeSpawnAttempt ? { resumeActionRequest: true } : {}),
       },
     );
+    recordStartupPhase('spawn_dispatch');
   } catch (error) {
     const mapped = mapUnknownErrorToControlError(error);
     if (structuredCreationOutput) {

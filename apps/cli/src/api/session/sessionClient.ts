@@ -1504,9 +1504,10 @@ export class ApiSessionClient extends EventEmitter {
                         provenance: params.provenance,
                         ...(params.surfaceItemReference === undefined ? {} : { surfaceItemReference: params.surfaceItemReference }),
                     }),
-                    params.admission === undefined && params.observeCommitSignal === undefined ? undefined : {
+                    params.admission === undefined && params.observeCommitSignal === undefined && params.awaitDelivery === undefined ? undefined : {
                         ...(params.admission ? { admission: params.admission } : {}),
                         ...(params.observeCommitSignal ? { observeCommitSignal: params.observeCommitSignal } : {}),
+                        ...(params.awaitDelivery === undefined ? {} : { awaitDelivery: params.awaitDelivery }),
                     },
                 ),
             enqueueCommittedVoiceAgentTranscriptTurn: (params) => {
@@ -3003,6 +3004,7 @@ export class ApiSessionClient extends EventEmitter {
     enqueueSessionEventCommitted(
         event: SessionEventMessage,
         id?: string,
+        options?: Readonly<{ awaitDelivery?: boolean }>,
     ): Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number;
         whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>> {
         const semantic = readSessionFollowSemanticSourceEvent({ type: 'event', data: event });
@@ -3011,6 +3013,7 @@ export class ApiSessionClient extends EventEmitter {
             evidence ? { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: projectSessionFollowRuleSharedSourceEvidenceV1(evidence) } : undefined,
             event.type === 'ready' && semantic?.kind === 'finished'
                 ? this.terminalPendingSettlementOperationAbortController.signal : undefined,
+            options,
         ).then(result => ({ ...result, ...(result.whenCommitted && evidence ? {
             whenCommitted: result.whenCommitted.then(commit => this.readPersonalFollowCommit(commit, evidence)),
         } : {}) }));
@@ -3829,8 +3832,18 @@ export class ApiSessionClient extends EventEmitter {
         StartupSessionPublisherAuthorityClaimResult
     > {
         let projection: RuntimeActivityProjectionWrite | null = null;
+        let attempt = 0;
+        const recordPhase = (phase: 'server_contract' | 'presence_ack', startedAt: number): void => {
+            try {
+                logger.infoFile('[API] Startup publisher claim phase', { phase, attempt,
+                    durationMs: Math.round(performance.now() - startedAt) });
+            } catch { /* Diagnostics cannot change publisher admission. */ }
+        };
         while (true) {
+            attempt += 1;
+            const contractStartedAt = performance.now();
             const contract = await this.waitForPublisherClaimServerContract();
+            recordPhase('server_contract', contractStartedAt);
             if (!supportsSessionPublisherAuthorityCheckV1(contract)) {
                 if (!this.isCurrentPublisherClaimServerContract(contract)) {
                     continue;
@@ -3867,6 +3880,7 @@ export class ApiSessionClient extends EventEmitter {
             }
 
             let acknowledged: RuntimeActivityProjectionSettlement;
+            const acknowledgementStartedAt = performance.now();
             try {
                 acknowledged =
                     await this.updateRuntimeActivityProjectionOnSocketExact(
@@ -3881,6 +3895,8 @@ export class ApiSessionClient extends EventEmitter {
                     continue;
                 }
                 throw error;
+            } finally {
+                recordPhase('presence_ack', acknowledgementStartedAt);
             }
             if (!this.isCurrentPublisherClaimServerContract(contract)) {
                 continue;

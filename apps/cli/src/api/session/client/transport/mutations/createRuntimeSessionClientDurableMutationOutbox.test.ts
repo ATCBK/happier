@@ -56,6 +56,43 @@ function createDeferred<T = void>() {
 }
 
 describe('runtime session client durable mutation outbox', () => {
+    it('releases optional diagnostics after durable admission while retaining their exact delivery', async () => {
+        const started = createDeferred();
+        const ack = createDeferred<unknown>();
+        const sessionId = 'diagnostic-admission';
+        let requests = 0;
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+            getSocket: () => ({ connected: true, emit: vi.fn(), emitWithAck: async () => {
+                requests += 1;
+                started.resolve();
+                return await ack.promise;
+            } }), requestReconnect: () => undefined });
+        await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        let admitted = false;
+        const pending = outbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({ sessionId,
+            localId: 'notice', content: 'sealed', createdAt: 100,
+            provenance: { kind: 'non_dependent', source: 'background' } }), { awaitDelivery: false })
+            .then(result => { admitted = true; return result; });
+        try {
+            await started.promise;
+            await vi.waitFor(() => expect(admitted).toBe(true));
+            expect(await pending).toMatchObject({ persisted: true, delivered: false, localId: 'notice' });
+            expect(requests).toBe(1);
+            const paths = resolveSessionClientDurableMutationJournalPaths({
+                activeServerDir: configurationMock.activeServerDir, custody: 'runtime', sessionId,
+            });
+            expect(JSON.parse(await readFile(paths.queuePath, 'utf8')).mutations).toHaveLength(1);
+            ack.resolve({ ok: true, status: 'observed', id: 'notice-row', seq: 1,
+                localId: 'notice', didWrite: true, ingestedAt: 200 });
+            await outbox.flush('flush');
+            expect(requests).toBe(1);
+            await expect(readFile(paths.queuePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            ack.resolve(null);
+            await outbox.close();
+            await pending;
+        }
+    });
     it('keeps startup capability facts on one transcript identity across runner delivery lifetimes', async () => {
         const sessionId = 'startup-notice-retry';
         const committed = new Set<string>();
@@ -530,6 +567,9 @@ describe('runtime session client durable mutation outbox', () => {
         });
         expect(deliveredEvents).toEqual(['message']);
         expect(requestReconnect).not.toHaveBeenCalled();
+        // Transcript enqueue owns its exact ACK; the separate flush owns the
+        // durable dequeue. Observe that cut before inspecting retained custody.
+        await outbox.flush('flush');
         const paths = resolveSessionClientDurableMutationJournalPaths({
             activeServerDir: configurationMock.activeServerDir,
             custody: 'runtime',

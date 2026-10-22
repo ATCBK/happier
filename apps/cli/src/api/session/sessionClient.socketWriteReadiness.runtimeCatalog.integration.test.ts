@@ -47,6 +47,9 @@ import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/run
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
+import { createSessionRuntimeModelsPublisher } from '@/agent/runtime/controls/sessionRuntimeModelsPublisher';
+import { applyActiveModelFacts } from '@/providers/sessions/applyActiveModelFacts';
+import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -86,6 +89,42 @@ const currentFeatures = FeaturesResponseSchema.parse({
 describe('ApiSessionClient socket write readiness', () => {
   const clients: ApiSessionClient[] = [];
   const connectGates: ReturnType<typeof createDeferred>[] = [];
+
+  it('admits a diagnostic event durably without awaiting its one Home round trip', async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const transcript = createSessionTranscriptHomeStub();
+    let requests = 0;
+    const observedLocalIds: string[] = [];
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        requests += 1;
+        observedLocalIds.push(SessionTranscriptObservationInputSchema.parse(payload).localId);
+        started.resolve();
+        await release.promise;
+      }
+      return transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(createPlainSessionFixture({ id: 'diagnostic-admission-client' }), [socket], {
+      initialRegisteredSessionStateFieldMutations: [],
+    });
+    let admitted = false;
+    const pending = client.enqueueSessionEventCommitted({ type: 'message', message: 'Optional capability unavailable' },
+      'diagnostic-notice', { awaitDelivery: false }).then(result => { admitted = true; return result; });
+    try {
+      await started.promise;
+      await vi.waitFor(() => expect(admitted).toBe(true));
+      expect(await pending).toMatchObject({ persisted: true, delivered: false, localId: observedLocalIds[0] });
+      expect(observedLocalIds[0]).toEqual(expect.any(String));
+      expect(requests).toBe(1);
+      release.resolve();
+      await client.flushDurableMutationDelivery();
+      expect(requests).toBe(1);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
 
   function createSocket(options: Parameters<typeof createApiSessionSocketStub>[0] = {}) {
     const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1', committedFenceMs: 1_000 });
@@ -789,6 +828,51 @@ describe('ApiSessionClient socket write readiness', () => {
     expect(socket.emitWithAck.mock.calls.map(([event]) => event)).not.toContain('update-state');
   });
 
+
+  it.each([false, true])('counts initial model authority, snapshot and commit round trips (combined: %s)', async combined => {
+    const session = createEncryptedOwnerSession(`s-initial-model-publication-${combined}`);
+    const socket = createSocket();
+    const client = createClient(session, [socket], { durableMutationDeliveryInitiallyActive: false,
+      metadataAuthority: { kind: 'owner', credentials: ownerCredentials } });
+    await client.claimCurrentSessionPublisherAuthorityForStartup();
+    await client.refreshSessionSnapshotFromServerRequired({ reason: 'startup-drain' });
+    await client.activateDurableMutationDelivery();
+    const authorityCount = () => socket.emitWithAck.mock.calls.filter(([event]) => event === 'session-publisher-authority-check').length;
+    const httpCount = (path: string) => vi.mocked(axios.get).mock.calls.filter(([url]) => new URL(String(url)).pathname === path).length;
+    const before = { authority: authorityCount(), snapshot: httpCount(`/v2/sessions/${session.id}`),
+      currentness: httpCount('/v1/account/encryption/currentness'), commits: vi.mocked(axios.patch).mock.calls.length };
+    const target = { selection: { agentTargetKey: 'agent:happier.agent.qwen/qwen', providerConnectionId: null, modelId: 'chosen' },
+      policy: 'live', providerBinding: null, sessionBindingMetadata: null, runtimeBindingBasis: null,
+      revalidateBeforeEffect: async () => true,
+    } satisfies AuthorizedSessionModelTransitionTarget;
+    if (!combined) {
+      await client.updateMetadataAsCurrentPublisher(metadata => applyActiveModelFacts(metadata, target, 'qwen'));
+    }
+    const snapshot = { observedAt: 1, currentModelId: 'chosen', models: [{ id: 'chosen', name: 'Chosen model' }] };
+    const publisher = createSessionRuntimeModelsPublisher({ agentId: 'qwen', agentTargetKey: target.selection.agentTargetKey,
+      runnerProcessIdentity: { pid: 123, processStartTimeMs: 1_000 }, session: client,
+      ...(combined ? { initialActiveTarget: target } : {}),
+      // Native Agent observations are the external execution boundary; the real
+      // Session writer, codecs, currentness and tuple transport remain beneath it.
+      source: { read: () => snapshot, subscribe: listener => { listener(snapshot); return { dispose() {} }; } },
+    });
+    try {
+      await publisher.flush();
+      const expected = combined ? 1 : 2;
+      expect({ authority: authorityCount() - before.authority,
+        snapshot: httpCount(`/v2/sessions/${session.id}`) - before.snapshot,
+        currentness: httpCount('/v1/account/encryption/currentness') - before.currentness,
+        commits: vi.mocked(axios.patch).mock.calls.length - before.commits,
+      }).toEqual({ authority: expected, snapshot: expected, currentness: expected, commits: expected });
+      expect(client.getMetadataSnapshot()?.sessionModelsV1).toMatchObject({ currentModelId: 'chosen',
+        availableModels: [{ id: 'chosen', name: 'Chosen model' }],
+        activeSelectionV1: { source: 'runtime_readback', selection: target.selection },
+      });
+      expect(axios.patch).toHaveBeenLastCalledWith(`${serverUrl}/v2/sessions/${session.id}`, expect.objectContaining({
+        publisherPrecondition: { machineId: 'machine-1', committedFenceMs: 1_000, publisherGeneration: '1' },
+      }), expect.anything());
+    } finally { publisher.dispose(); }
+  });
 
   it.each([false, true])('drains a fenced publisher metadata write while connected (close prepared: %s)', async closing => {
     const session = createEncryptedOwnerSession(`s-publisher-close-${closing}`);

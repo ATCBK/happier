@@ -293,11 +293,13 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   }
   const publishCapabilityNotice = async (items: SessionCapabilityNoticeV1['items']) => {
     const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items });
+    // Native preparation needs durable diagnostic custody, not its Home ACK.
+    // The existing journal owns delivery/retry after this admission returns.
     await params.session.enqueueSessionEventCommitted({
       type: 'message',
       message: notice.items.map(item => `${item.name} couldn't start · ${item.detail ?? item.code}`).join('\n'),
       [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
-    });
+    }, undefined, { awaitDelivery: false });
     if (operationContext && !await operationContext.isCurrent()) {
       throw new McpServerCatalogUnavailableError('scope-retired');
     }

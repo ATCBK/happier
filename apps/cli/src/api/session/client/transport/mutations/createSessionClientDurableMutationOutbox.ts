@@ -81,6 +81,8 @@ import {
 export type TranscriptMessageAdmissionOptions = Readonly<{
     admission?: CommittedTranscriptAdmission;
     observeCommitSignal?: AbortSignal;
+    /** Optional diagnostics may release the caller after durable local custody. */
+    awaitDelivery?: boolean;
 }>;
 
 type TranscriptMessageCommittedObserver = (
@@ -1130,13 +1132,21 @@ export function createRuntimeSessionClientDurableMutationOutbox(params: Readonly
             return await journal.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(mutation, opts);
         },
         activateDelivery: async () => {
+            const startedAt = performance.now();
             deliveryActive = true;
             if (retainedSessionSyncPendingInputServerContract) {
                 await journal.setSessionSyncPendingInputServerContract(
                     retainedSessionSyncPendingInputServerContract,
                 );
             }
+            const contractCompletedAt = performance.now();
             await journal.flush('flush');
+            try {
+                logger.infoFile('[API] Startup durable delivery phase', {
+                    contractMs: Math.round(contractCompletedAt - startedAt),
+                    flushMs: Math.round(performance.now() - contractCompletedAt),
+                });
+            } catch { /* Diagnostics cannot change durable custody. */ }
         },
         deactivateDelivery: () => {
             deliveryActive = false;
@@ -2034,17 +2044,9 @@ function createGenericSessionClientDurableMutationOutboxInstance(
     ): Promise<void> {
         await ready;
         if (closed && reason !== 'flush') return;
-        await recoverDeadLetteredAuthoritativeMutations().catch((error) => {
-            logger.debug('[API] Failed to recover dead-lettered authoritative durable session mutations', {
-                sessionId: params.sessionId,
-                error: serializeAxiosErrorForLog(error),
-            });
-        });
-        await persistInFlight.catch(() => undefined);
-        if (closed && reason !== 'flush') return;
         if (flushInFlight) {
             await flushInFlight;
-            if (reason !== 'timer') {
+            if (reason !== 'timer' && mutations.length > 0) {
                 await flush(reason);
             }
             return;
@@ -2057,6 +2059,17 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             },
         });
         flushInFlight = trackedFlush.run(async () => {
+            // The shared flush owns recovery and the persistence barrier too.
+            // Concurrent enqueue callers join this preparation before waiting
+            // for their own ACK; they do not queue redundant disk scans.
+            await recoverDeadLetteredAuthoritativeMutations().catch((error) => {
+                logger.debug('[API] Failed to recover dead-lettered authoritative durable session mutations', {
+                    sessionId: params.sessionId,
+                    error: serializeAxiosErrorForLog(error),
+                });
+            });
+            await persistInFlight.catch(() => undefined);
+            if (closed && reason !== 'flush') return;
             clearRetryTimer();
             if (mutationsNeedPersistBeforeDelivery) {
                 await persist();
@@ -2756,7 +2769,8 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             const { whenCommitted, ...result } = await enqueue(createQueuedTranscriptMessage(mutation), {
                 // Independent child output must not retain its native runtime behind
                 // a Home ACK. The journal still owns delivery after local custody.
-                awaitFlush: mutation.provenance?.source !== 'sidechain' || opts?.admission?.requireDelivery === true,
+                awaitFlush: (opts?.awaitDelivery !== false && mutation.provenance?.source !== 'sidechain')
+                    || opts?.admission?.requireDelivery === true,
                 ...(opts?.admission === undefined ? {} : { admission: opts.admission }),
                 ...(opts?.observeCommitSignal === undefined ? {} : { observeCommitSignal: opts.observeCommitSignal }),
             });

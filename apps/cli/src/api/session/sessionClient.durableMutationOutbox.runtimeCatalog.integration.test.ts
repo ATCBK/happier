@@ -1991,6 +1991,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     expect(reconnectReasons).not.toContain('timer');
     await drainAsyncWork();
     expect(httpActions).toEqual(['begin', 'begin', 'complete']);
+    await outbox.flush('flush');
     await expect(readPersistedOutboxMutationCount('s1')).resolves.toBe(0);
     await outbox.close();
   });
