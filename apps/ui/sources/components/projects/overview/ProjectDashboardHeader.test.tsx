@@ -63,7 +63,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
         await holdDelete?.();
         if (unknownDelete) throw new TypeError('The Home lost the deletion acknowledgement');
     }
-    return artifacts.handle(path, init);
+    return artifacts.handle(path + new URL(String(url)).search, init);
 } });
 const { ProjectDashboardHeader, projectDashboardRouteId } = await import('./ProjectDashboardHeader');
 const { WidgetAreaLayoutBar } = await import('@/components/widgets/area/WidgetAreaLayoutBar');

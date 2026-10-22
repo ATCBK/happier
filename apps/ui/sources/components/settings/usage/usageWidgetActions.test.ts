@@ -25,7 +25,7 @@ it('edits only displayed widget metric inputs through real Actions and Artifact 
         settings: { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
             'widgets.area.layout.create': ['ui'], 'widgets.item.inputs.set': ['ui'],
         } }) } }],
-        route: async request => request.path.startsWith('/v1/artifacts') ? (await artifacts.handle(request.path, {
+        route: async request => request.path.startsWith('/v1/artifacts') ? (await artifacts.handle(`${request.path}${request.url.search}`, {
             method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
         })) ?? undefined : undefined });
     const focused = home.homes.a!;
@@ -91,7 +91,7 @@ it.each(['approve', 'reject', 'retire'] as const)('settles each metric approval 
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
     home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-metric-approval.test', accountId: 'account-a',
         settings: { actionsSettingsV1: actionsSettings } }],
-        route: async request => request.path.startsWith('/v1/artifacts') ? (await artifacts.handle(request.path, {
+        route: async request => request.path.startsWith('/v1/artifacts') ? (await artifacts.handle(`${request.path}${request.url.search}`, {
             method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
         })) ?? undefined : undefined });
     const focused = home.homes.a!;

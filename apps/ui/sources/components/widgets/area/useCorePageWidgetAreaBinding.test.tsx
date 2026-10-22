@@ -26,7 +26,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: actionPolicy } }, version: 0 });
     if (artifactReadFails && /^\/v1\/artifacts\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET')
         return Response.json({ error: 'Failed to get artifact' }, { status: 500 });
-    return artifacts.handle(path, init);
+    return artifacts.handle(path + new URL(String(url)).search, init);
 } });
 // Load the rendered area graph after installing HTTP boundaries, outside the timed Account journey.
 const { WidgetArea } = await import('./WidgetArea');

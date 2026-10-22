@@ -234,7 +234,7 @@ it.each([false, true])(
         const response = new URL(String(input)).pathname.startsWith(
           '/v1/artifacts',
         )
-          ? await artifacts.handle(new URL(String(input)).pathname, init)
+          ? await artifacts.handle(`${new URL(String(input)).pathname}${new URL(String(input)).search}`, init)
           : await fallback.request(input, init);
         if (!response) throw new Error('Unexpected Project layout request');
         return response;
