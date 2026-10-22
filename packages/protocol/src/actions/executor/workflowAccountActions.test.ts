@@ -151,7 +151,13 @@ describe('workflow Action refusal classification', () => {
   it.each([
     ['missing Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'not_found', httpStatus: 404 }), 'target_unavailable'],
     ['forbidden Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'forbidden', httpStatus: 403 }), 'target_unavailable'],
-    ['unavailable Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'network_error' }), 'target_unavailable'],
+    ['network Session snapshot failure', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'network_error' }), 'storage_unavailable'],
+    ['failed Session snapshot request', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'request_failed' }), 'storage_unavailable'],
+    ['server Session snapshot failure', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'http_error', httpStatus: 503 }), 'storage_unavailable'],
+    ['unproven Session absence', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'invalid_response', httpStatus: 404 }), 'storage_unavailable'],
+    ['Session authentication refusal', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'unauthorized' }), 'not_authenticated'],
+    ['Session currentness conflict', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'currentness_conflict' }), 'currentness_conflict'],
+    ['Session cancellation', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'cancelled' }), 'cancelled'],
     ['typed errorCode refusal', Object.assign(new Error('Source unavailable'), { errorCode: 'source_unavailable' }), 'source_unavailable'],
     ['Artifact owner-only delete refusal', Object.assign(new Error('workflow_definition_delete_forbidden'), { code: 'artifact_access_forbidden' }), 'run_access_denied'],
     ['Artifact read missing', Object.assign(new Error('artifact_not_found'), { code: 'artifact_not_found' }), 'content_unavailable'],
@@ -190,6 +196,16 @@ describe('workflow Action refusal classification', () => {
       .toMatchObject({ errorCode: 'storage_unavailable' });
   });
 
+  it.each(['network_error', 'http_error'] as const)('emits the existing storage diagnostic for a %s Session read', errorCode => {
+    const events: WorkflowActionFailureDiagnosticV1[] = [];
+    const result = normalizeWorkflowActionThrownError(Object.assign(new Error('Session snapshot unavailable'), {
+      name: 'SessionSnapshotReadError', errorCode, ...(errorCode === 'http_error' ? { httpStatus: 503 } : {}),
+    }), { operation: 'session.trigger.add', durationMs: 1, emit: event => events.push(event) });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+    expect(events).toEqual([{ event: 'workflow_action_failure', errorCode: 'storage_unavailable',
+      originalCode: null, httpStatus: null, operation: 'session.trigger.add', durationMs: 1 }]);
+  });
+
   it('preserves the Account role preparation cause in the content-free diagnostic', () => {
     const events: WorkflowActionFailureDiagnosticV1[] = [];
     const result = normalizeWorkflowActionThrownError(Object.assign(new Error('private catalog contents'), {
@@ -199,6 +215,34 @@ describe('workflow Action refusal classification', () => {
       details: { reason: 'account_role_overrides_unavailable' } });
     expect(events).toEqual([{ event: 'workflow_action_failure', errorCode: 'content_unavailable',
       originalCode: 'account_role_overrides_unavailable', httpStatus: null, operation: 'workflow.run.start', durationMs: 12 }]);
+  });
+
+  it.each([401, 403])('retains the refused Wait storage phase in the content-free HTTP %s diagnostic', async httpStatus => {
+    const events: WorkflowActionFailureDiagnosticV1[] = [];
+    const unexpected = (): never => { throw new Error('unexpected_effect'); };
+    const owner = createWorkflowAccountRunActionOwner({
+      definitions: { get: unexpected }, resolveAccountId: async () => 'account',
+      resolveEncryption: unexpected, normalizeAbsolutePath: unexpected, randomBytes: unexpected,
+      // HTTP is the genuine boundary. Keep the owner's transport refusal
+      // translation and the shared Action failure projector real.
+      storage: { execute: async () => { throw Object.assign(new Error('private request, token and content'), {
+        code: 'ERR_BAD_REQUEST', response: { status: httpStatus, data: { private: 'response-body' } },
+        config: { headers: { Authorization: 'private-token' } },
+        workflowStorageOperation: { operation: 'wait', durationMs: 149_000 },
+      }); } },
+    });
+    let refusal: unknown;
+    try {
+      await owner.execute({ actionId: 'workflow.run.wait', input: { runId: definitionId, timeoutSeconds: 300 }, context: {} });
+    } catch (error) { refusal = error; }
+    expect(refusal).toMatchObject({ code: 'run_access_denied' });
+    const result = normalizeWorkflowActionThrownError(refusal, {
+      operation: 'workflow.run.wait', durationMs: 150_000, emit: event => events.push(event),
+    });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+    expect(events).toEqual([{ event: 'workflow_action_failure', errorCode: 'run_access_denied',
+      originalCode: 'ERR_BAD_REQUEST', httpStatus, operation: 'wait', durationMs: 149_000 }]);
+    expect(JSON.stringify(events)).not.toContain('private');
   });
 
   it('reports invalid requests separately from unavailable private content', async () => {

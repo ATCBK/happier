@@ -22,12 +22,16 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   emit: (diagnostic: WorkflowActionFailureDiagnosticV1) => void;
 }>, preEffect = false): WorkflowActionFailureV1 {
   const thrown = error !== null && typeof error === 'object' ? error : null;
-  // The exact-Home Session reader uses errorCode, not code. Its missing,
-  // inaccessible or unreadable Session is an unavailable execution target.
+  // The exact-Home Session reader uses errorCode, not code. Only its semantic
+  // not_found/forbidden refusals prove an unavailable execution target;
+  // transport, server and unreadable-response failures remain retryable storage failures.
   // Recognize that boundary's shape without importing a UI-owned Error class.
-  const sessionSnapshotUnavailable = thrown !== null && 'name' in thrown && thrown.name === 'SessionSnapshotReadError'
-    && 'errorCode' in thrown && typeof thrown.errorCode === 'string';
+  const sessionSnapshotCode = thrown !== null && 'name' in thrown && thrown.name === 'SessionSnapshotReadError'
+    && 'errorCode' in thrown && typeof thrown.errorCode === 'string' ? thrown.errorCode : undefined;
+  const sessionSnapshotUnavailable = sessionSnapshotCode === 'not_found' || sessionSnapshotCode === 'forbidden';
   const thrownCode = sessionSnapshotUnavailable ? 'target_unavailable'
+    // The reader wraps terminal Account auth separately from scoped Session denial.
+    : sessionSnapshotCode === 'unauthorized' ? 'not_authenticated'
     : thrown && 'code' in thrown && typeof thrown.code === 'string' ? thrown.code
     : thrown && 'errorCode' in thrown && typeof thrown.errorCode === 'string' ? thrown.errorCode
     : 'storage_unavailable';

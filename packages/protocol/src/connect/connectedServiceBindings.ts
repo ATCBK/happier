@@ -169,7 +169,7 @@ export function projectConnectedServiceBindingsForChild(bindings: ConnectedServi
         serviceId, binding.source === 'connected' && binding.selection === 'group'
             ? { source: 'connected' as const, selection: 'group' as const, groupId: binding.groupId }
             : binding,
-    ])) };
+    ] as const)) };
 }
 
 export const PersistedConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.union([

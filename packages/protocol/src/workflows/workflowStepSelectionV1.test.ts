@@ -37,7 +37,7 @@ describe('workflow step selection', () => {
       .toEqual(explicit);
     expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { role: 'second_opinion' } }, roleSelection }).selection.connectedServices)
       .toBeUndefined();
-    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: agent } }, roleSelection }).selection.connectedServices)
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: agent, modelSelection: model } }, roleSelection }).selection.connectedServices)
       .toEqual(connectedServices);
     expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: otherAgent } }, roleSelection }).selection.connectedServices)
       .toBeUndefined();
