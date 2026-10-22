@@ -310,7 +310,7 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                     <ToolCallDetailsSections tool={toolForRendering} serverId={serverId} />
                 </TextSelectabilityScope>
             ) : (
-                <PageContentColumn>
+                <PageContentColumn style={styles.pageBody}>
                     <TextSelectabilityScope selectable>
                         <SpecializedFullView
                             tool={toolForRendering}
@@ -324,7 +324,7 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                 </PageContentColumn>
             )}
             {permissionTerminalError || permissionFooter ? (
-                <PageContentColumn>
+                <PageContentColumn style={styles.pageBody}>
                     {permissionTerminalError}
                     {permissionFooter}
                 </PageContentColumn>
@@ -343,6 +343,10 @@ const styles = StyleSheet.create((theme) => ({
     contentWrapper: {
         alignSelf: 'center',
         width: '100%',
+    },
+    // The call's own body stands on the page header's text edge, so its prose lines up with the title above it.
+    pageBody: {
+        paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
     },
     transcriptPageHeader: {
         paddingBottom: HAPPIER_PAGE_METRICS.sectionGapPx,
