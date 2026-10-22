@@ -439,6 +439,18 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 	}()
 	now := time.Now()
+	lastProgress := time.Time{}
+	reportProgress := func() error {
+		current := diskScanNow()
+		if current.Sub(lastProgress) < 100*time.Millisecond {
+			return nil
+		}
+		if err := emit(diskStreamProgress(current, summary, inFlight)); err != nil {
+			return err
+		}
+		lastProgress = current
+		return nil
+	}
 	// A record is projected using bounded passes over its own direct entries.
 	// No completed-leaf pass aggregates all physical observations or other dirs.
 	project := func(directory *diskStreamDirectory, publish bool) error {
@@ -512,7 +524,8 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			if node.Kind == "file" {
 				diskAccumulateAge(&record.AgeGroupBytes, node.MtimeMs, node.AllocatedBytes, now)
 			}
-			return nil
+			directory.lastActivity = diskScanNow()
+			return reportProgress()
 		}); err != nil {
 			return err
 		}
@@ -546,9 +559,12 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 					node.Flags.AtLeast = node.Flags.AtLeast || node.retained == nil && (child == nil || !child.record.Complete)
 				}
 				node.AllocationFacts = nil
-				return emit(diskEntryRecord{1, "dir-entry", record.ID, node, visible && record.atomicParent == "" && !record.Summarized && record.meta.kind != "package", node.retained != nil, false})
+				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, node, visible && record.atomicParent == "" && !record.Summarized && record.meta.kind != "package", node.retained != nil, false}); err != nil {
+					return err
+				}
 			}
-			return nil
+			directory.lastActivity = diskScanNow()
+			return reportProgress()
 		}); err != nil {
 			return err
 		}
@@ -592,7 +608,6 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 		return nil
 	}
-	lastProgress := time.Time{}
 	heartbeat := time.NewTicker(100 * time.Millisecond)
 	defer heartbeat.Stop()
 	pendingPaths, err := diskNewPathSpool(request.ScratchDirectory, "pending-paths")
@@ -692,11 +707,8 @@ walk:
 			}
 			break walk
 		case <-heartbeat.C:
-			if time.Since(lastProgress) >= 100*time.Millisecond {
-				if err := emit(diskStreamProgress(diskScanNow(), summary, inFlight)); err != nil {
-					return err
-				}
-				lastProgress = time.Now()
+			if err := reportProgress(); err != nil {
+				return err
 			}
 		case batch := <-batches:
 			directory := batch.directory
@@ -827,6 +839,13 @@ walk:
 					if err := enqueue(child); err != nil {
 						return err
 					}
+				}
+				// A batch can take much longer than its enumeration under slow
+				// spool/output I/O. Publish completed work at the same cadence
+				// while consuming it, rather than waiting for the outer select.
+				directory.lastActivity = diskScanNow()
+				if err := reportProgress(); err != nil {
+					return err
 				}
 			}
 			span.end = entries.end

@@ -60,6 +60,27 @@ describe('resident streamed disk index', () => {
             expect(MachineStorageScanGetResultV1Schema.parse(await runner.get()).state?.progress.usedBytes).toBe(2_000_000);
         } finally { await runner.dispose(); }
     });
+    it('adds each resumed native invocation to retained target progress without counting old work twice', async () => {
+        const root = join(scratch, 'resume-progress'); await mkdir(root);
+        await writeFile(join(root, 'data'), Buffer.alloc(8192));
+        const index = createStorageScanIndex({ activeServerDir: join(scratch, 'resume-progress-state') });
+        const admission = { volumeId: 'resume-progress', root, target: { folderPath: root }, usedBytes: 0,
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } } as const;
+        try {
+            await index.initialize([], true); index.begin(admission);
+            const native = startNativeDiskScan({ root }, { onRecord: record => index.ingest(admission.volumeId, record) });
+            await native.done; index.finish(admission.volumeId, 'cancelled');
+            const kept = index.state()!.progress;
+            index.begin({ ...admission, resume: true });
+            index.ingest(admission.volumeId, { v: 1, type: 'progress', sizedBytes: 0, items: 0, currentPath: root });
+            expect(index.state()!.progress).toEqual({ ...kept, currentPath: root });
+            index.ingest(admission.volumeId, { v: 1, type: 'progress', sizedBytes: 4096, items: 2, currentPath: root });
+            expect(index.state()!.progress).toEqual({ ...kept, sizedBytes: kept.sizedBytes + 4096, items: kept.items + 2, currentPath: root });
+            // Latest-wins is an invocation snapshot, not another increment.
+            index.ingest(admission.volumeId, { v: 1, type: 'progress', sizedBytes: 4096, items: 2 });
+            expect(index.state()!.progress).toEqual({ ...kept, sizedBytes: kept.sizedBytes + 4096, items: kept.items + 2 });
+        } finally { index.close(); }
+    });
     it('keeps finished folders visible after abrupt cancellation, reopens them, and resumes only unfinished folders', async () => {
         const volume = join(scratch, 'cancel-volume'); const root = join(volume, 'selected'); const finished = join(root, 'finished');
         await mkdir(finished, { recursive: true }); await writeFile(join(finished, 'data'), Buffer.alloc(8192));
@@ -72,8 +93,10 @@ describe('resident streamed disk index', () => {
         const activeServerDir = join(scratch, 'cancel-state');
         const volumes = [{ id: 'cancel', mountPath: volume, usedBytes: 0 }];
         const index = createStorageScanIndex({ activeServerDir });
-        let cancelling: Promise<unknown> | undefined; let requested = false;
-        const runner = createStorageScanRunner({ index, readVolumes: () => volumes, readEnabled: () => true,
+        let cancelling: Promise<unknown> | undefined; let requested = false; let requestedAt = 0; let finishedAt = 0; let finishMs = 0;
+        const runner = createStorageScanRunner({ index: { ...index, finish(volumeId, summary) {
+            const started = performance.now(); index.finish(volumeId, summary); finishMs += performance.now() - started;
+        } }, readVolumes: () => volumes, readEnabled: () => true,
             readScanHints: () => ({ priorityHints: [finished] }),
             fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }),
             onChange: () => {
@@ -81,7 +104,9 @@ describe('resident streamed disk index', () => {
                 requested = true;
                 // Cancel between committed stdout batches, as a real RPC does.
                 // Cancelling from inside a batch would intentionally roll it back.
-                queueMicrotask(() => { cancelling = runner.cancel(index.state()!.scanId); });
+                queueMicrotask(() => { requestedAt = performance.now(); cancelling = runner.cancel(index.state()!.scanId).then(result => {
+                    finishedAt = performance.now(); return result;
+                }); });
             } });
         let reopenedRunner: ReturnType<typeof createStorageScanRunner> | undefined;
         try {
@@ -94,16 +119,25 @@ describe('resident streamed disk index', () => {
             expect(retained).toMatchObject({ complete: true });
             expect(retained.node.size.allocatedBytes).toBe((await measureNativeDisk({ paths: [finished] })).totalAllocatedBytes);
             expect(page.root?.flags.atLeast).toBe(true);
+            expect(page.state?.progress.sizedBytes).toBe(page.root?.size.allocatedBytes);
+            expect(page.state?.progress.items).toBe(page.root?.items);
             expect(index.frontier('cancel')).not.toContain(root); expect(index.frontier('cancel')).not.toContain(finished);
             await runner.dispose();
             const reopened = createStorageScanIndex({ activeServerDir });
+            const resumedProgress: { sizedBytes: number; items: number }[] = [];
             reopenedRunner = createStorageScanRunner({ index: reopened, readVolumes: () => volumes, readEnabled: () => true,
+                onChange: () => { const progress = reopened.state()?.progress; if (progress) resumedProgress.push({ sizedBytes: progress.sizedBytes, items: progress.items }); },
                 fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }) });
             await reopenedRunner.initialize();
             const restored = MachineStorageScanGetResultV1Schema.parse(await reopenedRunner.get({ scanId: first.scanId, view: { tab: 'folders', depth: 1 } }));
             expect(restored.nodes.find(node => node.nodeId === finished)).toEqual(page.nodes.find(node => node.nodeId === finished));
             const resumed = await reopenedRunner.start({ target: first.target, resume: true }); await reopenedRunner.wait(resumed.scanId);
             expect(resumed.scanId).toBe(first.scanId); expect(reopened.state()?.status).toBe('complete');
+            expect(resumedProgress.length).toBeGreaterThan(0);
+            for (const progress of resumedProgress) {
+                expect(progress.sizedBytes).toBeGreaterThanOrEqual(restored.state!.progress.sizedBytes);
+                expect(progress.items).toBeGreaterThanOrEqual(restored.state!.progress.items);
+            }
             expect(reopened.readNode(finished)?.scannedAt).toBe(retained.scannedAt);
             expect(reopened.readNode(root)?.node.size.allocatedBytes).toBe((await measureNativeDisk({ paths: [root] })).totalAllocatedBytes);
             expect(reopened.readNode(root)).toMatchObject({ complete: true, node: { flags: { atLeast: false } } });

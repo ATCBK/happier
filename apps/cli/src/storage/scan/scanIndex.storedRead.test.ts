@@ -60,3 +60,29 @@ it('rejects changed malformed scan state before ingesting another entry, then ac
         } finally { database.close(); }
     } finally { index.close(); await rm(home, { recursive: true, force: true }); }
 });
+
+it('reads a stopped legacy invocation counter as the retained target total before resuming', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-scan-retained-'));
+    const volume = { id: 'volume', mountPath: home, usedBytes: 0 };
+    let index = createStorageScanIndex({ activeServerDir: home });
+    try {
+        await index.initialize([volume], true);
+        const state = index.begin({ volumeId: volume.id, root: home, target: { folderPath: home }, usedBytes: 0,
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
+        index.ingest(volume.id, { v: 1, type: 'dir', id: home, name: 'root', allocatedBytes: 8192, logicalBytes: 8192,
+            items: 2, mtimeMs: 1, flags: { atLeast: true }, children: [], files: [],
+            folded: { items: 0, allocatedBytes: 0, logicalBytes: 0 },
+            ageGroupBytes: { unknown: 0, months3: 0, months6: 0, months12: 0 }, complete: false });
+        index.close();
+        const directory = join(home, 'storage', 'scans');
+        const filename = (await readdir(directory)).find(file => file.endsWith('.sqlite'))!;
+        const database = openProtectedSqliteDatabaseSync(join(directory, filename));
+        database.prepare("UPDATE meta SET value=? WHERE key='state'").run(JSON.stringify({ ...state,
+            status: 'cancelled', progress: { sizedBytes: 1024, usedBytes: 0, items: 1 } }));
+        database.close();
+        index = createStorageScanIndex({ activeServerDir: home });
+        await index.initialize([volume], true);
+        expect(index.state()?.progress).toEqual({ sizedBytes: 8192, usedBytes: 0, items: 2 });
+        expect(index.readView().state?.progress).toEqual(index.state()?.progress);
+    } finally { index.close(); await rm(home, { recursive: true, force: true }); }
+});

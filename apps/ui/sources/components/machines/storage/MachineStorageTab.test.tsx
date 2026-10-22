@@ -878,6 +878,8 @@ describe('MachineStorageTab', () => {
         const disk = phone.screen.root.find((entry) => entry.props.testID === 'machine-storage-disk' && typeof entry.type === 'string');
         await act(async () => { disk.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 800 } } }); });
         expect(phone.screen.findByTestId('machine-storage-disk-shape:map')).toBeNull();
+        // The phone's list row still says each folder's size, as the lab's phone rows do (lab `rs` Mp).
+        await act(async () => { await vi.waitFor(() => expect(phone.screen.getTextContent()).toContain('318 GB')); });
         // Opening a part keeps the chart drawn while the next level is read, so the drill can morph (lab MU).
         const drill = await mount({ id: 'storage', view: 'disk' }, {}, (rpc) => {
             const view = (rpc.payload as { view?: { nodeId?: string } } | undefined)?.view;

@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { link, lstat, mkdir, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { createHappierTempDir, removeHappierTempDir } from '@happier-dev/cli-common/tempDirs';
+import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 
 import { measureNativeDisk, startNativeDiskScan, type NativeDiskScanRecord } from './nativeDiskMeasure';
 
@@ -102,10 +104,31 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     });
 
     it('cancels the actual helper after streaming begins and waits for process close', async () => {
+        const executable = resolveProcessCustodySupportExecutable(); expect(executable).toBeTruthy();
+        const spool = createHappierTempDir({ purpose: 'disk-cancel-latency' });
+        const child = spawn(executable!, ['disk-scan'], { stdio: ['pipe', 'pipe', 'pipe'] });
+        const lines = createInterface({ input: child.stdout });
+        let killAt = 0;
+        lines.on('line', line => {
+            const record: unknown = JSON.parse(line);
+            if (!killAt && typeof record === 'object' && record !== null && 'type' in record && record.type === 'dir-start') {
+                killAt = performance.now(); child.kill('SIGKILL');
+            }
+        });
+        const rawExit = new Promise<number>((resolve, reject) => {
+            child.once('error', reject);
+            child.once('exit', () => resolve(performance.now()));
+        });
+        child.stdin.write(JSON.stringify({ root: scratch, scratchDirectory: spool }) + '\n');
+        try {
+            const exitedAt = await rawExit;
+            expect(killAt).toBeGreaterThan(0);
+        } finally { lines.close(); child.kill('SIGKILL'); removeHappierTempDir(spool); }
         const controller = new AbortController();
+        let adapterKillAt = 0;
         const scan = startNativeDiskScan({ root: scratch }, {
             signal: controller.signal,
-            onRecord: (record) => { if (record.type === 'dir-start') controller.abort(); },
+            onRecord: (record) => { if (record.type === 'dir-start') { adapterKillAt = performance.now(); controller.abort(); } },
         });
         await expect(scan.done).rejects.toMatchObject({ name: 'AbortError' });
     });

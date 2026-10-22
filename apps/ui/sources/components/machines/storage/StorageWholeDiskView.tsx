@@ -1284,6 +1284,10 @@ function DiskList(
     if (delta === 0) return t('machineStorage.disk.noChange');
     return `${delta > 0 ? '+' : '−'}${formatMachineBytes(Math.abs(delta), 'storage')}`;
   };
+  const sizeText = (row: StorageDiskRow) =>
+    row.mark === 'mount'
+      ? t('machineStorage.disk.anotherDisk')
+      : `${row.node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(row.node.size.allocatedBytes, 'storage')}`;
   const fields = React.useMemo(
     (): CollectionField<StorageDiskRow>[] => [
       {
@@ -1314,9 +1318,7 @@ function DiskList(
               </View>
             )}
             <Text style={styles.size} numberOfLines={1}>
-              {row.mark === 'mount'
-                ? t('machineStorage.disk.anotherDisk')
-                : `${row.node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(row.node.size.allocatedBytes, 'storage')}`}
+              {sizeText(row)}
             </Text>
           </View>
         ),
@@ -1378,6 +1380,16 @@ function DiskList(
         </Text>
       ),
       fields,
+      // Phone (lab `rs` Mp): the list has no size column, so the row says its size at the right.
+      ...(props.compact
+        ? {
+            reason: (row: StorageDiskRow) => (
+              <Text style={styles.size} numberOfLines={1}>
+                {sizeText(row)}
+              </Text>
+            ),
+          }
+        : {}),
       accessibilityLabel: (row) =>
         t('machineStorage.disk.rowLabel', {
           name: storageDiskNodeName(row.node),
@@ -1387,7 +1399,7 @@ function DiskList(
       testID: (row) => `machine-storage-disk-row-${row.key}`,
       columnTitles: { title: t('machineStorage.disk.columns.name') },
     }),
-    [language, describe, fields, theme.colors.text.secondary, boxOf],
+    [language, describe, fields, props.compact, theme.colors.text.secondary, boxOf],
   );
   const sort = React.useMemo(
     () => ({

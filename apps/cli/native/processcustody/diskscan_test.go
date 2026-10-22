@@ -160,6 +160,9 @@ func TestDiskScanProgressClearsStallOnCompletedMetadataBatch(t *testing.T) {
 	stage := 0
 	err := diskScanStream(ctx, &diskControl{skipped: map[string]bool{}, changed: make(chan struct{}, 1)},
 		diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)}, func(record any) error {
+			if _, fact := record.(diskFactRecord); fact && stage == 2 {
+				clock.Add((100 * time.Millisecond).Milliseconds())
+			}
 			progress, ok := record.(diskProgress)
 			if !ok {
 				return nil
@@ -210,6 +213,52 @@ func TestDiskScanProgressNamesLongestInactiveDirectory(t *testing.T) {
 	}
 	if progress := diskStreamProgress(now, diskSummary{}, nil); progress.CurrentPath != "" || progress.StuckSinceMs != 0 {
 		t.Fatalf("empty frontier reported work: %#v", progress)
+	}
+}
+
+func TestDiskScanProgressDuringLargeMetadataBatch(t *testing.T) {
+	root := storageRenameTestRoot(t)
+	for index := 0; index < 64; index++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprint(index)), []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Unix(1_700_000_000, 0)
+	var clock atomic.Int64
+	clock.Store(start.UnixMilli())
+	originalOpen, originalNow := diskOpenDirectoryForScan, diskScanNow
+	release := make(chan struct{})
+	close(release)
+	diskScanNow = func() time.Time { return time.UnixMilli(clock.Load()) }
+	diskOpenDirectoryForScan = func(path string) (diskDirectory, error) {
+		dir, err := diskOpenRoot(path)
+		return diskProgressBatchDirectory{dir, release}, err
+	}
+	defer func() { diskOpenDirectoryForScan, diskScanNow = originalOpen, originalNow }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entries, intermediate := 0, 0
+	err := diskScanStream(ctx, &diskControl{skipped: map[string]bool{}, changed: make(chan struct{}, 1)},
+		diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)}, func(value any) error {
+			switch record := value.(type) {
+			case diskEntryRecord:
+				entries++
+				clock.Add((100 * time.Millisecond).Milliseconds())
+			case diskProgress:
+				if entries > 0 && entries < 64 {
+					intermediate++
+					if record.StuckSinceMs != 0 || record.CurrentPath != diskPathID(root) || record.Items == 0 {
+						t.Errorf("healthy batch progress lost its folder or completed work: %#v", record)
+					}
+				}
+				if entries == 64 {
+					cancel()
+				}
+			}
+			return nil
+		})
+	if err != nil || intermediate == 0 {
+		t.Fatalf("no progress during a large completed-metadata batch: entries=%d progress=%d err=%v", entries, intermediate, err)
 	}
 }
 
@@ -307,6 +356,53 @@ func (dir diskBlockingDirectory) entries(context.Context) ([]diskEntry, string, 
 	defer writer.Close()
 	_, err = reader.Read(make([]byte, 1))
 	return nil, "fixture", err
+}
+
+func TestDiskScanOwnerCancelRetiresBlockedHelper(t *testing.T) {
+	root := storageRenameTestRoot(t)
+	blocked := filepath.Join(root, "blocked")
+	if err := os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDiskCommandProcess$")
+	child.Env = append(os.Environ(), "HAPPIER_TEST_DISK_COMMAND=disk-scan", "HAPPIER_TEST_DISK_BLOCK="+blocked)
+	input, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close(); _ = child.Process.Kill() }()
+	if err := json.NewEncoder(input).Encode(diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)}); err != nil {
+		t.Fatal(err)
+	}
+	var killedAt time.Time
+	scanner := bufio.NewScanner(output)
+	for scanner.Scan() {
+		var record diskProgress
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == "progress" && record.CurrentPath == diskPathID(blocked) {
+			killedAt = time.Now()
+			if err := child.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	err = child.Wait()
+	if killedAt.IsZero() || err == nil || ctx.Err() != nil {
+		t.Fatalf("blocked helper failed to retire through process termination: requested=%v err=%v context=%v", !killedAt.IsZero(), err, ctx.Err())
+	}
+	t.Logf("blocked helper cancel-to-exit: %s", time.Since(killedAt))
 }
 
 func TestDiskScanOwnerBlockedSkipRetiresHelper(t *testing.T) {

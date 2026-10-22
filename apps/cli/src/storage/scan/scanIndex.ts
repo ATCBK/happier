@@ -74,8 +74,20 @@ function metadata(db: SqliteDatabaseSync, key: string): string | undefined {
     const value = ingestion(db).metadata.get(key); return value ? valueRow.parse(value).value : undefined;
 }
 function saveMetadata(db: SqliteDatabaseSync, key: string, value: string) { db.prepare('INSERT OR REPLACE INTO meta VALUES(?,?)').run(key, value); }
+function retainedTargetProgress(db: SqliteDatabaseSync) {
+    const row = db.prepare('SELECT allocated,items FROM nodes WHERE id=?').get(metadata(db, 'root'));
+    if (!row) return undefined;
+    const total = z.object({ allocated: z.number(), items: z.number() }).parse(row);
+    return { sizedBytes: total.allocated, items: total.items };
+}
 function readState(db: SqliteDatabaseSync): DiskScanStateV1 | null {
-    const value = metadata(db, 'state'); return value ? StoredDiskScanStateV1Schema.parse(JSON.parse(value) as unknown) : null;
+    const value = metadata(db, 'state');
+    if (!value) return null;
+    const state = StoredDiskScanStateV1Schema.parse(JSON.parse(value) as unknown);
+    // Also repair reads of stopped indexes written before termination counters
+    // were reconciled. No rescan or UI-side reconstruction is necessary.
+    if (state.status !== 'running') Object.assign(state.progress, retainedTargetProgress(db));
+    return state;
 }
 function migrateEnumeration(db: SqliteDatabaseSync, table = 'dirs', namespace = '') {
     const columns = db.prepare(`PRAGMA ${namespace}table_info(${table})`).all().map(value => z.object({ name: z.string() }).parse(value).name);
@@ -345,6 +357,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
     const now = deps.nowMs ?? Date.now;
     const directory = join(deps.activeServerDir, 'storage', 'scans');
     const databases = new Map<string, SqliteDatabaseSync>();
+    const progressBases = new WeakMap<SqliteDatabaseSync, Pick<DiskScanStateV1['progress'], 'sizedBytes' | 'items'>>();
     let closed = false;
     const fileName = (id: string) => `${createHash('sha256').update(id).digest('hex')}.sqlite`;
     const file = (id: string) => join(directory, fileName(id));
@@ -411,6 +424,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             const db = dbFor(input.volumeId); const prior = readState(db);
             db.exec('DROP TABLE IF EXISTS frontier_replacement');
             if (input.resume && prior && prior.status !== 'complete') {
+                progressBases.set(db, { sizedBytes: prior.progress.sizedBytes, items: prior.progress.items });
                 prior.status = 'running'; delete prior.finishedAt; saveMetadata(db, 'state', JSON.stringify(prior)); return prior;
             }
             return transaction(db, () => {
@@ -434,6 +448,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
                 db.prepare('INSERT INTO frontier VALUES(?)').run(input.root);
                 saveMetadata(db, 'root', input.root); db.prepare("DELETE FROM meta WHERE key='drawableNodes'").run();
                 saveMetadata(db, 'skippedPaths', '[]');
+                progressBases.set(db, { sizedBytes: 0, items: 0 });
                 saveMetadata(db, 'usedBytes', String(input.usedBytes)); saveMetadata(db, 'reservedBytes', String(input.reservedBytes ?? 0));
                 saveMetadata(db, 'apfsContainerId', input.apfsContainerId ?? '');
                 const priorCoverage = metadata(db, 'baselineState') && db.prepare('SELECT scanned,complete FROM baseline_coverage WHERE path=?').get(input.root);
@@ -448,7 +463,12 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
         withIngestBatch(volumeId: string, consume: () => void): void { transaction(dbFor(volumeId), consume); },
         ingest(volumeId: string, record: NativeDiskScanRecord) {
             const db = dbFor(volumeId); ingestion(db).assertAdmittedState();
-            if (record.type === 'progress') { const state = readState(db)!; state.progress = { usedBytes: state.progress.usedBytes, sizedBytes: record.sizedBytes, items: record.items,
+            if (record.type === 'progress') { const state = readState(db)!;
+                // A resumed helper seeds deduplication from the retained facts
+                // and reports only this invocation's new work. Merge its latest
+                // snapshot with the index-owned retained target, once.
+                const base = progressBases.get(db) ?? { sizedBytes: 0, items: 0 };
+                state.progress = { usedBytes: state.progress.usedBytes, sizedBytes: base.sizedBytes + record.sizedBytes, items: base.items + record.items,
                 ...(record.currentPath ? { currentPath: record.currentPath } : {}), ...(record.stuckSinceMs === undefined ? {} : { stuckSinceMs: record.stuckSinceMs }) };
                 saveMetadata(db, 'state', JSON.stringify(state)); return; }
             if (record.type === 'summary') return;
@@ -470,13 +490,15 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             reconcileCoverage(db, now());
             state.status = typeof summary === 'string' ? summary : summary.termination === 'completed' ? 'complete' : summary.termination;
             state.finishedAt = now(); delete state.progress.currentPath; delete state.progress.stuckSinceMs;
+            // Abrupt process cancellation has no terminal helper summary. The
+            // retained target in this index still owns the total already sized.
+            const total = retainedTargetProgress(db);
+            Object.assign(state.progress, total);
             if (typeof summary !== 'string') {
                 state.unreadable = { counts: summary.unreadableCounts, examples: summary.unreadable };
                 if (summary.apfsLocalSnapshotCount !== undefined) state.apfsLocalSnapshotCount = summary.apfsLocalSnapshotCount;
                 else delete state.apfsLocalSnapshotCount;
-                const aggregate = db.prepare('SELECT allocated,items FROM nodes WHERE id=?').get(metadata(db, 'root'));
-                const total = aggregate ? z.object({ allocated: z.number(), items: z.number() }).parse(aggregate) : undefined;
-                state.progress.sizedBytes = total?.allocated ?? summary.allocatedBytes; state.progress.items = total?.items ?? summary.items;
+                state.progress.sizedBytes = total?.sizedBytes ?? summary.allocatedBytes; state.progress.items = total?.items ?? summary.items;
                 transaction(db, () => {
                     if (summary.streamedFrontier) {
                         if (!hasStagedFrontier(db)) throw Object.assign(new Error('Native frontier stream not started'), { code: 'invalid_native_disk_output' });
@@ -489,6 +511,9 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             }
             db.exec('DROP TABLE IF EXISTS frontier_replacement');
             saveMetadata(db, 'state', JSON.stringify(state));
+            // Skip recovery can start another native invocation of this scan
+            // without a new admission; its baseline is the same retained total.
+            progressBases.set(db, { sizedBytes: state.progress.sizedBytes, items: state.progress.items });
             if (state.status !== 'complete') { reclaimScanSpace(db); return; }
             if ('volumeId' in state.target) saveMetadata(db, 'wholeDiskRoot', metadata(db, 'root')!);
             const wholeRoot = metadata(db, 'wholeDiskRoot');
