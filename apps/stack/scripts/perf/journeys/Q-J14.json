@@ -2,8 +2,8 @@
   "id": "Q-J14",
   "intent": "Own exact PERF-Q-before approval only: Inbox → review → Approve → Executed. Public CLI created e54e9bc9-aba3-48b3-b7ac-2b7603004ac5 for artifact.create of e3f469dc-4000-4000-8000-000000000051, title perf-Q-before-j14, text PERF-Q-before harmless approval effect. Verify durable receipt and this exact effect separately; never choose an unrelated row.",
   "prepare": [
-    { "op": "open" },
-    { "op": "home" },
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] },
     { "op": "idle", "ms": 90000 }
   ],
   "steps": [

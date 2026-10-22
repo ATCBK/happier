@@ -1,0 +1,15 @@
+{
+  "id": "Q-J2-settled",
+  "intent": "Reload #4 settled-Home diagnostic: reload the restored authenticated Home, wait for populated visible Session rows without title/subtitle loading and visible Capacity, then observe five minutes OFF/OFF with the same saved-tab and Capacity corpus. Cross-Home coverage may remain partial and must be reported; visible hydration is not complete inventory freshness. Uses the canonical long-task observer and mapped CPU profile, with no new collector.",
+  "readiness": "Populated visible Session rows have hydrated titles/subtitles, Capacity is visible, and no skeleton remains. Record the canonical query-status separately rather than assuming all Homes are available.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelectorAll('[data-testid^=\"session-list-item-\"]').length > 0 && !document.querySelector('[data-testid^=\"session-list-title-loading-\"], [data-testid^=\"session-list-subtitle-loading-\"], [data-testid*=\"skeleton\"]') && [...document.querySelectorAll('[data-testid$=\".widget.capacity\"]')].some(e=>e.getClientRects().length)"] },
+    { "op": "browser", "args": ["eval", "(() => { const ids = s => [...document.querySelectorAll(s)].map(e=>e.getAttribute('data-testid')).sort(); globalThis.__QSettledHomeFixture = { tabs: ids('[data-testid^=\"workspace-tab-\"]'), capacity: ids('[data-testid$=\".widget.capacity\"]'), queryStatus: document.querySelector('[data-testid=\"session-list-query-status\"]')?.textContent ?? null }; return globalThis.__QSettledHomeFixture; })()"] }
+  ],
+  "steps": [
+    { "op": "idle", "ms": 300000 },
+    { "op": "browser", "args": ["eval", "(() => { const ids = s => [...document.querySelectorAll(s)].map(e=>e.getAttribute('data-testid')).sort(); const f = globalThis.__QSettledHomeFixture; if (!f || JSON.stringify(f.tabs) !== JSON.stringify(ids('[data-testid^=\"workspace-tab-\"]')) || JSON.stringify(f.capacity) !== JSON.stringify(ids('[data-testid$=\".widget.capacity\"]'))) throw new Error('Settled Home visible corpus changed'); return { sameCorpus: true, queryStatus: document.querySelector('[data-testid=\"session-list-query-status\"]')?.textContent ?? null }; })()"] }
+  ]
+}

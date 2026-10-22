@@ -1,0 +1,17 @@
+{
+  "id": "Q-J3-drag",
+  "intent": "Reload #4 controlled Session-list sibling reorder using trusted browser drag delivery. Move cmvctxhrn023qmcqysmf8u8xn after adjacent same-indent cmvcpb1cv00i2mcqyy6442nqb using the target row's bottom edge, never its nesting center. The two-ID geometry/order is verified and restored by a reverse real UI drag after capture. No Session content, execution, Machine binding or approval mutation. Native frame supplement uses the same owned CDP page; missing dropped-frame counters remain unavailable.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"session-list-item-cmvctxhrn023qmcqysmf8u8xn\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"session-list-item-cmvcpb1cv00i2mcqyy6442nqb\"]"] },
+    { "op": "browser", "args": ["eval", "(() => { const a=document.querySelector('[data-testid=\"session-list-item-cmvctxhrn023qmcqysmf8u8xn\"]'),b=document.querySelector('[data-testid=\"session-list-item-cmvcpb1cv00i2mcqyy6442nqb\"]');const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();if(ar.top>=br.top||Math.abs(ar.left-br.left)>1)throw new Error('Requires original adjacent same-indent sibling order');const source=a.closest('[draggable=\"true\"]'),target=b.closest('[draggable=\"true\"]');if(!source||!target)throw new Error('Native Session drag source not admitted');source.setAttribute('data-perf-q-drag-source','true');const marker=document.createElement('div');marker.setAttribute('data-testid','perf-q-drag-target');Object.assign(marker.style,{position:'absolute',left:'45%',bottom:'1px',width:'10%',height:'2px',zIndex:'1000',pointerEvents:'auto'});globalThis.__QDragTargetOriginalPosition=target.style.position;target.style.position='relative';target.appendChild(marker);globalThis.__QDragTargetHost=target;return {sameIndent:true,originalOrder:true};})()"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["eval", "globalThis.__QArmDragFrameTrace()"] },
+    { "op": "browser", "args": ["drag", "[data-perf-q-drag-source=\"true\"]", "[data-testid=\"perf-q-drag-target\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-item-cmvctxhrn023qmcqysmf8u8xn\"]')?.getBoundingClientRect().top > document.querySelector('[data-testid=\"session-list-item-cmvcpb1cv00i2mcqyy6442nqb\"]')?.getBoundingClientRect().top"] },
+    { "op": "browser", "args": ["eval", "(() => { const events=globalThis.__QDragNativeProof??[];if(!['dragstart','drop','dragend'].every(type=>events.some(e=>e.type===type&&e.isTrusted)))throw new Error('Trusted native drag/drop proof missing');return {trustedNativeDragDrop:true};})()"] }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id":"J9",
+  "intent":"Reload10 after-only owned Artifact e3f469dc-4000-4000-8000-000000000053, produced by the verified fresh deferred J14 approval. Open body/editor and cancel unchanged; no save, grant, policy change or foreign-document edit. Tiny owned fixture is not the historical large ORC document workload.",
+  "prepare":[{"op":"open"},{"op":"home"}],
+  "steps":[
+    {"op":"open","path":"/artifacts"},
+    {"op":"browser","args":["wait","[data-testid=\"artifacts:collection\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"artifacts:row:e3f469dc-4000-4000-8000-000000000053\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"artifact:body\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"artifact:edit\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"artifact-editor:body\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"artifact-editor:body\"] [contenteditable=\"true\"]"]},
+    {"op":"idle","ms":10000},
+    {"op":"browser","args":["click","[data-testid=\"artifact-editor:cancel\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"artifact:body\"]"]}
+  ]
+}

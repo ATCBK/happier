@@ -1,0 +1,15 @@
+{
+  "id":"J7-board",
+  "intent":"Reload10 after-only owned Board d4fc7c15-2756-4114-b3eb-943e77dbc402, populated through ordinary UI with Your Home widget5d971e2f-bae8-4131-bdb5-5866258cc76e. Observe real header/canvas/widget for one minute; no modification inside capture. Not an empty-board substitute or matched historic fixture.",
+  "prepare":[{"op":"open"},{"op":"home"},{"op":"idle","ms":120000}],
+  "steps":[
+    {"op":"browser","args":["click","[data-testid=\"app-rail:boards\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"boards-column:list\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"boards-column:board:d4fc7c15-2756-4114-b3eb-943e77dbc402\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"boards-column:board:d4fc7c15-2756-4114-b3eb-943e77dbc402\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"board-header\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"board-canvas\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"board-widget:5d971e2f-bae8-4131-bdb5-5866258cc76e.widget\"]"]},
+    {"op":"idle","ms":60000}
+  ]
+}

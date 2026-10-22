@@ -1,0 +1,15 @@
+{
+  "id": "Q-J2-interim8",
+  "intent": "Reload #8 dev ON/ON populated Home five-minute idle with scalar progressive Session-content readiness observations; incomplete hydration is measurement data, not a reason to wait indefinitely for all rows.",
+  "readiness": "Authenticated Home shell and at least one populated Session-list row; readiness samples distinguish ready, unsettled and blocked rows without recording contents. This is not complete inventory freshness.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"session-list-item-\"]"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8BeginHydration()"] },
+    { "op": "idle", "ms": 300000 },
+    { "op": "browser", "args": ["eval", "globalThis.__q8EndHydration()"] }
+  ]
+}

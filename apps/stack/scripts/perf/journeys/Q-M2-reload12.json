@@ -1,0 +1,94 @@
+{
+  "id": "Q-M2",
+  "intent": "Reload12 dev declaration-only navigation correction: same ordinary census/exact perf Machine/Processes readiness as Q-M2. Reuse Q-J8-interim8 deferred new-document Home preparation, and ordinary rail-to-All-Machines entry rather than agent-browser open's failing navigation wait. Record route-action change; no budget, harness-owner or product change, no matched timing claim.",
+  "prepare": [
+    {
+      "op": "browser",
+      "args": [
+        "eval",
+        "globalThis.__q12NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "globalThis.__q12NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"app-rail-machines\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"sidebar-machines-all\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"machines.index.header\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"machines.index.view:list\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"machine-page-tabs\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"machine-page-tab:processes\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"machine-processes-table\"], [data-testid=\"machine-processes-nothing\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "!document.querySelector('[data-testid=\"machine-processes-loading\"], [data-testid=\"machine-processes-error\"], [data-testid=\"machine-processes-older\"], [data-testid=\"machine-processes-offline\"]')"
+      ]
+    }
+  ]
+}

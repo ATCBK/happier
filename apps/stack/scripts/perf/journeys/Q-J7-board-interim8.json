@@ -1,0 +1,16 @@
+{
+  "id": "Q-J7-board-interim8",
+  "intent": "After-only reload #8 Board readiness smoke: ordinary Boards list to its first visible existing Board, real header/canvas, no Board/card/layout mutation. No matched per-Board baseline is claimed.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail:boards", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"boards-column:list\"]"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"boards-column:board:\"]:not([data-testid$=\":need-you\"])", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"board-header\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"board-canvas\"]"] },
+    { "op": "idle", "ms": 10000 }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "Q-J7-triage-interim8",
+  "intent": "After-only reload #8 read-only PRs & Issues smoke to the existing PR 612 detail. No source mutation or new Session spawn is requested; a known runner activation error is recorded separately if encountered.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail-more", "click"] },
+    { "op": "browser", "args": ["find", "testid", "app-rail-more:plugin:happier.triage:triage", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-list-region\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D\"]"] },
+    { "op": "browser", "args": ["find", "testid", "triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-shell-detail-region\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]"] },
+    { "op": "idle", "ms": 10000 }
+  ]
+}

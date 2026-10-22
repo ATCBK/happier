@@ -1,0 +1,18 @@
+{
+  "id": "Q-J10-interim8",
+  "intent": "Reload #8 J10 smoke, same Home to existing Team to Home steps. Preparation uses P4a's deferred root navigation and semantic Home marker rather than waiting for dev document load; no timeout or measured-step change.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:settings\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"teams-row:\"]"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"teams-row:\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"team-overview-identity\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"app-shell-logo\"]"] },
+    { "op": "home" }
+  ]
+}

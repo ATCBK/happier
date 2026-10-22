@@ -1,0 +1,16 @@
+{
+  "id":"Q-J7-triage-milestone10",
+  "intent":"Reload10 read-only PR612 list/detail smoke. Corrected live More trigger and explicit admitted-menu-entry readiness; no external source mutation, no empty source treated as ready. Existing PR fixture is required.",
+  "prepare":[{"op":"open"},{"op":"home"}],
+  "steps":[
+    {"op":"browser","args":["click","[data-testid=\"app-rail-more.trigger\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"app-rail-more:plugin:happier.triage:triage\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"app-rail-more:plugin:happier.triage:triage\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"triage-shell-list-region\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"triage-shell-detail-region\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]"]},
+    {"op":"idle","ms":10000}
+  ]
+}

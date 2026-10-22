@@ -1,0 +1,16 @@
+{
+  "id": "Q-J14",
+  "intent": "Reload10 own fresh deferred CLI Artifact Action proposal7952e54c-f054-4930-a565-c4c9012312ba only. Approve once and observe Executed; verify durable receipt and exact harmless effecte3f469dc-4000-4000-8000-000000000053 separately. Replaces the retired historical blocking fixture, never another user's request.",
+  "prepare": [{"op":"open"},{"op":"home"},{"op":"idle","ms":90000}],
+  "steps": [
+    {"op":"browser","args":["click","[data-testid=\"app-rail:inbox\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"inbox.popover.open\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"inbox.content\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"inbox.approval.7952e54c-f054-4930-a565-c4c9012312ba\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"inbox.approval.7952e54c-f054-4930-a565-c4c9012312ba\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"approvals.header\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"approvals.approve\"]"]},
+    {"op":"browser","args":["click","[data-testid=\"approvals.approve\"]"]},
+    {"op":"browser","args":["wait","--fn","(() => { const s=document.querySelector('[data-testid=\"approvals.status\"]'); return Boolean(s && /\\bExecuted\\b/.test(s.textContent) && !document.querySelector('[data-testid=\"approvals.approve\"]')); })()"]}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "Q-J8-interim8",
+  "intent": "After-only reload #8 read-only Machine/resource smoke via ordinary rail, exact perf Machine, Overview, Processes and Storage. Existing perf Machine is the fixture; no process/resource/recipient policy mutation or Session spawn.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail-machines\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"sidebar-machines-all\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.header\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machines.index.view:list\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machines.index.row.machine:srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tabs\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tab-body.overview\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machine-page-tab:processes\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-processes-table\"], [data-testid=\"machine-processes-nothing\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machine-page-tab:storage\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-storage\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"machine-page-tab:overview\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"machine-page-tab-body.overview\"]"] }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "Q-J9-interim8",
+  "intent": "After-only reload #8 Artifact recipient/readiness smoke to the existing approved ORC-LIVE document 802da2b9-9e09-41d5-9622-bb93afe4bf46, editor open and unchanged cancel. If ordinary inventory cannot expose that fixture, no new Artifact, Session or file is created.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__q8NavigationPending = true; setTimeout(() => location.assign('/?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__q8NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["eval", "setTimeout(() => location.assign('/artifacts?server=http%3A%2F%2Fhappier-agent-qa-perf.localhost%3A3020&happier_hmr=0'), 0); true"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifacts:collection\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifacts:row:802da2b9-9e09-41d5-9622-bb93afe4bf46\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"artifacts:row:802da2b9-9e09-41d5-9622-bb93afe4bf46\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact:body\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"artifact:edit\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact-editor:body\"] [contenteditable=\"true\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"artifact-editor:cancel\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"artifact:body\"]"] }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id":"Q-J12-J5",
+  "intent":"Reload10 after-only phone390px New Session/Machine-sheet and own unsent-draft reflow smoke. Refuse a foreign nonempty draft. No Send or Agent launch; full M4 streamed/first-message remains blocked independently by Codex CLI availability. 390x540 is web viewport reflow, not native IME certification.",
+  "prepare":[
+    {"op":"browser","args":["set","viewport","390","844"]},
+    {"op":"open"},{"op":"home"}
+  ],
+  "steps":[
+    {"op":"open","path":"/new"},
+    {"op":"browser","args":["wait","[data-testid=\"new-session-composer-input\"]"]},
+    {"op":"browser","args":["eval","(() => { const v=document.querySelector('[data-testid=\"new-session-composer-input\"]').value; if(v&&!v.startsWith('PERF_Q10_PHONE:'))throw new Error('Refusing to replace a foreign draft');return true; })()"]},
+    {"op":"browser","args":["fill","[data-testid=\"new-session-composer-input\"]","PERF_Q10_PHONE: owned unsent draft continuity check; do not send."]},
+    {"op":"browser","args":["click","[data-testid=\"agent-input-machine-chip\"]"]},
+    {"op":"browser","args":["wait","[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]:not([aria-disabled=\"true\"])"]},
+    {"op":"browser","args":["press","Escape"]},
+    {"op":"browser","args":["set","viewport","390","540"]},
+    {"op":"browser","args":["wait","--fn","innerWidth===390&&innerHeight===540"]},
+    {"op":"browser","args":["set","viewport","390","844"]},
+    {"op":"browser","args":["wait","--fn","innerWidth===390&&innerHeight===844&&document.querySelector('[data-testid=\"new-session-composer-input\"]')?.value==='PERF_Q10_PHONE: owned unsent draft continuity check; do not send.'"]}
+  ]
+}

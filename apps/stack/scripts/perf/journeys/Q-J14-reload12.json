@@ -1,0 +1,114 @@
+{
+  "id": "Q-J14-reload12",
+  "intent": "Own fresh deferred approval25703904-8de4-46c5-80d7-d5a7e25e0041 only, effect054. Entity-aware correction: open exact request before sole Approve, verify its row leaves Needs you, then exact request page Executed/no Approve. Durable receipt/effect checked independently; no global next-item status predicate.",
+  "prepare": [
+    {
+      "op": "home"
+    }
+  ],
+  "steps": [
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"app-rail:inbox\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"inbox.popover.open\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"inbox.content\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": ["wait", "[data-testid=\"inbox.approval.25703904-8de4-46c5-80d7-d5a7e25e0041\"]"]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"inbox.approval.25703904-8de4-46c5-80d7-d5a7e25e0041\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"approvals.header\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"inbox.detail.open\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "location.pathname==='/inbox/approvals/25703904-8de4-46c5-80d7-d5a7e25e0041'&&Boolean(document.querySelector('[data-testid=\"approvals.approve\"]'))"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "eval",
+        "(() => { if(location.pathname!=='/inbox/approvals/25703904-8de4-46c5-80d7-d5a7e25e0041')throw Error('Wrong approval entity'); return true; })()"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "click",
+        "[data-testid=\"approvals.approve\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": ["wait", "--fn", "location.pathname==='/inbox/approvals/25703904-8de4-46c5-80d7-d5a7e25e0041'&&[...document.querySelectorAll('[data-testid=\"approvals.status\"]')].filter(e=>e.getClientRects().length).some(e=>e.textContent.includes('Executed'))&&![...document.querySelectorAll('[data-testid=\"approvals.approve\"]')].some(e=>e.getClientRects().length)"]
+    },
+    {
+      "op": "open",
+      "path": "/inbox"
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "[data-testid=\"inbox.content\"]"
+      ]
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "Boolean(document.querySelector('[data-testid=\"inbox.content\"]'))&&!document.querySelector('[data-testid=\"inbox.approval.25703904-8de4-46c5-80d7-d5a7e25e0041\"]')"
+      ]
+    },
+    {
+      "op": "open",
+      "path": "/inbox/approvals/25703904-8de4-46c5-80d7-d5a7e25e0041"
+    },
+    {
+      "op": "browser",
+      "args": [
+        "wait",
+        "--fn",
+        "location.pathname==='/inbox/approvals/25703904-8de4-46c5-80d7-d5a7e25e0041'&&[...document.querySelectorAll('[data-testid=\"approvals.status\"]')].filter(e=>e.getClientRects().length).some(e=>e.textContent.includes('Executed'))&&![...document.querySelectorAll('[data-testid=\"approvals.approve\"]')].some(e=>e.getClientRects().length)"
+      ]
+    }
+  ]
+}

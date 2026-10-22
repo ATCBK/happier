@@ -1,0 +1,12 @@
+{
+  "id": "J1",
+  "intent": "Production milestone J1: same manual restore-to-Home shell boundary as B1-J1, with explicit optional welcome-tour dismissal when it overlays the manual input. Warm remains authenticated root reload. The extra cold browser action is recorded; cold distributions use only this identical declaration.",
+  "prepare": [],
+  "steps": [
+    { "op": "open", "path": "/restore/manual", "when": "cold" },
+    { "op": "open", "when": "warm" },
+    { "op": "browser", "when": "cold", "args": ["eval", "(() => { const b=[...document.querySelectorAll('[role=dialog] button,[role=dialog] [role=button]')].find(e=>e.getClientRects().length && e.textContent.trim()==='Skip'); if(b)b.click(); return {tourDismissed:!!b}; })()"] },
+    { "op": "restore", "when": "cold" },
+    { "op": "home" }
+  ]
+}
