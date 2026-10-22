@@ -16,9 +16,13 @@ vi.mock('undici', () => ({
 import { connect } from './index.js';
 import { formatAccountApiTokenCredentialV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import {
+  createActionExecutor,
   deriveBoxPublicKeyFromSeed, openBoxBundle, openEncryptedDataKeyEnvelopeV1,
+  ExternalActionRequestEnvelopeV2Schema, openExternalActionRequestV2,
+  prepareExternalActionResponseV2,
   sealEncryptedDataKeyEnvelopeV1, wrapApiTokenEncryptionAccessV1, V2SessionByIdResponseSchema,
 } from '@happier-dev/protocol';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { deriveBoxSecretKeyFromSeed } from '@happier-dev/protocol/crypto/boxBundle';
 import { sealSessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions';
@@ -131,6 +135,56 @@ describe('SDK embed helpers', () => {
       expect(queries[1]).toMatchObject({ folderIds: [], tagIds: ['other'], includeInactive: false });
       await expect(client.embed.listSessions({ folderId: null, tagIds: [] })).rejects.toMatchObject({ code: 'listing_filter_required' });
       expect(queries).toHaveLength(2);
+    } finally { await client.close(); }
+  });
+
+  it('routes an E2EE parent listing through its bound Machine and the real Action executor', async () => {
+    const context = { serverIdentityId: 'srv_sdk', accountId: self.accountId, tokenId: TOKEN_ID,
+      contentPublicKey: 'B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=' };
+    const accountKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+    const wrappingSecret = new Uint8Array(32).fill(7);
+    const token = formatAccountApiTokenCredentialV1({ bearer: TOKEN,
+      wrappingSecret: encodeBase64(wrappingSecret, 'base64url'),
+      serverIdentityId: context.serverIdentityId, accountId: context.accountId,
+      contentPublicKey: context.contentPublicKey });
+    const encryptionAccess = wrapApiTokenEncryptionAccessV1({ context, wrappingSecret,
+      contentPrivateKey: accountKey, randomBytes: (length) => new Uint8Array(length).fill(3) });
+    const listResult = { queryVersion: 1, sessions: [], nextCursor: null, hasNext: false,
+      attentionNextCursor: null, attentionHasNext: false };
+    const sessionList = vi.fn(async () => listResult);
+    const executor = createActionExecutor({ sessionList } as Pick<ActionExecutorDeps, 'sessionList'> as ActionExecutorDeps);
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: URL, options: RequestInit) => {
+      if (url.pathname.endsWith('/self')) return json({ ...self, accountEncryptionMode: 'e2ee' });
+      if (url.pathname.endsWith('/encryption-access')) {
+        return json({ v: 1, accountId: context.accountId, tokenId: context.tokenId, encryptionAccess });
+      }
+      if (url.pathname === '/v1/machines') return json([]);
+      const request = ExternalActionRequestEnvelopeV2Schema.parse(JSON.parse(String(options.body)));
+      expect(request.target).toEqual({ kind: 'machine', machineId: grant.create.machineId });
+      const binding = { serverIdentityId: context.serverIdentityId, accountId: context.accountId,
+        credentialId: context.tokenId, actionId: 'session.list' as const, requestId: request.requestId,
+        target: request.target! };
+      const opened = openExternalActionRequestV2({ envelope: request, binding, material: { type: 'dataKey', machineKey: accountKey } });
+      expect(opened).not.toBeNull();
+      requests.push(String(options.body));
+      const execution = await executor.execute('session.list', opened!.input, {
+        surface: 'api', authority: 'account_automation', serverId: context.serverIdentityId,
+        externalActionTarget: binding.target,
+      });
+      return json(prepareExternalActionResponseV2({ binding, request,
+        material: { type: 'dataKey', machineKey: accountKey },
+        randomBytes: (length) => new Uint8Array(length).fill(4),
+        executedMachineId: grant.create.machineId, execution }).response);
+    }));
+    const client = connect({ endpoint: 'https://happier.example', token });
+    try {
+      await expect(client.embed.listSessions()).resolves.toEqual(listResult);
+      expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({
+        folderIds: ['leads'], tagIds: ['hot', 'inbound'],
+      }) }));
+      expect(requests.join('')).not.toContain('leads');
+      expect(requests.join('')).not.toContain('inbound');
     } finally { await client.close(); }
   });
 

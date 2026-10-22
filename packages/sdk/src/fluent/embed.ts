@@ -104,12 +104,20 @@ export function createEmbed(params: EmbedParams): HappierEmbed {
       }, { signal: options?.signal, requestId: options?.requestId });
     },
     async listSessions(input = {}, options) {
-      const { config } = await readParent(options);
+      const { grant, config, accountMode } = await readParent(options);
       const folderId = input.folderId === undefined ? config.organization.folderId : input.folderId;
       const tagIds = input.tagIds === undefined ? config.organization.tagIds : [...input.tagIds];
       if (!folderId && tagIds.length === 0) refuse('listing_filter_required');
       const { folderId: _folderId, tagIds: _tagIds, ...query } = input;
-      return params.sessions.list({ ...query, folderIds: folderId ? [folderId] : [], tagIds },
+      // `session.list` is Account-placed, so Plain transport needs no target.
+      // E2EE Action operands still need an exact Machine carrier because the
+      // Home cannot open Account material. The parent grant's creation binding
+      // is the embed's one configured Machine authority; do not invent another
+      // Machine selector or alter the Action's canonical placement.
+      const sessions = accountMode === 'e2ee' && grant.create !== null
+        ? params.machineSessions(grant.create.machineId)
+        : params.sessions;
+      return sessions.list({ ...query, folderIds: folderId ? [folderId] : [], tagIds },
         { signal: options?.signal, requestId: options?.requestId });
     },
     async createCredential(input, options) {
