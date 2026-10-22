@@ -26,7 +26,7 @@ type SocketRpcEmit = (
     payload: Readonly<{ requestId: string }>,
 ) => void;
 type SocketRpcTimeout = (
-    timeoutMs: number,
+    timeoutMs: number | undefined,
 ) => Readonly<{ emitWithAck: SocketRpcEmitWithAck }>;
 type SessionEncryptionTestDouble = Readonly<{
     encryptRaw(value: unknown): Promise<unknown>;
@@ -241,7 +241,7 @@ describe('apiSocket.sessionRPC plaintext sessions', () => {
         const emitWithAck = vi.fn<SocketRpcEmitWithAck>(
             async () => ({ ok: true, result: { ok: true, value: 790 } }),
         );
-        const timeout = vi.fn<SocketRpcTimeout>();
+        const timeout = vi.fn<SocketRpcTimeout>(() => ({ emitWithAck }));
 
         const { apiSocket } = await import('./apiSocket');
         installApiSocketTestOverrides(apiSocket, {
@@ -256,7 +256,8 @@ describe('apiSocket.sessionRPC plaintext sessions', () => {
             { timeoutMs: null },
         );
 
-        expect(timeout).not.toHaveBeenCalled();
+        // Socket.IO's timeout(undefined) clears the per-emit override; it arms no timer.
+        expect(timeout.mock.calls).toEqual([[undefined]]);
         expect(emitWithAck).toHaveBeenCalledWith(
             expect.any(String),
             {

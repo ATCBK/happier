@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol';
 import { SessionManagerOptionsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { selectSessionRelationRecords } from '@/components/sessions/work/reportSubtree';
 import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderCandidates';
 
@@ -56,8 +57,9 @@ async function setup() {
     vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
     const request = vi.fn(async (_url: string, _init?: RequestInit): Promise<Response> =>
         new Response(JSON.stringify({ ok: true, sessionId: 'child/id', managerSessionId: 'lead', attachedAt: 1 }), { status: 200 }));
-    setRuntimeFetch(async (url, init) => new URL(String(url)).pathname === '/v1/auth/ping'
-        ? new Response('{}', { status: 200 }) : request(String(url), init));
+    // The Session reader batches; the shared adapter serves it from the per-Session facts below.
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => new URL(String(url)).pathname === '/v1/auth/ping'
+        ? new Response('{}', { status: 200 }) : request(String(url), init)));
     const account = await captureLazyActionAccountContext(home.id);
     return { home, account, request, TokenStorage, token, execute: createSessionManagerAction(account) };
 }

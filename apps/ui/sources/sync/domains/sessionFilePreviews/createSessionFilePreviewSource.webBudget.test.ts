@@ -38,7 +38,7 @@ describe('shared web file preview buffering budget', () => {
         const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:oversized-preview');
         try {
             const result = await createSessionFilePreviewSource({ scope: harness.scope, filePath: 'clip.mp4', mimeType, maxBytes: mimeType === 'video/mp4' ? null : 100 });
-            expect(result).toEqual({ ok: false, error: 'File exceeds the preview size limit' });
+            expect(result).toEqual({ ok: false, error: 'File exceeds the preview size limit', errorCode: 'too_large' });
             expect(harness.requests.some(request => request.url.endsWith('/chunks/0'))).toBe(false);
             expect(createObjectURL).not.toHaveBeenCalled();
         } finally {
@@ -71,7 +71,7 @@ describe('shared web file preview buffering budget', () => {
         const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:oversized-preview');
         try {
             const result = await createSessionFilePreviewSource({ scope: harness.scope, filePath: 'clip.mp4', mimeType: 'video/mp4', maxBytes: null, expectedSizeBytes: WEB_DOWNLOAD_MEMORY_FALLBACK_MAX_BYTES + 1 });
-            expect(result).toEqual({ ok: false, error: 'File exceeds the preview size limit' });
+            expect(result).toEqual({ ok: false, error: 'File exceeds the preview size limit', errorCode: 'too_large' });
             expect(harness.rpcRequests).toHaveLength(0);
             expect(createObjectURL).not.toHaveBeenCalled();
         } finally {

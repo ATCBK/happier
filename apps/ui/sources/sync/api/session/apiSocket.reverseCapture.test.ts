@@ -78,6 +78,7 @@ async function bootApiSocket(params: Readonly<{
         {
             getSessionEncryption: () => null,
             getMachineEncryption: params.getMachineEncryption,
+            getMachineEncryptionContext: () => undefined,
         } as unknown as Encryption,
     );
 
