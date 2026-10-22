@@ -500,9 +500,10 @@ export function getConnectedAccountAuthenticationMode(
 }
 
 /**
- * Returns the exact daemon-projected authentication descriptor for a qualified
- * service. A conflicted or incomplete projection must remain unknown rather
- * than borrowing a mode from a similarly named descriptor.
+ * Authentication declarations for passive Account target eligibility do not
+ * require a Machine supplier. Prefer its exact projected descriptor when
+ * present; otherwise the admitted bundled declaration supplies the same facts.
+ * Neither source admits execution, and conflicting suppliers remain unknown.
  */
 export function getConnectedAccountAuthentication(
   service: Readonly<{ pluginId: string; localId: string }>,
@@ -510,6 +511,8 @@ export function getConnectedAccountAuthentication(
 ): PluginConnectedAccountAuthenticationV2 | null {
   const entry = snapshot ? snapshot.entries.find(candidate => candidate.service && sameService(candidate.service, service))
     : getQualifiedConnectedServiceRegistryEntry(service);
-  if (!entry || (entry.projectedDescriptorCandidates?.length ?? 0) > 1) return null;
-  return entry.projectedDescriptor?.authentication ?? null;
+  if (entry?.projectionStatus === 'conflict' || (entry?.projectedDescriptorCandidates?.length ?? 0) > 1) return null;
+  return entry?.projectedDescriptor?.authentication
+    ?? BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS[`${service.pluginId}/${service.localId}`]?.descriptor.authentication
+    ?? null;
 }

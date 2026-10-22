@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import {
   getGeneratedLegacyConnectedServiceRegistryFallback,
@@ -11,7 +12,9 @@ import {
   canExecuteConnectedServiceAction,
   getConnectedServiceSetupPresentation,
   isConnectedServiceUsageCapable,
+  getConnectedAccountAuthentication,
 } from './connectedServiceRegistry';
+import { buildConnectedAccountPurposeTargetChoices } from './connectedAccountPurposeTargetChoices';
 import { advanceConnectedAccountDescriptorProjectionState, createConnectedAccountDescriptorProjectionLoadingState,
   mergeConnectedAccountDescriptorProjections, type ConnectedAccountDescriptorProjectionState } from './connectedAccountDescriptorProjection';
 
@@ -69,6 +72,48 @@ describe('connectedServiceRegistry', () => {
     status: ConnectedAccountDescriptorProjectionState['status'] = 'ready',
   ) => installConnectedAccountDescriptorProjection({
     scopeKey: 'server-a', status, descriptors, conflicts: [], errorReason: status === 'stale' ? 'transport' : null,
+  });
+
+  it('keeps a saved bundled pool selectable without a Machine descriptor supplier', () => {
+    install([]);
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const account = QualifiedConnectedAccountProfileV4Schema.parse({
+      ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+      configurationReady: true, configurationRevision: null, scopes: [],
+    });
+    const group = QualifiedConnectedAccountGroupV4Schema.parse({
+      v: 1, ref: { service, groupId: 'work-pool' }, incarnation: 'work-pool-row', displayName: 'Work pool',
+      policy: {}, activeConnectedAccountId: 'work', generation: 1, runtimeStateRevision: 1,
+      state: { status: 'ready' }, createdAt: 1, updatedAt: 1,
+      members: [{ v: 1, connectedAccountId: 'work', priority: 1, enabled: true, state: {}, createdAt: 1, updatedAt: 1 }],
+    });
+    const choices = buildConnectedAccountPurposeTargetChoices({
+      declaration: { purpose: 'openai-upstream', service, required: false },
+      selectedTarget: { kind: 'group', service, groupId: 'work-pool' },
+      accounts: [account], groups: [group], labelsByKey: {}, serviceTitle: 'ChatGPT',
+      sourceNegotiation: 'advertised-v4',
+      resolveAuthentication: target => getConnectedAccountAuthentication(target, getConnectedServiceRegistrySnapshot()),
+    });
+    const selected = choices.find(choice => choice.current && choice.kind === 'group');
+    expect(selected).toMatchObject({ eligibility: 'usable', selectable: true });
+    expect(selected?.presentation.unavailableReason).toBeUndefined();
+    // Passive declaration truth does not admit a sign-in/refresh operation.
+    expect(getQualifiedConnectedServiceRegistryEntry(service)).toBeNull();
+    expect(getConnectedAccountAuthentication({ pluginId: 'acme.foreign', localId: service.localId })).toBeNull();
+  });
+
+  it('preserves projected authentication and refuses conflicting suppliers rather than borrowing bundled modes', () => {
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const descriptor: ConnectedAccountDescriptorProjectionState['descriptors'][number] = {
+      id: service.localId, pluginId: service.pluginId, serviceId: 'openai-codex', title: 'ChatGPT',
+      provenance: 'first_party', sourceKind: 'bundled', authentication: manualAuthentication([]), capabilities: [],
+      availability: { state: 'blocked', reason: 'runtime_unavailable' }, diagnostics: [],
+    };
+    install([descriptor]);
+    expect(getConnectedAccountAuthentication(service)).toEqual(descriptor.authentication);
+    install([descriptor, { ...descriptor, authentication: manualAuthentication([{ id: 'other', title: 'Other', secret: true }]) }], 'conflict');
+    expect(getConnectedAccountAuthentication(service)).toBeNull();
   });
 
   it('admits Account configuration from the exact current descriptor even without a native executable', () => {
