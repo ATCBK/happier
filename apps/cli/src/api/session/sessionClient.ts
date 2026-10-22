@@ -605,6 +605,7 @@ export class ApiSessionClient extends EventEmitter {
     private sessionPermissionRpcRouter: SessionPermissionRpcRouter | null = null;
     private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
+    private executionRunLifecycleRegistration: RpcLifecycleRegistration | null = null;
     private agentStateLock = new AsyncLock();
     private requestSettlementAdmissionLock = new AsyncLock();
     private metadataLock = new AsyncLock();
@@ -1148,7 +1149,7 @@ export class ApiSessionClient extends EventEmitter {
             getEphemeralStreamConnectionEpoch: () => this.getEphemeralStreamConnectionEpoch(),
         };
 
-        registerExecutionRunHandlers(this.rpcHandlerManager, {
+        this.executionRunLifecycleRegistration = registerExecutionRunHandlers(this.rpcHandlerManager, {
             sessionId: this.sessionId,
             cwd: this.resolveWorkingDirectory(),
             resolveCwd: () => this.resolveWorkingDirectory(),
@@ -1207,6 +1208,8 @@ export class ApiSessionClient extends EventEmitter {
                 return context.settings ?? null;
             },
         });
+
+        this.rpcLifecycleRegistrations.push(this.executionRunLifecycleRegistration);
 
         registerEphemeralTaskHandlers(this.rpcHandlerManager, {
           workingDirectory: this.resolveWorkingDirectory(),
@@ -6034,6 +6037,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        this.startExecutionRunDisposal();
         this.executionRunPermissionHandler?.reset();
         this.executionRunPermissionHandler = null;
         this.pendingInputReadinessAbortController?.abort();
@@ -6112,6 +6116,17 @@ export class ApiSessionClient extends EventEmitter {
         this.runtimeTerminationStarted = true;
         this.providerInputOutcomeProducerGeneration += 1;
         this.acceptedCanonicalPendingDeliveryOperationAbortController.abort();
+        this.startExecutionRunDisposal();
+    }
+
+    private startExecutionRunDisposal(): void {
+        // Child processes must not wait behind parent provider or transport shutdown.
+        // The retained registration joins this same idempotent disposal during close().
+        void this.executionRunLifecycleRegistration?.dispose().catch((error: unknown) => {
+            logger.infoFile('[API] Failed to dispose execution runs', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
     }
 
     hasRuntimeTerminationStarted(): boolean {
