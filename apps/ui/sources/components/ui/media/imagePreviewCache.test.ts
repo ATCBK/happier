@@ -1,8 +1,48 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ImagePreviewCache } from './imagePreviewCache';
+import { createImagePreviewAcquisition, ImagePreviewCache, resolveImagePreviewCacheKey } from './imagePreviewCache';
 
 describe('ImagePreviewCache', () => {
+    it('shares an unversioned admitted read with its dependents but reads a later admission afresh', async () => {
+        const cache = new ImagePreviewCache({ maxEntries: 0, maxTotalBytes: 1_000, now: () => 1_000 });
+        const input = { cacheScopeId: 'workspace', filePath: 'logo.svg', cacheKey: null,
+            acquisitionKey: createImagePreviewAcquisition() };
+        const key = resolveImagePreviewCacheKey(input);
+        expect(key).not.toBeNull();
+        if (!key) throw new Error('Expected an admitted preview identity');
+        const cleanup = vi.fn();
+        let bytes = 'original';
+        const read = vi.fn(async () => ({ status: 'loaded' as const, uri: `blob:${bytes}`, cleanup }));
+        cache.retain(key);
+        expect(await cache.load(key, read)).toMatchObject({ uri: 'blob:original' });
+        bytes = 'saved';
+        // Mode changes and stage entry retain the admitted picture, not a second working-tree read.
+        const dependentKey = resolveImagePreviewCacheKey({ ...input })!;
+        cache.retain(dependentKey);
+        expect(await cache.load(dependentKey, read)).toMatchObject({ uri: 'blob:original' });
+        expect(read).toHaveBeenCalledOnce();
+        cache.release(key);
+        expect(cleanup).not.toHaveBeenCalled();
+        cache.release(dependentKey);
+        expect(cleanup).toHaveBeenCalledOnce();
+        const nextKey = resolveImagePreviewCacheKey({ ...input, acquisitionKey: createImagePreviewAcquisition() })!;
+        expect(nextKey).not.toEqual(key);
+        cache.retain(nextKey);
+        expect(await cache.load(nextKey, read)).toMatchObject({ uri: 'blob:saved' });
+        expect(read).toHaveBeenCalledTimes(2);
+        cache.release(nextKey);
+    });
+
+    it('keeps the admitted retry when a dependent enters and retries only on new intent', () => {
+        const input = { cacheScopeId: 'workspace', filePath: 'logo.svg', cacheKey: null,
+            acquisitionKey: createImagePreviewAcquisition(), retryCount: 1 };
+        const key = resolveImagePreviewCacheKey(input);
+        expect(key).not.toBeNull();
+        expect(resolveImagePreviewCacheKey({ ...input })).toEqual(key);
+        expect(resolveImagePreviewCacheKey({ ...input, retryCount: 2 })).not.toEqual(key);
+        expect(resolveImagePreviewCacheKey({ ...input, cacheKey: 'real-revision', acquisitionKey: createImagePreviewAcquisition() }))
+            .toEqual(resolveImagePreviewCacheKey({ ...input, cacheKey: 'real-revision' }));
+    });
     it('shares an in-flight fill and keeps it alive while another consumer remains', async () => {
         const cache = new ImagePreviewCache({ maxEntries: 0, maxTotalBytes: 1_000, now: () => 1_000 });
         const key = { sessionId: 'workspace', signature: 'version', filePath: 'a.png' };

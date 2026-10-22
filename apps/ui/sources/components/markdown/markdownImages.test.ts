@@ -6,6 +6,7 @@ import { projectMarkdownFindText } from './rendering/markdownFindProjection';
 import { mapRenderedSelectionToMarkdownSource } from './rendering/markdownSelectionSource';
 import { applyEnrichedMarkdownImagePolicy, normalizeMarkdownLinkUrl } from './enriched/enrichedMarkdownLinkHandling';
 import { buildMarkdownImageDocument } from './markdownImages';
+import { createImagePreviewAcquisition } from '@/components/ui/media/imagePreviewCache';
 import { STREAMING_INCOMPLETE_LINK_HREF } from './streaming/streamingMarkdownRepairConfig';
 
 describe('opt-in Markdown document images', () => {
@@ -76,5 +77,26 @@ describe('opt-in Markdown document images', () => {
         } });
         expect(document.images.map(image => image.alt)).toEqual(['Clip', 'Photo']);
         expect(document.gallery.map(image => image.alt)).toEqual(['Photo']);
+    });
+
+    it('carries each admitted image into its gallery but gives a later document fresh reads', () => {
+        const input = { markdown: '![Photo](photo.png)', images: {
+            resolve: (path: string) => ({ kind: 'workspace' as const, path }), remoteLoaded: false, onLoadRemote() {},
+        } };
+        const document = buildMarkdownImageDocument(input);
+        expect(document.images[0]).toMatchObject({ acquisitionKey: expect.any(String) });
+        expect(document.gallery[0]).toBe(document.images[0]);
+        expect(buildMarkdownImageDocument(input).images[0]).not.toEqual(document.images[0]);
+    });
+
+    it('does not re-acquire the admitted local pictures when remote consent changes the gallery', () => {
+        const input = { markdown: '![Photo](photo.png)\n\n![Remote](https://remote.test/shot.png)',
+            acquisitionKey: createImagePreviewAcquisition() };
+        const resolve = (path: string) => path.startsWith('https:')
+            ? { kind: 'remote' as const, url: path } : { kind: 'workspace' as const, path };
+        const blocked = buildMarkdownImageDocument({ ...input, images: { resolve, remoteLoaded: false, onLoadRemote() {} } });
+        const granted = buildMarkdownImageDocument({ ...input, images: { resolve, remoteLoaded: true, onLoadRemote() {} } });
+        expect(granted.images[0]).toEqual(blocked.images[0]);
+        expect(granted.gallery).toHaveLength(2);
     });
 });

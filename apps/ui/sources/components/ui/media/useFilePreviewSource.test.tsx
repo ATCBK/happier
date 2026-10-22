@@ -13,6 +13,7 @@ import { transferMachine } from '@/components/sessions/files/sessionFileTransfer
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { useFilePreviewSource } from './useFilePreviewSource';
+import { buildWorkspacePreviewIdentity } from './buildWorkspacePreviewIdentity';
 import { buildImageCompareModel, projectImageComparePreview } from '@/components/workspaces/scm/review/imageCompare/imageCompareModel';
 import { useImageCompare } from '@/components/workspaces/scm/review/imageCompare/useImageCompare';
 
@@ -242,6 +243,70 @@ describe('useFilePreviewSource', () => {
             await first.unmount();
             await second.unmount();
         }
+    });
+
+    it('does not reuse an unversioned Markdown image for a later working-tree comparison After', async () => {
+        const path = 'assets/unversioned-compare.svg';
+        const original = '<svg xmlns="http://www.w3.org/2000/svg" width="232" height="56"><rect width="232" height="56" fill="#fbfafc"/></svg>';
+        const edited = '<svg xmlns="http://www.w3.org/2000/svg" width="2320" height="560"><rect width="232" height="56" fill="#ffdb99"/></svg>';
+        transfer.setPayload(new TextEncoder().encode(original), path);
+        const markdown = await renderHook(() => useFilePreviewSource({ enabled: true,
+            source: { kind: 'workspace', scope: fixture.scope, filePath: path },
+            ...buildWorkspacePreviewIdentity(fixture.scope, path),
+        }));
+        try {
+            await vi.waitFor(() => expect(markdown.getCurrent().status).toBe('loaded'));
+        } finally { await markdown.unmount(); }
+        // The real Machine download boundary now holds the bytes saved through the editor.
+        transfer.setPayload(new TextEncoder().encode(edited), path);
+        const compare = await renderHook(() => useImageCompare({ enabled: true, scope: fixture.scope, filePath: path,
+            source: { kind: 'workingTree', changeKind: 'added', area: 'both' },
+        }));
+        try {
+            await vi.waitFor(() => expect(compare.getCurrent().after.kind).toBe('present'));
+            const after = compare.getCurrent().after;
+            if (after.kind !== 'present') throw new Error('Expected working-tree After bytes');
+            const savedBytes = files.get(after.uri)!.chunks.flatMap(chunk => [...chunk]);
+            expect(new TextDecoder().decode(new Uint8Array(savedBytes))).toBe(edited);
+            expect(compare.getCurrent().before).toEqual({ kind: 'added' });
+        } finally { await compare.unmount(); }
+    });
+
+    it.each([
+        { recovered: false, signature: null },
+        { recovered: true, signature: null },
+        { recovered: true, signature: 'recovered-stage-version' },
+    ])('shares the comparison After with its well and stage, recovered=$recovered signature=$signature', async ({ recovered, signature }) => {
+        const { ImageCompare } = await import('@/components/workspaces/scm/review/imageCompare/ImageCompare');
+        const { MediaStage } = await import('./stage/MediaStage');
+        fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0 });
+        interruptTransfer = recovered;
+        const input = { enabled: true, scope: fixture.scope, filePath: 'shared-after.png',
+            source: { kind: 'workingTree' as const, changeKind: 'added', area: 'both' as const, signature } };
+        const compare = await renderHook(() => useImageCompare(input));
+        if (recovered) {
+            await vi.waitFor(() => expect(compare.getCurrent().after.kind).toBe('unavailable'));
+            interruptTransfer = false;
+            await act(async () => compare.getCurrent().retry('after'));
+        }
+        await vi.waitFor(() => expect(compare.getCurrent().after.kind).toBe('present'));
+        const model = compare.getCurrent();
+        if (model.after.kind !== 'present') throw new Error('Expected a loaded After');
+        const shownUri = model.after.uri;
+        const well = await renderScreen(fixture.wrap(<ImageCompare filePath={input.filePath} kind="image" alphaCapable
+            before={model.before} after={model.after} beforePreviewInput={model.beforePreviewInput}
+            afterPreviewInput={model.afterPreviewInput} />));
+        const stage = await renderScreen(fixture.wrap(<MediaStage items={model.gallery} initialIndex={0} onClose={() => {}} />));
+        try {
+            await vi.waitFor(() => expect(stage.findByTestId('media-stage-image')?.props.source.uri).toBe(shownUri));
+            await vi.waitFor(() => expect(well.findByTestId('image-compare-after-picture')?.props.source.uri).toBe(shownUri));
+            expect(transfer.prepares).toHaveLength(recovered ? 2 : 1);
+            await compare.unmount();
+            expect(files.get(shownUri)?.exists).toBe(true);
+            await well.unmount();
+            expect(files.get(shownUri)?.exists).toBe(true);
+        } finally { await compare.unmount(); await well.unmount(); await stage.unmount(); }
+        expect(files.get(shownUri)?.exists).toBe(false);
     });
 
     it('reports the shared transfer progress while a workspace preview downloads', async () => {

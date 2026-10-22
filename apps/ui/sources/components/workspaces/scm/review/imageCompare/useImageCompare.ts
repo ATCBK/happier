@@ -4,6 +4,7 @@ import type { ScmComparisonFile, ScmDiffArea } from '@happier-dev/protocol/scm';
 import { useFileAtRevisionPreview } from '@/components/ui/media/useFileAtRevisionPreview';
 import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
+import { createImagePreviewAcquisition } from '@/components/ui/media/imagePreviewCache';
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
@@ -54,8 +55,10 @@ export function useImageCompare(input: Readonly<{
             enabled: input.enabled && !afterAbsent && Boolean(live),
             source: { kind: 'workspace', scope: { serverId, machineId, rootPath }, filePath: input.filePath },
             mimeType: viewer.mimeType, sizeBytes: live?.sizeBytes, ...identity,
-            // A retry asks for fresh bytes, as the media player's does; the first read shares the page's cache.
-            ...(attempts.after > 0 ? { cacheKey: `${identity.cacheKey}:retry:${attempts.after}` } : {}),
+            // This mounted comparison owns one live read; wells, modes and stage borrow that read.
+            ...(!identity.cacheKey ? { acquisitionKey: createImagePreviewAcquisition() } : {}),
+            // The preview owner retries keyed and unkeyed reads without inventing a version for either.
+            retryCount: attempts.after,
         };
     }, [input.enabled, afterAbsent, Boolean(live), serverId, machineId, rootPath, input.filePath, viewer.mimeType,
         live?.sizeBytes, live?.signature, attempts.after]);

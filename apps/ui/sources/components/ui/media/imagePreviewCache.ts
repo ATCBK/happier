@@ -4,6 +4,26 @@ export type ImagePreviewCacheKey = Readonly<{
     filePath: string;
 }>;
 
+let nextAcquisition = 0;
+
+/** One admitted read, shared only by its dependent wells/gallery; never a file revision. */
+export function createImagePreviewAcquisition(): string {
+    return JSON.stringify(['acquisition', ++nextAcquisition]);
+}
+
+export function resolveImagePreviewCacheKey(input: Readonly<{
+    cacheScopeId: string;
+    filePath: string;
+    cacheKey?: string | null;
+    acquisitionKey?: string;
+    retryCount?: number;
+}>): ImagePreviewCacheKey | null {
+    const signature = input.cacheKey?.trim() || input.acquisitionKey;
+    if (!signature) return null;
+    return { sessionId: input.cacheScopeId, filePath: input.filePath,
+        signature: (input.retryCount ?? 0) > 0 ? `${signature}:retry:${input.retryCount}` : signature };
+}
+
 export type ImagePreviewCacheValue =
     | Readonly<{ status: 'loaded'; uri: string; cleanup?: (() => void | Promise<void>) | null; byteLength?: number | null; mimeType?: string }>
     | Readonly<{ status: 'error'; error: string; errorCode?: string }>;

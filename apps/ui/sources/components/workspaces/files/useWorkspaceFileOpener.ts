@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { z } from 'zod/mini';
 import type { WorkspaceFileOpenInput, WorkspaceFileTarget, WorkspaceFindSeedSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { executeWorkspaceUiAction, openWorkspaceHrefOrElse } from '@/components/appShell/workspace/workspaceActionRuntime';
+import { executeWorkspaceUiAction, openWorkspaceHrefOrElse, resolveWorkspaceUiActionOutcome } from '@/components/appShell/workspace/workspaceActionRuntime';
 import { useWorkspaceFileNavigationCapabilities } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import type { Href } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
@@ -29,8 +29,8 @@ export type WorkspaceFileOpenOptions = Readonly<Pick<WorkspaceFileOpenInput, 'an
     signal?: AbortSignal;
     origin?: WorkspaceFileOpenOrigin;
 }>;
-/** Resolves true when Action accepts the request, including deferred approval. */
-export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean>;
+/** True accepts the request (including deferred approval); false refuses it; null cancels it. */
+export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean | null>;
 
 /** Every file entry point enters the same Action policy and mounted navigation owner. */
 export function useWorkspaceFileOpener() {
@@ -48,8 +48,9 @@ export function useWorkspaceFileOpener() {
         if (destinationNavigation) destinationNavigation.push(href);
         else fireAndForget(openWorkspaceHrefOrElse(resolveHref(href), () => router.push(href)), { tag: 'useWorkspaceFileOpener.openApproval' });
     }, [destinationNavigation, router]);
-    const open = React.useCallback(async (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions): Promise<boolean> => {
-        if (!canOpen || options?.signal?.aborted) return false;
+    const open = React.useCallback(async (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions): Promise<boolean | null> => {
+        if (options?.signal?.aborted) return null;
+        if (!canOpen) return false;
         const { path, ...address } = target;
         if (paneDispatch && options?.present !== false && (paneRegion === 'main' || paneRegion === 'side')) {
             const scopeId = target.kind === 'project'
@@ -83,7 +84,7 @@ export function useWorkspaceFileOpener() {
                 onReturn: kind => { if (kind === 'route') setTranscriptJumpHighlight(transcript); },
             }, phone ? 'route' : 'pane');
         }
-        return result.ok;
+        return resolveWorkspaceUiActionOutcome(result);
     }, [canOpen, focusReturnOwner, instanceKey, openApproval, paneDispatch, paneRegion, phone]);
     return React.useMemo(() => ({ open, canOpen }), [open, canOpen]);
 }

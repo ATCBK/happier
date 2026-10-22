@@ -11,6 +11,7 @@ import type { StreamingTextRevealPreset } from '../streaming/streamingTextReveal
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
 import { buildMarkdownImageDocument, type MarkdownImageResolver } from '../markdownImages';
+import { createImagePreviewAcquisition } from '@/components/ui/media/imagePreviewCache';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { MarkdownSegmentView } from './MarkdownSegmentView';
 import { MarkdownCodeBlockWrapKeyProvider } from '../MarkdownCodeBlockWrapState';
@@ -108,9 +109,12 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
         if (cacheKey) writeMarkdownRenderSegmentsCache(cacheKey, preparedMarkdown, next);
         return next;
     }, [preparedMarkdown, props.renderCacheKey, props.streamingMode, sourceRangeInteractionsActive, splitEnrichedSourceRanges, imagesEnabled]);
+    // Consent and streaming re-project this same reader's gallery, not its admitted local bytes.
+    const imageAcquisitionKey = React.useMemo(() => props.images?.resolve ? createImagePreviewAcquisition() : undefined,
+        [props.images?.resolve, props.imageScope?.serverId, props.imageScope?.machineId, props.imageScope?.rootPath]);
     const imageDocument = React.useMemo(() => props.images
-        ? buildMarkdownImageDocument({ markdown: preparedMarkdown, images: props.images, segments })
-        : undefined, [preparedMarkdown, props.images, segments]);
+        ? buildMarkdownImageDocument({ markdown: preparedMarkdown, images: props.images, segments, acquisitionKey: imageAcquisitionKey })
+        : undefined, [preparedMarkdown, props.images, segments, imageAcquisitionKey]);
     const segmentKeys = React.useMemo(() => {
         if (!props.sourceRangeLayoutObserver) return segments.map((segment) => segment.key);
         const occurrences = new Map<string, number>();

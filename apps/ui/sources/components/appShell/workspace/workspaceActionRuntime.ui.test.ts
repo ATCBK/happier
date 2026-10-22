@@ -14,7 +14,9 @@ vi.mock('socket.io-client', async importOriginal =>
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
-const { executeWorkspaceUiAction, registerMountedWorkspaceAction } = await import('./workspaceActionRuntime');
+const { executeWorkspaceUiAction, registerMountedWorkspaceAction, resolveWorkspaceUiActionOutcome } = await import('./workspaceActionRuntime');
+const { workspaceActionFailure } = await import('./workspaceActions');
+const { runUniversalSearchActivation } = await import('../search/runUniversalSearchActivation');
 const { createWorkspaceState, reduceWorkspaceState } = await import('./workspaceState');
 const { createWorkspaceNavigationAdapter } = await import('./workspaceNavigationAdapter');
 const { createWorkspaceActionAdapter } = await import('./workspaceActions');
@@ -64,6 +66,17 @@ describe('workspace UI Action approval presentation', () => {
         connections.length = 0;
         publishAppliedActiveServerRuntimeAvailability(false);
     });
+
+    it.each(['workspace_navigation_cancelled', 'action_cancelled', 'workspace_destination_unavailable'] as const)(
+        'preserves %s through the UI result projection and Search error custody', async errorCode => {
+            const failures: string[] = [];
+            const result = workspaceActionFailure(errorCode);
+            await runUniversalSearchActivation({ dismiss: () => {},
+                activate: async () => resolveWorkspaceUiActionOutcome(result),
+                presentFailure: () => { failures.push('search'); } });
+            expect(failures).toEqual(errorCode === 'workspace_destination_unavailable' ? ['search'] : []);
+        },
+    );
 
     it('opens the authenticated approval on its Home while retaining the tabs the pending close has not removed', async () => {
         const { serverId, scope } = await activateApprovalHome('workspace-approval', 'alice');

@@ -15,7 +15,7 @@ vi.mock('react-native', async () => {
     return createReactNativeNativeMock({ platformOS: 'ios' });
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true, renderCustomModals: true }).module);
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 const fs = await vi.hoisted(async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock('file:///markdown-preview'));
 vi.mock('expo-file-system', () => fs.module);
@@ -101,12 +101,13 @@ describe('workspace Markdown entry points', () => {
     it.each(['file', 'readme'] as const)('%s renders relative images, opens its gallery, and grants remote consent only on Load', async entry => {
         const { FileContentPanel } = await import('@/components/workspaces/files/file/FileContentPanel');
         const { CodeReadmeCard } = await import('@/components/projects/files/code/CodeReadmeCard');
-        const { Modal } = await import('@/modal');
-        const screen = await renderScreen(entry === 'file'
+        const { Modal, ModalProvider } = await import('@/modal');
+        const content = entry === 'file'
             ? <FileContentPanel workspaceScope={fixture.scope} theme={createThemeFixture()} displayMode="markdown" sessionId={fixture.session.id}
                 filePath="docs/README.md" fileContent={markdown} diffContent={null} language="markdown"
                 selectedLineKeys={new Set()} lineSelectionEnabled={false} onToggleLine={() => {}} />
-            : <CodeReadmeCard scope={fixture.scope} path="docs/README.md" />);
+            : <CodeReadmeCard scope={fixture.scope} path="docs/README.md" />;
+        const screen = await renderScreen(<ModalProvider>{content}</ModalProvider>);
         await waitForImage(screen, 2);
         expect(transfer.prepares.map(request => request.payload)).toEqual(expect.arrayContaining([
             expect.objectContaining({ rootPath: '/repo', path: '/repo/docs/shot.png' }),
@@ -122,10 +123,16 @@ describe('workspace Markdown entry points', () => {
                 expect.objectContaining({ source: expect.objectContaining({ source: { kind: 'workspace', scope: fixture.scope, filePath: 'docs/second.png' } }) }),
             ] }),
         }));
+        // The canonical modal boundary mounts the real stage and its neighbours. Both reuse the
+        // already rendered inline pictures, rather than acquiring each workspace image again.
+        await vi.waitFor(() => expect(screen.findByTestId('media-stage-image')).toBeTruthy());
+        expect(transfer.prepares).toHaveLength(2);
+        await act(async () => Modal.hideAll());
         await act(async () => { screen.findAllByTestId('markdown-load-remote-images')[0]!.props.onPress(); });
         await vi.waitFor(() => expect(screen.findAllByTestId('markdown-remote-images')).toHaveLength(0));
         expect(screen.findAllByType('NativeImage').some(image => image.props.source.uri === 'https://remote.test/shot.png')).toBe(true);
         expect(fixture.storage.getState().localSettings.remoteImageConsentV1).toHaveLength(1);
+        expect(transfer.prepares).toHaveLength(2);
         await screen.unmount();
     });
 

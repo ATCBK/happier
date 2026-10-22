@@ -33,6 +33,14 @@ export async function invokeWorkspaceAction(request: Parameters<MountedWorkspace
     return mounted ? await mounted(request) : workspaceActionFailure('unsupported_action');
 }
 
+/** True accepts the intent, false refuses it, and null is an intentional cancellation. */
+export function resolveWorkspaceUiActionOutcome(result: Readonly<{ ok: true } | { ok: false; errorCode: string }>): boolean | null {
+    if (result.ok) return true;
+    return isActionApprovalDeclinedErrorCode(result.errorCode)
+        || result.errorCode === 'workspace_navigation_cancelled' || result.errorCode === 'action_cancelled'
+        ? null : false;
+}
+
 /** Human menus and shortcuts enter Action policy before reaching the admitted mounted transport. */
 export async function executeWorkspaceUiAction(request: Parameters<MountedWorkspaceAction>[0], openApproval: (href: Href) => void): Promise<ActionExecuteResult> {
     const lifetime = captureActiveServerAccountScopeCurrentness();
@@ -47,7 +55,7 @@ export async function executeWorkspaceUiAction(request: Parameters<MountedWorksp
         if (result.ok) {
             const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
             if (pending.success && scope && lifetime.isCurrent()) openApproval(buildApprovalHref(pending.data.artifactId, scope.serverId));
-        } else if (lifetime.isCurrent() && !isActionApprovalDeclinedErrorCode(result.errorCode) && !['workspace_navigation_cancelled', 'action_cancelled'].includes(result.errorCode)) {
+        } else if (lifetime.isCurrent() && resolveWorkspaceUiActionOutcome(result) === false) {
             if (!presentActionTurnedOffNoticeIfOff(result, request.actionId)) await Modal.alertAsync(t('common.error'), t('common.unavailable'));
         }
         return result;

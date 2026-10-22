@@ -13,7 +13,7 @@ import {
     createSessionAttachmentPreviewSource,
     type SessionFilePreviewSource,
 } from '@/sync/domains/sessionFilePreviews/createSessionFilePreviewSource';
-import { ImagePreviewCache, type ImagePreviewCacheProgress, type ImagePreviewCacheValue } from './imagePreviewCache';
+import { ImagePreviewCache, resolveImagePreviewCacheKey, type ImagePreviewCacheProgress, type ImagePreviewCacheValue } from './imagePreviewCache';
 import { buildWorkspacePreviewIdentity } from './buildWorkspacePreviewIdentity';
 
 export type FilePreviewSource =
@@ -28,6 +28,8 @@ export type UseFilePreviewSourceInput = Readonly<{
     enabled: boolean;
     source: FilePreviewSource;
     cacheKey?: string | null;
+    /** Owner-allocated admitted read shared by dependent wells/stage, not a mutable file's version. */
+    acquisitionKey?: string;
     /** Explicit consumer retry; restarts unkeyed reads and requests fresh keyed bytes. */
     retryCount?: number;
     cacheScopeId?: string | null;
@@ -98,13 +100,13 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
     const maxBytes = input.maxBytes !== undefined ? input.maxBytes : viewer.kind === 'video' ? null : previewLimit;
     const normalizedMaxBytes = maxBytes === null ? null : typeof maxBytes === 'number' && Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : 0;
     const retryCount = input.retryCount ?? 0;
-    const originalCacheKey = (input.cacheKey ?? stage?.sha256)?.trim() || null;
-    const cacheKey = originalCacheKey && retryCount > 0 ? `${originalCacheKey}:retry:${retryCount}` : originalCacheKey;
     const cacheScopeId = input.cacheScopeId?.trim() || (attachment
         ? JSON.stringify(['session-attachment', attachment.sessionId, attachment.id])
         : stage ? JSON.stringify(['composer-stage', stage.executionTarget.serverId, stage.executionTarget.machineId, stage.owner.pluginId, stage.owner.localId, stage.id])
         : scope ? buildWorkspacePreviewIdentity(scope, filePath, sizeBytes, null).cacheScopeId
         : source.kind === 'session' ? source.sessionId : source.kind === 'bytes' ? 'bytes' : '');
+    const cacheKey = resolveImagePreviewCacheKey({ cacheScopeId, filePath,
+        cacheKey: input.cacheKey ?? stage?.sha256, acquisitionKey: input.acquisitionKey, retryCount })?.signature ?? null;
     const stageIdentity = stage ? JSON.stringify(stage) : null;
     const attachmentIdentity = attachment ? JSON.stringify(attachment) : null;
     const identity = JSON.stringify([kind, cacheScopeId, cacheKey, retryCount, filePath, mimeType, sizeBytes, normalizedMaxBytes, stageIdentity, attachmentIdentity]);

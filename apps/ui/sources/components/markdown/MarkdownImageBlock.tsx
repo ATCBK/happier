@@ -38,6 +38,7 @@ function imageSource(
       enabled: true,
       source: { kind: 'workspace', scope, filePath: image.source.path },
       ...buildWorkspacePreviewIdentity(scope, image.source.path),
+      acquisitionKey: image.acquisitionKey,
     };
   }
   if (image.source.kind === 'remote' && remoteLoaded) {

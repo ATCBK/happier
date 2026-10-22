@@ -176,7 +176,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     const preview = useFilePreviewSource({
       ...item.source,
       enabled: picture && item.source.enabled,
-      retryCount: attempt,
+      retryCount: (item.source.retryCount ?? 0) + attempt,
     });
     const [size, setSize] = React.useState<MediaPictureSize | null>(null);
     const [failed, setFailed] = React.useState<string | null>(null);
