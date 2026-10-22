@@ -1842,6 +1842,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         // to the composer-view anchor — the "menu appears at the top of the composer,
         // then jumps on the next keystroke" report.
         enabled: isInputFocused && !props.disabled,
+        // Only the command menu consumes the rect, and it can only open over an active `@`/`/`
+        // word. Web skips its per-keystroke mirror-div measurement otherwise and measures before
+        // paint in the commit the word activates; native ignores this and keeps D38 above.
+        demanded: activeWord !== null,
     });
     const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
         () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),
@@ -2586,6 +2590,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [canStopFromComposer, handleComposerAbortShortcut, handleComposerFocusShortcut]);
     useKeyboardShortcutHandlers(keyboardShortcutHandlers);
 
+    // Identity-stable handlers: these feed the action-menu and control-row memos, which an inline
+    // arrow would invalidate on every keystroke render.
+    const handleStopFromComposer = React.useCallback(() => {
+        void handleAbortPress();
+    }, [handleAbortPress]);
+    const handleToggleExtraChipCollapsedPopover = React.useCallback((chipKey: string) => {
+        toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
+    }, [toggleSelectionOverlay]);
+    const blurComposerInput = React.useCallback(() => {
+        inputRef.current?.blur();
+    }, []);
     const {
         handleActionMenuPress,
         actionMenuActions,
@@ -2638,9 +2653,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onResumeClick: handleResumePress,
         onFileViewerPress: props.onFileViewerPress,
         canStop: canStopFromComposer,
-        onStop: () => {
-            void handleAbortPress();
-        },
+        onStop: handleStopFromComposer,
         hasProfile,
         hasEnvVars,
         hasAgent,
@@ -2653,9 +2666,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         layout: effectiveActionBarLayout,
         chips: props.extraActionChips,
         overlayAnchorRef,
-        onToggleExtraChipCollapsedPopover: (chipKey) => {
-            toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
-        },
+        onToggleExtraChipCollapsedPopover: handleToggleExtraChipCollapsedPopover,
         themeTint: theme.colors.composer.chipTint,
         showChipLabels,
         showAutoHideChipLabels,
@@ -2703,7 +2714,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         currentPath: props.currentPath,
         resumeChipAnchorRef,
         onResumePress: handleResumePress,
-        blurInput: () => inputRef.current?.blur(),
+        blurInput: blurComposerInput,
         resumeSessionId: props.resumeSessionId,
         resumeIsChecking: props.resumeIsChecking,
         onAbort: props.onAbort,
