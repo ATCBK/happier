@@ -16,6 +16,7 @@ import { buildSessionListRenderableMetadataComparison } from './sessionListRende
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 const canonicalExternalSessionLink = {
     v: 1 as const,
@@ -76,6 +77,39 @@ function buildRenderable(
 }
 
 describe('derivePendingRequestFlagsFromAgentState', () => {
+    it('retains omitted empty request flags only for an otherwise unchanged row', () => {
+        const previous = buildRenderable({ id: 'empty-request-projection',
+            encryptedContentAvailability: 'ready',
+            hasPendingPermissionRequests: false, hasPendingUserActionRequests: false,
+        });
+        const { hasPendingPermissionRequests: _permission, hasPendingUserActionRequests: _action, ...omitted } = previous;
+        expect(preserveSessionListRenderableStaleFields(previous, omitted)).toBe(previous);
+        const replacedOwnerProjection = { kind: 'owner', ownerMetadataEnvelope: { t: 'plain', v: { v: 1 } },
+            ownerMetadata: { v: 1 } } satisfies SessionOwnerMetadataProjection;
+        for (const changed of [
+            { ...omitted, agentStateVersion: previous.agentStateVersion + 1 },
+            { ...omitted, metadataVersion: previous.metadataVersion + 1 },
+            { ...omitted, accessLevel: 'view' as const, access: createSessionAccessFixture('view') },
+            { ...omitted, encryptedContentAvailability: 'encrypted_content_unavailable' as const },
+            { ...omitted, [SESSION_OWNER_METADATA_PROJECTION]: replacedOwnerProjection },
+        ]) {
+            const next = preserveSessionListRenderableStaleFields(previous, changed);
+            expect(next).not.toBe(previous);
+            expect(next.hasPendingPermissionRequests).toBeUndefined();
+            expect(next.hasPendingUserActionRequests).toBeUndefined();
+        }
+        expect(preserveSessionListRenderableStaleFields(previous, { ...omitted,
+            hasPendingPermissionRequests: true, hasPendingUserActionRequests: true,
+        })).toMatchObject({ hasPendingPermissionRequests: true, hasPendingUserActionRequests: true });
+        const observedEmpty = { ...previous, pendingRequestObservedAt: 100 };
+        const newerObservation = preserveSessionListRenderableStaleFields(observedEmpty, {
+            ...omitted, pendingRequestObservedAt: 200,
+        });
+        expect(newerObservation.pendingRequestObservedAt).toBe(200);
+        expect(newerObservation.hasPendingPermissionRequests).toBeUndefined();
+        expect(newerObservation.hasPendingUserActionRequests).toBeUndefined();
+    });
+
     it('admits cleared pending flags on a privacy layout contraction with reset versions', () => {
         const previous = buildRenderable({
             id: 's_contracted', metadataLayoutVersion: 0, metadataVersion: 9, agentStateVersion: 8,

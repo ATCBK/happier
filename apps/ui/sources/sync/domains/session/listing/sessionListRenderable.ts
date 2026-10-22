@@ -702,7 +702,8 @@ export function buildSessionListRenderableFromSession(
             : undefined,
     };
 
-    return previous && areSessionListRenderablesEqual(previous, next) ? previous : next;
+    const withPendingProjection = preserveSessionListRenderablePendingFlags(previous, next);
+    return previous && areSessionListRenderablesEqual(previous, withPendingProjection) ? previous : withPendingProjection;
 }
 
 export function resolveSessionListReadableSeq(
@@ -767,14 +768,25 @@ function preserveSessionListRenderablePendingFlags(
     if (!previous) return next;
     next = reconcileSessionRequestProjection(previous, next);
     const preserveMissingFlags = shouldPreserveSessionListRenderablePendingFlags(next, previous);
-    if (!preserveMissingFlags) return next;
-    return {
+    const omittedEmptyProjection = previous.hasPendingPermissionRequests === false
+        && previous.hasPendingUserActionRequests === false
+        && next.hasPendingPermissionRequests === undefined
+        && next.hasPendingUserActionRequests === undefined;
+    if (!preserveMissingFlags && !omittedEmptyProjection) return next;
+    const retainedPendingProjection = {
         ...next,
         agentStateVersion: preserveMissingFlags ? previous.agentStateVersion : next.agentStateVersion,
         hasPendingPermissionRequests: previous.hasPendingPermissionRequests,
         hasPendingUserActionRequests: previous.hasPendingUserActionRequests,
-        pendingRequestObservedAt: previous.pendingRequestObservedAt ?? null,
+        pendingRequestObservedAt: preserveMissingFlags ? previous.pendingRequestObservedAt ?? null : next.pendingRequestObservedAt,
     };
+    if (preserveMissingFlags) return retainedPendingProjection;
+    // An unopened inactive replay can omit proved-empty flags. Retain them only
+    // when the canonical comparison proves the entire row, including tuple and
+    // authority, otherwise unchanged. New evidence still owns its projection.
+    return areSessionListRenderablesEqual(previous, retainedPendingProjection)
+        ? previous
+        : next;
 }
 
 export function preserveSessionListRenderableStaleFields(
