@@ -1,10 +1,12 @@
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
+import { createServer, type ServerResponse } from 'node:http';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import { logger } from '@/ui/logger';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import type { Socket } from 'socket.io-client';
@@ -2807,27 +2809,163 @@ describe('managed-services SVC09 owner', () => {
         }
     });
 
-    it('lets the caller own an ordinary prompt while response headers remain unavailable', async () => {
+    it.each(['headers', 'body'] as const)('keeps real managed HTTP %s under caller lifetime beyond inherited transport deadlines', async phase => {
+        // This is the actual managed HTTP/Undici boundary, with a shorter ambient
+        // default so the regression remains independent of Undici's fast clock.
+        const previousDispatcher = getGlobalDispatcher();
+        const ambientDispatcher = new Agent({ headersTimeout: 25, bodyTimeout: 25 });
+        setGlobalDispatcher(ambientDispatcher);
+        if (phase === 'headers') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const arrived = deferred<ServerResponse>();
+        const server = createServer((request, response) => {
+            request.resume();
+            request.on('end', () => {
+                if (phase === 'body') {
+                    response.writeHead(200);
+                    response.write('accepted');
+                }
+                arrived.resolve(response);
+            });
+        });
+        let handle: ManagedServiceHandle | undefined;
+        try {
+            await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+            const address = server.address();
+            if (!address || typeof address === 'string') throw new Error('Missing loopback endpoint');
+            const harness = createHarness();
+            harness.moveHealthyEndpoint(`http://127.0.0.1:${address.port}`, address.port);
+            handle = await harness.owner.bindScope(harness.scope, exec).supervise({
+                id: 'gateway', mode: { kind: 'spawn', launch: { executable: {} as never },
+                    endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: address.port } } },
+            });
+            const pending = handle.request({ pathAndQuery: '/native/message', method: 'POST', body: new TextEncoder().encode('input') })
+                .then(response => ({ response }), error => ({ error }));
+            const nativeResponse = await arrived.promise;
+            if (phase === 'headers') {
+                await vi.advanceTimersByTimeAsync(300_001);
+                nativeResponse.end('completed');
+                const result = await pending;
+                expect(result).toMatchObject({ response: { status: 200 } });
+                if ('response' in result) await result.response.body?.cancel();
+            } else {
+                const result = await pending;
+                expect(result).toMatchObject({ response: { status: 200 } });
+                if (!('response' in result)) throw result.error;
+                const reader = result.response.body!.getReader();
+                expect(new TextDecoder().decode((await reader.read()).value)).toBe('accepted');
+                const next = reader.read().then(value => ({ value }), error => ({ error }));
+                // Body deadlines use Undici's coarse fast timer even for a
+                // small configured value, so allow its real clock to tick.
+                await new Promise(resolve => setTimeout(resolve, 2_000));
+                nativeResponse.end('completed');
+                const chunk = await next;
+                expect(chunk).toMatchObject({ value: { done: false } });
+                if ('value' in chunk) expect(new TextDecoder().decode(chunk.value.value)).toBe('completed');
+                await reader.cancel();
+            }
+        } finally {
+            await handle?.dispose();
+            setGlobalDispatcher(previousDispatcher);
+            vi.useRealTimers();
+            server.closeAllConnections();
+            await new Promise<void>(resolve => server.close(() => resolve()));
+            await ambientDispatcher.destroy();
+        }
+    });
+
+    it('preserves the transport exception on a typed failure without adding request data', async () => {
+        const cause = new TypeError('fetch failed', { cause: Object.assign(new Error('headers timeout'), { code: 'UND_ERR_HEADERS_TIMEOUT' }) });
+        const harness = createHarness(async () => { throw cause; });
+        const handle = await harness.owner.bindScope(harness.scope, exec).supervise({
+            id: 'gateway', mode: { kind: 'spawn', launch: { executable: {} as never },
+                endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: 4312 } } },
+        });
+        try {
+            const error = await handle.request({ pathAndQuery: '/native/message', method: 'POST', body: new TextEncoder().encode('private input') })
+                .then(() => null, error => error);
+            expect(error).toBeInstanceOf(PluginError);
+            expect(error).toMatchObject({ code: 'plugin_managed_service_unavailable', cause });
+            expect(error.cause).toBe(cause);
+            expect(JSON.stringify(error)).not.toContain('private input');
+            expect(error.details).toBeUndefined();
+        } finally { await handle.dispose(); }
+    });
+
+    it.each(['deadline', 'caller'] as const)('honours the %s while real managed HTTP headers are pending', async authority => {
+        if (authority === 'deadline') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const arrived = deferred<void>();
+        const server = createServer((request) => {
+            request.resume();
+            request.on('end', () => arrived.resolve());
+        });
+        const caller = new AbortController();
+        let handle: ManagedServiceHandle | undefined;
+        try {
+            await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+            const address = server.address();
+            if (!address || typeof address === 'string') throw new Error('Missing loopback endpoint');
+            const harness = createHarness();
+            harness.moveHealthyEndpoint(`http://127.0.0.1:${address.port}`, address.port);
+            handle = await harness.owner.bindScope(harness.scope, exec).supervise({
+                id: 'gateway', mode: { kind: 'spawn', launch: { executable: {} as never },
+                    endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: address.port } } },
+            });
+            const pending = handle.request({ pathAndQuery: '/native/message', method: 'POST', signal: caller.signal,
+                ...(authority === 'deadline' ? { timeoutMs: 5 } : {}) })
+                .then(response => ({ response }), error => ({ error }));
+            await arrived.promise;
+            if (authority === 'caller') caller.abort('caller canceled');
+            else await vi.advanceTimersByTimeAsync(5);
+            expect(await pending).toMatchObject({ error: {
+                code: authority === 'caller' ? 'plugin_operation_aborted' : 'plugin_managed_service_unavailable',
+            } });
+        } finally {
+            vi.useRealTimers();
+            caller.abort();
+            await handle?.dispose();
+            server.closeAllConnections();
+            await new Promise<void>(resolve => server.close(() => resolve()));
+        }
+    });
+
+    it('keeps Bun-native prompt headers pending for caller lifetime beyond the native idle deadline', async () => {
         vi.useFakeTimers();
         let fetchSignal: AbortSignal | undefined;
         const response = deferred<Response>();
+        const platformFetch = vi.spyOn(globalThis, 'fetch');
         let handle: ManagedServiceHandle | undefined;
         try {
+            // Genuine native-fetch boundary: Bun 1.3.5 maps timeout:false to
+            // disable_timeout in src/bun.js/webcore/fetch.zig:511-535, then
+            // disables socket timers in src/http.zig:1731-1737. Its idle
+            // deadline cannot be shortened through the newer environment knob.
             const hostFetch = vi.fn<typeof globalThis.fetch>(async (
                 _request,
                 init,
             ) => await new Promise<Response>((resolve, reject) => {
-                void response.promise.then(resolve, reject);
+                const nativeTimeout = init && 'timeout' in init && init.timeout === false
+                    ? undefined : setTimeout(() => reject(new TypeError('Native fetch idle timeout')), 300_000);
+                void response.promise.then(value => {
+                    clearTimeout(nativeTimeout);
+                    resolve(value);
+                }, error => {
+                    clearTimeout(nativeTimeout);
+                    reject(error);
+                });
                 fetchSignal = init?.signal ?? undefined;
                 if (!fetchSignal) {
                     reject(new Error('fetch signal missing'));
                     return;
                 }
-                const abort = (): void => reject(fetchSignal?.reason);
+                const abort = (): void => {
+                    clearTimeout(nativeTimeout);
+                    reject(fetchSignal?.reason);
+                };
                 fetchSignal.addEventListener('abort', abort, { once: true });
                 if (fetchSignal.aborted) abort();
             }));
-            const harness = createHarness(hostFetch);
+            platformFetch.mockImplementation(hostFetch);
+            const harness = createHarness();
             handle = await harness.owner.bindScope(
                 harness.scope,
                 exec,
@@ -2851,6 +2989,7 @@ describe('managed-services SVC09 owner', () => {
             expect(await result).toEqual({ status: 200 });
         } finally {
             await handle?.dispose();
+            platformFetch.mockRestore();
             vi.useRealTimers();
         }
     });

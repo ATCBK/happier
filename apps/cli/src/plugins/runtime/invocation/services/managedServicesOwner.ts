@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { Agent } from 'undici';
 import { logger } from '@/ui/logger';
 import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
@@ -221,6 +222,11 @@ const MAX_MANAGED_SERVICE_RESPONSE_HEADERS = 128;
 const MAX_MANAGED_SERVICE_RESPONSE_HEADER_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_RESPONSE_CHUNK_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_REQUEST_TIMEOUT_MS = 300_000;
+// Like the incumbent ambient fetch pool, this pool lives with the process.
+// Individual caller/handle signals still own each request and response body.
+const managedServiceHttpDispatcher = new Agent({
+    connect: { timeout: 0 }, headersTimeout: 0, bodyTimeout: 0,
+});
 
 export function projectManagedServiceSpawnEnvironmentKeys(
     spec: ManagedServiceSpec,
@@ -265,8 +271,8 @@ export function projectManagedServiceSpawnEnvironmentKeys(
     return Object.freeze([...environmentKeys].sort());
 }
 
-function fail(code: string, message: string): never {
-    throw new PluginError({ code, message });
+function fail(code: string, message: string, options?: ErrorOptions): never {
+    throw new PluginError({ code, message }, options);
 }
 
 function translateError(error: unknown): never {
@@ -310,7 +316,7 @@ function translateError(error: unknown): never {
         code,
         message: error.message,
         ...(error.details ? { details: error.details } : {}),
-    });
+    }, error.cause === undefined ? undefined : { cause: error.cause });
 }
 
 function flattenManagedServiceCleanupFailures(
@@ -1943,11 +1949,13 @@ function requestHeaderSizeExceeded(
 function requestFailure(
     callerSignal: AbortSignal | null | undefined,
     message: string,
+    cause?: unknown,
 ): never {
-    if (callerSignal?.aborted) {
-        return fail('plugin_operation_aborted', message);
-    }
-    return requestUnavailable(message);
+    return fail(
+        callerSignal?.aborted ? 'plugin_operation_aborted' : 'plugin_managed_service_unavailable',
+        message,
+        cause === undefined ? undefined : { cause },
+    );
 }
 
 function normalizeManagedServiceRequest(
@@ -2352,12 +2360,13 @@ async function executeManagedServiceFetch(input: Readonly<{
             redirect: 'manual',
             signal: establishment.signal,
         });
-    } catch {
+    } catch (cause) {
         cleanupEstablishment();
         cleanupLifetime();
         return requestFailure(
             input.callerSignal,
             'Managed-service request failed',
+            cause,
         );
     }
     let status: number;
@@ -2993,7 +3002,13 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             );
         }
     };
-    const hostFetch = input.fetch ?? globalThis.fetch.bind(globalThis);
+    const platformFetch = globalThis.fetch.bind(globalThis);
+    const hostFetch: typeof globalThis.fetch = input.fetch ?? ((target, init) => {
+        // Node consumes the dispatcher; Bun consumes timeout:false. Both keep
+        // transport deadlines beneath the owning caller/handle lifetime.
+        const options = { ...init, dispatcher: managedServiceHttpDispatcher, timeout: false };
+        return platformFetch(target, options);
+    });
     const removeSemanticEntry = (
         entry: ManagedServicesSemanticEntry,
     ): void => {
