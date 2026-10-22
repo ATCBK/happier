@@ -149,7 +149,15 @@ describe('projectRuntimeTranscriptEvent tool lifecycle', () => {
       event: canonicalRuntimeEvent({ sessionId: 'session-1', turnId: 'turn-1', emittedAtMs: 10, ...event }),
     });
     await project({ kind: 'tool-call', toolCallId: 'pending-action', toolName: 'action_execute', input: {} });
-    fixture.session.enqueueAgentMessageCommitted.mockResolvedValueOnce({ persisted: false, delivered: false });
+    const persist = fixture.session.enqueueAgentMessageCommitted.getMockImplementation()!;
+    let refuseResult = true;
+    fixture.session.enqueueAgentMessageCommitted.mockImplementation(async (...args) => {
+      if (args[1].type === 'tool-result' && refuseResult) {
+        refuseResult = false;
+        return { persisted: false, delivered: false };
+      }
+      return await persist(...args);
+    });
     await expect(project({ kind: 'turn-cancelled', cause: 'user' })).rejects.toMatchObject({
       code: 'runtime_transcript_required_admission_failed', reason: 'durable_custody_rejected', eventKind: 'tool-result',
     });

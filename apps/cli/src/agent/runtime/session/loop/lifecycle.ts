@@ -458,6 +458,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       return params.session.enqueueSessionTurnMutation?.(mutation);
     }
     const projectionsBeforeTerminalMutation = [...pendingRuntimeTranscriptProjections];
+    const cancellationAdmission = mutation.action === 'cancel' ? (async () => {
+      if (!params.session.enqueueSessionTurnMutation) {
+        throw new RuntimeTranscriptRequiredAdmissionError('durable_enqueue_unavailable', mutation.action);
+      }
+      await params.session.enqueueSessionTurnMutation(mutation);
+    })() : null;
+    void cancellationAdmission?.catch(() => undefined);
     const terminalMutation = (async () => {
       const enqueueTerminalMutation = params.session.enqueueSessionTurnMutation?.bind(params.session);
       if (!enqueueTerminalMutation) {
@@ -466,6 +473,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           mutation.action,
         );
       }
+      await cancellationAdmission;
       let transcriptAdmissionFailure: RuntimeTranscriptRequiredAdmissionError | null = null;
       try {
         await Promise.all(projectionsBeforeTerminalMutation);
@@ -509,14 +517,18 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
           ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
-        if ((transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait') && startUserMessageSeq !== undefined) {
+        if ((transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait')
+          && (startSeqInclusive !== undefined || finalAssistantMessageSeq !== null)) {
           await enqueueTerminalMutation({
             v: mutation.v, sessionId: mutation.sessionId,
             mutationId: `${mutation.mutationId}:input-anchors`, observedAt: mutation.observedAt,
             ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
             action: 'append_transcript_anchors', turnId: mutation.turnId,
-            transcriptAnchors: { startUserMessageSeq, userMessageSeqs,
-              startSeqInclusive: startUserMessageSeq, endSeqInclusive: Math.max(...endSeqs) },
+            transcriptAnchors: {
+              ...(startUserMessageSeq !== undefined ? { startUserMessageSeq, userMessageSeqs } : {}),
+              ...(startSeqInclusive !== undefined ? { startSeqInclusive, endSeqInclusive: Math.max(...endSeqs) } : {}),
+              finalAssistantMessageSeq,
+            },
           });
         }
         if (transcriptAdmissionFailure && mutation.action === 'complete') {
@@ -551,7 +563,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
                 },
               }
             : mutation;
-        await enqueueTerminalMutation(settledMutation);
+        if (mutation.action !== 'cancel') await enqueueTerminalMutation(settledMutation);
         if ('turnId' in mutation) {
           retireTurnTranscriptState(mutation.turnId);
         }
@@ -565,7 +577,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       return undefined;
     })();
     trackRuntimeTranscriptProjection(terminalMutation.then(() => undefined));
-    return terminalMutation;
+    // Cancellation status is independent of reply custody. The tracked work
+    // still joins every transcript write and publishes its exact anchors.
+    return cancellationAdmission ?? terminalMutation;
   };
   let capabilityOverrideSync: RuntimeOverrideSynchronizers | null = null;
   const readCapabilityOverrideSync = (): RuntimeOverrideSynchronizers | null => capabilityOverrideSync;
@@ -678,6 +692,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let requestRuntimeEndedTermination = (): void => undefined;
   const observeRuntimeLifecycleMessage = (message: unknown): void => {
     const parsedRuntimeEvent = AgentSessionRuntimeEventSchema.safeParse(message);
+    if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'turn-cancelled') {
+      logger.debug(`${params.config.uiLogPrefix} Runtime cancellation observed`, {
+        turnId: parsedRuntimeEvent.data.turnId,
+        emittedAtMs: parsedRuntimeEvent.data.emittedAtMs,
+        pendingTranscriptProjections: pendingRuntimeTranscriptProjections.size,
+      });
+    }
     const questionWaitTurnId = params.session.readQuestionWaitTurnId?.() ?? null;
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'turn-start') {
       if (hostReadyCapture?.turnId === null && parsedRuntimeEvent.data.startedBy === 'host') {
@@ -724,22 +745,24 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       }
     }
     const readyCapture = hostReadyCapture?.turnId === projectionTurnId ? hostReadyCapture : null;
-    const transcriptProjection = runtimeTranscriptProjectionSerial.then(async () => {
+    const projectedTranscript = projectRuntimeTranscript({
+      session: params.session,
+      provider: runtimeTranscriptProvider,
+      runtimeMessageDeltaBridge,
+      normalizedToolTurnChangeTracker,
+      toolNormalizationProtocol,
+      mcpServerIdentities: params.config.mcpServerIdentities,
+      skillDelivery: params.config.readSkillDelivery?.(),
+      usageAccount: params.config.skillUsageAccount,
+      event: message,
+      questionWaitTurnId,
+      priorProjection: runtimeTranscriptProjectionSerial,
+    });
+    const transcriptProjection = (async () => {
       let transcriptProjectionError: unknown = null;
       let projectionResult: RuntimeTranscriptProjectionResult | undefined;
       try {
-        projectionResult = await projectRuntimeTranscript({
-          session: params.session,
-          provider: runtimeTranscriptProvider,
-          runtimeMessageDeltaBridge,
-          normalizedToolTurnChangeTracker,
-          toolNormalizationProtocol,
-          mcpServerIdentities: params.config.mcpServerIdentities,
-          skillDelivery: params.config.readSkillDelivery?.(),
-          usageAccount: params.config.skillUsageAccount,
-          event: message,
-          questionWaitTurnId,
-        });
+        projectionResult = await projectedTranscript;
       } catch (error) {
         transcriptProjectionError = error;
       }
@@ -792,7 +815,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       if (transcriptProjectionError) {
         throw transcriptProjectionError;
       }
-    });
+    })();
     const loggedTranscriptProjection = transcriptProjection.then(
       () => undefined,
       (error) => {

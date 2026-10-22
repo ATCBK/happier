@@ -206,8 +206,30 @@ function buildRuntimeToolLocalId(event: Readonly<{
   return kind === 'tool-call' ? identity.callLocalId : identity.resultLocalId;
 }
 
+function commitRuntimeTurnCancellation(
+  params: Parameters<typeof projectRuntimeTranscriptEvent>[0],
+  event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-cancelled' }>,
+): Promise<TranscriptMessageCommitResult> | undefined {
+  if (!params.provider || !params.runtimeMessageDeltaBridge || params.questionWaitTurnId === event.turnId) return undefined;
+  const markerId = event.agentTurnId ?? event.turnId;
+  return commitRequiredRuntimeTranscriptMessage({
+    session: params.session,
+    provider: params.provider,
+    body: { type: 'turn_cancelled', id: markerId },
+    localId: `${markerId}:turn_cancelled`,
+    meta: { source: 'runtime', runtimeEventKind: event.kind, runtimeTurnId: event.turnId },
+    createdAt: event.emittedAtMs,
+    updatedAt: event.emittedAtMs,
+    provenance: { kind: 'non_dependent', source: 'external' },
+    eventKind: event.kind,
+    ...(params.admission === undefined ? {} : { admission: params.admission }),
+  });
+}
+
 /** Foreground calls retain correction custody until their native result arrives. */
-export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscriptEvent {
+export function createRuntimeTranscriptProjector(): (
+  params: Parameters<typeof projectRuntimeTranscriptEvent>[0] & Readonly<{ priorProjection?: Promise<void> }>,
+) => Promise<RuntimeTranscriptProjectionResult> {
   const pendingCalls = new Map<string, {
     sessionId: string;
     turnId: string;
@@ -220,6 +242,12 @@ export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscr
       return await projectRuntimeTranscriptEvent(params);
     }
     const event = parsed.data;
+    // Native cancellation is already authoritative. Publish its marker before
+    // joining earlier transcript writes, while retaining their ordered drain.
+    const cancellationMarker = event.kind === 'turn-cancelled'
+      ? commitRuntimeTurnCancellation(params, event) : undefined;
+    void cancellationMarker?.catch(() => undefined);
+    await params.priorProjection;
     if (event.kind === 'turn-cancelled' || event.kind === 'turn-failed' || event.kind === 'turn-complete') {
       for (const call of pendingCalls.values()) {
         if (call.sessionId !== event.sessionId || call.turnId !== event.turnId || call.missingResultCreatedAtMs !== undefined) continue;
@@ -245,7 +273,7 @@ export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscr
       ...(pendingCall?.missingResultCreatedAtMs === undefined ? {} : {
         toolResultCreatedAtMs: pendingCall.missingResultCreatedAtMs,
       }),
-    });
+    }, cancellationMarker);
     if (result.projected && event.kind === 'tool-call' && isForegroundTurnRuntimeTranscriptEvent(event)) {
       pendingCalls.set(buildRuntimeToolLocalId(event, 'tool-call'), {
         sessionId: event.sessionId, turnId: event.turnId, toolCallId: event.toolCallId,
@@ -566,7 +594,7 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;
   skillDelivery?: AgentSessionSkillDelivery;
   usageAccount?: SkillUsageAccount;
-}>): Promise<RuntimeTranscriptProjectionResult> {
+}>, cancellationMarker?: Promise<TranscriptMessageCommitResult>): Promise<RuntimeTranscriptProjectionResult> {
   const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
   if (!parsed.success) {
     return { projected: false, reason: 'unsupported_event' };
@@ -883,7 +911,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     if (!params.runtimeMessageDeltaBridge || !params.provider) {
       return { projected: false, reason: 'unsupported_event' };
     }
-    await flushRequiredRuntimeTranscriptSegments({
+    const marker = cancellationMarker ?? commitRuntimeTurnCancellation(params, event);
+    void marker?.catch(() => undefined);
+    const assistantReceipt = await flushRequiredRuntimeTranscriptSegments({
       bridge: params.runtimeMessageDeltaBridge,
       reason: params.questionWaitTurnId === event.turnId ? 'turn-end' : 'abort',
       eventKind: event.kind,
@@ -910,24 +940,8 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     if (params.questionWaitTurnId === event.turnId) {
       return { projected: true, kind: event.kind };
     }
-    const markerId = event.agentTurnId ?? event.turnId;
-    await commitRequiredRuntimeTranscriptMessage({
-      session: params.session,
-      provider: params.provider,
-      body: { type: 'turn_cancelled', id: markerId },
-      localId: `${markerId}:turn_cancelled`,
-      meta: {
-        source: 'runtime',
-        runtimeEventKind: event.kind,
-        runtimeTurnId: event.turnId,
-      },
-      createdAt: event.emittedAtMs,
-      updatedAt: event.emittedAtMs,
-      provenance: { kind: 'non_dependent', source: 'external' },
-      eventKind: event.kind,
-      ...(params.admission === undefined ? {} : { admission: params.admission }),
-    });
-    return { projected: true, kind: event.kind };
+    await marker;
+    return { projected: true, kind: event.kind, ...assistantReceipt };
   }
   if (event.kind === 'transcript-message-committed' && event.role === 'user') {
     const observation = resolveCommittedTranscriptObservation(event);
