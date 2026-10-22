@@ -12,6 +12,7 @@ export default defineConfig({
   // boundaries; the packaged integration resolver only owns CLI aliases.
   esbuild: sourceConfig.esbuild,
   resolve: sourceConfig.resolve,
+  server: sourceConfig.server,
   test: {
     ...integrationConfig.test,
     server: sourceConfig.test?.server,

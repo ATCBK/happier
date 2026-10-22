@@ -9,6 +9,7 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 import type { ExternalSessionsAgentId, SessionMetadata } from '@happier-dev/protocol';
 
 import { listSessionMarkers, type DaemonSessionMarker } from '@/daemon/sessionRegistry';
+import { logger } from '@/ui/logger';
 import {
   hasConnectedServiceBindings,
   mergeConnectedServiceRuntimeSnapshots,
@@ -123,7 +124,10 @@ export async function resolveConnectedServiceRuntimeSnapshotForExternalSession(p
   agentId: ExternalSessionsAgentId;
   remoteSessionId: string;
 }>): Promise<ConnectedServiceRuntimeSnapshot> {
-  const markers = await listSessionMarkers().catch(() => [] as DaemonSessionMarker[]);
+  const markers = await listSessionMarkers().catch((): DaemonSessionMarker[] => {
+    logger.infoFile('[ExternalSessions] Marker discovery failed; connected-service snapshot recovery is unavailable');
+    return [];
+  });
   return markers
     .filter((marker) => markerMatchesExternalSession(marker, params.agentId, params.remoteSessionId))
     .map((marker) => ({ marker, snapshot: resolveMarkerConnectedServiceRuntimeSnapshot(marker) }))
