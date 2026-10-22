@@ -207,7 +207,10 @@ interface SessionRipgrepResponse {
 }
 
 // Response types for spawn session
-export type ResumeSessionResult = SpawnSessionResult;
+// Resume's in-process callers can retain the typed transport refusal without
+// changing the established spawn wire envelope or exposing private error prose.
+export type ResumeSessionResult = Exclude<SpawnSessionResult, { type: 'error' }>
+    | (Extract<SpawnSessionResult, { type: 'error' }> & Readonly<{ rpcErrorCode?: string }>);
 /** Local pending-input projection, not a daemon spawn acknowledgement. */
 export type PendingInputRuntimeEnsureResult = ResumeSessionResult | Readonly<{ type: 'pending' }>;
 
@@ -567,7 +570,8 @@ async function runResumeSession(
         return {
             type: 'error',
             errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
-            errorMessage: error instanceof Error ? error.message : 'Failed to resume session'
+            errorMessage: error instanceof Error ? error.message : 'Failed to resume session',
+            ...(readSessionRpcErrorCode(error) ? { rpcErrorCode: readSessionRpcErrorCode(error) } : {}),
         };
     }
 }
