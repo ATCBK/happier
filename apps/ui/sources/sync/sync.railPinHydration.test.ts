@@ -175,5 +175,36 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
             expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
             expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
         }
+        if (membership === 'retained') {
+            const address = { serverId, sessionId: 'rail-only' };
+            const { retainVisibleSessionListSurfaces } = await import('./domains/session/sessionSurfaceVisibility');
+            const release = retainVisibleSessionListSurfaces([address]);
+            try {
+                // The exact read establishes this Home's ordinary hydration;
+                // returning to a visible row must not force another witness.
+                await sync.ensureSessionVisibleForMessageRoute(address.sessionId, {
+                    serverId, forceRefresh: true, hydrateMessages: false,
+                });
+                const readsAfterHydration = exactReads.length;
+                await sync.hydrateSessionListRows([address]);
+                expect(exactReads).toHaveLength(readsAfterHydration);
+                // A newer canonical tuple still demands a read; a retained
+                // opened row is not a cache that can overrule list invalidation.
+                serveNewerRow = true;
+                storage.getState().applyServerScopedSessionListRowPatches(serverId, [{
+                    sessionId: address.sessionId, patch: { seq: 14, updatedAt: 3, metadataVersion: 2 },
+                }]);
+                await sync.hydrateSessionListRows([address]);
+                expect(exactReads).toHaveLength(readsAfterHydration + 1);
+                expect(storage.getState().sessions[address.sessionId]).toMatchObject({ seq: 14, metadataVersion: 2 });
+                await sync.hydrateSessionListRows([address]);
+                expect(exactReads).toHaveLength(readsAfterHydration + 1);
+                // Mutation/disclosure callers' explicit exact witness is kept.
+                await sync.ensureSessionVisibleForMessageRoute(address.sessionId, {
+                    serverId, forceRefresh: true, hydrateMessages: false,
+                });
+                expect(exactReads).toHaveLength(readsAfterHydration + 2);
+            } finally { release(); }
+        }
     });
 });

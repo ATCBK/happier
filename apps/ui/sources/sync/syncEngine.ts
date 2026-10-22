@@ -4018,7 +4018,12 @@ class Sync {
                 const needsTurnsProjection = includeTurnsProjection
                     && existingSession.sessionTurns === undefined
                     && isSessionContentReadable(readSessionContentAvailability(existingSession));
-                if (hasAuthoritativeSessionRouteState && !needsTurnsProjection) {
+                const listRenderable = preferredServerId
+                    ? readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, preferredServerId, normalized)
+                    : null;
+                const hasCurrentListState = !listRenderable
+                    || isHydratedSessionCurrentForListState(existingSession, () => listRenderable);
+                if (hasAuthoritativeSessionRouteState && hasCurrentListState && !needsTurnsProjection) {
                     if (DEBUG_SESSION_HYDRATE) {
                         log.log(`[sessionHydrate] fast-path hit ${normalized}`);
                     }
@@ -6962,7 +6967,6 @@ class Sync {
             if (!isSessionListRowVisible(address.sessionId, address.serverId)) return;
             await this.ensureSessionVisibleForMessageRoute(address.sessionId, {
                 serverId: address.serverId,
-                forceRefresh: true,
                 hydrateMessages: false,
             });
         }), this.syncTuning.sessionListHydrationConcurrencyLimit);
