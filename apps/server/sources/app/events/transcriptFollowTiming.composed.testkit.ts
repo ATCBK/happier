@@ -308,17 +308,34 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     await release;
                 });
                 await entered;
+                let deliveryTransactions = 0;
+                const deliveryTransaction = db.$transaction;
+                // Observe the real database boundary: a queued inTx read has
+                // not reached Prisma, whereas a PostgreSQL lock wait has.
+                db.$transaction = new Proxy(deliveryTransaction, { apply(target, thisArg, args: unknown[]) {
+                    deliveryTransactions++;
+                    stamps.deliveryTransactionEntered ??= performance.now();
+                    return Reflect.apply(target, thisArg, args);
+                } });
+                const spareRead = provider === 'postgres'
+                    ? db.account.findUniqueOrThrow({ where: { id: owner.id }, select: { id: true } })
+                        .then(() => { stamps.spareConnectionReadReturned = performance.now(); })
+                    : Promise.resolve();
                 const publication = (async () => {
+                    stamps.actorReadStarted = performance.now();
                     const accountActor = await resolveSessionMessageAccountActor(message);
+                    stamps.actorReadReturned = performance.now();
                     stamps.emit = performance.now();
                     await eventRouter.emitUpdate({ userId: owner.id,
                         payload: buildNewMessageUpdate({ ...message, accountActor }, session.id, recipients![0]!.cursor, `follow-${index}`),
                         recipientFilter: { type: 'all-interested-in-session', sessionId: session.id } });
                 })();
                 let timer: ReturnType<typeof setTimeout> | undefined;
+                let deliveryFailed = false;
                 try {
                     const observed = await Promise.race([response,
                         new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
+                    await spareRead;
                     const hopMs = (from: string, to: string) => stamps[from] === undefined || stamps[to] === undefined
                         ? null : stamps[to]! - stamps[from]!;
                     console.info('WAKE3_HOME_TIMING', JSON.stringify({ provider, version, index, httpRoundTripDelayMs,
@@ -334,7 +351,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                             daemonToHttpHeaders: hopMs('daemonReturn', 'httpReturn'),
                             responseOpen: hopMs('httpReturn', 'responseOpened'),
                         }, commitToResponseMs: observed ? hopMs('commitAcknowledged', 'responseOpened') : null, writerHeld: true,
-                        observerConnections, pages: [...pages] }));
+                        observerConnections, deliveryTransactions, pages: [...pages] }));
                     expect(observed, 'Home follow must return before the next writer releases').not.toBeNull();
                     expect(stamps.responseOpened! - stamps.commitAcknowledged!).toBeLessThan(1000);
                     expect(observed).toMatchObject({ status: 200, body: { execution: { ok: true,
@@ -345,12 +362,21 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     if (typeof nextCursor !== 'string') throw new Error('Committed row must advance the follow cursor');
                     cursor = nextCursor;
                     expect(observerConnections).toBe(1);
+                } catch (error) {
+                    deliveryFailed = true;
+                    throw error;
                 } finally {
                     clearTimeout(timer);
                     releaseWriter?.();
-                    await writer;
-                    await publication;
-                    await response;
+                    try {
+                        const outcomes = await Promise.allSettled([writer, publication, response, spareRead]);
+                        const errors = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []);
+                        if (errors.length > 0) {
+                            const error = new AggregateError(errors, 'Transcript-follow delivery cleanup failed');
+                            if (!deliveryFailed) throw error;
+                            console.error(error);
+                        }
+                    } finally { db.$transaction = deliveryTransaction; }
                 }
             }
         } catch (error) {
