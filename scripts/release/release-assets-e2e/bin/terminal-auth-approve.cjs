@@ -100,8 +100,10 @@ async function main() {
     throw new Error('missing token from /v1/auth response');
   }
 
-  // 2) Write credentials to enable `happier auth approve` (token-only usage).
-  const secret = randomBytes(32).toString('base64');
+  // 2) Write legacy credentials for `happier auth approve`. The legacy secret is the
+  // Account's Ed25519 signing seed, so approval can verify it still owns this Account.
+  const pkcs8Der = privateKey.export({ type: 'pkcs8', format: 'der' });
+  const secret = Buffer.from(pkcs8Der.subarray(pkcs8Der.length - 32)).toString('base64');
   const serverDir = join(homeDir, 'servers', activeServerId);
   const keyPath = join(serverDir, 'access.key');
   mkdirSync(serverDir, { recursive: true });
