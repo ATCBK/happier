@@ -4,6 +4,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { withTempDir } from '@/testkit/fs/tempDir';
+
 import { readJsonlFileBackwardPage } from '@/api/directSessions/filePaging/jsonlBackwardPager';
 import {
   createCodexAppServerProcessEnv,
@@ -12,6 +14,8 @@ import {
 } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import { pageCodexTranscript } from './pageCodexTranscript';
 import { DirectSessionsProviderUnavailableError } from '@/backends/directSessions/providerOps';
+import { loadDirectSessionTranscriptItems } from '@/api/directSessions/import/loadDirectSessionTranscriptItems';
+import { listCodexDirectSessionCandidatesViaRollouts } from './listCodexDirectSessionCandidatesViaRollouts';
 
 function sessionMetaLine(payload: Record<string, unknown>): string {
   return `${JSON.stringify({ type: 'session_meta', payload })}\n`;
@@ -26,6 +30,24 @@ function eventMsgLine(params: { timestamp: string; payload: Record<string, unkno
 }
 
 describe('pageCodexTranscript', () => {
+  it('fails an import explicitly when a nine-MiB native record exceeds the existing read allowance', async () => withTempDir('happier-codex-direct-oversized-', async (root) => {
+    const codexHome = join(root, 'codex-home');
+    const sessionsDir = join(codexHome, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    const sessionId = '11111111-1111-1111-1111-111111111111';
+    await writeFile(join(sessionsDir, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`),
+      sessionMetaLine({ id: sessionId }) + responseItemLine({ timestamp: '2026-01-02T00:00:01.000Z',
+        payload: { type: 'function_call_output', call_id: 'large-result', output: 'x'.repeat(9 * 1024 * 1024) } }));
+    const candidates = await listCodexDirectSessionCandidatesViaRollouts({ source: { kind: 'codexHome', home: 'user' },
+      env: { CODEX_HOME: codexHome }, activeServerDir: join(root, 'server'), limit: 10 });
+    expect(candidates.candidates.map(candidate => candidate.remoteSessionId)).toContain(sessionId);
+    await expect(loadDirectSessionTranscriptItems({ maxPages: 2, readPage: cursor => pageCodexTranscript({
+      source: { kind: 'codexHome', home: 'user' }, env: { CODEX_HOME: codexHome },
+      activeServerDir: join(root, 'server'), remoteSessionId: sessionId, direction: 'older',
+      maxBytes: 64 * 1024, maxItems: 30, cursor,
+    }) })).rejects.toMatchObject({ code: 'JSONL_RECORD_TOO_LARGE' });
+  }));
+
   it('pages newest-first (direction=older) from a rollout jsonl transcript', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-'));
     const codexHome = join(root, 'codex-home');

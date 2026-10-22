@@ -45,6 +45,21 @@ graph TB
 - **Persistence/config:** `src/persistence.ts` + `src/configuration.ts` manage local state in `~/.happy`.
 - **Agents:** `src/claude`, `src/codex`, `src/gemini` provide provider-specific runners.
 
+## Direct-session JSONL read progress (development)
+
+The shared readers in `api/directSessions/filePaging` own byte paging for native
+JSONL sources. If their existing read allowance cannot complete the next record
+and no source has been consumed, they throw `JsonlRecordTooLargeError` with code
+`JSONL_RECORD_TOO_LARGE`. Transcript paging, follow and full import fail explicitly
+rather than repeating an unchanged cursor, skipping the record or claiming complete
+history. A larger caller allowance can read the record intact. Incomplete JSON at
+EOF remains pending for its writer to finish.
+
+Display-title scans are advisory: their shared title-page adapter logs allowance
+exhaustion through the default logger and retains the bounded fallback. An oversized
+record therefore does not hide the session from discovery. These changes are in
+development source; they do not establish preview or stable availability.
+
 ## Streamed transcript recovery (development)
 
 `api/session/streamedTranscriptWriter` owns segment text, identity, and durable
