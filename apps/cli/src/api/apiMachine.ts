@@ -3469,6 +3469,9 @@ export class ApiMachineClient {
             socket: this.socket,
             event: MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1,
             payload: { v: 1, sessionId },
+            // Stop owns the lifetime; a slow durable close must not time out
+            // independently while the same transport still awaits its outcome.
+            timeoutMs: null,
         });
         return MachineSessionTerminalCaptureResponseV1Schema.parse(raw);
     }
@@ -3492,6 +3495,7 @@ export class ApiMachineClient {
                 sessionId: target.sessionId,
                 authority: target.authority,
             },
+            timeoutMs: null,
         });
         return MachineSessionTerminalFinalizeResponseV1Schema.parse(raw);
     }
