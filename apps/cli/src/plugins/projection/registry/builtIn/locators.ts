@@ -8,7 +8,7 @@ import { assertHostCanExcludeBundledPlugin, BUNDLED_PLUGIN_PUBLICATION_FAILURES_
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
-import { isExecutingFirstPartySourceRuntime } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
+import { defaultCanImportFirstPartyPluginSource, isExecutingFirstPartySourceRuntime } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 import { readGeneratedPluginUiArtifactsManifestSync } from '@/plugins/install/ui/generatedArtifacts';
 import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
 import { pluginSourceProvenanceForKind } from '../../../manifest/sourceProvenance';
@@ -282,12 +282,12 @@ export function loadCurrentBundledPluginLocatorResult() {
     // demand. Installed-plugin discovery then reuses that graph instead of
     // rereading and validating every bundled manifest on each refresh.
     if (admittedBundledPlugins) return admittedBundledPlugins;
-    // Current source declarations activate their real development modules.
-    // Distribution failures describe prepared package bytes, so only their
-    // executing role admits that inventory. Unknown roles remain fail closed.
+    // Direct TypeScript loading has no publication claim. Compiled source
+    // runtimes carry their own derived declarations and failure inventory,
+    // just as package runtimes carry their own publication inventory.
     return admittedBundledPlugins = loadBundledPluginLocatorResult(
         generatedBundledPluginManifests.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS,
-        isExecutingFirstPartySourceRuntime(import.meta.url)
+        defaultCanImportFirstPartyPluginSource()
             ? [] : readCurrentBundledPluginPublicationFailures(),
     );
 }

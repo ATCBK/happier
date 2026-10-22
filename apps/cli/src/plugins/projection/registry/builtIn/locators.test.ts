@@ -72,7 +72,7 @@ describe('bundled plugin locators', () => {
             rmSync(root, { recursive: true, force: true });
         }
     });
-    it('admits frozen source declarations from the explicitly launched source bundle without native publication files', async () => {
+    it('admits derived source declarations and their isolated failures from the explicitly launched bundle', async () => {
         const root = mkdtempSync(join(tmpdir(), 'happier-frozen-source-catalog-'));
         const projectRoot = join(root, 'apps', 'cli');
         const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../../..');
@@ -81,6 +81,12 @@ describe('bundled plugin locators', () => {
             mkdirSync(join(projectRoot, 'src/chunks'), { recursive: true });
             writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', type: 'module' }));
             cpSync(join(repoRoot, 'apps/cli/assets/bundled-plugin-manifests'), join(projectRoot, 'assets/bundled-plugin-manifests'), { recursive: true });
+            const failurePath = join(projectRoot, '.project/tmp/bundled-plugin-publication/failures.json');
+            mkdirSync(dirname(failurePath), { recursive: true });
+            writeFileSync(failurePath, JSON.stringify([{
+                packageName: '@happier-dev/plugins-inspector', pluginId: 'happier.inspector',
+                diagnostic: { code: 'plugin_manifest_invalid', message: 'Captured source declaration is invalid' },
+            }]));
             symlinkSync(join(repoRoot, 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
             await build({
                 configFile: join(repoRoot, 'apps/cli/vitest.config.ts'), logLevel: 'silent',
@@ -97,7 +103,10 @@ describe('bundled plugin locators', () => {
                 loadBundledPluginLocators: typeof loadBundledPluginLocators;
             };
             const loaded = compiled.loadCurrentBundledPluginLocatorResult();
-            expect(loaded.pluginFailures).toEqual([]);
+            expect(loaded.pluginFailures).toEqual([expect.objectContaining({
+                pluginId: 'happier.inspector', diagnostic: { code: 'plugin_manifest_invalid', message: 'Captured source declaration is invalid' },
+            })]);
+            expect(loaded.loadedPlugins.some((plugin) => plugin.pluginId === 'happier.inspector')).toBe(false);
             expect(loaded.loadedPlugins.some((plugin) => plugin.pluginId === 'happier.agent.codex')).toBe(true);
             const retainedPluginRoot = join(root, 'packages/plugins/fixture');
             mkdirSync(join(retainedPluginRoot, 'dist/happier-plugin-ui'), { recursive: true });
