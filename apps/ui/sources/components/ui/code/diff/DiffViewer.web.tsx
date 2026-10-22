@@ -70,7 +70,9 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     }
 
     if (props.mode === 'unified') {
-        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
+        // While Find holds Pierre's place, hunk bands read as Pierre draws them ("N unchanged lines"), not raw `@@`.
+        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines}
+            lineInfoSeparators={props.lineInfoSeparators ?? (wantsPierre && props.findActive && props.precomputedLines ? true : undefined)} />;
     }
     return <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
 });
