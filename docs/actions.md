@@ -3392,8 +3392,11 @@ A configured instance's `value` bindings are admitted against the widget's
 object the admission owner compiles, so the advertised shape and the accepted
 shape cannot diverge. A picked Session, Machine or checkout is the value
 `action.options.resolve` returned for that widget input, unchanged. When
-`widgets.item.add` needs approval, the add's inputs are admitted by that same
-owner first, so a person is never asked to approve an add that cannot run.
+`widgets.item.add` needs approval, that same owner preflights the add's inputs
+first and refuses decisive invalid or denied inputs. If preflight cannot decide
+because every unavailable field reports `not_authenticated`, validation is
+deferred to approved execution with the person's Account reads. Approval does
+not bypass input admission, and a deferred add can still be refused then.
 
 Saved groups use the `widgets.fragment.*` lifecycle and `widgets.group.add` to
 insert independent copies through one atomic layout intent. They preserve group

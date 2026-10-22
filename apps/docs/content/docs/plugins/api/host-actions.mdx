@@ -4629,7 +4629,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text): Session id — Use a nonempty value for an exact authorized Session. Omit it to inherit the current Action Session, or to select detached scope when no current Session exists. Set null to select detached scope even inside a current Session.
-- `intent` (text, required): Intent
+- `intent` (select, required): Intent — Choose the purpose and its accepted retentionPolicy, runClass and ioMode together. Delegate covers ordinary bounded child work; Voice serves ongoing conversations.
 - `backendTarget` (textarea, required): Backend target (json)
 - `instructions` (textarea): Instructions
 - `permissionMode` (select, required): Permission intent — Permission intent. Preferred values: read_only | default | auto | yolo. Compatible aliases are accepted.
@@ -15254,7 +15254,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `agentModeId` (text): Agent mode
 - `configuration` (json): Configuration — Optional full snapshot: &#123;mode:&#123;value:null,updatedAtMs:0&#125;,model:&#123;value:null,updatedAtMs:0&#125;,permissionIntent:&#123;value:null,updatedAtMs:0&#125;,options:&#123;&#125;&#125;. Set model.value to a model-id string or null, permissionIntent.value to a canonical intent or null, and options[option.value] to &#123;value:&lt;scalar&gt;,updatedAtMs:&lt;milliseconds&gt;&#125;. For model-scoped choices, first supply draftInput.modelSelection or draftInput.configuration.model; without a selected model the inventory contains only session-wide options. Config-option choices name option ids, not snapshots or selected values; read agents.config_options.list with modelId for their value choices. Omit configuration when no override is needed.
 - `profileId` (text): Profile id
-- `connectedServices` (json): Connected services — Pass the selected option.value through the connected-services input schema; do not put a Connected Account profile id in modelSelection.ref.providerConnectionId.
+- `connectedServices` (json): Connected services — From an Agent Session, omission inherits the parent Connected selection when the child resolves to the same Agent. Root starts and other Agents use Account defaults. Pass an explicit binding object to override; &#123;v:2,bindingsByServiceId:&#123;&#125;&#125; requests native authentication. Read your Session selection through session.status.get. Pass the selected option.value through this schema; a Connected Account profile id is not a modelSelection.ref.providerConnectionId.
 - `capabilitySelection` (json): Capability selection
 - `transcriptStorage` (text): Transcript storage
 - `terminal` (json): Terminal
@@ -15265,7 +15265,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.status.get`
 
-**Get session status** — Get summary status for a session, optionally refreshing live agent state or inspecting current execution prerequisites.
+**Get session status** — Get summary status and the content-free Connected selection for a session. Use sessionId:"self" to read your own selection for reuse in child starts. Optionally refresh live agent state or inspect current execution prerequisites.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
