@@ -40,10 +40,10 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
     const presence = useMachinePresenceSummary(machineServerId, machineId);
 
     // The daemon's last-known status; a connected machine is the proxy for a live daemon.
-    const daemonStatus: 'stopped' | 'likelyAlive' = machine.metadata?.daemonLastKnownStatus === 'shutting-down'
+    const daemonStatus: 'stopped' | 'likelyAlive' | 'unknown' = presence.reachability === 'unknown' ? 'unknown' : machine.metadata?.daemonLastKnownStatus === 'shutting-down'
         ? 'stopped'
         : presence.reachability === 'reachable' ? 'likelyAlive' : 'stopped';
-    const daemonStatusLabel = daemonStatus === 'likelyAlive' ? t('machine.daemonStatus.likelyAlive') : t('machine.daemonStatus.stopped');
+    const daemonStatusLabel = daemonStatus === 'unknown' ? t('common.unknown') : daemonStatus === 'likelyAlive' ? t('machine.daemonStatus.likelyAlive') : t('machine.daemonStatus.stopped');
 
     const handleStopDaemon = async () => {
         const runStopDaemon = async () => {
@@ -84,7 +84,7 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
             <Item
                 title={t('machine.status')}
                 detail={daemonStatusLabel}
-                detailStyle={daemonStatus === 'likelyAlive' ? undefined : { color: theme.colors.state.warning.foreground }}
+                detailStyle={daemonStatus === 'stopped' ? { color: theme.colors.state.warning.foreground } : undefined}
                 mode="info"
                 showChevron={false}
             />
@@ -102,7 +102,7 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
                         size="small"
                         display="secondary"
                         title={t('machineDetailPage.stopDaemonAction')}
-                        disabled={isStoppingDaemon || daemonStatus === 'stopped'}
+                        disabled={isStoppingDaemon || daemonStatus !== 'likelyAlive'}
                         loading={isStoppingDaemon}
                         onPress={handleStopDaemon}
                     />

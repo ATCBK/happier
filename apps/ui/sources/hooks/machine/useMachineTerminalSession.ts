@@ -80,7 +80,7 @@ export function useMachineTerminalSession(params: Readonly<{
     serverId?: string | null;
     cwd: string | null;
     launch?: DaemonTerminalLaunchIntent | null;
-    machineReachable?: boolean;
+    machineReachable?: boolean | null;
     machineRpcTargetAvailable?: boolean;
     terminalKey: string;
     terminalRef: React.MutableRefObject<EmbeddedTerminalRendererHandle | null>;
@@ -454,6 +454,11 @@ export function useMachineTerminalSession(params: Readonly<{
             if (attemptMachineReachable === false) {
                 setStatus('error');
                 setError('terminal_machine_unreachable');
+                return;
+            }
+            if (attemptMachineReachable === null) {
+                setStatus('error');
+                setError('terminal_unavailable');
                 return;
             }
             if ((params.readOnly && !params.attachedTerminalId) || params.attachedTerminalId === null || (params.attachedTerminalId === undefined && !initialTerminalSize)) {

@@ -62,7 +62,7 @@ export type MachineVitalsOverviewView =
 
 export function selectMachineVitalsOverviewView(
   input: Readonly<{
-    online: boolean;
+    online: boolean | null;
     published: MachinePublishedResourceSummaryV1 | null;
     state: Readonly<{
       status: MachineResourceState['status'];
@@ -75,10 +75,13 @@ export function selectMachineVitalsOverviewView(
   const { state, published } = input;
   const sample = state.snapshot?.sample ?? null;
   // The last report stays while a machine is away; nothing is shown as zero (OS 3).
-  if (!input.online)
+  if (input.online === false)
     return sample
       ? { kind: 'ready', sample, freshness: 'offline' }
       : { kind: 'offline_empty' };
+  if (input.online === null) return sample
+    ? { kind: 'ready', sample, freshness: 'stale' }
+    : { kind: 'unavailable', since: null, reason: 'request_failed' };
   if (state.status === 'not_reported') return { kind: 'older_happier' };
   // The daemon itself says its sampler is failing: the body is one state card that names it (OS 5).
   if (published?.vitals.state === 'unavailable') {

@@ -124,5 +124,5 @@ export const MachineVitalsBarAccessory = React.memo(function MachineVitalsBarAcc
         machineResourceStore.retryHistory({ ...readTarget.key, range });
     }, [key, readTarget.enabled, readTarget.key, range]);
     if (view.kind !== 'loading' && view.kind !== 'ready') return null;
-    return <MachineVitalsRangeBar freshness={resolveVitalsFreshnessChip(view, retry)} showRange={view.kind === 'ready'} placement="bar" />;
+    return <MachineVitalsRangeBar freshness={props.online === null ? { kind: 'none' } : resolveVitalsFreshnessChip(view, retry)} showRange={view.kind === 'ready'} placement="bar" />;
 });

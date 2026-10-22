@@ -60,7 +60,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
     serverId: string;
     machine: Machine;
     machineName: string;
-    online: boolean;
+    online: boolean | null;
     /** The page draws the freshness chip and range at the end of its tab bar; the body leaves them out. */
     rangeInBar?: boolean;
     /** Opens the Processes tab (VU-7's rows and links); without it "Using the most" is left out. */
@@ -86,7 +86,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
     machineId: machine.id,
     daemonStateVersion: machine.daemonStateVersion ?? null,
     range,
-    enabled: props.online,
+    enabled: props.online === true,
   });
   const view = selectMachineVitalsOverviewView({
     online: props.online,
@@ -113,14 +113,14 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
   // What Happier uses — processes (plan 30) and what it keeps on each volume (plan 40) — through the one
   // attribution owner, only while this Overview shows a reading.
   const attribution = useMachineVitalsAttribution({ machineId: machine.id, serverId: props.serverId, online: props.online,
-    enabled: props.online && view.kind === 'ready', sample: view.kind === 'ready' ? view.sample : null });
+    enabled: props.online === true && view.kind === 'ready', sample: view.kind === 'ready' ? view.sample : null });
   const storageSummary = attribution.storage.summary;
   const happierBytesByVolume = React.useMemo(() => storageSummary
     ? new Map(storageSummary.volumes.map((entry) => [entry.volume.volumeId, entry.happierBytes])) : null, [storageSummary]);
 
   // Offline is said once, in a quiet banner above what the machine last reported (lab `rv` OS 3); with nothing
   // reported this session the banner says that too, and no body follows.
-  const offlineBanner = !props.online && !props.offlineExplained ? (
+  const offlineBanner = props.online === false && !props.offlineExplained ? (
     <AttentionBanner
       testID="machine-vitals-offline"
       tone="neutral"
@@ -137,6 +137,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
       } : null}
     />
   ) : null;
+  if (props.online === null && view.kind !== 'ready') return <SurfaceStateCard kind="unavailable" title={t('common.unknown')} />;
   if (view.kind === 'offline_empty') return offlineBanner;
   if (
     view.kind === 'older_happier' ||
@@ -153,7 +154,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
     );
   }
 
-  const freshness = resolveVitalsFreshnessChip(view, retry);
+  const freshness = props.online === null ? { kind: 'none' as const } : resolveVitalsFreshnessChip(view, retry);
   return (
     <>
       {offlineBanner}
@@ -203,7 +204,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
           machineName={props.machineName}
           processes={attribution.processes.answer}
           processesStatus={attribution.processes.status}
-          offline={!props.online}
+          offline={props.online === false}
           sample={view.sample}
           logicalCores={published?.host?.logicalCores ?? null}
           onOpenProcesses={props.onOpenProcesses}

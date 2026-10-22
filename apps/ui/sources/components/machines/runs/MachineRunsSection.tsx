@@ -41,7 +41,7 @@ type ExecutionRunsState =
 export const MachineRunsSection = React.memo(function MachineRunsSection(props: Readonly<{
     machine: Machine;
     serverId: string;
-    online: boolean;
+    online: boolean | null;
     /** The focused Home is switching to this machine's: no machine RPC until it settles. */
     isServerSwitching: boolean;
     /** Bumped by the page's refresh. */

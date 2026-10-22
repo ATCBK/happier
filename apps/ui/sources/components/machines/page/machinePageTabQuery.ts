@@ -27,7 +27,7 @@ export type MachinePageTabBodyProps = Readonly<{
     serverId: string;
     machineId: string;
     machineName: string;
-    online: boolean;
+    online: boolean | null;
     params: MachinePageTabParams;
     setParams(next: MachinePageTabParams): void;
     /** The tab's bar accessory is drawn at the end of the tab bar, so the body leaves its own copy out. */
@@ -38,7 +38,7 @@ export type MachinePageTabBodyProps = Readonly<{
 export type MachinePageTabBarAccessoryProps = Readonly<{
     serverId: string;
     machineId: string;
-    online: boolean;
+    online: boolean | null;
     /** The open tab's params, for an accessory that switches the tab's own view (Storage: Happier | Whole disk). */
     params?: MachinePageTabParams;
     setParams?: (next: MachinePageTabParams) => void;

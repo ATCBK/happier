@@ -16,7 +16,7 @@ import { MachineShareTrustDisclosure } from './MachineShareTrustDisclosure';
 
 /** Domain meaning only. ShareSheet retains list, picker, focus, Back and removal anatomy. */
 export function createMachineShareAdapter(input: Readonly<{
-    machineName: string; online: boolean; controller: ReturnType<typeof useMachineShareController>;
+    machineName: string; online: boolean | null; controller: ReturnType<typeof useMachineShareController>;
     openApproval?: (artifactId: string) => void;
 }>): ShareSheetAdapter<MachineShareGrantRow> {
     const { machineName: machine, controller } = input;
@@ -112,7 +112,7 @@ export function createMachineShareAdapter(input: Readonly<{
             if (controller.issue) notices.push(notice('read-error', 'error', controller.issue.message,
                 controller.issue.retryable ? { label: t('common.retry'), onPress: () => { void controller.retryContent(); } } : undefined));
             // Only someone who can change access is told that changes are saved while it is offline.
-            if (!input.online) notices.push(notice('offline', 'unavailable', t(controller.response?.canManage === false
+            if (input.online === false) notices.push(notice('offline', 'unavailable', t(controller.response?.canManage === false
                 ? 'machines.sharing.offlineRecipient' : 'machines.sharing.offline', { machine })));
             if (controller.notice) notices.push(notice('notice', 'warning', controller.notice.message));
             if (controller.approvalId && input.openApproval) {

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { MachineAccessGrantsListResponseV1 } from '@happier-dev/protocol/machines/machineAccessV1';
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { ShareSheet } from '../ShareSheet';
 import { createMachineShareAdapter } from './machineShareAdapter';
@@ -24,7 +24,7 @@ vi.mock('@legendapp/list/react-native', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm: vi.fn(async () => true) } }).module;
+    return createModalModuleMock({ renderCustomModals: true, spies: { confirm: vi.fn(async () => true) } }).module;
 });
 
 const bob = { kind: 'account' as const, accountId: 'bob' };
@@ -38,6 +38,39 @@ const initial: MachineAccessGrantsListResponseV1 = {
 };
 
 describe('Machine sharing through the canonical controller and sheet', () => {
+    it('keeps the mounted share modal presence bound to its exact Home and Account', async () => {
+        const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-share-presence.test', accountId: 'alice' }],
+            route: request => request.path === '/v1/machines/machine/access' && request.method === 'GET' ? Response.json(initial) : undefined });
+        const { Modal, ModalProvider } = await import('@/modal');
+        const { showMachineShareSheet } = await import('./MachineSharingSection');
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } =
+            await import('@/sync/domains/machines/reachability/machineReachability');
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            const scope = { serverId: home.homes.machine!.id, accountId: 'alice' };
+            const machine = createMachineFixture({ id: 'machine', active: false, activeAt: 1 });
+            const applyMachine = () => getStorage().getState().applyMachines([machine], true, { sourceServerId: scope.serverId });
+            applyMachine();
+            screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+            await act(async () => showMachineShareSheet({ machineId: machine.id, machineName: 'Devbox', scope, online: false }));
+            const offline = () => screen!.findByTestId('machine-share-offline') !== null;
+            await vi.waitFor(() => expect(offline()).toBe(true));
+            await act(async () => withdrawMachinePresenceForScope(scope));
+            expect(offline()).toBe(false);
+            await act(async () => captureMachinePresenceObservation({ ...scope, accountId: 'bob' })([machine.id]));
+            expect(offline()).toBe(false);
+            await act(async () => captureMachinePresenceObservation(scope)([machine.id]));
+            expect(offline()).toBe(true);
+            await act(async () => { await home.switchAccount('machine', 'bob'); applyMachine(); });
+            expect(offline()).toBe(false);
+        } finally {
+            await act(async () => Modal.hideAll());
+            await screen?.unmount();
+            clearMachineRequestReachabilityForTest();
+            await home.dispose();
+        }
+    });
+
     it.each([
         ['machines.access.grant.remove', false], ['machines.access.grant.remove', true],
         ['machines.access.leave', false], ['machines.access.leave', true],
@@ -504,7 +537,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
         } finally { await home.dispose(); }
     });
 
-    it('tells someone it is shared with only that it is offline, and gives them the same person mark as the people under it', async () => {
+    it.each([false, null])('shows an offline recipient notice only for observed offline presence (%s)', async online => {
         const snapshot: MachineAccessGrantsListResponseV1 = { ...initial, canManage: false, grants: [], ownDirectGrant: false,
             access: { ...initial.access, role: 'use' }, ownAccessSources: [{ principal: { kind: 'team', teamId: 'team' }, displayName: 'Teammates' }] };
         const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-recipient.test', accountId: 'bob' }],
@@ -514,13 +547,14 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             function Surface() {
                 const controller = useMachineShareController({ machineId: 'machine', machineName: 'Devbox', scope });
                 return <ShareSheet model={controller.model} actions={controller.actions}
-                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online: false, controller })}
+                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online, controller })}
                     presentation="full" testID="machine-share-editor" />;
             }
             const screen = await renderScreen(<Surface />);
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-your-access')).not.toBeNull());
             const text = screen.getTextContent();
-            expect(text).toContain(t('machines.sharing.offlineRecipient', { machine: 'Devbox' }));
+            if (online === false) expect(text).toContain(t('machines.sharing.offlineRecipient', { machine: 'Devbox' }));
+            else expect(text).not.toContain(t('machines.sharing.offlineRecipient', { machine: 'Devbox' }));
             expect(text).not.toContain(t('machines.sharing.offline', { machine: 'Devbox' }));
             expect(screen.findByTestId('machine-share-your-access-visual')).not.toBeNull();
         } finally { await home.dispose(); }

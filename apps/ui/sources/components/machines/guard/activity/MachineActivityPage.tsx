@@ -56,7 +56,7 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
     const wayBack = useGuardWayBack({ serverId: props.serverId, machineId: props.machineId });
     const selected = filter === 'all' ? all : filtered;
     const { list, status } = selected;
-    const freshness = useGuardActivityFreshness(selected);
+    const freshness = useGuardActivityFreshness(selected, props);
     const groups = React.useMemo(() => list ? groupGuardActivityByDay(list.entries) : [], [language, list]);
     const counts = all.list?.counts ?? null;
     const total = counts ? counts.stopped + counts.cleanedUp + counts.needsLook : null;

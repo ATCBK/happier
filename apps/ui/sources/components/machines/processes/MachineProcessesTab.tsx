@@ -158,13 +158,13 @@ function useStableProcessOrder(
 function useMachineSample(
   serverId: string,
   machineId: string,
-  online: boolean,
+  online: boolean | null,
 ) {
   const keys = React.useMemo(
     () => [{ machineId, serverId }],
     [machineId, serverId],
   );
-  useMachineResourceLiveDemand(keys, { detail: 'summary', enabled: online });
+  useMachineResourceLiveDemand(keys, { detail: 'summary', enabled: online === true });
   const target = useMachineDaemonReadTarget({ serverId, machineId, online });
   const key = React.useMemo(
     () => ({ ...target.key, view: 'summary' as const }),
@@ -265,11 +265,12 @@ function MachineProcessesTree(
   const capturedAtMs = answer?.capturedAtMs ?? null;
   const retryProcesses = processes.retry;
   const freshness = React.useMemo((): MachineFreshness => {
-    if (!online) return capturedAtMs !== null ? { kind: 'offline', at: capturedAtMs } : { kind: 'none' };
+    if (online === null) return { kind: 'none' };
+    if (online === false) return capturedAtMs !== null ? { kind: 'offline', at: capturedAtMs } : { kind: 'none' };
     if (stale && capturedAtMs !== null) return { kind: 'stale', at: capturedAtMs, onRetry: retryProcesses };
     return processes.paused ? PAUSED : LIVE;
   }, [capturedAtMs, online, processes.paused, retryProcesses, stale]);
-  const unavailableReason = !online
+  const unavailableReason = online === null ? t('common.unknown') : online === false
     ? t('machineProcesses.states.offlineTitle', { machine: machineName })
     : stale
       ? t('machineProcesses.menu.unavailable', { machine: machineName })
@@ -803,7 +804,7 @@ function MachineProcessesTree(
   // ---- whole-tab states (lab `rp` ST) ----
   if (
     answer === null &&
-    processes.status !== 'loading' &&
+    (online !== true || processes.status !== 'loading') &&
     !(online && scope === 'all' && !allVisible)
   ) {
     return (
@@ -837,7 +838,7 @@ function MachineProcessesTree(
     <ListPresentationProvider value="page">
       <ItemGroup header="none" surface="none">
         {renderToolbar(slots.search)}
-        {!online && answer ? (
+        {online === false && answer ? (
           <SurfaceStateCard
             testID="machine-processes-offline"
             kind="unavailable"

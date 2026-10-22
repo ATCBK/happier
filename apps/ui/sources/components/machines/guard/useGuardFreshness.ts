@@ -3,20 +3,23 @@ import * as React from 'react';
 import type { MachineFreshness } from '@/components/machines/page/MachineFreshnessChip';
 import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
 import { useMachineGuardView, type MachineGuardActivityHookResult } from '@/sync/domains/machines/guard/useMachineGuardView';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 const LIVE: MachineFreshness = { kind: 'live' };
 const NONE: MachineFreshness = { kind: 'none' };
 
 /** Activity is a distinct reader: its selected query and successful answer time own its freshness. */
-export function useGuardActivityFreshness(activity: MachineGuardActivityHookResult): MachineFreshness {
+export function useGuardActivityFreshness(activity: MachineGuardActivityHookResult, input: Readonly<{ serverId: string; machineId: string }>): MachineFreshness {
     const { list, status, offline, retry } = activity;
+    const { reachability } = useMachinePresenceSummary(input.serverId, input.machineId);
     return React.useMemo<MachineFreshness>(() => {
+        if (reachability === 'unknown') return NONE;
         const at = list?.asOf ?? null;
         if (offline) return at === null ? NONE : { kind: 'offline', at };
         if (list && (status === 'error' || status === 'not_reported')) return { kind: 'stale', at: list.asOf, onRetry: retry };
         if (status === 'loading') return { kind: 'checking', at };
         return list ? LIVE : NONE;
-    }, [list, offline, retry, status]);
+    }, [list, offline, reachability, retry, status]);
 }
 
 /**
@@ -28,14 +31,16 @@ export function useGuardActivityFreshness(activity: MachineGuardActivityHookResu
  */
 export function useGuardFreshness(input: Readonly<{ serverId: string; machineId: string }>): MachineFreshness {
     const guard = useMachineGuardView(input);
+    const { reachability } = useMachinePresenceSummary(input.serverId, input.machineId);
     const { lastSeenAt } = useMachineTabFacts(input.serverId, input.machineId);
     const { view, offline, status, pending, receivedAtMs, retry } = guard;
     return React.useMemo((): MachineFreshness => {
+        if (reachability === 'unknown') return NONE;
         if (offline) return lastSeenAt !== null ? { kind: 'offline', at: lastSeenAt } : NONE;
         if (status === 'not_reported') return NONE;
         if (view === null) return status === 'error' ? NONE : { kind: 'checking', at: null };
         if (status === 'error' && receivedAtMs !== null) return { kind: 'stale', at: receivedAtMs, onRetry: retry };
         if (pending || status === 'loading') return { kind: 'checking', at: receivedAtMs };
         return LIVE;
-    }, [lastSeenAt, offline, pending, receivedAtMs, retry, status, view]);
+    }, [lastSeenAt, offline, pending, reachability, receivedAtMs, retry, status, view]);
 }

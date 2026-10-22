@@ -45,7 +45,7 @@ export type MachinePageTarget = Readonly<{
     machineName: string;
     /** The name inside page sentences: "this machine" while the machine's details are locked or loading. */
     machineSentenceName: string;
-    online: boolean;
+    online: boolean | null;
     /** The page is focusing the Home its link names. */
     isServerSwitching: boolean;
     /** The machine list is being read because the machine is not known yet. */
@@ -138,7 +138,7 @@ export function useMachinePageTarget(): MachinePageTarget {
         machine,
         machineName,
         machineSentenceName,
-        online: machine ? presence.reachability === 'reachable' : false,
+        online: presence.reachability === 'unknown' ? null : presence.reachability === 'reachable',
         isServerSwitching,
         isHydratingMachine,
         switchReady: Boolean(machineId) && !isServerSwitching

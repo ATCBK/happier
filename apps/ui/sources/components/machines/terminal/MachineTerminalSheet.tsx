@@ -88,7 +88,7 @@ const MachineTerminalShell = React.memo(function MachineTerminalShell(
     machineId: props.machineId,
     serverId: props.serverId,
     cwd: props.homeDir,
-    machineReachable: presence.reachability !== 'unreachable',
+    machineReachable: presence.reachability === 'unknown' ? null : presence.reachability === 'reachable',
     machineRpcTargetAvailable: true,
     terminalKey,
     terminalRef,

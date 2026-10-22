@@ -85,7 +85,7 @@ export function MachineOverview(props: MachinePageTabBodyProps) {
             <MachineResourcesAskBlock serverId={props.serverId} machineId={props.machineId} machineName={props.machineName} />
 
             {/* Skills and MCP servers (Capabilities P8 U8.6): what sessions on this machine get, before This machine. */}
-            <MachineCapabilitiesSection machineId={props.machineId} machineName={props.machineName} offline={!props.online} />
+            <MachineCapabilitiesSection machineId={props.machineId} machineName={props.machineName} offline={props.online === false} />
 
             {/* Project work (the workspaces held here; its page has workers, runs, recent sessions, terminals), then This machine. */}
             <MachineThisMachineSection serverId={props.serverId} machine={machine} />

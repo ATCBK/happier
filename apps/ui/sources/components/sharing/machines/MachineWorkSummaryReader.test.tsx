@@ -19,6 +19,21 @@ const createActionExecutor = (ports: Partial<ActionExecutorDeps>) =>
     createProtocolActionExecutor(createActionExecutorBoundaryFixture(ports));
 
 describe('MachineWorkSummaryReader', () => {
+    it('holds unknown presence as unavailable without reading or claiming offline, then follows the observed verdict', async () => {
+        const { MachineWorkSummaryReader } = await import('./MachineWorkSummaryReader');
+        const read = vi.fn(async () => ({ kind: 'current', requesters: [] }));
+        const executor = createActionExecutor({ machineWorkSummaryGet: read });
+        const props = { machineId: 'machine', machineName: 'devbox', scope: { serverId: 'home', accountId: 'alice' }, execute: executor.execute };
+        const screen = await renderScreen(<MachineWorkSummaryReader {...props} online={null} />);
+        expect(screen.findByTestId('machine-work-summary.offline')).toBeNull();
+        expect(screen.findByTestId('machine-work-summary.unavailable')).not.toBeNull();
+        expect(read).not.toHaveBeenCalled();
+        await screen.update(<MachineWorkSummaryReader {...props} online={false} />);
+        expect(screen.findByTestId('machine-work-summary.offline')).not.toBeNull();
+        await screen.update(<MachineWorkSummaryReader {...props} online />);
+        expect(screen.findByTestId('machine-work-summary.empty')).not.toBeNull();
+    });
+
     it('settles an in-flight read when heartbeat updates arrive before its response', async () => {
         const { storage } = await import('@/sync/domains/state/storageStore');
         const { MachineWorkSummaryReader } = await import('./MachineWorkSummaryReader');

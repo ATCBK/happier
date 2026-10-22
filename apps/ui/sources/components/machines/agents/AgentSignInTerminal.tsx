@@ -43,7 +43,7 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
         serverId: props.serverId,
         cwd: machine?.metadata?.homeDir?.trim() || null,
         launch,
-        machineReachable: presence.reachability !== 'unreachable',
+        machineReachable: presence.reachability === 'unknown' ? null : presence.reachability === 'reachable',
         machineRpcTargetAvailable: true,
         terminalKey,
         attachedTerminalId: signIn.terminalId,

@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { MachinePageState } from './machinePageContext';
 
 installDisconnectedServerSocketBoundary();
@@ -25,11 +25,48 @@ const { MachineVitalsBarAccessory } = await import('../vitals/MachineVitalsRange
 const { machineResourceStore } = await import('@/sync/domains/machines/resources/machineResourceStore');
 const { useManagedEnrolledMachine } = await import('@/components/settings/machines/managed/ManagedMachineSections');
 const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { useMachineDaemonReadTarget, useMachineDaemonReadTargets } = await import('@/sync/domains/machines/useMachineDaemonReadTarget');
+const { useMachineWidgetMachine } = await import('../widgets/machineWidgetKit');
+const { MachineDaemonSection } = await import('../daemon/MachineDaemonSection');
+const { t } = await import('@/text');
 
-afterEach(() => { standardCleanup(); machineResourceStore.reset(); boundary.rpc.mockReset(); boundary.rpc.mockImplementation(() => new Promise(() => {})); clearMachineRequestReachabilityForTest(); });
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+afterEach(async () => { standardCleanup(); machineResourceStore.reset(); boundary.rpc.mockReset(); boundary.rpc.mockImplementation(() => new Promise(() => {})); clearMachineRequestReachabilityForTest(); await accountConnection?.dispose(); accountConnection = null; });
+
+it('withdraws resource admission without presenting an unobserved Machine as offline, and restores only its exact Account', async () => {
+    const serverId = await home.addHome({ name: 'Presence Home', serverUrl: 'https://resource-presence.test', accountId: 'owner' });
+    const machine = createMachineFixture({ id: 'presence-machine', active: true, activeAt: Date.now(), storageMode: 'plain' });
+    storage.setState({ machines: {}, machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const hook = await renderHook(() => ({
+        read: useMachineDaemonReadTarget({ serverId, machineId: machine.id }),
+        fleet: useMachineDaemonReadTargets({ serverId, machineIds: [machine.id] }),
+        widget: useMachineWidgetMachine({ serverId, machineId: machine.id }),
+    }));
+    await vi.waitFor(() => expect(hook.getCurrent().read.enabled).toBe(true));
+    const scope = { serverId, accountId: 'owner' };
+    await act(async () => { withdrawMachinePresenceForScope(scope); });
+    expect(hook.getCurrent().read).toMatchObject({ enabled: false, offline: false });
+    expect(hook.getCurrent().fleet[0]).toMatchObject({ enabled: false, offline: false });
+    expect(hook.getCurrent().widget.online).toBeNull();
+    const daemon = await renderScreen(<MachineDaemonSection serverId={serverId} machine={machine} />);
+    expect(daemon.findByProps({ title: t('machine.status') }).props.detail).toBe(t('common.unknown'));
+    expect(daemon.findByTestId('machine-detail-stop-daemon-button')?.props.disabled).toBe(true);
+    await act(async () => { captureMachinePresenceObservation({ ...scope, accountId: 'other' })([machine.id]); });
+    expect(hook.getCurrent().widget.online).toBeNull();
+    await act(async () => { captureMachinePresenceObservation(scope)([machine.id]); });
+    expect(hook.getCurrent().read).toMatchObject({ enabled: true, offline: false });
+    expect(hook.getCurrent().widget.online).toBe(true);
+    await act(async () => { recordMachineRequestFailed({ ...scope, machineId: machine.id }); });
+    expect(hook.getCurrent().read).toMatchObject({ enabled: false, offline: true });
+    expect(hook.getCurrent().widget.online).toBe(false);
+});
 
 it('shares the Account-qualified Overview sample and retries the same retained read from the tab bar', async () => {
     const serverId = await home.addHome({ name: 'Freshness Home', serverUrl: 'https://overview-freshness.test', accountId: 'owner' });
+    // The real resource Action needs the Home's authenticated runtime authority as well as stored credentials.
+    home.answer(serverId, '/v1/machines', { body: [], respondAfter: new Promise<void>(() => {}) });
+    accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://overview-freshness.test', accountId: 'owner', request: home.request });
     const machine = createMachineFixture({ id: 'freshness-machine', active: true, activeAt: Date.now(), storageMode: 'plain' });
     storage.setState({ machines: {}, machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
     const authority = await renderHook(() => ({ binding: useServerCredentialAccountScopeBinding(serverId).binding,

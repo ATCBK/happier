@@ -10,7 +10,7 @@ export type MachineReplacementPickerCandidate = Readonly<{
     id: string;
     label: string;
     subtitle: string;
-    online: boolean;
+    online: boolean | null;
 }>;
 
 export type MachineReplacementPickerModalProps = CustomModalInjectedProps & Readonly<{
@@ -29,7 +29,7 @@ export function MachineReplacementPickerModal(props: MachineReplacementPickerMod
                         testID={`machine-replacement-picker-candidate:${candidate.id}`}
                         title={candidate.label}
                         subtitle={candidate.subtitle}
-                        detail={candidate.online ? t('status.online') : t('status.offline')}
+                        detail={candidate.online === null ? t('common.unknown') : candidate.online ? t('status.online') : t('status.offline')}
                         showChevron={false}
                         onPress={() => {
                             props.onClose();

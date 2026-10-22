@@ -458,6 +458,28 @@ describe('useMachineTerminalSession', () => {
         expect(terminalOps.close).not.toHaveBeenCalled();
     });
 
+    it('waits for observed Machine presence without claiming unknown is offline or opening its terminal', async () => {
+        terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'observed', reused: false });
+        terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'observed', frames: [], nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });
+        const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+        const terminalRef = { current: { write: vi.fn(), clear: vi.fn() } satisfies EmbeddedTerminalRendererHandle };
+        let reachable: boolean | null = null;
+        const hook = await renderHook(() => useMachineTerminalSession({
+            machineId: 'machine', serverId: homeIds.primary, cwd: '/repo', terminalKey: 'unobserved-machine',
+            terminalRef, machineReachable: reachable, machineRpcTargetAvailable: true,
+        }));
+        await act(async () => hook.getCurrent().onReady(80, 24));
+        await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
+        expect(terminalOps.ensure).not.toHaveBeenCalled();
+        expect(hook.getCurrent().error).toBe('terminal_unavailable');
+        reachable = true;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
+        expect(terminalOps.ensure).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().error).toBeNull();
+        await hook.unmount();
+    });
+
     it('issues an explicit Retry while the machine is unreachable', async () => {
         const ensured = createDeferred<DaemonTerminalEnsureResponse>();
         terminalOps.ensure.mockReturnValue(ensured.promise);

@@ -17,7 +17,7 @@ type Props = Readonly<{
     machineId: string;
     machineName: string;
     scope: ServerAccountScope;
-    online: boolean;
+    online: boolean | null;
     /** The incumbent page's explicit refresh; not a timer or a work census. */
     refreshKey?: number;
     execute?: ReturnType<typeof createDefaultActionExecutor>['execute'];
@@ -34,7 +34,8 @@ function unavailable(previous: MachineWorkSummaryState, reason: 'loading' | 'off
 
 function ScopedMachineWorkSummaryReader(props: Props) {
     const [execute] = React.useState(() => props.execute ?? createFrontDoorActionExecute());
-    const [state, setState] = React.useState<MachineWorkSummaryState>({ kind: props.online ? 'loading' : 'offline' });
+    const [state, setState] = React.useState<MachineWorkSummaryState>(() => props.online === null
+        ? { kind: 'summary', summary: { kind: 'unavailable' } } : { kind: props.online ? 'loading' : 'offline' });
     const pending = React.useRef<AbortController | null>(null);
     const lifetimeRef = React.useRef<AbortController | null>(null);
     const target = React.useMemo(() => ({ serverId: props.scope.serverId, machineId: props.machineId }), [props.scope.serverId, props.machineId]);
@@ -43,7 +44,7 @@ function ScopedMachineWorkSummaryReader(props: Props) {
     const load = React.useCallback(async () => {
         const lifetime = lifetimeRef.current;
         if (!lifetime || lifetime.signal.aborted) return;
-        if (!props.online) { pending.current?.abort(); setState(previous => unavailable(previous, 'offline')); return; }
+        if (!props.online) { pending.current?.abort(); setState(previous => unavailable(previous, props.online === false ? 'offline' : 'unavailable')); return; }
         // Heartbeats and this RPC's own transport hydration update the same
         // Machine row. Let its current, budgeted read settle before refreshing;
         // replacing it on every update can cancel setup or discard its response.

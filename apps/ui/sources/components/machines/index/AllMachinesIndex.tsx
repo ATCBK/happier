@@ -169,10 +169,10 @@ function AllMachinesIndexBody() {
     // A long fleet keeps its offline machines out of the table until asked for, as the list column folds them
     // (real fleets carry dozens of retired or sleeping machines); a search still reaches every machine.
     const [showOffline, setShowOffline] = React.useState(false);
-    const offlineCount = React.useMemo(() => searchable ? items.filter(item => !item.online).length : 0, [items, searchable]);
+    const offlineCount = React.useMemo(() => searchable ? items.filter(item => item.status === 'offline').length : 0, [items, searchable]);
     const offlineFoldable = offlineCount > 0 && offlineCount < items.length && !normalizedQuery;
     const hideOffline = offlineFoldable && !showOffline;
-    const filter = React.useCallback((item: MachineIndexItem) => (!hideOffline || item.online) && (!normalizedQuery
+    const filter = React.useCallback((item: MachineIndexItem) => (!hideOffline || item.status !== 'offline') && (!normalizedQuery
         || item.title.toLocaleLowerCase().includes(normalizedQuery)
         || (item.host?.toLocaleLowerCase().includes(normalizedQuery) ?? false)), [hideOffline, normalizedQuery]);
 
@@ -526,7 +526,7 @@ const MachinePresenceCell = React.memo(function MachinePresenceCell(props: Reado
     const { item } = props;
     return (
         <View style={stylesheet.presence}>
-            {item.kind === 'machine' ? (
+            {item.kind === 'machine' && item.status !== 'unknown' ? (
                 <StatusDot color={item.online ? theme.colors.status.connected : theme.colors.status.disconnected} />
             ) : null}
             <Text numberOfLines={1} style={stylesheet.quiet}>{item.reason ?? item.presence}</Text>

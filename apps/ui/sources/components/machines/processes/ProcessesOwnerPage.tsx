@@ -102,7 +102,7 @@ export function ProcessesOwnerPage(
     titles,
     expectedAccountId: binding?.accountId ?? null,
     isCurrent,
-    unavailableReason: online
+    unavailableReason: online === null ? t('common.unknown') : online
       ? null
       : t('machineProcesses.states.offlineTitle', { machine: machineName }),
     focusAfter: () => {},

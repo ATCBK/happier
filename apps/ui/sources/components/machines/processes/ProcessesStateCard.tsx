@@ -8,12 +8,13 @@ import { t } from '@/text';
 export function ProcessesStateCard(props: Readonly<{
   status: MachineProcessesState['status'];
   reason: string | undefined;
-  online: boolean;
+  online: boolean | null;
   machineName: string;
   onRetry: () => void;
   onOpenDoctor?: () => void;
 }>) {
-  if (!props.online) {
+  if (props.online === null) return <SurfaceStateCard testID="machine-processes-unknown" kind="unavailable" title={t('common.unknown')} />;
+  if (props.online === false) {
     return <SurfaceStateCard testID="machine-processes-offline-empty" kind="unavailable"
       title={t('machineProcesses.states.offlineTitle', { machine: props.machineName })}
               reason={t('machineProcesses.states.offlineReason')} />;

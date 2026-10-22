@@ -33,7 +33,7 @@ import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
@@ -90,7 +90,7 @@ function replacementCandidateSubtitle(machine: Machine, label: string): string {
  */
 export function composeMachinePageHeaderFacts(input: Readonly<{
     machine: Machine;
-    online: boolean;
+    online: boolean | null;
     managedMeta: readonly PageHeaderMetaFact[] | undefined;
     encryptionMode: 'e2ee' | 'plain' | null;
     replacedByMachineLabel: string | null;
@@ -153,7 +153,7 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
     const { binding } = useServerCredentialAccountScopeBinding(target.serverId);
     const machineAccountScope = binding?.isCurrent() ? binding.scope : null;
     const machineCanSpawn = React.useMemo(
-        () => target.online && canAttemptMachineSpawn({ machine: machine ?? undefined, selectedMachineId: target.machineId, scope: machineAccountScope }),
+        () => target.online === true && canAttemptMachineSpawn({ machine: machine ?? undefined, selectedMachineId: target.machineId, scope: machineAccountScope }),
         [machine, target.machineId, target.online, machineAccountScope],
     );
     const encryptionMode = useAccountEncryptionMode({
@@ -296,13 +296,13 @@ const MachineSentence = React.memo(function MachineSentence(props: Readonly<{
     serverId: string;
     machineId: string;
     attention: NonNullable<ReturnType<typeof readMachinePublishedResources>>['attention'] | null;
-    online: boolean;
+    online: boolean | null;
     offlineLine: string;
     fallback: string;
 }>) {
     const { theme } = useUnistyles();
     const working = useMachineWorkingCount({ serverId: props.serverId, machineId: props.machineId });
-    const sentence = describeMachineSentence({ attention: props.attention, working, nowMs: Date.now(), online: props.online, offlineLine: props.offlineLine });
+    const sentence = describeMachineSentence({ attention: props.attention, working, nowMs: Date.now(), online: props.online === true, offlineLine: props.offlineLine });
     if (!sentence) return <Text style={[styles.sentence, { color: theme.colors.text.secondary }]}>{props.fallback}</Text>;
     const leadColor = sentence.tone === 'calm' ? theme.colors.text.primary
         : resolveMachineAttentionWordColor(theme.colors);
@@ -341,11 +341,12 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
         const names = resolveMachineDisplayNames(eligible);
         return eligible.map((candidate) => {
             const label = names.get(candidate.id) ?? getMachineDisplayName(candidate);
+            const reachability = resolveMachineReachability(accountScope, candidate, nowMs);
             return {
                 id: candidate.id,
                 label,
                 subtitle: replacementCandidateSubtitle(candidate, label),
-                online: isMachineReachable(accountScope, candidate, nowMs),
+                online: reachability === 'unknown' ? null : reachability === 'reachable',
             };
         });
     }, [accountScope, allMachines, machineId, nowMs, reachabilityRevision]);

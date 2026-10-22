@@ -105,7 +105,7 @@ async function mount(
     reply?: (rpc: Rpc) => unknown;
     machine?: Partial<Machine>;
     params?: Extract<MachinePageTabParams, { id: 'processes' }>;
-    online?: boolean;
+    online?: boolean | null;
     waitForRows?: boolean;
     askBeforeKill?: boolean;
     askBeforeStop?: boolean;
@@ -160,7 +160,7 @@ async function mount(
       activeServerId: serverId,
       machine: current,
       machineName: 'leeroy-mbp',
-      online: options.online ?? true,
+      online: options.online === undefined ? true : options.online,
       isServerSwitching: false,
       isHydratingMachine: false,
       switchReady: true,
@@ -178,7 +178,7 @@ async function mount(
           serverId={serverId}
           machineId="machine"
           machineName="leeroy-mbp"
-          online={options.online ?? true}
+          online={options.online === undefined ? true : options.online}
           params={options.params ?? { id: 'processes' }}
           setParams={setParams}
         />
@@ -410,6 +410,14 @@ describe('MachineProcessesTab', () => {
     const { screen } = await mount({ online: false, waitForRows: false, params });
     expect(screen.findByTestId('machine-processes-offline-empty')).not.toBeNull();
     expect(screen.findByTestId('machine-processes-table')).toBeNull();
+    expect(transport.rpc.mock.calls.some(([rpc]: readonly unknown[]) => typeof rpc === 'object' && rpc !== null && 'method' in rpc
+      && (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST || rpc.method === RPC_METHODS.DAEMON_PROCESSES_WATCH))).toBe(false);
+  });
+
+  it('keeps unknown presence distinct from offline while no process answer can be read', async () => {
+    const { screen } = await mount({ online: null, waitForRows: false });
+    expect(screen.findByTestId('machine-processes-unknown') !== null).toBe(true);
+    expect(screen.findByTestId('machine-processes-offline-empty')).toBeNull();
     expect(transport.rpc.mock.calls.some(([rpc]: readonly unknown[]) => typeof rpc === 'object' && rpc !== null && 'method' in rpc
       && (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST || rpc.method === RPC_METHODS.DAEMON_PROCESSES_WATCH))).toBe(false);
   });
