@@ -23,7 +23,8 @@ import { createRuntimeProviderModelManagementServices } from '@/providers/modelM
 import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
 import { projectAgentProviderBrokerApplications } from '@/providers/broker/applicationProjection';
 import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
-import { PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from '@/providers/broker/providerBrokerPrivateProtocol';
+import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
+import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from '@/providers/broker/providerBrokerPrivateProtocol';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -50,6 +51,23 @@ import { buildMachineResumeRequest } from '@/session/services/requestInactiveSes
 import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { partitionProviderSessionArgs } from '@/cli/providerSessionArgPartition';
 import { buildPluginHostSessionRuntimeOptions, buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
+import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { createOnChildExited } from '../sessions/onChildExited';
+import { SessionAttachPayloadV2Schema } from '@/agent/runtime/sessionAttachPayload';
+import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+// This composition now consumes the real UI authoring hook. Reuse its
+// complete native/browser boundary and cleanup rather than piecemeal stubs.
+import '../../../../ui/sources/dev/vitestSetup';
+import { renderHook } from '../../../../ui/sources/dev/testkit/hooks/renderHook';
+import { useNewSessionAuthoringState } from '../../../../ui/sources/components/sessions/new/hooks/screenModel/useNewSessionAuthoringState';
+import { buildSessionSpawnNewInputV2FromAuthoringDraft } from '../../../../ui/sources/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
+import { createNewSessionPromptStore } from '../../../../ui/sources/components/sessions/new/hooks/screenModel/newSessionPromptStore';
+import { DEFAULT_NEW_SESSION_AUTOMATION_DRAFT } from '../../../../ui/sources/sync/domains/automations/automationDraft';
+import { settingsParse } from '../../../../ui/sources/sync/domains/settings/settings';
+import { sessionModelSelectionV2TeamBindingIntent } from '@happier-dev/protocol/providers/selection/v2';
+import { ConnectedAccountCatalogRowReadResponseV1Schema, emptyConnectedAccountCatalogRecordV1 }
+  from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { readStoredCredentials } from '@/persistence';
 
 // Only process creation is replaced. Production daemon preparation creates
 // the bootstrap/attach files; the admitted external Agent runs in this worker.
@@ -104,6 +122,7 @@ const { registerTeamRoutes }: typeof import('../../../../server/sources/app/team
 const { resolveServerFeaturesForGating }: typeof import('../../../../server/sources/app/features/catalog/serverFeatureGate') = await import(server + 'app/features/catalog/serverFeatureGate');
 const { createSessionPublisherPresence }: typeof import('../../../../server/sources/app/presence/sessionPublisherPresence') = await import(server + 'app/presence/sessionPublisherPresence');
 const { openTeamCredentialProviderBroker }: typeof import('../../../../server/sources/app/teams/credentials/providerBrokerAdmission') = await import(server + 'app/teams/credentials/providerBrokerAdmission');
+const { verifyProviderBrokerRouteGrantSignatureV1 }: typeof import('../../../../server/sources/app/machines/peer/mediation/signProviderBrokerRouteGrantV1') = await import(server + 'app/machines/peer/mediation/signProviderBrokerRouteGrantV1');
 const { writeSessionTeamCredentialBindingsInTx }: typeof import('../../../../server/sources/app/teams/credentials/sessionBinding') = await import(server + 'app/teams/credentials/sessionBinding');
 const { inTx }: typeof import('../../../../server/sources/storage/inTx') = await import(server + 'storage/inTx');
 const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest,
@@ -139,15 +158,17 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
   afterEach(async () => { await harness?.close(); });
   afterAll(async () => { await pluginReloadController.shutdown(); });
 
-  const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed'], resumeOnly = false) => withTempHappyCliEntrypoint(async entrypoint => {
+  const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed'], resumeOnly = false, uiAuthoring = false) => withTempHappyCliEntrypoint(async entrypoint => {
     let phase = 'setup';
     let runnerFailure: string | null = null;
     const answersObserved: string[] = [];
     const completedIngresses: string[] = [];
+    const brokerRefusals: unknown[] = [];
+    const homeRequestPaths: string[] = [];
     let readLaunchPhases: () => unknown = () => [];
     let readLaunchMessages: () => readonly string[] = () => [];
     onTestFailed(() => { console.error('Team Pool deciding failure', { phase, runnerFailure, answersObserved, completedIngresses,
-      launchPhases: readLaunchPhases(), launchMessages: readLaunchMessages(), os: os.observed }); });
+      brokerRefusals, homeRequestPaths, launchPhases: readLaunchPhases(), launchMessages: readLaunchMessages(), os: os.observed }); });
     const surface = brokerOnly ? 'broker-catalog' : 'shared';
     const launchEnv = createSpawnHappyCliEnvScope();
     launchEnv.patch({ HAPPIER_CLI_SUBPROCESS_RUNTIME: 'node', HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: entrypoint,
@@ -192,12 +213,20 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     const requests: unknown[] = [];
     const sourceRpcFailures: unknown[] = [];
     const carrier = createServer(async (request, response) => {
+      if (request.method === 'DELETE' && request.url === PROVIDER_BROKER_PRIVATE_CLOSE_PATH) {
+        response.writeHead(204).end(); return;
+      }
       if (request.url === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
         response.writeHead(204, { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' }).end(); return;
       }
+      if (request.method !== 'POST') {
+        response.writeHead(404).end(); return;
+      }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (!body) { response.writeHead(400).end(); return; }
+      requests.push(JSON.parse(body));
       response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ output_text: 'TEAM_POOL_NATIVE_SENTINEL' }));
     });
     carrier.listen(0, '127.0.0.1'); await once(carrier, 'listening');
@@ -256,6 +285,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         machineId: broker.id, agentTargetKey: worker.agentTargetKey, connectedAccountTarget: target,
         sourceCatalog: true, application, refreshPolicy: 'current_only' });
       app.addHook('onRequest', async request => {
+        homeRequestPaths.push(`${request.method} ${request.url.split('?')[0]}`);
         request.headers['x-test-user-id'] = recipient.id;
         request.authTokenEpoch = recipient.tokenEpoch;
       });
@@ -283,11 +313,19 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       app.get('/v1/account/profile', async () => AccountProfileResponseSchema.parse({ id: recipient.id }));
       app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
       app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+      app.get('/v1/account/entity-rows/connected-accounts/purposes', async () => ConnectedAccountCatalogRowReadResponseV1Schema.parse({
+        status: 'present', revision: 1, content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
+      }));
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
       if (!address || typeof address === 'string') throw new Error('Missing Home address');
       const origin = `http://127.0.0.1:${address.port}`;
       await runWithServerHttpBaseUrl(origin, async () => {
+        // Reuse the gateway testkit's persistent-credential boundary with
+        // this journey's recipient, preserving real Account-currentness checks.
+        if (uiAuthoring) {
+          vi.mocked(readStoredCredentials).mockResolvedValue(credentials);
+        }
         const homeDomainAction = createAccountServerActionDeps({ token: credentials.token, credentials }).homeDomainAction!;
         const applications = projectAgentProviderBrokerApplications({ registry: worker.lease.registry.contributes,
           agentTargetKey: worker.agentTargetKey, acceptedProtocols: readLeasedAgentProviderRequirements({ lease: worker.lease, agentId: worker.agentId })!.acceptsProtocols });
@@ -338,15 +376,21 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({ path: join(directory, 'device-local-key.json') });
         installProcessBoundary();
         // One process owns its applied registry for both independent ingress cases.
-        for (const surface of (resumeOnly ? ['cli'] as const : ['cli', 'rpc'] as const)) {
+        for (const surface of (uiAuthoring ? ['ui'] as const : resumeOnly ? ['cli'] as const : ['cli', 'rpc'] as const)) {
         phase = `${surface}:launch`;
         const requestStart = requests.length;
         const tracked = new Map<number, import('../types').TrackedSession>();
         const awaiters = new Map<number, (session: import('../types').TrackedSession) => void>();
         const resolvers = new Map<number, (result: import('@/session/shared/spawnSessionContract').SpawnSessionResult) => void>();
         const timeouts = new Map<number, NodeJS.Timeout>();
+        const spawnResourceCleanupByPid = new Map<number, () => void | Promise<void>>();
+        const sessionAttachCleanupByPid = new Map<number, () => Promise<void>>();
+        const exitTasks: Promise<void>[] = [];
+        const onChildExited = createOnChildExited({ pidToTrackedSession: tracked,
+          spawnResourceCleanupByPid, sessionAttachCleanupByPid, getApiMachineForSessions: () => null });
         let runner: Promise<void> | undefined;
         let sessionId = '';
+        let retainedModelSelection: SpawnSessionOptions['modelSelection'];
         let closePublisher: (() => Promise<unknown>) | undefined;
         os.pid = process.pid + 1_000_000;
         const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
@@ -366,11 +410,23 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           expect(launch.existingSessionId).toBe(sessionId);
           expect(launch.teamCredentialBindings).toBeUndefined();
           expect(launch.modelSelection?.ref).toMatchObject({ agentTargetKey: worker.agentTargetKey, modelId: 'gpt-5.5' });
+          retainedModelSelection = launch.modelSelection;
           // The accepted slot travels in protected attach, not fresh-create argv.
-          const attach = JSON.parse(await readFile(attachPath, 'utf8'));
+          const attach = SessionAttachPayloadV2Schema.parse(JSON.parse(await readFile(attachPath, 'utf8')));
+          if (!attach.snapshot) throw new Error('Missing committed Session snapshot');
           expect(attach.snapshot.acceptedTeamCredentialBinding).toMatchObject({
             resourceId: resource.id, teamId: team.id, deliveryMode: 'brokered',
           });
+          if (uiAuthoring) {
+            const metadata = attach.snapshot.ownerMetadata ? projectSessionOwnerCompatibilityViewV1({
+              sharedMetadata: attach.snapshot.metadata, ownerMetadata: attach.snapshot.ownerMetadata,
+            }) : attach.snapshot.metadata;
+            // The daemon commits immutable birth intent; the host runner
+            // publishes modelSelectionIntentV1 later during metadata startup.
+            expect(metadata.sessionCreationCorrespondenceV1?.recipe.modelSelection).toMatchObject({ v: 1,
+              ref: { agentTargetKey: worker.agentTargetKey, providerConnectionId: null, modelId: offered.descriptor.id } });
+            expect(attach.snapshot.acceptedTeamCredentialBinding).toMatchObject({ expectedResourceRevision: resource.revision });
+          }
           // Replace socket delivery only: the real Home presence owner admits
           // this process before its native runtime opens the Team broker.
           const presence = createSessionPublisherPresence();
@@ -381,6 +437,9 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           closePublisher = () => presence.closePublisher({ socket: publisherSocket });
           expect(registered, JSON.stringify(registered, (_key, value) => typeof value === 'bigint' ? String(value) : value))
             .toMatchObject({ status: 'registered' });
+          // The resume regression ends at the real runner argument/launch
+          // consumer above; the other journey owns native inference coverage.
+          if (!resumeOnly) {
           phase = `${surface}:native-plan`;
           // The OS adapter runs the external Agent in this test worker using
           // its admitted lease, not a daemon runner's private runtime source.
@@ -391,19 +450,43 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             modelSelection: launch.modelSelection, resume: launch.resume,
             backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
           }, { pluginRuntimeRegistryLease: worker.lease, prepareTeamCredentialProviderBinding: async input => {
+            let freshHomeAuthority: Extract<ReturnType<typeof ProviderBrokerOpenResponseV1Schema.parse>, { ok: true }>['authority'] | undefined;
+            let inferenceDialed = false;
+            const openTunnel = createProviderBrokerMachineCarrierTunnelOpen({
+              accountId: recipient.id, localMachineId: worker.machineId,
+              resolveTrustRoots: () => [{ keyId: 'journey', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+              runtime: { endpoint: { endpointId: 'a'.repeat(64) }, openHttpTunnel: async transport => {
+                // Home admission must finish before native starts first-stream
+                // custody. Keep the signed handshake on the real launch path.
+                if (!inferenceDialed) {
+                  expect(freshHomeAuthority, 'Fresh Home grant must precede native dial').toBeDefined();
+                  const handshake = await transport.handshakeProvider?.();
+                  expect(handshake).toMatchObject({ kind: 'provider_broker', authority: freshHomeAuthority });
+                  inferenceDialed = true;
+                }
+                return { localPort: carrierAddress.port, localCapability: 'synthetic-carrier-capability',
+                  remoteEndpointId: 'b'.repeat(64), observedPath: 'relay', close: async () => {} };
+              } },
+            });
             const opened = await openSessionTeamCredentialProviderBinding({ ...input, machineId: worker.machineId,
               agentId: worker.agentId, binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: input.resourceId,
                 expectedResourceRevision: input.expectedResourceRevision, deliveryMode: 'brokered', teamId: team.id },
               lease: worker.lease, materializationBaseDir: join(directory, 'materialized'),
               readCatalog: signal => readSessionTeamCredentialProviderModels({ homeDomainAction, lease: worker.lease,
                 agentId: worker.agentId, agentTargetKey: worker.agentTargetKey, teamId: team.id, resourceId: resource.id, signal }),
-              openBroker: request => openTeamCredentialProviderBroker({ actorAccountId: recipient.id, authentication,
+              openBroker: async request => {
+                const result = await openTeamCredentialProviderBroker({ actorAccountId: recipient.id, authentication,
                 request, readCurrentPresence: async () => ({ initiatorPresence: { state: 'known', machineIds: new Set([worker.machineId]) },
                   brokerPresence: { state: 'known', machineIds: new Set([broker.id]) } }), nowMs: Date.now(), grantId: crypto.randomUUID(),
                 signingKey: { keyId: 'journey', secretKey: signingKey.secretKey }, readProviderProjection: request => project(request.application),
-                readPoolSourceEligibility: async () => ({ eligibleMachineIds: new Set([broker.id]), reasons: new Map() }) }),
-              openTunnel: async () => ({ localPort: carrierAddress.port, localCapability: 'synthetic-carrier-capability', observedPath: 'relay',
-                retire: async () => {}, close: async () => {} }),
+                verifyRefreshAuthority: authority => verifyProviderBrokerRouteGrantSignatureV1({ authority, nowMs: Date.now(),
+                  signingCapability: { keyId: 'journey', publicKey: Buffer.from(signingKey.publicKey).toString('base64url'), expiresAt: null } }),
+                readPoolSourceEligibility: async () => ({ eligibleMachineIds: new Set([broker.id]), reasons: new Map() }) });
+                if (request.refreshAuthority && result.ok) freshHomeAuthority = result.authority;
+                if (!result.ok) brokerRefusals.push({ reasonCode: result.reasonCode, refresh: Boolean(request.refreshAuthority) });
+                return result;
+              },
+              openTunnel,
             });
             if (!opened) throw new Error('Accepted Team binding was not opened');
             return opened;
@@ -434,6 +517,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             await operations.resetOrDisposeRuntime();
           }
           await expect(readFile(attachPath)).rejects.toMatchObject({ code: 'ENOENT' });
+          }
           phase = `${surface}:webhook`;
           // The real waiter projects the Home-created settlement already held
           // by daemon custody; a handwritten success would discard that receipt.
@@ -455,8 +539,9 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             connectedServicesMaterializationBaseDir: join(directory, 'connected-services'), connectedServiceRefreshCoordinator: null,
             connectedServiceQuotasCoordinator: null, connectedServiceRuntimeRegistry: { registerTarget() {} },
             pidToTrackedSession: tracked, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
-            spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
-            resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '', onChildExited() {},
+            spawnResourceCleanupByPid, sessionAttachCleanupByPid,
+            resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '',
+            onChildExited: (...args) => { const task = onChildExited(...args); exitTasks.push(task); return task; },
             processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true });
         const handler = createSpawnNewSessionLifecycleActionHandler({ serverId: configuration.activeServerId, spawnSession });
         try {
@@ -478,7 +563,46 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           readLaunchPhases = () => launchPhases;
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
-          const start = () => createActionExecutor(deps).execute('session.spawn_new', {
+          const authoredSpawn = uiAuthoring ? await (async () => {
+            let authoring: Parameters<typeof useNewSessionAuthoringState>[0] = {
+              automationDraft: DEFAULT_NEW_SESSION_AUTOMATION_DRAFT, automationFeatureEnabled: false,
+              selectedMachineId: null, selectedMachine: null, targetServerId: null, selectedPath: directory, directoryKind: 'path',
+              executionTarget: { kind: 'machine', target: { serverId: configuration.activeServerId, machineId: worker.machineId } },
+              organizationPlacement: { folderId: null, tagIds: [] }, checkoutCreationDraft: null,
+              promptStore: createNewSessionPromptStore('TEAM_POOL_NATIVE_PROMPT'), staticAgentId: null,
+              backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
+              agentTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
+              transcriptStorage: 'persisted', useProfiles: false, selectedProfileId: null, selectedSecretId: null,
+              selectedSecretIdByProfileIdByEnvVarName: {}, getSessionOnlySecretValueEncByProfileIdByEnvVarName: () => ({}),
+              resumeSessionId: '', permissionMode: 'default', modelSelection: { v: 1, updatedAt: 1,
+                ref: { agentTargetKey: worker.agentTargetKey, providerConnectionId: null, modelId: offered.descriptor.id } },
+              capabilitySelection: null, agentNewSessionOptions: null, settings: settingsParse({}),
+              effectiveWindowsRemoteSessionLaunchMode: null, windowsRemoteSessionLaunchModeOverride: null,
+              acpSessionModeId: null, sessionConfigOptionOverrides: null, automationRequestedByRoute: false,
+              backendNewSessionOptionStateByTargetKey: {},
+            };
+            const hook = await renderHook(() => useNewSessionAuthoringState(authoring));
+            try {
+              // Selecting the same model from a Team changes its source, not
+              // the legacy backing tuple. Exercise the actual UI draft owner
+              // and the submit producer before the real Action/daemon path.
+              authoring = { ...authoring, teamCredentialBindings: [sessionModelSelectionV2TeamBindingIntent({
+                v: 2, updatedAt: 1, ref: { source: 'team_resource', resourceId: offered.selection.resourceId,
+                  teamId: offered.selection.teamId, expectedResourceRevision: offered.selection.expectedResourceRevision,
+                  deliveryMode: offered.selection.deliveryMode, agentTargetKey: offered.selection.agentTargetKey,
+                  modelId: offered.selection.modelId },
+              })] };
+              await hook.rerender();
+              return buildSessionSpawnNewInputV2FromAuthoringDraft({ draft: hook.getCurrent().currentAuthoringDraft,
+                creationKey: 'team-pool-ui', permissionMode: 'default', configurationUpdatedAtMs: 1,
+                initialMessage: 'TEAM_POOL_NATIVE_PROMPT' });
+            } finally { await hook.unmount(); }
+          })() : null;
+          if (uiAuthoring) expect(authoredSpawn?.teamCredentialBindings).toEqual([{
+            v: 1, slot: { kind: 'provider_model' }, teamId: team.id, resourceId: resource.id,
+            expectedResourceRevision: resource.revision, deliveryMode: 'brokered',
+          }]);
+          const start = () => createActionExecutor(deps).execute('session.spawn_new', authoredSpawn ?? {
             creationKey: `team-pool-${surface}`, executionTarget: { serverId: configuration.activeServerId, machineId: worker.machineId },
             directory: { kind: 'path', path: directory }, agentTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
             permissionMode: 'default', modelSelection: { v: 1, updatedAt: 1,
@@ -541,14 +665,15 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { active: true, archivedAt: true } }))
             .toEqual({ active: true, archivedAt: null });
           expect(await db.sessionPendingMessage.count({ where: { sessionId, status: 'queued' } })).toBe(1);
-          expect(await db.session.count({ where: { accountId: recipient.id } })).toBe(surface === 'cli' ? 1 : 2);
-          expect(requests.slice(requestStart)).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
+          expect(await db.session.count({ where: { accountId: recipient.id } })).toBe(completedIngresses.length + 1);
+          expect(requests.slice(requestStart)).toEqual(resumeOnly ? [] : [{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
           expect(await db.sessionTeamCredentialBinding.findMany({ where: { sessionId } })).toEqual(expect.arrayContaining([
-            expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id }),
+            expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id, resourceRevision: resource.revision }),
           ]));
           if (surface === 'cli') {
             await closePublisher?.(); closePublisher = undefined;
             await closeControlledRunner();
+            await Promise.all(exitTasks);
             // A Session which really ran keeps normal rejoin/Resume behavior.
             // Leave an OS refusal armed so an accidental relaunch is visible.
             os.runner = () => { throw new Error('Stopped Session unexpectedly relaunched'); };
@@ -561,12 +686,19 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             } finally { os.runner = null; os.refuseStart = false; }
             phase = `${surface}:normal-retained-resume`;
             // A replacement daemon has no old process custody, just Home's
-            // retained Session. Use the real sparse resume producer/contract.
+            // retained Session. Use the real resume producer/contract and the
+            // custom Agent identity that its client must carry (no birth fields).
             tracked.clear();
             runner = undefined;
             os.runner = runControlledRunner;
-            const resume = SpawnDaemonSessionRequestSchema.parse(buildMachineResumeRequest({ directory }, sessionId));
-            const resumed = await spawnSession({ directory: resume.directory, existingSessionId: resume.sessionId });
+            const resume = SpawnDaemonSessionRequestSchema.parse(buildMachineResumeRequest({ directory,
+              agentTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
+              // This external-Agent OS adapter does not publish host startup
+              // metadata; the client retains the actual last-admitted model.
+              modelSelection: retainedModelSelection,
+            }, sessionId));
+            const resumed = await spawnSession({ directory: resume.directory, existingSessionId: resume.sessionId,
+              agentTarget: resume.agentTarget, modelSelection: resume.modelSelection });
             expect(resumed, JSON.stringify({ resumed, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
               message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ type: 'success', sessionId });
             expect(runner).toBeDefined();
@@ -574,13 +706,13 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             expect(tracked.get(os.pid)?.spawnOptions?.teamCredentialBindings).toContainEqual(expect.objectContaining({
               resourceId: resource.id, teamId: team.id, deliveryMode: 'brokered',
             }));
-            expect(requests.slice(requestStart)).toEqual([
+            expect(requests.slice(requestStart)).toEqual(resumeOnly ? [] : [
               { model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' },
               { model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' },
             ]);
           }
           completedIngresses.push(surface);
-        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closePublisher?.(); await closeControlledRunner(); }
+        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closePublisher?.(); await closeControlledRunner(); await Promise.all(exitTasks); }
         }
       });
     } finally {
@@ -597,6 +729,8 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     ({ onTestFailed }) => runJourney(true, onTestFailed));
   it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach',
     ({ onTestFailed }) => runJourney(false, onTestFailed));
-  it('resumes a retained Team Session through sparse resume admission, runner argv and the real Session launch contract',
+  it('resumes a retained Team Session through normal resume admission, runner argv and the real Session launch contract',
     ({ onTestFailed }) => runJourney(false, onTestFailed, true));
+  it('preserves a UI-authored Team source through submit, daemon spawn, persisted binding and brokered inference',
+    ({ onTestFailed }) => runJourney(false, onTestFailed, false, true));
 });
