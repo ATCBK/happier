@@ -9,6 +9,9 @@ import {
   UsageDayStyleBody, UsageDaylightStyleBody, UsagePlanetBody, UsageRecordsStyleBody, UsageRunLengthBody, UsageScoreBody,
   UsageSkyStyleBody, UsageSteeringStyleBody, UsageWeekTideStyleBody,
 } from '@/components/settings/usage/widgets/UsageChartStyleBodies';
+import {
+  UsageAtmosphereBody, UsageCalendarArtStyleBody, UsageMachinesBody, UsageMoonsBody, UsageProjectsBody,
+} from '@/components/settings/usage/widgets/UsagePlanetFamilyBodies';
 
 /**
  * Development harness: the real chart Style bodies fed by synthetic work facts pushed through the real How-you-work owner,
@@ -38,6 +41,25 @@ export default function UsageChartsHarness() {
     </View>
     {card('A day in agents · Dial', <UsageDayStyleBody {...props('usage_parallel', 'h.dial')} style="dial" />)}
     {card('Score', <UsageScoreBody {...props('usage_score', 'h.score')} />)}
+    <Text style={styles.note}>Calendar and planet family</Text>
+    {card('Ninety planets', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.ninety')} style="ninetyPlanets" />)}
+    <View style={styles.row}>
+      {card('Streak thread', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.thread')} style="streakThread" />, true)}
+      {card('Weeks skyline', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.skyline')} style="weeksSkyline" />, true)}
+    </View>
+    <View style={styles.row}>
+      {card('Days on the surface', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.surface')} style="daysOnSurface" />, true)}
+      {card('Around the period', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.orbit')} style="aroundPeriod" />, true)}
+    </View>
+    {card('Ringed by streaks', <UsageCalendarArtStyleBody {...props('usage_rhythm', 'h.rings')} style="ringedStreaks" />)}
+    <View style={styles.row}>
+      {card('Moons', <UsageMoonsBody {...props('usage_orbit', 'h.moons', { style: 'moons' })} />, true)}
+      {card('Atmosphere', <UsageAtmosphereBody {...props('usage_atmosphere', 'h.atmosphere')} />, true)}
+    </View>
+    <View style={styles.row}>
+      {card('Machines', <UsageMachinesBody {...props('usage_machines', 'h.machines')} />, true)}
+      {card('Projects', <UsageProjectsBody {...props('usage_projects', 'h.projects')} />, true)}
+    </View>
   </ScrollView>;
 }
 
