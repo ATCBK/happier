@@ -88,6 +88,29 @@ describe('DiffHunkRow on the shared hunk contract', () => {
     expect(screen.findByTestId('diff-hunk-discard-0')).toBeFalsy();
   });
 
+  it('says why Discard is unavailable on any change whose buttons are showing, not only the current one', async () => {
+    const screen = await render({
+      currentIndex: 1,
+      actions: { keep: vi.fn(), discard: vi.fn() },
+      disabledReason: (_hunk, action) =>
+        action === 'discard' ? 'Untracked file' : null,
+    });
+    const count = () => screen.getTextContent().split('Untracked file').length - 1;
+    // Quiet rows stay quiet: only the current change speaks.
+    expect(count()).toBe(1);
+    const row = screen.findByTestId('diff-hunk-row-0')!;
+    await act(async () => {
+      row.props.onMouseEnter?.();
+    });
+    // Hovering a change reveals its buttons and, with the disabled Discard, the reason beside it.
+    expect(count()).toBe(2);
+    expect(screen.findByTestId('diff-hunk-discard-0')!.props.disabled).toBe(true);
+    await act(async () => {
+      screen.findByTestId('diff-hunk-row-0')!.props.onMouseLeave?.();
+    });
+    expect(count()).toBe(1);
+  });
+
   it('leaves notes-only callers without rows', async () => {
     const screen = await render({
       renderNote: (hunk) => <>{`note-${hunk.index}`}</>,

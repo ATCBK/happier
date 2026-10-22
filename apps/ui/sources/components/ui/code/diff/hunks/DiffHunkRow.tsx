@@ -107,7 +107,8 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
   const showActions = !phone && (keep || discard) && (current || revealed);
   const discardReason = discard ? reason('discard') : null;
   const keepReason = keep ? reason('keep') : null;
-  const shownReason = current ? (discardReason ?? keepReason) : null;
+  // The reason speaks wherever its buttons show: the current change, and any change hovered or focused.
+  const shownReason = current || showActions ? (discardReason ?? keepReason) : null;
   const textInset = React.useContext(DiffHunkRowTextInsetContext);
   // In a sideways-scrolling column the row spans the visible width and stays pinned to its left edge,
   // so its actions sit at the pane edge, not past the longest line.
@@ -179,7 +180,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
           >{narrow ? '' : `· ${range}`}</Text>
         </View>
       ) : (
-        <View style={styles.label}>
+        <View style={[styles.label, narrow ? styles.labelNarrow : null]}>
           <Text
             variant="micro"
             emphasis="semiBold"
@@ -194,6 +195,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
           >
             {t('hunkReview.change', { n })}
           </Text>
+          {/* While a reason speaks, the range (the gutter already numbers the lines) steps aside for it. */}
           <Text
             variant="micro"
             numberOfLines={1}
@@ -201,7 +203,7 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               color: theme.colors.text.tertiary,
               fontVariant: ['tabular-nums'],
             }}
-          >{narrow ? '' : `· ${range}`}</Text>
+          >{narrow || shownReason ? '' : `· ${range}`}</Text>
         </View>
       )}
       <View style={styles.grow} />
@@ -225,7 +227,8 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
               size="mini"
               display="inverted"
               title={t('hunkReview.discard')}
-              trailing={narrow ? undefined :
+              // An unavailable Discard does not advertise a key that does nothing; its reason sits beside it.
+              trailing={narrow || discardReason !== null ? undefined :
                 <ShortcutHint
                   commandId="review.change.discard"
                   color={theme.colors.text.tertiary}
@@ -318,6 +321,7 @@ const styles = StyleSheet.create((theme) => ({
   rowBusy: {
     opacity: 0.6,
   },
+  // The change's name never gives way to the reason: in a narrow column the reason ellipsizes first.
   label: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -325,11 +329,15 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     minWidth: 0,
   },
+  labelNarrow: {
+    flexShrink: 0,
+  },
   grow: {
     flex: 1,
   },
   reason: {
     flexShrink: 1,
+    minWidth: 0,
   },
   actions: {
     flexShrink: 0,
