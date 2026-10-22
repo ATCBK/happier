@@ -36,7 +36,13 @@ export interface SessionPermissionRequest {
 
 export const NOTIFICATION_PERMISSION_DENY_REASON = 'Denied from notification';
 
-export function buildNotificationPermissionDecisionRequest(action: 'allow' | 'deny', requestId: string): SessionPermissionRequest {
+/** The one definition of how a notification button press maps to a permission decision. */
+export type NotificationPermissionDecisionRequest = SessionPermissionRequest & (
+    | Readonly<{ approved: true; decision: 'approved' }>
+    | Readonly<{ approved: false; decision: 'denied'; reason: string }>
+);
+
+export function buildNotificationPermissionDecisionRequest(action: 'allow' | 'deny', requestId: string): NotificationPermissionDecisionRequest {
     return action === 'allow'
         ? { id: requestId, approved: true, decision: 'approved' }
         : { id: requestId, approved: false, decision: 'denied', reason: NOTIFICATION_PERMISSION_DENY_REASON };

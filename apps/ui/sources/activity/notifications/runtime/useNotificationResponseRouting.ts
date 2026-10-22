@@ -75,18 +75,18 @@ export function useNotificationResponseRouting(params: Readonly<{
             requestId: string;
             action: 'allow' | 'deny';
         }): Promise<void> => {
-            const { sessionAllow, sessionDeny } = await import('@/sync/ops');
-            if (actionParams.action === 'allow') {
-                await sessionAllow(actionParams.sessionId, actionParams.requestId, undefined, undefined, 'approved');
+            // One owner defines the notification decision mapping; the foreground
+            // path still dispatches through sessionAllow/sessionDeny and their
+            // preferred-session-scope and denial-recovery behavior.
+            const [{ sessionAllow, sessionDeny }, { buildNotificationPermissionDecisionRequest }] = await Promise.all([
+                import('@/sync/ops'),
+                import('@/sync/ops/sessionPermissionDecision'),
+            ]);
+            const decision = buildNotificationPermissionDecisionRequest(actionParams.action, actionParams.requestId);
+            if (decision.approved) {
+                await sessionAllow(actionParams.sessionId, decision.id, decision.mode, decision.allowedTools, decision.decision);
             } else {
-                await sessionDeny(
-                    actionParams.sessionId,
-                    actionParams.requestId,
-                    undefined,
-                    undefined,
-                    'denied',
-                    'Denied from notification',
-                );
+                await sessionDeny(actionParams.sessionId, decision.id, decision.mode, decision.allowedTools, decision.decision, decision.reason);
             }
         };
 

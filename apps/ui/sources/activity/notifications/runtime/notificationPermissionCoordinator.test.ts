@@ -126,6 +126,28 @@ describe('notification permission issuance', () => {
         expect(storage.getAllKeys().filter((key) => key.startsWith('request:v1:')).length).toBeLessThanOrEqual(2);
     });
 
+    it('admits more than 512 valid actions at the production default capacity', async () => {
+        vi.useFakeTimers();
+        try {
+            const journal = new NotificationPermissionJournal(storage);
+            for (let index = 0; index < 600; index += 1) {
+                vi.setSystemTime(1000 + index);
+                journal.write({ ...request, requestId: `bulk-${index}` }, 'confirmed');
+            }
+            expect(storage.getAllKeys().filter((key) => key.startsWith('request:v1:')).length).toBe(512);
+            // The oldest settled records were reclaimed; recent history is intact.
+            expect(journal.read({ ...request, requestId: 'bulk-0' })).toBeNull();
+            expect(journal.read({ ...request, requestId: 'bulk-87' })).toBeNull();
+            expect(journal.read({ ...request, requestId: 'bulk-88' })?.state).toBe('confirmed');
+            expect(journal.read({ ...request, requestId: 'bulk-599' })?.state).toBe('confirmed');
+            // A live coordinator admission still works past the historical cutoff.
+            const run = createNotificationPermissionCoordinator(journal);
+            const send = vi.fn(async (issued: () => void) => { issued(); return { ok: true }; });
+            await expect(run({ ...request, requestId: 'bulk-600' }, send)).resolves.toMatchObject({ status: 'confirmed' });
+            expect(send).toHaveBeenCalledTimes(1);
+        } finally { vi.useRealTimers(); }
+    });
+
     it('reclaims the oldest settled record and preserves ambiguous records regardless of age', () => {
         vi.useFakeTimers();
         try {
