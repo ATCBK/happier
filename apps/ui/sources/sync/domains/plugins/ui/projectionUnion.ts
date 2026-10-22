@@ -286,9 +286,16 @@ export function createPluginUiProjectionUnionPublication() {
             if (members && source) {
                 const currentSource = source;
                 const sameMembers = arePluginUiProjectionUnionMembersEquivalentForPlugins(members, nextMembers, true);
+                const sameMaterializationInputs = members.length === nextMembers.length && members.every((member, index) => {
+                    const next = nextMembers[index]!;
+                    return member.machineId === next.machineId && member.serverId === next.serverId
+                        && member.serverIdentityId === next.serverIdentityId
+                        && member.materializationsByPluginId === next.materializationsByPluginId;
+                });
                 if ((!sameMembers && (members.some(member => member.projection && !nextMembers.some(next => next.projection === member.projection))
                     || nextMembers.some(member => member.projection && !members!.some(previous => previous.projection === member.projection))))
-                    || [...comparisons.materializations.keys()].some(value => !nextMembers.some(member => member.materializationsByPluginId?.[value.pluginId] === value))) {
+                    || (!sameMaterializationInputs && [...comparisons.materializations.keys()]
+                        .some(value => !nextMembers.some(member => member.materializationsByPluginId?.[value.pluginId] === value)))) {
                     comparisons = retainDeclarationComparisons(nextMembers.flatMap(member => member.projection ? [member.projection] : []), comparisons,
                         nextMembers.flatMap(member => member.materializationsByPluginId ? Object.values(member.materializationsByPluginId) : []));
                 }

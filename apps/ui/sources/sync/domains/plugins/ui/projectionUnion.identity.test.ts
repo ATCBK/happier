@@ -24,6 +24,7 @@ describe('execution-origin projection identity', () => {
                 renderers: [{ id: 'content', kind: 'declarative', root: { kind: 'text', text: 'Native manifest comparison payload' } }],
                 views: [{ id: 'content', container: 'appPage', target: { kind: 'app' }, title: 'Native manifest comparison', renderer: 'content' }],
             } } });
+        let materializationReads = 0;
         let members = Array.from({ length: 56 }, (_, index) => {
             const member = sourceMember(`stream-${String(index).padStart(2, '0')}`, pluginId, 'row');
             const projection = preparePluginUiProjectionOrigins({ ...member.projection!, installedPackagesById: {
@@ -38,7 +39,13 @@ describe('execution-origin projection identity', () => {
                 enabled: true, trustState: 'trusted', observedAt: 1,
                 declaredManifest: index % 2 ? { ...nativeManifest, displayName: 'Conflicting native manifest' } : nativeManifest,
                 uiArtifacts: index % 2 ? slots.reverse() : slots });
-            return { ...member, projection, materializationsByPluginId: { [pluginId]: materialization },
+            const materializationsByPluginId = new Proxy({ [pluginId]: materialization }, {
+                get(target, key, receiver) {
+                    if (key === pluginId) materializationReads++;
+                    return Reflect.get(target, key, receiver);
+                },
+            });
+            return { ...member, projection, materializationsByPluginId,
                 selectableExecutionOrigins: [projection.installedPackagesById[pluginId]!.executionOrigin!] } satisfies PluginUiProjectionUnionMember;
         });
         const selections = new Map([[pluginId, members[0]!.projection.installedPackagesById[pluginId]!.executionOrigin!]]);
@@ -53,6 +60,15 @@ describe('execution-origin projection identity', () => {
             return merged;
         };
         let projection = publish();
+        expect(materializationReads).toBeGreaterThan(0);
+        materializationReads = 0;
+        for (let report = 0; report < members.length; report++) {
+            members = members.map(member => ({ ...member, selectableExecutionOrigins: [...member.selectableExecutionOrigins] }));
+            expect(publish()).toBe(projection);
+        }
+        const unchangedMaterializationReads = materializationReads;
+        expect.soft(unchangedMaterializationReads).toBe(0);
+        materializationReads = 0;
         const retainedFacts = new Set<object>();
         const remember = (value: unknown): void => {
             if (!value || typeof value !== 'object' || retainedFacts.has(value)) return;
@@ -68,6 +84,7 @@ describe('execution-origin projection identity', () => {
         const compareCustody = vi.spyOn(sourceCustodyComparison, 'pluginSourceCustodyV1Equal');
         const projectJson = vi.spyOn(strictJsonProjection, 'projectNativeJsonValueForTransport');
         const sourceManifests = new Set<unknown>(members.map(member => member.materializationsByPluginId[pluginId]!.declaredManifest));
+        materializationReads = 0;
         let untouchedSupplierPreparations = 0;
         let reportingSupplierPreparations = 0;
         let untouchedSupplierComparisons = 0;
@@ -101,6 +118,7 @@ describe('execution-origin projection identity', () => {
             expect.soft(untouchedSupplierPreparations).toBe(0);
             expect.soft(untouchedSupplierComparisons).toBe(0);
             expect(reportingSupplierPreparations).toBeGreaterThan(0);
+            expect(materializationReads).toBeGreaterThan(0);
             // Comparison snapshots own cloned portable JSON. Checking only
             // original payload identities misses equality walks over those
             // unchanged copies during currentness-only publications.
