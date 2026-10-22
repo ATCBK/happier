@@ -186,7 +186,7 @@ import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
 import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
 
-import { captureLazyActionAccountContext, captureHomeOpenApprovalSettlementAccount, withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
+import { captureLazyActionAccountContext, captureApprovalSettlementAccount, withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { resolveRequesterSessionSpawnDisposition } from './requesterSessionSpawnPreparation';
 import { createUiArtifactAction } from './artifactActionDeps';
 import { createUiProfileActionExecuteV1 } from './profileActionDeps';
@@ -965,10 +965,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   const updateApprovalArtifact = async ({ artifactId, request }: Readonly<{
     artifactId: string; request: ApprovalRequest | TargetActionApprovalRequestV1;
   }>) => {
-    // Only the known Home-open ACK may outlive presentation focus; target
-    // decisions keep their captured Account lifetime throughout the CAS.
+    // Only the known Home-open ACK and a decided terminal outcome may outlive their
+    // invoking presentation/intent; target decisions keep their captured Account lifetime.
     const settlement = accountContext && request.v === 2
-      ? await captureHomeOpenApprovalSettlementAccount(accountContext, request) : null;
+      ? await captureApprovalSettlementAccount(accountContext, request) : null;
     const artifactAccount = settlement ?? accountContext;
     try {
       const written = await writeApprovalRequestArtifact({

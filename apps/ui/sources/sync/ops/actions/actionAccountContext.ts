@@ -733,17 +733,23 @@ export async function withActionAccountRequestSignal<TResult>(
     finally { merged.dispose(); retirement.dispose(); }
 }
 
-/** Only the original Home-open Artifact's known ACK may outlive presentation focus. */
-export async function captureHomeOpenApprovalSettlementAccount(original: LazyActionAccountContext, request: ApprovalRequest) {
-    if (request.v !== 2 || request.actionId !== 'account.home_continuation.invoke' || request.status !== 'executed'
-        || request.execution?.ok !== true || request.executionOriginV1.accountId !== original.accountId
-        || !areServerProfileIdentifiersEquivalent(request.executionOriginV1.serverId, original.serverId)
-        || typeof request.actionArgs !== 'object' || request.actionArgs === null || !('operation' in request.actionArgs)
-        || request.actionArgs.operation !== 'open'
-        || typeof request.execution.result !== 'object' || request.execution.result === null
-        || !('status' in request.execution.result) || request.execution.result.status !== 'completed') return null;
-    if (original.accountLifetime.isCurrent()) return null;
-    const settlement = await captureLazyActionAccountContext(original.serverId, original.invocationSignal);
+/** Only the Home-open ACK, or a decided terminal outcome whose invoking intent ended, may outlive its invocation signal/lifetime. */
+export async function captureApprovalSettlementAccount(original: LazyActionAccountContext, request: ApprovalRequest) {
+    if (request.v !== 2 || request.executionOriginV1.accountId !== original.accountId
+        || !areServerProfileIdentifiersEquivalent(request.executionOriginV1.serverId, original.serverId)) return null;
+    // The invoking intent (for example a Settings write cancelled by a
+    // declaration change) may end after the approval was decided. The decided
+    // terminal outcome still belongs to the live Account, so only that intent's
+    // signal is released from the final Artifact CAS.
+    const intentEnded = original.accountOnlyLifetime.isCurrent() && original.invocationSignal?.aborted === true
+        && (request.status === 'executed' || request.status === 'failed');
+    const homeOpenAck = !original.accountLifetime.isCurrent() && request.actionId === 'account.home_continuation.invoke' && request.status === 'executed'
+        && request.execution?.ok === true && typeof request.actionArgs === 'object' && request.actionArgs !== null
+        && 'operation' in request.actionArgs && request.actionArgs.operation === 'open'
+        && typeof request.execution.result === 'object' && request.execution.result !== null
+        && 'status' in request.execution.result && request.execution.result.status === 'completed';
+    if (!intentEnded && !homeOpenAck) return null;
+    const settlement = await captureLazyActionAccountContext(original.serverId, intentEnded ? undefined : original.invocationSignal);
     if (settlement.accountId !== original.accountId || settlement.endpointUrl !== original.endpointUrl
         || settlement.serverIdentityId !== original.serverIdentityId || !areCredentialsEqual(settlement.credentials, original.credentials)) {
         settlement.dispose();
