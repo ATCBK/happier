@@ -77,6 +77,7 @@ export type DeepIndexDbHandle = Readonly<{
   getExternalSourceState: (args: Readonly<{ sessionId: string }>) => ExternalSourceState | null;
   setExternalSourceState: (args: Omit<ExternalSourceState, 'coverageComplete'> & Readonly<{ sessionId: string }>) => void;
   listExternalSourceStates: () => readonly (ExternalSourceState & Readonly<{ sessionId: string }>)[];
+  getExternalSourceItemCursor: (args: Readonly<{ sessionId: string; sourceItemId: string; paddingMessages: number }>) => string | undefined;
   upsertEmbedding: (args: Readonly<{
     sessionId: string;
     seqFrom: number;
@@ -565,6 +566,18 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
   };
 
   return {
+    getExternalSourceItemCursor: ({ sessionId, sourceItemId, paddingMessages }) => {
+      const target = db.prepare('SELECT sourceOrder FROM message_chunks WHERE sessionId = ? AND sourceItemId = ?;')
+        .get(sessionId, sourceItemId) as { sourceOrder: number | null } | undefined;
+      if (target?.sourceOrder == null) return undefined;
+      // Start with the newest requested neighbor so a target at a page edge
+      // retains its newer context. The native reader still validates the
+      // opaque locator and supplies all window text from the current source.
+      const rows = db.prepare(`SELECT sourceCursor FROM message_chunks
+        WHERE sessionId = ? AND sourceOrder >= ? ORDER BY sourceOrder ASC LIMIT ?;`)
+        .all(sessionId, target.sourceOrder, paddingMessages + 1) as { sourceCursor: string | null }[];
+      return rows.at(-1)?.sourceCursor ?? undefined;
+    },
     getExternalSourceState: ({ sessionId }) => {
       const row = getExternalStateStmt.get(sessionId) as ExternalSourceStateRow | undefined;
       return row ? readExternalState(row) : null;

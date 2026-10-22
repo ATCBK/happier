@@ -11,7 +11,8 @@ import {
   extractMemoryIndexableTranscriptItem,
 } from './transcript/extractIndexableItem';
 import { normalizeMemoryContentPolicy, type MemoryContentPolicy } from './transcript/contentPolicy';
-import { extractExternalMemoryTranscriptItems } from './externalTranscriptIndex';
+import { externalMemoryStorageId, extractExternalMemoryTranscriptItems } from './externalTranscriptIndex';
+import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
 
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
@@ -26,15 +27,20 @@ type ExternalMemoryWindowRequest = Readonly<{
   paddingMessages: number;
   contentPolicy?: MemoryContentPolicy | null;
   signal?: AbortSignal;
+  db?: Pick<DeepIndexDbHandle, 'getExternalSourceItemCursor'>;
   fetchExternalTranscriptPage: (request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>,
     signal?: AbortSignal) => Promise<AgentExternalSessionsTranscriptPage | null>;
 }>;
 
 async function getExternalMemoryWindow(params: ExternalMemoryWindowRequest): Promise<MemoryWindowV1> {
+  params.signal?.throwIfAborted();
   const maxMessages = configuration.memoryMaxTranscriptWindowMessages;
   const padding = Math.min(Math.max(0, Math.trunc(params.paddingMessages)), maxMessages - 1);
   const contentPolicy = normalizeMemoryContentPolicy(params.contentPolicy);
-  let cursor = params.cursor;
+  let cursor = params.cursor ?? params.db?.getExternalSourceItemCursor({
+    sessionId: externalMemoryStorageId(params.source), sourceItemId: params.sourceItemId, paddingMessages: padding,
+  });
+  let indexedStart = params.cursor === undefined && cursor !== undefined;
   const visited = new Set<string>();
   let newerContext: MemoryExternalSnippetV1[] = [];
   let before: MemoryExternalSnippetV1[] = [];
@@ -44,6 +50,16 @@ async function getExternalMemoryWindow(params: ExternalMemoryWindowRequest): Pro
     params.signal?.throwIfAborted();
     const page = await params.fetchExternalTranscriptPage({ source: params.source, ...(cursor ? { cursor } : {}) }, params.signal);
     params.signal?.throwIfAborted();
+    if (indexedStart) {
+      indexedStart = false;
+      // An index locator can predate a native rewrite. Let the reader reject
+      // it, then use the ordinary head scan; explicit caller cursors retain
+      // their existing discontinuity behavior.
+      if (!page || (page.items.length === 0 && page.truncated === true && !page.nextCursor)) {
+        cursor = undefined;
+        continue;
+      }
+    }
     if (!page) break;
     const snippets = extractExternalMemoryTranscriptItems(page.items, contentPolicy).map(item => ({
       source: params.source, sourceItemId: item.sourceItemId, ...(cursor ? { cursor } : {}),

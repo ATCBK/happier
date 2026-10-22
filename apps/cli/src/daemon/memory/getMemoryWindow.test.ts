@@ -4,8 +4,31 @@ import type { Credentials, StoredCredentials } from '@/persistence';
 import { encryptSessionPayload, type SessionEncryptionContext } from '@/session/transport/encryption/sessionEncryptionContext';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { getMemoryWindow } from './getMemoryWindow';
+import { openDeepIndexDb } from './deepIndex/deepIndexDb';
+import { externalMemoryStorageId } from './externalTranscriptIndex';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('getMemoryWindow', () => {
+  it.each(['discontinuity', 'unavailable'] as const)('restarts from the native head when an indexed locator is %s after a rewrite', async failure => {
+    const directory = await mkdtemp(join(tmpdir(), 'memory-stale-window-'));
+    const db = openDeepIndexDb({ dbPath: join(directory, 'deep.sqlite') });
+    const source = { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' };
+    try {
+      db.insertChunk({ sessionId: externalMemoryStorageId(source), source, sourceItemId: 'wanted', sourceCursor: 'old-page',
+        sourceOrder: 1, seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1, text: 'old text' });
+      const window = await getMemoryWindow({ source, sourceItemId: 'wanted', paddingMessages: 0, db,
+        // The native reader's discontinuity response is a real program boundary;
+        // source validation, semantic extraction and redaction remain real.
+        fetchExternalTranscriptPage: async request => request.cursor
+          ? failure === 'unavailable' ? null : { items: [], nextCursor: null, hasMore: false, truncated: true }
+          : { items: [{ id: 'wanted', createdAtMs: 1, raw: { role: 'user', content: { type: 'text', text: 'rewritten native text' } } }],
+            nextCursor: null, hasMore: false, truncated: false },
+      });
+      expect(window.externalSnippets?.map(item => item.text)).toEqual(['User: rewritten native text']);
+    } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
+  });
   it('reads a native hit through transcript pages using opaque cursors and source item identity', async () => {
     const source = { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'pi-source', nativeSessionId: 'native' };
     const calls: (string | undefined)[] = [];

@@ -304,14 +304,19 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       if (!external.enabled || !external.agents.includes(parsed.data.source.agentId) || !memoryWorker.readExternalTranscriptPage) {
         return MemoryWindowV1Schema.parse({ v: 1, snippets: [], citations: [], externalSnippets: [] });
       }
-      return MemoryWindowV1Schema.parse(await getMemoryWindow({
-        source: parsed.data.source, sourceItemId: parsed.data.sourceItemId,
-        ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
-        paddingMessages: settings.hints.paddingMessagesOnVerify,
-        contentPolicy: { ...settings.contentPolicy, includeToolOutputs: external.includeToolOutput },
-        fetchExternalTranscriptPage: memoryWorker.readExternalTranscriptPage,
-        ...(context?.signal ? { signal: context.signal } : {}),
-      }));
+      const deepDbPath = memoryWorker.getDeepDbPath();
+      const db = deepDbPath ? openDeepIndexDb({ dbPath: deepDbPath }) : undefined;
+      try {
+        return MemoryWindowV1Schema.parse(await getMemoryWindow({
+          source: parsed.data.source, sourceItemId: parsed.data.sourceItemId,
+          ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+          paddingMessages: settings.hints.paddingMessagesOnVerify,
+          contentPolicy: { ...settings.contentPolicy, includeToolOutputs: external.includeToolOutput },
+          db,
+          fetchExternalTranscriptPage: memoryWorker.readExternalTranscriptPage,
+          ...(context?.signal ? { signal: context.signal } : {}),
+        }));
+      } finally { db?.close(); }
     }
 
     const { readStoredCredentials } = await import('@/persistence');

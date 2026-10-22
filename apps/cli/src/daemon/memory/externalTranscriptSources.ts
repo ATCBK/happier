@@ -47,6 +47,7 @@ export function createMemoryExternalTranscriptTraversal() {
   let preferRefresh = true;
   return {
     replace(next: readonly MemoryExternalTranscriptCandidate[], refreshIds?: ReadonlySet<string>) {
+      const discovered: [string, Entry][] = [];
       const retainedIds = new Set(next.map(candidate => externalMemoryStorageId(candidate.source)));
       for (const id of candidates.keys()) if (!retainedIds.has(id)) candidates.delete(id);
       for (const candidate of next) {
@@ -55,7 +56,18 @@ export function createMemoryExternalTranscriptTraversal() {
         if (existing) {
           existing.candidate = candidate;
           if (refreshIds?.has(id)) existing.refresh = true;
-        } else candidates.set(id, { candidate, refresh: refreshIds?.has(id) ?? false });
+        } else {
+          const entry = { candidate, refresh: refreshIds?.has(id) ?? false };
+          if (entry.refresh) discovered.push([id, entry]);
+          else candidates.set(id, entry);
+        }
+      }
+      if (discovered.length) {
+        // A new sibling must not queue behind every previously discovered,
+        // unstarted refresh. Keep the incumbent rotation behind this batch.
+        const retained = [...candidates];
+        candidates.clear();
+        for (const [id, entry] of [...discovered, ...retained]) candidates.set(id, entry);
       }
     },
     size() { return candidates.size; },
@@ -109,12 +121,16 @@ export function createMemoryExternalTranscriptTraversal() {
       for (let i = 0; i < Math.min(count, candidates.size); i++) {
         let first: [string, Entry] | undefined;
         let refresh: [string, Entry] | undefined;
+        let unstartedRefresh: [string, Entry] | undefined;
         let backfill: [string, Entry] | undefined;
         let continuation: [string, Entry] | undefined;
         for (const pair of candidates) {
           if (selected.has(pair[0])) continue;
           first ??= pair;
-          if (pair[1].refresh) refresh ??= pair;
+          if (pair[1].refresh) {
+            if (pair[1].state === undefined) unstartedRefresh ??= pair;
+            else refresh ??= pair;
+          }
           if (pair[1].state !== 'current') backfill ??= pair;
           if (pair[1].state === 'more' && !pair[1].refresh) continuation ??= pair;
           if (refresh && continuation) break;
@@ -123,7 +139,11 @@ export function createMemoryExternalTranscriptTraversal() {
         // Otherwise each page waits behind the whole unstarted corpus. Explicit
         // refreshes still alternate with backfill under the same allowance.
         const history = continuation ?? backfill;
-        const next = preferRefresh ? refresh ?? history ?? first : history ?? refresh ?? first;
+        // Keep admitted append/rewrite work ahead of newly discovered history.
+        // Both use the existing refresh allowance; initial backfill still gets
+        // every other selection.
+        const requested = refresh ?? unstartedRefresh;
+        const next = preferRefresh ? requested ?? history ?? first : history ?? requested ?? first;
         if (!next) break;
         const [id, entry] = next;
         selected.add(id);
@@ -362,7 +382,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           const source = { type: 'external_transcript' as const,
             agentId: native.agentId, sourceKey: native.sourceKey, nativeSessionId: identity.value.remoteSessionId };
           const id = externalMemoryStorageId(source);
-          if (refresh && !state.pending.has(id) && !state.candidates.has(id)) refreshIds.add(id);
+          // Inventory may finish long before transcript backfill. A sibling
+          // discovered by a later ordinary crawl needs the same refresh slot
+          // as one found during an interrupted inventory's refresh pass.
+          if ((refresh || state.initialInventoryComplete) && !state.pending.has(id) && !state.candidates.has(id)) refreshIds.add(id);
           state.pending.set(id, { native: { ...native, source: identity.value.source }, source });
         }
         if (page.value.nextCursor) {

@@ -150,6 +150,27 @@ export function activate(api) {
 const cursor = (page: number) => encodeCodexExternalSessionIndexCursor({ ...createInitialCodexExternalSessionIndexCursor(), rolloutOffset: page });
 
 describe('native inventory cursor lifetime', () => {
+  it('prioritizes a newly discovered sibling after inventory completes while transcript backfill remains', async () => {
+    await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
+      configure(() => null, { watchedFiles: 1, candidates: true });
+      await sources.refresh(settings, signal);
+      const initial = await sources.inventory(signal);
+      expect(initial?.completeSources.size).toBe(1);
+      const main = sources.take(1)[0]!;
+      sources.noteSyncResult(main.source, 'more');
+      configure(page => page < 6 ? cursor(page + 1) : null,
+        { watchedFiles: 1, candidates: true, headId: 'new-sibling' });
+      notifyTopology();
+      await sources.inventory(signal);
+      const selected: string[] = [];
+      for (let turn = 0; turn < 2; turn++) {
+        const next = sources.take(1)[0]!;
+        selected.push(next.source.nativeSessionId);
+        sources.noteSyncResult(next.source, 'more');
+      }
+      expect(selected).toContain('new-sibling');
+    });
+  });
   it('does not complete initial coverage when a listed native identity could not be read', async () => {
     await withInventory(async (sources, configure, signal, _settings, _demands, db) => {
       configure(page => page === 0 ? cursor(1) : null, { candidates: true, unavailableIds: ['fixture-1'] });
