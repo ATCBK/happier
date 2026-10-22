@@ -28,7 +28,9 @@ function completed(result: Awaited<ReturnType<ExecService['run']>>) {
 
 export type CuaNativeOutcome<T> =
     | Readonly<{ kind: 'success'; value: T }>
-    | Readonly<{ kind: 'unknown'; reason: 'transport' | 'termination' | 'truncated' | 'response' }>;
+    | Readonly<{ kind: 'unknown'; reason: 'transport' | 'termination' | 'truncated' | 'response' }>
+    // Native exit 3 is Cua's typed NotFound for the exact id the command named.
+    | Readonly<{ kind: 'unknown'; reason: 'not_found' }>;
 
 export function createCuaNativeClient(options: {
     exec: Pick<ExecService, 'run'>;
@@ -114,6 +116,10 @@ export function createCuaNativeClient(options: {
         signal?.throwIfAborted();
         try {
             const result = await options.exec.run({ executable: options.executable, args: ['--json', ...args], env: environment }, { signal });
+            if (result.termination.observed.kind === 'exit' && result.termination.observed.exitCode === 3
+                && result.termination.requestedBy.kind === 'none') {
+                return { kind: 'unknown', reason: 'not_found' } as const;
+            }
             if (result.termination.observed.kind !== 'exit' || result.termination.observed.exitCode !== 0
                 || result.termination.requestedBy.kind !== 'none') {
                 return { kind: 'unknown', reason: 'termination' } as const;

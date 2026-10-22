@@ -103,7 +103,7 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
             const value = resource(operation.resource);
             // Native identity/runtime/image qualifies created compute even when
             // Space registration never completed. Enrollment still uses reconcile.
-            const observed = await sandbox.inspect(value, signal);
+            const observed = await leaf.inspect(value, signal);
             if (observed.existence !== 'present' || observed.imageId !== operation.imageId) {
                 return { kind: 'unknown', code: 'cua_cleanup_incomplete' };
             }

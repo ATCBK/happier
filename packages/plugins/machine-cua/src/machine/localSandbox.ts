@@ -8,6 +8,11 @@ export function createCuaLocalSandbox(native: CuaNativeClient) {
         const resource = parseCuaLocalResource(input);
         const unknown = { resource, existence: 'unknown' as const, power: 'unknown' as const };
         const response = await native.json(['--embedded', 'sandbox', 'info', resource.sandboxId], signal);
+        // After a finished delete the native registry no longer has the record
+        // and `info` answers with typed NotFound instead of a `missing` row.
+        if (response.kind === 'unknown' && response.reason === 'not_found') {
+            return { resource, existence: 'absent' as const, power: 'unknown' as const };
+        }
         if (response.kind !== 'success') return unknown;
         const parsed = CuaNativeSandboxSchema.safeParse(response.value);
         if (!parsed.success || parsed.data.id !== resource.sandboxId || parsed.data.runtime !== resource.runtimeId
