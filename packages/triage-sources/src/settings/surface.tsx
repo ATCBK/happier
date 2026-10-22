@@ -76,6 +76,7 @@ import {
   defineUiSurface,
   useExecutePluginAction,
   usePluginHostApi,
+  usePluginHostReadiness,
   usePluginTranslation,
 } from '@happier-dev/plugin-ui';
 import {
@@ -206,6 +207,8 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
     const discovery = useExecutePluginAction(listInstances);
     const configuredRead = useExecutePluginAction(TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1);
     const administer = useExecutePluginAction(TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1);
+    const discoveryReadiness = usePluginHostReadiness();
+    const configuredReadiness = usePluginHostReadiness(false);
 
     const [outcomes, setOutcomes] = React.useState<ConfigurationOutcomes>({});
     const [learned, setLearned] = React.useState<RowLifecycles>({});
@@ -229,27 +232,26 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
 
     const runDiscovery = discovery.execute;
     const runConfiguredRead = configuredRead.execute;
-    const activeDiscoveryController = React.useRef<AbortController | null>(null);
-    React.useEffect(() => () => {
-      const active = activeDiscoveryController.current;
-      activeDiscoveryController.current = null;
-      active?.abort();
-    }, []);
+    const activeDiscovery = React.useRef<Readonly<{
+      controller: AbortController;
+      invocation: ReturnType<typeof runDiscovery>;
+    }> | null>(null);
 
     const startDiscovery = React.useCallback(() => {
       // `useExecutePluginAction` owns the action's in-flight guard. Keeping the
       // controller until that execution settles means a Refresh cannot start a
       // second request in the small cancellation-to-settlement gap.
-      if (activeDiscoveryController.current !== null) return;
+      if (activeDiscovery.current !== null) return;
       const controller = new AbortController();
-      activeDiscoveryController.current = controller;
       const invocation = runDiscovery({ v: 1 }, { signal: controller.signal });
+      const active = { controller, invocation };
+      activeDiscovery.current = active;
       void invocation.then(
         () => {
-          if (activeDiscoveryController.current === controller) activeDiscoveryController.current = null;
+          if (activeDiscovery.current === active) activeDiscovery.current = null;
         },
         () => {
-          if (activeDiscoveryController.current === controller) activeDiscoveryController.current = null;
+          if (activeDiscovery.current === active) activeDiscovery.current = null;
         },
       );
       void (async () => {
@@ -267,21 +269,31 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
       })();
     }, [discoveryDeadlineMs, runDiscovery]);
 
-    const read = React.useCallback(() => {
-      // Both reads run once on mount and again only on an explicit press. A
-      // settings page that polled would spend the account's provider rate budget
-      // for a reader who already has their answer.
-      //
-      // They are independent on purpose: what this source can reach and what it has
-      // already configured are different questions with different failure modes, and
-      // a page that waited for both would hide the answer it did get.
-      startDiscovery();
-      void runConfiguredRead({ v: 1 });
-    }, [runConfiguredRead, startDiscovery]);
-
     React.useEffect(() => {
-      read();
-    }, [read]);
+      if (discoveryReadiness.pending) return;
+      let current = true;
+      const acquire = () => { if (current) startDiscovery(); };
+      const previous = activeDiscovery.current;
+      // A withdrawn execution still owns the action hook's in-flight guard
+      // until it settles. Re-acquire afterwards, through the same read lifecycle.
+      if (previous) void previous.invocation.then(acquire, acquire);
+      else acquire();
+      return () => {
+        current = false;
+        activeDiscovery.current?.controller.abort();
+      };
+    }, [discoveryReadiness.pending, discoveryReadiness.revision, startDiscovery]);
+
+    // Account configuration remains readable while Machine discovery is pending.
+    // Both reads re-acquire on the host's existing readmission signal, never a timer.
+    React.useEffect(() => {
+      void runConfiguredRead({ v: 1 });
+    }, [configuredReadiness.revision, runConfiguredRead]);
+
+    const read = React.useCallback(() => {
+      if (!discoveryReadiness.pending) startDiscovery();
+      void runConfiguredRead({ v: 1 });
+    }, [discoveryReadiness.pending, runConfiguredRead, startDiscovery]);
 
     const refresh = React.useCallback(() => {
       // Everything this page learned from its own presses is discarded, because the

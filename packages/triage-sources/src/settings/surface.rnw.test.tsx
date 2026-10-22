@@ -191,6 +191,7 @@ async function mountSettings(
   harness: ReturnType<typeof createHarness>,
   translations: Readonly<Record<string, string>> = {},
   surface: typeof renderSurface = renderSurface,
+  surfaceContext = createSurfaceContextFixture({ translations }),
 ): Promise<PluginUiTestkit> {
   let fixture!: PluginUiTestkit;
   await act(async () => {
@@ -198,7 +199,7 @@ async function mountSettings(
       identity: { instanceId: 'fixture-instance-1', mountNonce: 'fixture-mount-1' },
       authorPlugin: { id: PLUGIN_ID, version: '0.0.0' },
       surface,
-      surfaceContext: createSurfaceContextFixture({ translations }),
+      surfaceContext,
       adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       handlers: {
         executeAction: async ({ action, input, signal }) => await harness.executeAction({ action, input, signal }),
@@ -232,6 +233,56 @@ afterEach(async () => {
 });
 
 describe('the mounted PRs & Issues source settings page', () => {
+  it('defers Machine discovery while the host is pending, keeps Account reads independent, and reacquires on readmission', async () => {
+    let discoveryReads = 0;
+    const harness = createHarness({
+      discovery: async () => {
+        discoveryReads += 1;
+        return { kind: 'complete', candidates: [candidate(`Workspace ${discoveryReads}`)], failures: [] };
+      },
+      configured: { kind: 'read', status: 'complete', instances: [configuredRecord('Already configured', 'active')] },
+    });
+    const pending = createSurfaceContextFixture({ machineConnectionPending: true, machineExecutionReady: false });
+    const ready = createSurfaceContextFixture({ machineConnectionPending: false, machineExecutionReady: true });
+    const page = await mountSettings(harness, {}, renderSurface, pending);
+
+    await expect(page.getByText('Already configured')).resolves.toBeDefined();
+    expect(discoveryReads).toBe(0);
+    await act(async () => { await page.updateSurface(ready); });
+    await expect(page.getByRole('button', { name: 'Add Workspace 1 to PRs & Issues' })).resolves.toBeDefined();
+    await act(async () => { await page.updateSurface(ready); });
+    expect(discoveryReads).toBe(1);
+    await act(async () => { await page.updateSurface(pending); });
+    expect(discoveryReads).toBe(1);
+    await act(async () => { await page.updateSurface(ready); });
+    await expect(page.getByRole('button', { name: 'Add Workspace 2 to PRs & Issues' })).resolves.toBeDefined();
+    expect(harness.administrations()).toEqual([]);
+  });
+
+  it('reacquires discovery after withdrawal while the previous provider read is still pending', async () => {
+    let oldSignal: AbortSignal | undefined;
+    let releaseOld!: (value: JsonValue) => void;
+    const oldRead = new Promise<JsonValue>((resolve) => { releaseOld = resolve; });
+    const harness = createHarness({ discovery: async (signal) => {
+      if (!oldSignal) { oldSignal = signal; return await oldRead; }
+      return { kind: 'complete', candidates: [candidate('Current workspace')], failures: [] };
+    } });
+    const ready = createSurfaceContextFixture({ machineConnectionPending: false, machineExecutionReady: true });
+    const page = await mountSettings(harness, {}, renderSurface, ready);
+    expect(oldSignal?.aborted).toBe(false);
+    try {
+      await act(async () => { await page.updateSurface(createSurfaceContextFixture({ machineConnectionPending: true, machineExecutionReady: false })); });
+      expect(oldSignal?.aborted).toBe(true);
+      await act(async () => { await page.updateSurface(ready); });
+      await expect(page.getByRole('button', { name: 'Add Current workspace to PRs & Issues' })).resolves.toBeDefined();
+      await act(async () => { releaseOld({ kind: 'complete', candidates: [candidate('Obsolete workspace')], failures: [] }); });
+      await expect(page.queryByRole('button', { name: 'Add Obsolete workspace to PRs & Issues' })).resolves.toBeUndefined();
+      expect(harness.administrations()).toEqual([]);
+    } finally {
+      releaseOld({ kind: 'complete', candidates: [], failures: [] });
+    }
+  });
+
   it('lets a separately authored source configure a selected set through the shared editor and real administration schema', async () => {
     let directoryReads = 0;
     let oldSignal: AbortSignal | undefined;
