@@ -1498,6 +1498,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    // On a phone the figures drop under the crumbs instead of being cut to "8.8…".
+    flexWrap: 'wrap',
     gap: theme.space.s12,
     paddingHorizontal: theme.space.s16,
     paddingVertical: theme.space.s12,
@@ -1519,7 +1521,6 @@ const styles = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
-    flexShrink: 1,
   },
   chart: {
     paddingHorizontal: theme.space.s16,
