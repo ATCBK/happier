@@ -74,4 +74,36 @@ describe('useSessionWorkspaceTarget', () => {
 
         await hook.unmount();
     });
+
+    it('keeps mounted workspace readers quiet for unrelated Machine and Session changes', async () => {
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders++;
+            return useSessionWorkspaceTarget('s1');
+        });
+        const target = hook.getCurrent();
+        expect(target?.rootPath).toBe('/repo');
+        const before = renders;
+        for (let index = 0; index < 5; index++) {
+            await act(async () => {
+                storage.setState(state => ({
+                    machines: { ...state.machines, other: createMachineFixture({ id: 'other', activeAt: index }) },
+                    sessions: { ...state.sessions, other: createSessionFixture({ id: 'other', seq: index }) },
+                }));
+            });
+        }
+        expect({ renders: renders - before, stableTarget: hook.getCurrent() === target }).toEqual({
+            renders: 0, stableTarget: true,
+        });
+
+        await act(async () => {
+            storage.setState(state => ({ sessions: { ...state.sessions, s1: createSessionFixture({
+                ...state.sessions.s1,
+                metadata: { ...state.sessions.s1.metadata!, path: '/changed' },
+            }) } }));
+        });
+        expect(hook.getCurrent()?.rootPath).toBe('/changed');
+        expect(renders).toBeGreaterThan(before);
+        await hook.unmount();
+    });
 });

@@ -1,6 +1,6 @@
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
-import { resolveWorkspaceTargetForSessionFromState } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
+import { resolveWorkspaceTargetForSessionFromState, type WorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
 import { storage } from '@/sync/domains/state/storage';
 import { useShallow } from 'zustand/react/shallow';
 import type { StorageState } from '@/sync/store/types';
@@ -12,10 +12,10 @@ export function resolveWorkspaceScopeForSession(sessionId: string): WorkspaceSco
 export function useWorkspaceScopeForSession(
     sessionId: string | null | undefined,
     serverId?: string | null,
-): WorkspaceScopeBase | null {
+): WorkspaceTargetForSession | null {
     const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     const normalizedServerId = typeof serverId === 'string' ? serverId.trim() : '';
-    const selector = useShallow((state: StorageState): WorkspaceScopeBase | null => {
+    const selector = useShallow((state: StorageState): WorkspaceTargetForSession | null => {
         if (!normalizedSessionId) return null;
         return resolveWorkspaceTargetForSessionFromState({
             sessions: state.sessions,
