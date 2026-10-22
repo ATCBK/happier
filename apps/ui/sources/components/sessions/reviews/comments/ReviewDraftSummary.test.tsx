@@ -69,5 +69,22 @@ describe('ReviewDraftSummary', () => {
         await act(async () => { screen.pressByTestId('review-ask-send'); });
         expect(sent).toBe(1);
     });
+    it('steps aside while Find is seated in its place and returns with its open comments intact', async () => {
+        const hidden = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+            [screen.findByTestId('review-drafts-summary')?.props.style].flat(2).some((style) => style?.display === 'none');
+        let setYielded: (yielded: boolean) => void = () => {};
+        function Host() {
+            const [yielded, set] = React.useState(false);
+            setYielded = set;
+            return <ReviewDraftSummary enabled yielded={yielded} drafts={drafts} onGoToComposer={() => {}} />;
+        }
+        const screen = await renderScreen(<Host />);
+        await act(async () => { screen.pressByTestId('review-drafts-expand'); });
+        expect(hidden(screen)).toBe(false);
+        await act(async () => { setYielded(true); });
+        expect(hidden(screen)).toBe(true);
+        await act(async () => { setYielded(false); });
+        expect(hidden(screen)).toBe(false);
+        expect(screen.findAllByTestId('review-draft-chip-0').length).toBeGreaterThan(0);
+    });
 });
-

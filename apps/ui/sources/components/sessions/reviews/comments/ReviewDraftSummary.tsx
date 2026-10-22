@@ -18,6 +18,8 @@ export const REVIEW_TRAY_RESERVED_PX = 76;
 
 export type ReviewDraftSummaryProps = Readonly<{
     enabled: boolean;
+    /** Steps aside (kept mounted, so an open comment and its draft survive) while Find is seated in its place. */
+    yielded?: boolean;
     drafts: readonly ReviewCommentDraft[];
     /** Hands the comments to the session composer, where they ride along with the next message. */
     onGoToComposer: () => void;
@@ -64,7 +66,7 @@ export function ReviewDraftSummary(props: ReviewDraftSummaryProps) {
         props.onGoToComposer();
     };
     return (
-        <View testID="review-drafts-summary" style={[styles.tray, composing ? styles.trayComposing : null]} pointerEvents="box-none">
+        <View testID="review-drafts-summary" style={[styles.tray, composing ? styles.trayComposing : null, props.yielded ? styles.trayYielded : null]} pointerEvents="box-none">
             {composing ? (
                 <View testID="review-ask-composer" style={styles.askHeader}>
                     <Icon name="chat-circle" size={16} color={theme.colors.state.active.foreground} />
@@ -179,6 +181,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         bottom: 12,
         borderRadius: 18,
         ...shadowLevelStyle(theme.colors.shadowLevels[4]),
+    },
+    trayYielded: {
+        display: 'none',
     },
     askHeader: {
         flexDirection: 'row',
