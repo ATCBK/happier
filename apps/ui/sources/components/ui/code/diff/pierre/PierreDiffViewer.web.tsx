@@ -1142,7 +1142,12 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 annotationRect && annotationRect.height > 0
                     ? annotationRect.top - paint.node.getBoundingClientRect().top : position.top
             );
-            paint.virtualizer.scrollTo({ top });
+            // Find lands its match mid-viewport, as the plain-DOM landing below does, clear of the sticky
+            // file header and the Find bar that a top-aligned line would sit under.
+            const root = paint.virtualizer.getRoot();
+            const viewportHeight = root instanceof HTMLElement ? root.clientHeight : window.innerHeight;
+            const lead = props.findActive && !annotation ? Math.max(0, (viewportHeight - position.height) / 2) : 0;
+            paint.virtualizer.scrollTo({ top: Math.max(0, top - lead) });
             // A virtualized target may mount on the next paint. Keep that landing pending.
             if (annotation ? !annotationRect || annotationRect.height <= 0 : !el) return;
         } else {
