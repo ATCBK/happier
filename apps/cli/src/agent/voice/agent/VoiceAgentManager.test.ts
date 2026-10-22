@@ -1195,18 +1195,32 @@ describe('VoiceAgentManager', () => {
     }
   });
 
-  it('clears the reaper interval when disposed', async () => {
-
-      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+  it('runs idle reaping only while established voice agents need it', async () => {
+    vi.useFakeTimers();
+    const manager = new VoiceAgentManager({
+      createBackend: () => createDeterministicBackend('backend'),
+    });
+    const params = {
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' } as const,
+      chatModelId: 'chat-model', commitModelId: 'commit-model',
+      permissionIntent: 'read-only' as const, idleTtlSeconds: 60, initialContext: 'CTX',
+    };
     try {
-      const createBackend: BackendFactory = () => createDeterministicBackend('backend');
-      const manager = new VoiceAgentManager({ createBackend });
-
+      expect(vi.getTimerCount()).toBe(0);
+      const first = await manager.start(params);
+      const second = await manager.start(params);
+      expect(vi.getTimerCount()).toBe(1);
+      await manager.stop({ voiceAgentId: first.voiceAgentId });
+      expect(vi.getTimerCount()).toBe(1);
+      await manager.stop({ voiceAgentId: second.voiceAgentId });
+      expect(vi.getTimerCount()).toBe(0);
+      await manager.start(params);
+      expect(vi.getTimerCount()).toBe(1);
       await manager.dispose();
-
-      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
-      clearIntervalSpy.mockRestore();
+      await manager.dispose();
+      vi.useRealTimers();
     }
   }, 15_000);
 
@@ -2610,6 +2624,7 @@ describe('VoiceAgentManager', () => {
 
       expect(reapedVoiceAgentIds).toEqual([started.voiceAgentId]);
       expect(disposed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
       await expect(manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'hi' })).rejects.toMatchObject({
         code: 'VOICE_AGENT_NOT_FOUND',
       });

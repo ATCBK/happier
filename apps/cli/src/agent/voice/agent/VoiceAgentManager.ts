@@ -124,7 +124,8 @@ export class VoiceAgentManager {
   }>();
   private readonly retiringVoiceAgents = new Map<string, Promise<void>>();
   private readonly runtimeDisposals = new WeakMap<ExecutionRunHostRuntime, Promise<void>>();
-  private readonly reaper: NodeJS.Timeout;
+  private readonly reaperIntervalMs: number;
+  private reaper: NodeJS.Timeout | null = null;
   private disposed = false;
 
   isTurnInFlight(voiceAgentId: string): boolean {
@@ -528,6 +529,7 @@ export class VoiceAgentManager {
       }
       if (this.voiceAgents.get(voiceAgent.id) === voiceAgent) {
         this.voiceAgents.delete(voiceAgent.id);
+        this.updateReaper();
         this.notifyActivityChanged(voiceAgent.id);
       }
       voiceAgent.activeTurnStream = null;
@@ -578,10 +580,19 @@ export class VoiceAgentManager {
     this.onResumeHandleChanged = opts.onResumeHandleChanged ?? null;
     this.onActivityChanged = opts.onActivityChanged ?? null;
     this.prepareFollowContext = typeof opts.prepareFollowContext === 'function' ? opts.prepareFollowContext : null;
-    const intervalMs = Math.max(5_000, Math.floor(opts.reaperIntervalMs ?? 30_000));
+    this.reaperIntervalMs = Math.max(5_000, Math.floor(opts.reaperIntervalMs ?? 30_000));
+  }
+
+  private updateReaper(): void {
+    if (this.disposed || this.voiceAgents.size === 0) {
+      if (this.reaper !== null) clearInterval(this.reaper);
+      this.reaper = null;
+      return;
+    }
+    if (this.reaper !== null) return;
     this.reaper = setInterval(() => {
       void this.reapIdle();
-    }, intervalMs);
+    }, this.reaperIntervalMs);
     this.reaper.unref?.();
   }
 
@@ -919,6 +930,7 @@ export class VoiceAgentManager {
       ensureCurrentStart();
       this.startingVoiceAgents.delete(voiceAgentId);
       this.voiceAgents.set(voiceAgentId, instance);
+      this.updateReaper();
       this.notifyActivityChanged(voiceAgentId);
 
       return {
@@ -934,6 +946,7 @@ export class VoiceAgentManager {
       const registeredVoiceAgent = this.voiceAgents.get(voiceAgentId) ?? null;
       if (registeredVoiceAgent && registeredVoiceAgent === instanceForCleanup) {
         this.voiceAgents.delete(voiceAgentId);
+        this.updateReaper();
         this.notifyActivityChanged(voiceAgentId);
         disposals.push(registeredVoiceAgent.dispose());
       } else if (instanceForCleanup) {
@@ -959,7 +972,7 @@ export class VoiceAgentManager {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    clearInterval(this.reaper);
+    this.updateReaper();
 
     const startingIds = [...this.startingVoiceAgents.keys()];
     for (const occurrence of this.startingVoiceAgents.values()) {
@@ -1481,6 +1494,7 @@ export class VoiceAgentManager {
     // terminal truth may settle immediately, while same-id resume must still
     // wait for this exact Voice cleanup to finish.
     this.voiceAgents.delete(params.voiceAgentId);
+    this.updateReaper();
     this.notifyActivityChanged(params.voiceAgentId);
 
     await retirement;
@@ -1500,6 +1514,7 @@ export class VoiceAgentManager {
         } finally {
           if (this.voiceAgents.get(voiceAgent.id) === voiceAgent) {
             this.voiceAgents.delete(voiceAgent.id);
+            this.updateReaper();
           }
           await voiceAgent.dispose();
         }
