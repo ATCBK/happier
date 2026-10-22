@@ -7,6 +7,25 @@ import { ActionOperationSnapshotV1Schema as PredecessorActionOperationSnapshotV1
 const ACCOUNT_SCOPE = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation store', () => {
+  it('does not publish another retention wake for an unchanged retained resource reference', () => {
+    const store = createActionOperationStore();
+    store.create({ operationId: 'retention', actionId: 'machines.managed.power.set', title: 'Unused Stop',
+      scope: ACCOUNT_SCOPE, cancellation: 'supported', inputIdentity: '{}' });
+    const domainRef = { kind: 'managedMachine' as const, id: 'managed',
+      controller: { machineId: 'controller', installationId: 'installation' } };
+    store.updateDomainRef('retention', domainRef);
+    const before = store.get(ACCOUNT_SCOPE, 'retention');
+    const publications: unknown[] = [];
+    const unsubscribe = store.subscribe(() => publications.push(store.get(ACCOUNT_SCOPE, 'retention')));
+    try {
+      store.updateDomainRef('retention', { ...domainRef, controller: { ...domainRef.controller } });
+      expect(store.get(ACCOUNT_SCOPE, 'retention')).toBe(before);
+      expect(publications).toEqual([]);
+      store.updateDomainRef('retention', { ...domainRef, controller: { ...domainRef.controller, installationId: 'replacement' } });
+      expect(publications).toHaveLength(1);
+      expect(store.get(ACCOUNT_SCOPE, 'retention')?.domainRef).toMatchObject({ controller: { installationId: 'replacement' } });
+    } finally { unsubscribe(); }
+  });
   it.each(['succeeded', 'failed', 'cancelled'] as const)('keeps %s snapshots readable when the wall clock moves backwards', state => {
     let now = 1_000;
     const store = createActionOperationStore({ now: () => now });

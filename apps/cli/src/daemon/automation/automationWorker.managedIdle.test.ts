@@ -213,7 +213,7 @@ describe('Automation observation and managed unused retention', () => {
         let ready = false;
         let preparation: ReturnType<typeof prepareManagedRetentionPolicy> | undefined;
         try {
-            expect(await bridge.read()).toEqual({ kind: 'idle', since: owner.since });
+            expect(await bridge.read()).toMatchObject({ kind: 'idle', since: owner.since });
             preparation = prepareManagedRetentionPolicy({ machine, purpose: { kind: 'retention' },
                 options: { requestId: 'unused-stop', signal: cancellation.signal },
                 input: { token: 'disposable-harness', credentials: { token: 'disposable-harness', encryption: null },
@@ -221,7 +221,7 @@ describe('Automation observation and managed unused retention', () => {
                     runtimeRegistry: fixture().runtimeRegistry, managedProviderOperationAuthority: authority,
                     homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: machine.homeId,
                         canonicalServerUrl: owner.origin, revision: 1, endpoints: [{ kind: 'https', url: owner.origin }] }, authority: 'current_connection' }),
-                    managedGuestActivity: { ...bridge, reopen: async () => { const result = await bridge.reopen(); initialized.resolve(); return result; } },
+                    managedGuestActivity: { ...bridge, read: async () => { const result = await bridge.read(); initialized.resolve(); return result; } },
                     readPolicyCurrent: async () => machine,
                 } }).then(result => { ready = true; return result; });
             await initialized.promise;
@@ -229,15 +229,16 @@ describe('Automation observation and managed unused retention', () => {
                 const previous = owner.claims.length;
                 await vi.advanceTimersByTimeAsync(60_000);
                 await waitForClaim(() => owner.claims.length > previous);
-                expect(await bridge.read()).toEqual({ kind: 'idle', since: owner.since });
+                expect(await bridge.read()).toMatchObject({ kind: 'idle', since: owner.since });
                 expect(ready).toBe(false);
             }
             await vi.advanceTimersByTimeAsync(owner.since + 3_599_999 - Date.now());
-            expect(await bridge.read()).toEqual({ kind: 'idle', since: owner.since });
+            expect(await bridge.read()).toMatchObject({ kind: 'idle', since: owner.since });
             expect(ready).toBe(false);
             await vi.advanceTimersByTimeAsync(owner.since + 3_600_000 - Date.now());
             const result = await preparation;
-            expect(result).toMatchObject({ draining: true, purpose: { kind: 'retention',
+            expect(owner.drain.isQuiescing()).toBe(false);
+            expect(result).toMatchObject({ purpose: { kind: 'retention',
                 evidence: { decision: { kind: 'idle', since: owner.since, confirmedAt: owner.since + 3_600_000 } } } });
             expect(owner.publications.length).toBeGreaterThan(1);
             for (const publication of owner.publications) expect(publication).toEqual({ kind: 'idle', since: owner.since });

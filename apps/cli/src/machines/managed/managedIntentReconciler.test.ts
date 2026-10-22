@@ -47,6 +47,7 @@ import { ActionOperationGetV1ResponseSchema as PredecessorOperationGetSchema } f
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { doesManagedNativeObservationSettleIntent } from '../../../../server/sources/app/machines/managed/managedNativeObservation';
+import { createAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 
 const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, since: number, confirmedAt: number) {
@@ -140,7 +141,8 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
         }), requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
         createRedactionLease: () => ({ add() {}, close() {} }),
     });
-    const readActivity = vi.fn(async () => decision);
+    const readActivity = vi.fn(async (): Promise<ManagedActivityBridgeResultV1> => decision.kind === 'idle'
+        ? { ...decision, evidence: signedIdle(machine, decision.since, Date.now()) } : decision);
     const confirmIdle = vi.fn(async (): Promise<ManagedActivityBridgeResultV1> => decision.kind === 'idle'
         ? { ...decision, evidence: signedIdle(machine, decision.since, Date.now()) } : decision);
     const reopen = vi.fn(async () => undefined);
@@ -416,7 +418,8 @@ describe('unused Stop through guest drain and controller operation custody', () 
         expect(await operations.handlers.getV2({ operationId: 'already-running-wake' })).toMatchObject({ kind: 'not_found' });
         expect(test.effects).toEqual([]);
     });
-    it.each(['idle', 'busy', 'unknown', 'missing-confirmation', 'approval-held', 'approval-approved', 'approval-rejected', 'approval-observation-failed'] as const)(
+    it.each(['idle', 'busy', 'unknown', 'missing-confirmation', 'approval-held', 'approval-approved', 'approval-rejected', 'approval-observation-failed',
+        'within-window', 'refused-reopen', 'lost-probe-reply', 'aborted-probe'] as const)(
         'settles unused Stop only with confirmed idle (%s)', async disposition => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(1_790_000_000_000);
@@ -459,9 +462,16 @@ describe('unused Stop through guest drain and controller operation custody', () 
                 managedId: current.id, expectedRevision: current.intentRevision, controller: current.controller,
                 ...(action ? { action } : {}) }, context));
         };
-        const bridge = { read: (current: typeof machine) => call(current, MANAGED_ACTIVITY_READ_RPC_METHOD),
+        const bridge = { read: async (current: typeof machine) => {
+                const result = await call(current, MANAGED_ACTIVITY_READ_RPC_METHOD);
+                if (disposition === 'lost-probe-reply') throw new Error('RPC response lost');
+                if (disposition === 'aborted-probe') await controller.handlers.cancel({ operationId: 'unused-stop' });
+                return result;
+            },
             confirmIdle: (current: typeof machine) => call(current, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, 'begin'),
-            reopen: (current: typeof machine) => call(current, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, 'resume'),
+            reopen: (current: typeof machine) => disposition === 'refused-reopen'
+                ? Promise.resolve({ kind: 'refused' as const, code: 'admission_unavailable' as const })
+                : call(current, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, 'resume'),
             waitForChange: async (signal?: AbortSignal) => {
                 signal?.throwIfAborted();
                 await new Promise<void>((resolve, reject) => {
@@ -480,9 +490,10 @@ describe('unused Stop through guest drain and controller operation custody', () 
         let failApprovalObservation: ((error: unknown) => void) | undefined;
         let work: ReturnType<typeof driver.executePolicy> | undefined;
         let settled = false;
+        const insideWindow = ['within-window', 'refused-reopen', 'lost-probe-reply', 'aborted-probe'].includes(disposition);
         try {
             expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: Date.now() });
-            vi.setSystemTime(Date.now() + 3_600_000);
+            vi.setSystemTime(Date.now() + (insideWindow ? 1_000 : 3_600_000));
             if (disposition === 'busy') {
                 guestOperations.create({ operationId: 'accepted-work', actionId: 'projects.compute.exec', title: 'Accepted work',
                     scope: { accountId: 'owner', machineId: 'guest' }, cancellation: 'supported', inputIdentity: '{}' });
@@ -544,10 +555,31 @@ describe('unused Stop through guest drain and controller operation custody', () 
                 const result = await controller.handlers.getV2({ operationId: 'unused-stop' });
                 const expected = disposition === 'busy' ? 'managed.intent.busy' : 'managed.intent.activity-unknown';
                 if (result.kind === 'found' && result.operation.progress?.kind === 'phase'
-                    && result.operation.progress.phase === expected) break;
+                    && (result.operation.progress.phase === expected || insideWindow
+                        && result.operation.progress.phase === 'managed.intent.waiting-idle')) {
+                    // Let the probe finish and reach its change wait, rather
+                    // than asserting on the initial phase publication.
+                    await new Promise<void>(resolve => setImmediate(resolve));
+                    break;
+                }
                 await new Promise<void>(resolve => setImmediate(resolve));
             }
-            if (disposition.startsWith('approval-')) {
+            if (insideWindow) {
+                expect(drain.isQuiescing()).toBe(false);
+                expect(test.effects).toEqual([]);
+                const installer = createAgentInstallJobOwner({ admissionDrain: drain, readTrackedSessions: () => [],
+                    readRegistry: () => ({ agents: [{ id: 'fixture-manual', pluginId: 'fixture.plugin', runtimeSpec: {
+                        id: 'fixture-manual', title: 'Fixture', binaryName: 'fixture-manual', sourcePreferenceDefault: 'system-first',
+                        acceptsJavaScriptFileOverride: false, manualInstallKind: 'command', manualInstallRecipes: null,
+                        managedInstall: null, installGuideUrl: 'https://example.com/guide',
+                    } }], managedDependencies: [] }) });
+                try {
+                    expect(installer.start({ agentId: 'fixture-manual', intent: 'install', consent: { vendorRecipe: false } }).ok).toBe(true);
+                } finally { await installer.shutdown(); }
+                await controller.handlers.cancel({ operationId: 'unused-stop' });
+                await observed;
+                expect(drain.isQuiescing()).toBe(false);
+            } else if (disposition.startsWith('approval-')) {
                 expect(storedApproval).toMatchObject({ status: 'open', actionId: 'machines.managed.power.set',
                     approval: { flow: 'blocking', result: 'required' },
                     actionArgs: { managedId: machine.id, intent: 'stop', expectedRevision: machine.intentRevision },
@@ -1295,7 +1327,6 @@ describe('managed native intent through the accepted Action', () => {
         await vi.advanceTimersByTimeAsync(1);
         await work;
         expect(test.effects).toEqual(['destroy']);
-        expect(test.reopen).toHaveBeenCalledOnce();
     });
     it('carries an after-idle retention Stop out as native Suspend for a provider that only suspends', async () => {
         vi.useFakeTimers({ now: 3_599_999 });
@@ -1309,7 +1340,7 @@ describe('managed native intent through the accepted Action', () => {
         expect(test.effects).toEqual(['power']);
         expect(test.nativeInputs).toMatchObject([{ intent: 'suspend' }]);
     });
-    it('returns to waiting while the guest drain is reopened for the selected unused interval', async () => {
+    it('keeps the selected unused interval in waiting until native preparation is due', async () => {
         vi.useFakeTimers({ now: 60_000 });
         const test = setup();
         test.setMachine({ desiredWhen: 'after-idle', desiredAfterMs: 3_600_000 });
@@ -1328,12 +1359,10 @@ describe('managed native intent through the accepted Action', () => {
         try {
             await vi.advanceTimersByTimeAsync(0);
             expect(test.effects).toEqual([]);
-            expect(test.reopen).toHaveBeenCalledOnce();
             expect(await operations.handlers.getV2({ operationId: 'unused-interval' })).toMatchObject({ kind: 'found', operation: {
                 state: 'running', progress: { kind: 'phase', phase: 'managed.intent.waiting-idle' },
             } });
-            // Every published observation reaches the UI, including the short
-            // confirmation before reopening. None means stopping is underway.
+            // The guest's short probe is not a stopping state in the UI.
             expect(phases).not.toContain('managed.intent.draining');
             await vi.advanceTimersByTimeAsync(3_540_000);
             await observed;
@@ -1349,6 +1378,7 @@ describe('managed native intent through the accepted Action', () => {
         const test = setup();
         test.setMachine({ desiredWhen: 'after-idle', desiredAfterMs: 2 });
         const fresh = { kind: 'idle' as const, since: 0, evidence: signedIdle(test.readMachine(), 0, 1) };
+        test.readActivity.mockResolvedValue(fresh);
         test.confirmIdle.mockResolvedValue(fresh);
         const cancellation = new AbortController();
         const work = test.run(cancellation.signal);
@@ -1364,6 +1394,7 @@ describe('managed native intent through the accepted Action', () => {
         const test = setup({ kind: 'idle', since: 100_000 });
         test.setMachine({ desiredWhen: 'after-idle', desiredAfterMs: 2 });
         const fresh = { kind: 'idle' as const, since: 100_000, evidence: signedIdle(test.readMachine(), 100_000, 200_000) };
+        test.readActivity.mockResolvedValue(fresh);
         test.confirmIdle.mockResolvedValue(fresh);
         const cancellation = new AbortController();
         const work = test.run(cancellation.signal);
@@ -1524,7 +1555,7 @@ describe('managed native intent through the accepted Action', () => {
         const cancellation = new AbortController();
         const work = test.run(cancellation.signal);
         try {
-            while (test.confirmIdle.mock.calls.length < 2 && test.effects.length === 0) {
+            while (test.waitForChange.mock.calls.length === 0 && test.effects.length === 0) {
                 await new Promise<void>(resolve => setImmediate(resolve));
             }
             expect(test.effects).toEqual([]);
@@ -1622,6 +1653,5 @@ describe('managed native intent through the accepted Action', () => {
         await expect(work).rejects.toMatchObject({ code: 'intent_changed' });
         expect(test.effects).toEqual([]);
         expect(test.readMachine().submittedNativeEffect).toBeUndefined();
-        if (phase === 'interval') expect(test.reopen).toHaveBeenCalled();
     });
 });

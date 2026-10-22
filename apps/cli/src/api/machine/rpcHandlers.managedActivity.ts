@@ -43,17 +43,47 @@ export function registerManagedActivityRpcHandlers(params: ManagedActivityRpcOwn
             && !context.signal.aborted; }
         catch { return false; }
     };
+    const confirm = async (target: ManagedActivityReadRequestV1, context: RpcHandlerContext,
+        method: string, probe: boolean): Promise<ManagedActivityBridgeResultV1> => {
+        if (params.admissionDrain.isFinalShutdown()
+            || !await currentTarget(target, context, method)) return refused();
+        // A read owns a reversible probe only. Never borrow or release a
+        // concurrent final native-effect confirmation's retained drain.
+        const ownsDrain = !probe || drainedTarget === null;
+        if (ownsDrain) {
+            drainedTarget = target;
+            params.admissionDrain.beginUnusedStopDrain();
+        }
+        const releaseOwned = () => { if (ownsDrain && drainedTarget === target) release(target); };
+        const onAbort = () => releaseOwned();
+        context.signal.addEventListener('abort', onAbort, { once: true });
+        try {
+            if (context.signal.aborted) { releaseOwned(); return refused(); }
+            const decision = await params.activity.readDecision();
+            if (!await currentAdmission(context)
+                || !await currentTarget(target, context, method)) {
+                releaseOwned(); return refused();
+            }
+            if (decision.kind !== 'idle') releaseOwned();
+            else if (params.commitIdleEvidence) {
+                const evidence = params.commitIdleEvidence(target, decision, context);
+                if (!evidence || !await currentAdmission(context)
+                    || !await currentTarget(target, context, method)) {
+                    releaseOwned(); return refused();
+                }
+                return { ...decision, evidence };
+            }
+            return decision;
+        } catch (error) { releaseOwned(); throw error; }
+        finally {
+            context.signal.removeEventListener('abort', onAbort);
+            if (probe) releaseOwned();
+        }
+    };
     params.rpcHandlerManager.registerHandler(MANAGED_ACTIVITY_READ_RPC_METHOD, async (raw: unknown, context) => {
         const parsed = ManagedActivityReadRequestV1Schema.safeParse(raw);
         if (!parsed.success || !await currentAdmission(context) || !context) return refused();
-        if (!await currentTarget(parsed.data, context, MANAGED_ACTIVITY_READ_RPC_METHOD)) {
-            release(parsed.data); return refused();
-        }
-        const decision = await params.activity.readDecision();
-        if (!await currentAdmission(context) || !await currentTarget(parsed.data, context, MANAGED_ACTIVITY_READ_RPC_METHOD)) {
-            release(parsed.data); return refused();
-        }
-        return decision;
+        return await confirm(parsed.data, context, MANAGED_ACTIVITY_READ_RPC_METHOD, true);
     });
     params.rpcHandlerManager.registerHandler(MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, async (raw: unknown, context) => {
         const parsed = ManagedAdmissionDrainConfirmRequestV1Schema.safeParse(raw);
@@ -65,26 +95,6 @@ export function registerManagedActivityRpcHandlers(params: ManagedActivityRpcOwn
             release(target);
             return await params.activity.readDecision();
         }
-        if (params.admissionDrain.isFinalShutdown()
-            || !await currentTarget(target, context, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD)) return refused();
-        drainedTarget = target;
-        params.admissionDrain.beginUnusedStopDrain();
-        try {
-            const decision = await params.activity.readDecision();
-            if (!await currentAdmission(context)
-                || !await currentTarget(target, context, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD)) {
-                release(target); return refused();
-            }
-            if (decision.kind !== 'idle') release(target);
-            else if (params.commitIdleEvidence) {
-                const evidence = params.commitIdleEvidence(target, decision, context);
-                if (!evidence || !await currentAdmission(context)
-                    || !await currentTarget(target, context, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD)) {
-                    release(target); return refused();
-                }
-                return { ...decision, evidence };
-            }
-            return decision;
-        } catch (error) { release(target); throw error; }
+        return await confirm(target, context, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, false);
     });
 }

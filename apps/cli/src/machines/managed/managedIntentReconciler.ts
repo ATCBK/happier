@@ -32,7 +32,7 @@ function remainingIdleDuration(activity: Extract<ManagedActivityBridgeResultV1, 
 
 async function waitForIdle(params: Readonly<{
     machine: ManagedMachineV1; bridge: ManagedGuestActivityTransport; duration: number; signal?: AbortSignal;
-    isCurrent(): Promise<boolean>; onDrain(active: boolean): void;
+    isCurrent(): Promise<boolean>;
     onActivity(kind: 'busy' | 'unknown' | 'idle' | 'waiting'): void;
 }>) {
     for (;;) {
@@ -40,29 +40,16 @@ async function waitForIdle(params: Readonly<{
         if (!await params.isCurrent()) throw new ManagedMachineControllerError('intent_changed');
         const activity = await params.bridge.read(params.machine, params.signal);
         if (activity.kind === 'refused') throw new ManagedMachineControllerError(activity.code);
-        // An idle observation starts a reversible confirmation probe, not
-        // shutdown. Keep the selected unused window in the waiting phase.
+        // The guest read commits evidence under a reversible local probe and
+        // releases it before replying. Waiting never retains guest admission.
         params.onActivity(activity.kind === 'idle' ? 'waiting' : activity.kind);
         let remaining: number | undefined;
         if (activity.kind === 'idle') {
-            params.onDrain(true);
-            const fresh = await params.bridge.confirmIdle(params.machine, params.signal);
-            if (fresh.kind === 'refused') throw new ManagedMachineControllerError(fresh.code);
-            if (fresh.kind === 'idle') {
-                // Both timestamps belong to the actual guest clock. A read
-                // followed by a short committed probe must not mix that clock
-                // with this controller's Date.now or hold drain for the wait.
-                remaining = remainingIdleDuration(fresh, params.duration);
-                if (remaining === 0) {
-                    params.onActivity('idle');
-                    return fresh;
-                }
-            } else {
-                params.onActivity(fresh.kind);
+            remaining = remainingIdleDuration(activity, params.duration);
+            if (remaining === 0) {
+                params.onActivity('idle');
+                return activity;
             }
-            await params.bridge.reopen(params.machine);
-            params.onDrain(false);
-            if (fresh.kind === 'idle') params.onActivity('waiting');
         }
         await waitForChangeOrDeadline({ waitForChange: signal => params.bridge.waitForChange(signal),
             signal: params.signal, remainingMs: remaining });
@@ -85,15 +72,14 @@ function publishActivity(options: ManagedMachineReconciliationInput['options'], 
 export async function prepareManagedRetentionPolicy(params: Readonly<{
     input: ManagedMachineReconciliationInput['input']; options: ManagedMachineReconciliationInput['options'];
     machine: ManagedMachineV1; purpose: Extract<ManagedPolicyPurposeV1, { kind: 'retention' }>;
-}>): Promise<{ purpose: ManagedPolicyPurposeV1; bridge?: ManagedGuestActivityTransport; draining: boolean }> {
+}>): Promise<{ purpose: ManagedPolicyPurposeV1; bridge?: ManagedGuestActivityTransport }> {
     const { machine, input, options, purpose } = params;
     if (machine.retention.kind === 'until-delete') throw new ManagedMachineControllerError('intent_changed');
-    if (purpose.evidence || machine.submittedNativeEffect) return { purpose, draining: Boolean(purpose.evidence) };
+    if (purpose.evidence || machine.submittedNativeEffect) return { purpose };
     if (machine.retention.kind === 'unused' && !machine.enrolledMachineId) {
         throw new ManagedMachineControllerError('admission_unavailable');
     }
     const bridge = input.managedGuestActivity ?? createManagedGuestActivityTransport(input, options, machine);
-    let draining = false;
     const isCurrent = async () => {
         if (!input.readPolicyCurrent) throw new ManagedMachineControllerError('admission_unavailable');
         const current = await input.readPolicyCurrent(machine.id, options.signal);
@@ -111,7 +97,7 @@ export async function prepareManagedRetentionPolicy(params: Readonly<{
                 assertLive(options.signal);
                 if (!await isCurrent()) throw new ManagedMachineControllerError('intent_changed');
                 const remaining = machine.retention.at - Date.now();
-                if (remaining <= 0) return { purpose, bridge, draining };
+                if (remaining <= 0) return { purpose, bridge };
                 await waitForChangeOrDeadline({ waitForChange: signal => bridge.waitForChange(signal),
                     signal: options.signal, remainingMs: remaining });
                 assertLive(options.signal);
@@ -119,11 +105,10 @@ export async function prepareManagedRetentionPolicy(params: Readonly<{
         }
         options.context?.operationOwnerUpdate?.update({ progress: { phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' } });
         const fresh = await waitForIdle({ machine, bridge, duration: machine.retention.afterMs, signal: options.signal,
-            isCurrent, onDrain: active => { draining = active; }, onActivity: kind => publishActivity(options, machine, kind) });
+            isCurrent, onActivity: kind => publishActivity(options, machine, kind) });
         if (!('evidence' in fresh)) throw new ManagedMachineControllerError('admission_unavailable');
-        return { purpose: { kind: 'retention', evidence: fresh.evidence }, bridge, draining };
+        return { purpose: { kind: 'retention', evidence: fresh.evidence }, bridge };
     } catch (error) {
-        if (draining) await bridge.reopen(machine);
         await bridge.dispose?.();
         throw error;
     }
@@ -134,14 +119,12 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
     let machine = params.machine;
     const { client, options } = params;
     let bridge = params.input.managedGuestActivity;
-    let draining = options.policyPurpose?.kind === 'retention' && Boolean(options.policyPurpose.evidence);
+    let draining = false;
     let submitted = false;
     let releaseDrain = !machine.submittedNativeEffect;
     const admittedMachine = machine;
-    let drainMachine = options.policyPurpose?.kind === 'retention' && options.policyPurpose.evidence
-        ? { ...machine, intentRevision: options.policyPurpose.evidence.managedTarget.expectedRevision } : machine;
+    let drainMachine = machine;
     try {
-        if (draining && !bridge) bridge = createManagedGuestActivityTransport(params.input, options, machine);
         client.assertConnection(machine);
         let effectContext = options.context;
         // Acquisition recovery and Remove use one native correlation reader.
@@ -245,7 +228,7 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
                 } });
                 bridge ??= createManagedGuestActivityTransport(params.input, options, machine);
                 await waitForIdle({ machine, bridge, duration: idleDuration, signal: options.signal,
-                    isCurrent: () => client.isCurrent(machine), onDrain: active => { draining = active; drainMachine = machine; },
+                    isCurrent: () => client.isCurrent(machine),
                     onActivity: kind => publishActivity(options, machine, kind) });
             }
             let waitingForGuestWork = false;
@@ -319,6 +302,8 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
                         } });
                         try {
                             assertLive(options.signal);
+                            draining = true;
+                            drainMachine = machine;
                             const fresh = await idleBridge.confirmIdle(machine, options.signal);
                             if (fresh.kind === 'refused') throw new ManagedMachineControllerError(fresh.code);
                             publishActivity(options, machine, fresh.kind);

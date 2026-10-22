@@ -55,7 +55,9 @@ describe('managed guest activity bridge', () => {
                     rpcAdmission: { context: context.machineAdmission, method, managedTarget, managedIdleDecision: decision },
                 } }) };
         });
-        expect(await owner.call(MANAGED_ACTIVITY_READ_RPC_METHOD, target)).toEqual({ kind: 'idle', since: 100 });
+        expect(await owner.call(MANAGED_ACTIVITY_READ_RPC_METHOD, target)).toMatchObject({ kind: 'idle', since: 100,
+            evidence: { decision: { kind: 'idle', since: 100, confirmedAt: 200 } } });
+        expect(owner.drain.isQuiescing()).toBe(false);
         const result = await owner.call(MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, { ...target, action: 'begin' });
         expect(result).toMatchObject({ kind: 'idle', since: 100, evidence: { decision: { kind: 'idle', since: 100, confirmedAt: 200 } } });
         const evidence = ManagedCommittedIdleEvidenceV1Schema.parse((result as { evidence?: unknown }).evidence);
@@ -106,5 +108,28 @@ describe('managed guest activity bridge', () => {
         owner.drain.resume();
         expect(owner.drain.isQuiescing()).toBe(false);
         owner.inventory.dispose();
+    });
+
+    it('does not let a read probe reopen a retained native-effect confirmation', async () => {
+        const owner = setup();
+        try {
+            await owner.call(MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, { ...target, action: 'begin' });
+            expect(owner.drain.isQuiescing()).toBe(true);
+            expect(await owner.call(MANAGED_ACTIVITY_READ_RPC_METHOD, target)).toMatchObject({ kind: 'idle' });
+            expect(owner.drain.isQuiescing()).toBe(true);
+            await owner.call(MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, { ...target, action: 'resume' });
+            expect(owner.drain.isQuiescing()).toBe(false);
+        } finally { owner.inventory.dispose(); }
+    });
+
+    it('releases a probe when its transport is aborted during the actual inventory read', async () => {
+        const owner = setup();
+        const request = new AbortController();
+        owner.duringRead(() => request.abort());
+        try {
+            expect(await owner.call(MANAGED_ACTIVITY_READ_RPC_METHOD, target, { ...owner.context, signal: request.signal }))
+                .toMatchObject({ kind: 'refused' });
+            expect(owner.drain.isQuiescing()).toBe(false);
+        } finally { owner.inventory.dispose(); }
     });
 });

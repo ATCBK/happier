@@ -327,7 +327,7 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 }
             }
             const prepared = purpose.kind === 'retention'
-                ? await prepareManagedRetentionPolicy({ input, options, machine, purpose }) : { purpose, bridge: undefined, draining: false };
+                ? await prepareManagedRetentionPolicy({ input, options, machine, purpose }) : { purpose, bridge: undefined };
             let ownerStarted = false;
             let failureClient: ManagedMachineControllerClient | undefined;
             try {
@@ -411,7 +411,6 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 }
                 throw error;
             } finally {
-                if (!ownerStarted && prepared.bridge && prepared.draining) await prepared.bridge.reopen(machine);
                 await prepared.bridge?.dispose?.();
             }
         },

@@ -254,7 +254,7 @@ export function createActionOperationStore(options?: Readonly<{
     },
 
     updateDomainRef(operationId: string, domainRef: ActionOperationDomainRefV1): ActionOperationSnapshotV1 | null {
-      return mutate(operationId, (current) => ({
+      return mutate(operationId, (current) => isDeepStrictEqual(current.domainRef, domainRef) ? current : ({
         ...current,
         revision: current.revision + 1,
         domainRef,
