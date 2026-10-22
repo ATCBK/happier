@@ -8,6 +8,8 @@ vi.mock('@/text', async () => {
 import {
   clearMachineRequestReachabilityForTest,
   recordMachineRequestFailed,
+  withdrawMachinePresenceForScope,
+  captureMachinePresenceObservation,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { describeMachinePresenceLine } from './machinePresenceLine';
 
@@ -22,6 +24,16 @@ describe('describeMachinePresenceLine', () => {
     active: true,
     activeAt: now - 60 * 60 * 1_000,
   };
+
+  it('retains unknown after transport withdrawal until this exact Account observes the Machine again', () => {
+    withdrawMachinePresenceForScope(scope);
+    expect(describeMachinePresenceLine(fresh, now, null, scope)).toMatchObject({ online: false, status: 'unknown', label: 't:common.unknown' });
+    captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })([fresh.id]);
+    expect(describeMachinePresenceLine(fresh, now, null, scope).label).toBe('t:common.unknown');
+    captureMachinePresenceObservation(scope)([fresh.id]);
+    expect(describeMachinePresenceLine(fresh, now, null, scope)).toMatchObject({ online: true, status: 'online' });
+    expect(describeMachinePresenceLine(stale, now, null, scope)).toMatchObject({ online: false, status: 'offline' });
+  });
 
   it('says a machine with a fresh heartbeat that this Home could not reach is unreachable from here, not offline', () => {
     // The daemon is alive (fresh heartbeat), but this Home's last request to it failed after that.

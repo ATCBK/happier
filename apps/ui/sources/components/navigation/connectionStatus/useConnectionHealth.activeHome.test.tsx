@@ -8,6 +8,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -37,15 +38,29 @@ afterEach(async () => {
     await homes.reset();
     publishAppliedActiveServerRuntimeAvailability(false);
     storage.setState(initialStorageState, true);
+    clearMachineRequestReachabilityForTest();
 });
 
-function applyMachine(serverId: string, id: string, host: string) {
-    storage.getState().applyMachines([createMachineFixture({ id, activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, host } })], true,
+function applyMachine(serverId: string, id: string, host: string, presence = { active: true, activeAt: Date.now() }) {
+    storage.getState().applyMachines([createMachineFixture({ id, ...presence, metadata: { ...createMachineFixture().metadata!, host } })], true,
         { sourceServerId: serverId, sourceAccountId: serverId === appliedHomeId ? 'health-account' : 'staged-account' });
     storage.getState().markMachineListSettled(serverId);
 }
 
 describe('useActiveHomeConnectionHealth', () => {
+    it('withdraws retained chrome presence without reporting offline and restores fresh offline truth', async () => {
+        applyMachine(appliedHomeId, 'machine-a', 'applied-a', { active: false, activeAt: 1 });
+        const hook = await renderHook(useActiveHomeConnectionHealth);
+        expect(hook.getCurrent().kind).toBe('machine_offline');
+        const scope = { serverId: appliedHomeId, accountId: 'health-account' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent()).toMatchObject({ kind: 'machine_unknown', machineCount: 1, onlineCount: 0,
+            hasUnknownMachines: true, machineLabelKey: 'status.unknown' });
+        await act(async () => captureMachinePresenceObservation(scope)(['machine-a']));
+        expect(hook.getCurrent()).toMatchObject({ kind: 'machine_offline', onlineCount: 0,
+            hasUnknownMachines: false, machineLabelKey: 'status.offline' });
+    });
+
     it('keeps unavailable-only readers quiet across Machine metadata publications while observing real Home failures', async () => {
         applyMachine(appliedHomeId, 'machine-a', 'applied-a');
         let renders = 0;

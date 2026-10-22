@@ -3,7 +3,7 @@ import { EMPTY_MACHINE_PROCESSES_STATE, machineProcessesStore } from './machineP
 import type { MachineProcessesKey } from './machineProcessesRpc';
 import { useMachineDaemonReadTarget } from '../useMachineDaemonReadTarget';
 
-export function useMachineProcesses(input: Omit<MachineProcessesKey, 'accountId'> & Readonly<{ enabled?: boolean; active?: boolean; online?: boolean }>) {
+export function useMachineProcesses(input: Omit<MachineProcessesKey, 'accountId'> & Readonly<{ enabled?: boolean; active?: boolean; online?: boolean | null }>) {
     const target = useMachineDaemonReadTarget(input);
     const binding = target.accountBinding;
     const accountId = target.key.expectedAccountId ?? undefined;

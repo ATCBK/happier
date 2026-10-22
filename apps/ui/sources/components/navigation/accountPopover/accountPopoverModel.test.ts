@@ -13,6 +13,7 @@ import {
     resolveHomeTargetSummary,
     resolveHomeConnectionSummary,
 } from '@/components/navigation/connectionStatus/resolveHomeConnectionSummary';
+import { resolveMachineConnectionSummary } from '@/components/navigation/connectionStatus/resolveMachineConnectionSummary';
 
 import {
     resolveAccountServiceIdentity,
@@ -24,6 +25,13 @@ import {
 const twoOfThree = { kind: 'multiple', onlineCount: 2, offlineCount: 1 } as const;
 
 describe('account popover Home health', () => {
+    it('keeps a connected Home quiet when retained machine presence is unknown', () => {
+        const summary = resolveMachineConnectionSummary({ machineCount: 2, onlineCount: 0,
+            hasUnknownMachines: true, primaryMachineLabel: null });
+        expect(resolveCurrentHomeHealth(resolveHomeConnectionSummary({ healthKind: 'machine_unknown' }), summary))
+            .toEqual({ tone: 'ok', label: 'connectionStatus.summary.connected', fix: null });
+    });
+
     it('says how many machines are online for a healthy current Home, with no fix', () => {
         const health = resolveCurrentHomeHealth(resolveHomeConnectionSummary({ healthKind: 'healthy' }), twoOfThree);
         expect(health).toEqual({

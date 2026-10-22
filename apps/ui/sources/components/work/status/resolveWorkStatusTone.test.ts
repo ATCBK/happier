@@ -12,6 +12,11 @@ import { t } from '@/text';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 describe('resolveWorkStatusTone', () => {
+    it('keeps unknown Machine presence neutral without treating retained work counts as current', () => {
+        expect(resolveWorkStatusTone({ kind: 'machine', facts: {
+            online: null, word: t('common.unknown'), needsYouCount: 2, runningSessionCount: 3,
+        } })).toEqual({ bucket: 'idle', tone: 'neutral', word: t('common.unknown') });
+    });
     it('classifies an unlinked task by its tracker category and linked work by the shared Session status', () => {
         const task = (category: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | null) =>
             resolveWorkStatusTone({ kind: 'task', facts: { category, word: 'Tracker state', linkedStatuses: [] } });
@@ -44,6 +49,8 @@ describe('resolveWorkStatusTone', () => {
             observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' } };
         const facts = { online: false, needsYouCount: 0, runningSessionCount: 0, word: 'Offline', machineId: 'guest', managedMachine: managed };
         expect(resolveWorkStatusTone({ kind: 'machine', facts })).toEqual({ bucket: 'idle', tone: 'neutral', word: t('managedPower.asleep') });
+        expect(resolveWorkStatusTone({ kind: 'machine', facts: { ...facts, online: null } }))
+            .toEqual({ bucket: 'idle', tone: 'neutral', word: t('managedPower.asleep') });
         expect(resolveWorkStatusTone({ kind: 'machine', facts: { ...facts, machineId: 'other' } }).bucket).toBe('offline');
         expect(resolveWorkStatusTone({ kind: 'machine', facts: { ...facts, managedMachine: { ...managed, archivedAt: 20 } } }).bucket).toBe('offline');
         expect(resolveWorkStatusTone({ kind: 'machine', facts: { ...facts, revokedAt: 20 } }).bucket).toBe('offline');

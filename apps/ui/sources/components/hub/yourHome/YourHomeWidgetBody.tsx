@@ -206,9 +206,9 @@ const SESSION_TONE: Readonly<Record<YourHomeMachine['shown'][number], HomeOrbitD
   idle: 'quiet',
 };
 function orbitBodies(machines: readonly YourHomeMachine[]): HomeOrbitBody[] {
-  return machines.map((machine) => ({
+  return machines.filter(machine => machine.online !== null).map((machine) => ({
     key: machine.id,
-    online: machine.online,
+    online: machine.online === true,
     dots: machine.online ? machine.shown.map((state, index) => ({ key: String(index), tone: SESSION_TONE[state] })) : [],
   }));
 }
@@ -262,8 +262,8 @@ function LegendRow(
 ) {
   const { theme } = useUnistyles();
   const { machine } = props;
-  const off = !machine.online;
-  const state = off
+  const off = machine.online === false;
+  const state = machine.online === null ? t('common.unknown') : off
     ? t('homeWidgets.yourHomeOffline', {
         lastSeen: formatLastSeen(machine.lastSeenAt ?? 0),
       })
@@ -312,7 +312,7 @@ function LegendRow(
       </View>
       {machine.needsYou > 0 ? (
         <NeedsYou label={String(machine.needsYou)} />
-      ) : off ? (
+      ) : machine.online === null ? null : off ? (
         <View style={styles.offDot} />
       ) : (
         <Text style={styles.legendCount}>{machine.shown.length}</Text>

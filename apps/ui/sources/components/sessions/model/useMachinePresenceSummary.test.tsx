@@ -128,7 +128,7 @@ describe('reactive Machine presence', () => {
                 publications.push(membership);
                 return membership;
             });
-            expect(publications[0]).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+            expect(publications[0]).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'], counts: { online: 1, offline: 0, unknown: 0 } });
             await hook.unmount();
             await owner.unmount();
         } finally { storage.setState(previous); }
@@ -149,19 +149,19 @@ describe('reactive Machine presence', () => {
             expect(foreignLifetime.isCurrent()).toBe(true);
             let supplied: ServerAccountScopeLifetime | null = null;
             const hook = await renderHook(() => useMachinePresenceMembership(serverId, supplied));
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 0, unknown: 1 } });
             supplied = lifetime;
             await hook.rerender();
             expect(hook.getCurrent().onlineMachineIds).toEqual(['machine']);
             supplied = foreignLifetime;
             await hook.rerender();
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 0, unknown: 1 } });
             supplied = lifetime;
             await hook.rerender();
             expect(hook.getCurrent().onlineMachineIds).toEqual(['machine']);
             await act(async () => { await home.switchAccount(serverId, 'account-c'); });
             expect(lifetime.isCurrent()).toBe(false);
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 0, unknown: 1 } });
             await hook.unmount();
             await owners.unmount();
         } finally { storage.setState(previous); }
@@ -211,7 +211,7 @@ describe('reactive Machine presence', () => {
         storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
         try {
             const hook = await renderHook(() => useMachinePresenceMembership(serverId));
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: ['locked-machine'], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: ['locked-machine'], selectableMachineIds: [], counts: { online: 1, offline: 0, unknown: 0 } });
             await hook.unmount();
         } finally { storage.setState(previous); }
     });
@@ -229,7 +229,7 @@ describe('reactive Machine presence', () => {
             });
             const admitted = hook.getCurrent();
             const rendersAfterAdmission = renders;
-            expect(admitted).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+            expect(admitted).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'], counts: { online: 1, offline: 0, unknown: 0 } });
             await act(async () => {
                 vi.advanceTimersByTime(20_000);
                 storage.getState().applyMachines([{ ...machine, activeAt: Date.now(), metadata: {
@@ -245,19 +245,19 @@ describe('reactive Machine presence', () => {
             await act(async () => {
                 recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: 'machine' });
             });
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 1, unknown: 0 } });
             await act(async () => { vi.advanceTimersByTime(20_000); });
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 1, unknown: 0 } });
             await act(async () => {
                 storage.getState().applyMachines([{ ...machine, activeAt: Date.now() }], false, { sourceServerId: serverId });
             });
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 1, unknown: 0 } });
             await act(async () => {
                 recordMachineRequestSucceeded({ serverId, accountId: 'account-a', machineId: 'machine' });
             });
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'], counts: { online: 1, offline: 0, unknown: 0 } });
             await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: serverId }); });
-            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 0, unknown: 0 } });
             await hook.unmount();
         } finally { storage.setState(previous); }
     });

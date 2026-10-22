@@ -61,10 +61,10 @@ export function buildDesktopTrayState(params: Readonly<{
 
     const label = params.t(params.health.statusLabelKey);
     const machineLabel = params.t(params.health.machineLabelKey);
-    const showCounts = params.health.machineCount > 0;
+    const showCounts = params.health.machineCount > 0 && params.health.machineLabelKey !== 'status.unknown';
     const status = params.health.kind === 'machine_not_ready'
         ? 'attention_required'
-        : params.health.kind === 'server_restarting'
+        : params.health.kind === 'server_restarting' || params.health.kind === 'machine_unknown'
             ? 'connecting'
         : params.health.kind;
 

@@ -11,7 +11,7 @@ vi.mock('react-native-unistyles', async () => {
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
-const { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded, withdrawMachinePresenceForScope } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { useConnectionHealth } = await import('./useConnectionHealth');
 const before = storage.getState();
 
@@ -38,6 +38,21 @@ async function setup(locked = false) {
 }
 
 describe('connection health fleet readiness', () => {
+    it('keeps withdrawn presence unknown until the exact Home and Account observes the machine again', async () => {
+        const { serverId, machine, hook } = await setup();
+        const scope = { serverId, accountId: 'account-fleet' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent()).toMatchObject({ kind: 'machine_unknown', machineCount: 1, onlineCount: 0,
+            hasUnknownMachines: true, machineLabelKey: 'status.unknown', tone: 'neutral', isPulsing: false });
+        await act(async () => {
+            captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })([machine.id]);
+            captureMachinePresenceObservation({ ...scope, serverId: 'another-home' })([machine.id]);
+        });
+        expect(hook.getCurrent().machineLabelKey).toBe('status.unknown');
+        await act(async () => captureMachinePresenceObservation(scope)([machine.id]));
+        expect(hook.getCurrent()).toMatchObject({ kind: 'healthy', onlineCount: 1, hasUnknownMachines: false });
+    });
+
     it('retains locked inventory and socket presence without presenting executable readiness', async () => {
         const { hook } = await setup(true);
         expect(hook.getCurrent()).toMatchObject({ kind: 'machine_not_ready', machineCount: 1, onlineCount: 1, socketStatus: 'connected' });

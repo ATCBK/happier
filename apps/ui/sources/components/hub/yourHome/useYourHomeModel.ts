@@ -16,7 +16,7 @@ import {
 } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { storage, useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
@@ -100,12 +100,13 @@ export function useYourHomeModel(): YourHomeModel {
     });
     return buildYourHomeModel(
       machines.map((machine) => {
-        const online = isMachineReachable(accountScope, machine, presenceNowMs);
+        const reachability = resolveMachineReachability(accountScope, machine, presenceNowMs);
+        const online = reachability === 'unknown' ? null : reachability === 'reachable';
         return {
           id: machine.id,
           name: names.get(machine.id) ?? machine.id,
           online,
-          lastSeenAt: online ? null : (machine.activeAt ?? null),
+          lastSeenAt: online === false ? (machine.activeAt ?? null) : null,
           isThisComputer: machine.id === thisComputerId,
           sessions: sessions.get(machine.id) ?? NO_SESSIONS,
         };

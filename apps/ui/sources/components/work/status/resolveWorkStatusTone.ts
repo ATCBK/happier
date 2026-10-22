@@ -101,7 +101,7 @@ export type WorkStatusInput =
         settled?: boolean;
     }> }>
     | Readonly<{ kind: 'machine'; facts: Readonly<{
-        word: string; online: boolean; needsYouCount: number; runningSessionCount: number;
+        word: string; online: boolean | null; needsYouCount: number; runningSessionCount: number;
         machineId?: string;
         revokedAt?: number | null;
         /** Protected, Home-qualified inventory row; connectivity alone never establishes sleep. */
@@ -291,7 +291,7 @@ export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresent
                             : t(`managedMachines.detail.power.${observation.power}`) };
                     }
                 }
-                return { bucket: 'offline', tone: 'neutral', word };
+                return { bucket: online === null ? 'idle' : 'offline', tone: 'neutral', word };
             }
             if (needsYouCount > 0) return { bucket: 'needs_you', tone: 'attention', word };
             return { bucket: runningSessionCount > 0 ? 'working' : 'idle', tone: 'neutral', word };

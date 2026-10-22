@@ -6,7 +6,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
-import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { isMachineVisibleForLaunchSelection, isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
     isMachineReachable,
@@ -14,7 +14,7 @@ import {
     readMachineRequestReachabilityRevision,
     subscribeMachineRequestReachability,
 } from '@/sync/domains/machines/reachability/machineReachability';
-import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtMs, type MachinePresenceCounts } from '@/utils/sessions/machineUtils';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 
@@ -99,6 +99,7 @@ export function useMachinePresenceSummaries(
 export type MachinePresenceMembership = Readonly<{
     onlineMachineIds: readonly string[];
     selectableMachineIds: readonly string[];
+    counts: MachinePresenceCounts;
 }>;
 
 /** App-wide consumers need membership, not heartbeat timestamps or machine presentation. */
@@ -122,7 +123,7 @@ export function useMachinePresenceMembership(
         : suppliedCurrent && suppliedLifetime
             && areServerProfileIdentifiersEquivalent(suppliedLifetime.scope.serverId, targetServerId)
             ? suppliedLifetime.scope : null;
-    const cached = React.useRef<MachinePresenceMembership>({ onlineMachineIds: [], selectableMachineIds: [] });
+    const cached = React.useRef<MachinePresenceMembership>({ onlineMachineIds: [], selectableMachineIds: [], counts: { online: 0, offline: 0, unknown: 0 } });
     const readMachines = React.useCallback((resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()) => {
         const state = store.getState();
         const activeMachines = Object.values(state.machines);
@@ -142,12 +143,26 @@ export function useMachinePresenceMembership(
             .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
         const selectableMachineIds = machines.filter(machine => isMachineSelectableForFleet(scope, machine, nowMs, resolveScopeId))
             .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
+        const counts = { online: 0, offline: 0, unknown: 0 };
+        for (const machine of machines) {
+            if (!isMachineVisibleForLaunchSelection(machine)) continue;
+            const verdict = resolveMachineReachability(scope, machine, nowMs, resolveScopeId);
+            if (verdict === 'reachable') counts.online += 1;
+            else if (verdict === 'unreachable') counts.offline += 1;
+            else counts.unknown += 1;
+        }
         const previous = cached.current;
-        if (onlineMachineIds.length !== previous.onlineMachineIds.length
-            || onlineMachineIds.some((id, index) => id !== previous.onlineMachineIds[index])
-            || selectableMachineIds.length !== previous.selectableMachineIds.length
-            || selectableMachineIds.some((id, index) => id !== previous.selectableMachineIds[index])) {
-            cached.current = { onlineMachineIds, selectableMachineIds };
+        const onlineChanged = onlineMachineIds.length !== previous.onlineMachineIds.length
+            || onlineMachineIds.some((id, index) => id !== previous.onlineMachineIds[index]);
+        const selectableChanged = selectableMachineIds.length !== previous.selectableMachineIds.length
+            || selectableMachineIds.some((id, index) => id !== previous.selectableMachineIds[index]);
+        const countsChanged = counts.online !== previous.counts.online || counts.offline !== previous.counts.offline || counts.unknown !== previous.counts.unknown;
+        if (onlineChanged || selectableChanged || countsChanged) {
+            cached.current = {
+                onlineMachineIds: onlineChanged ? onlineMachineIds : previous.onlineMachineIds,
+                selectableMachineIds: selectableChanged ? selectableMachineIds : previous.selectableMachineIds,
+                counts: countsChanged ? counts : previous.counts,
+            };
         }
         return cached.current;
     }, [readMachines, scope]);

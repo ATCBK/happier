@@ -43,7 +43,8 @@ export function resolveConnectionHealth(params: Readonly<{
         readyCount += groupReadyCount;
     }
 
-    const hasUnknownMachines = machines.hasUnknownServers || hasUnknownReadyCount;
+    const hasUnknownMachines = machines.hasUnknownServers || hasUnknownReadyCount
+        || params.machineGroups.some(group => (group.unknownCount ?? 0) > 0);
 
     if (
         params.endpointReason === 'server_restarting'
@@ -152,7 +153,7 @@ export function resolveConnectionHealth(params: Readonly<{
 
     if (machines.onlineCount === 0) {
         return {
-            kind: 'machine_offline',
+            kind: hasUnknownMachines ? 'machine_unknown' : 'machine_offline',
             machineCount: machines.machineCount,
             onlineCount: machines.onlineCount,
             hasUnknownMachines,

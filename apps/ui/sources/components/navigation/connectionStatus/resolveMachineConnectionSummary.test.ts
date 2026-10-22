@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { resolveMachineConnectionSummary } from './resolveMachineConnectionSummary';
 
 describe('resolveMachineConnectionSummary', () => {
+    it.each([[1, 0], [3, 1]])('does not infer offline counts from unknown presence (%i machines, %i online)', (machineCount, onlineCount) => {
+        expect(resolveMachineConnectionSummary({ machineCount, onlineCount, hasUnknownMachines: true,
+            primaryMachineLabel: 'mbp' })).toEqual({ kind: 'unknown' });
+    });
+
     it('returns unknown when there are no machines but some server counts are unknown', () => {
         expect(resolveMachineConnectionSummary({
             machineCount: 0,

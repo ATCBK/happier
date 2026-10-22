@@ -2358,17 +2358,14 @@ export function useAllMachines(): Machine[] {
 }
 
 /**
- * This Home's machines online and offline, for always-mounted chrome (the rail's Machines tooltip,
+ * This Home's observed and unknown presence, for always-mounted chrome (the rail's Machines tooltip,
  * the Settings Machines row). Shared presence membership owns recovery and grace expiry;
- * a primitive inventory total keeps heartbeat and metadata-only changes quiet.
+ * stable verdict counts keep heartbeat and metadata-only changes quiet.
  */
 export function useMachinePresenceCounts(): MachinePresenceCounts {
   const scope = useActiveServerAccountScope();
   const membership = useMachinePresenceMembership(scope?.serverId ?? null);
-  const total = getStorage()((state) => resolveVisibleMachinesForActiveServerFromState(state, { serverId: scope?.serverId })
-    .filter(isMachineVisibleForLaunchSelection).length);
-  const online = scope ? membership.onlineMachineIds.length : 0;
-  return React.useMemo(() => ({ online, offline: total - online }), [online, total]);
+  return membership.counts;
 }
 
 /** Whether this Home has any machine at all, online or offline; a boolean, so presence churn stays quiet. */

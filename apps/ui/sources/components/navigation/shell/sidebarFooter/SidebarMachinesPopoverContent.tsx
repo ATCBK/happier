@@ -110,9 +110,10 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
     const counts = React.useMemo(() => collection.sections.flatMap(section => section.rows).reduce((result, row) => {
         if (row.kind !== 'machine') return result;
         if (row.online) result.online += 1;
-        else result.offline += 1;
+        else if (row.status === 'offline') result.offline += 1;
+        else result.unknown += 1;
         return result;
-    }, { online: 0, offline: 0 }), [collection.sections]);
+    }, { online: 0, offline: 0, unknown: 0 }), [collection.sections]);
     // Values are live only while the popover is open: one batched demand for the online machines it lists.
     const summary = useMachineSummarySettingValue();
     const demandKeys = React.useMemo((): MachineResourceKey[] => collection.sections.filter(section => !section.archived).flatMap(section => section.rows)

@@ -22,7 +22,8 @@ import {
     subscribeAppliedActiveServerRuntimeAvailability,
 } from '@/sync/runtime/orchestration/connectionManager';
 import { useHomeViewSelectionSettings } from '@/hooks/server/useHomeViewSelectionSettings';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
@@ -41,6 +42,17 @@ function isMachineReadyForConnectionHealth(machine: Readonly<{ daemonState?: unk
         return true;
     }
     return status === 'running';
+}
+
+function resolveObservedMachinePresence(machines: readonly Machine[], scope: MachineReachabilityScope | null | undefined, nowMs: number) {
+    const onlineMachines: Machine[] = [];
+    let unknownCount = 0;
+    for (const machine of machines) {
+        const reachability = resolveMachineReachability(scope, machine, nowMs);
+        if (reachability === 'reachable') onlineMachines.push(machine);
+        else if (reachability === 'unknown') unknownCount += 1;
+    }
+    return { onlineMachines, unknownCount };
 }
 
 export function useConnectionHealth() {
@@ -121,10 +133,11 @@ export function useConnectionHealth() {
 
                 const visibleMachines = group.machines.filter((machine) => !machine.revokedAt);
                 const scope = group.accountScope;
-                const onlineMachines = visibleMachines.filter((machine) => isMachineReachable(scope, machine, presenceNowMs));
+                const { onlineMachines, unknownCount } = resolveObservedMachinePresence(visibleMachines, scope, presenceNowMs);
                 return {
                     machineCount: visibleMachines.length,
                     onlineCount: onlineMachines.length,
+                    unknownCount,
                     readyCount: onlineMachines.filter((machine) => isMachineSelectableForFleet(scope, machine, presenceNowMs) && isMachineReadyForConnectionHealth(machine)).length,
                     status: group.status,
                 };
@@ -203,8 +216,8 @@ export function useActiveHomeConnectionHealth() {
         () => appliedMachines.filter((machine) => !machine.revokedAt),
         [appliedMachines],
     );
-    const onlineMachines = React.useMemo(
-        () => visibleMachines.filter((machine) => isMachineReachable(accountScope, machine, presenceNowMs)),
+    const { onlineMachines, unknownCount } = React.useMemo(
+        () => resolveObservedMachinePresence(visibleMachines, accountScope, presenceNowMs),
         [visibleMachines, accountScope, presenceNowMs, reachabilityRevision],
     );
     const primaryMachineLabel = React.useMemo(() => {
@@ -237,6 +250,7 @@ export function useActiveHomeConnectionHealth() {
                 : {
                     machineCount: visibleMachines.length,
                     onlineCount: onlineMachines.length,
+                    unknownCount,
                     readyCount: onlineMachines.filter(machine => isMachineSelectableForFleet(accountScope, machine, presenceNowMs) && isMachineReadyForConnectionHealth(machine)).length,
                 }),
             status: machineListStatus,
@@ -248,6 +262,7 @@ export function useActiveHomeConnectionHealth() {
         isAppliedHomeTransitioning,
         machineListStatus,
         onlineMachines,
+        unknownCount,
         accountScope,
         presenceNowMs,
         socketStatus.status,

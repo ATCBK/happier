@@ -1,12 +1,13 @@
 import { t } from '@/text';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
 export type MachinePresenceLine = Readonly<{
     online: boolean;
+    status: 'online' | 'offline' | 'unknown';
     /** Native retained power when known, otherwise ordinary connectivity/last-seen. */
     label: string;
 }>;
@@ -22,21 +23,23 @@ export function describeMachinePresenceLine(
     managedMachine?: ManagedMachineV1 | null,
     scope?: MachineReachabilityScope | null,
 ): MachinePresenceLine {
-    if (machine.presence === null) return { online: false, label: '' };
+    if (machine.presence === null) return { online: false, status: 'unknown', label: '' };
+    const reachability = machine.id ? resolveMachineReachability(scope, { ...machine, id: machine.id }, nowMs) : 'unknown';
     const presenceOnline = isMachineOnline(machine, nowMs);
-    const online = machine.id ? isMachineReachable(scope, { ...machine, id: machine.id }, nowMs) : false;
+    const online = reachability === 'reachable';
     const lastSeen = formatLastSeen(machine.activeAt ?? 0);
     // A fresh heartbeat with a failed request from this Home is a live machine this Home cannot
     // reach, not an offline one ("Offline · last seen just now" contradicts itself). "Offline"
     // stays for a stale heartbeat.
-    const word = online ? t('settingsOverview.machineOnline')
+    const word = reachability === 'unknown' ? t('common.unknown') : online ? t('settingsOverview.machineOnline')
         : presenceOnline
             ? t('settingsOverview.machineUnreachableFromHome', { lastSeen })
             : t('settingsOverview.machineOffline', { lastSeen });
     return {
         online,
+        status: reachability === 'unknown' ? 'unknown' : online ? 'online' : 'offline',
         label: resolveWorkStatusTone({ kind: 'machine', facts: {
-            online, word, machineId: machine.id, revokedAt: machine.revokedAt, managedMachine, needsYouCount: 0, runningSessionCount: 0,
+            online: reachability === 'unknown' ? null : online, word, machineId: machine.id, revokedAt: machine.revokedAt, managedMachine, needsYouCount: 0, runningSessionCount: 0,
         } }).word,
     };
 }

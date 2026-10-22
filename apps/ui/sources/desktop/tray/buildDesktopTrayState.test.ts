@@ -5,6 +5,14 @@ import { buildDesktopTrayState } from './buildDesktopTrayState';
 describe('buildDesktopTrayState', () => {
     const translate = (key: string) => key;
 
+    it('uses the existing neutral connecting tray state without inventing counts for unknown machine presence', () => {
+        expect(buildDesktopTrayState({
+            health: { kind: 'machine_unknown', machineCount: 2, onlineCount: 0,
+                statusLabelKey: 'status.unknown', machineLabelKey: 'status.unknown' },
+            t: translate,
+        })).toEqual({ status: 'connecting', label: 'status.unknown', detail: 'status.unknown' });
+    });
+
     it('maps healthy connection health to a healthy tray state', () => {
         expect(buildDesktopTrayState({
             health: {

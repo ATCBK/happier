@@ -4,7 +4,7 @@ import { useMachineDaemonReadTarget } from '../useMachineDaemonReadTarget';
 import { machineStorageStore, type MachineStorageState } from './machineStorageStore';
 import type { MachineStorageKey } from './machineRpc';
 
-export type MachineStorageHookInput = MachineStorageKey & Readonly<{ enabled?: boolean; online?: boolean }>;
+export type MachineStorageHookInput = MachineStorageKey & Readonly<{ enabled?: boolean; online?: boolean | null }>;
 
 /** Exact Home/Account identity comes from the one daemon-read target; storage adds its daemon-restart edge. */
 export function useMachineStorageTarget(input: MachineStorageHookInput) {

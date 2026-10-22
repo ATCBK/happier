@@ -6,7 +6,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 const home = createHomeGovernanceHarness();
 const homeIdentityId = 'srv_counts';
@@ -63,14 +63,33 @@ function setHomeMachines(machines: readonly Machine[]) {
 }
 
 describe('useMachinePresenceCounts', () => {
+    it('keeps withdrawn machines unknown until that exact Home and Account observes them again', async () => {
+        setHomeMachines([machine('laptop'), machine('studio', { active: false, activeAt: Date.now() - 2 * DAY_MS })]);
+        const hook = await renderHook(() => useMachinePresenceCounts());
+        const scope = { serverId: homeIdentityId, accountId: 'account' };
+        try {
+            await act(async () => { withdrawMachinePresenceForScope(scope); });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 0, unknown: 2 });
+            await act(async () => {
+                captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })(['laptop', 'studio']);
+                captureMachinePresenceObservation({ ...scope, serverId: 'another-home' })(['laptop', 'studio']);
+            });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 0, unknown: 2 });
+            await act(async () => { captureMachinePresenceObservation(scope)(['studio']); });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1, unknown: 1 });
+            await act(async () => { captureMachinePresenceObservation(scope)(['laptop']); });
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 1, unknown: 0 });
+        } finally { await hook.unmount(); }
+    });
+
     it('expires the chrome count at the same grace boundary without another store write', async () => {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         vi.setSystemTime(Date.now());
         setHomeMachines([machine('laptop')]);
         const hook = await renderHook(() => useMachinePresenceCounts());
-        expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+        expect(hook.getCurrent()).toEqual({ online: 1, offline: 0, unknown: 0 });
         await act(async () => { vi.advanceTimersByTime(60_001); });
-        expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+        expect(hook.getCurrent()).toEqual({ online: 0, offline: 1, unknown: 0 });
         await hook.unmount();
     });
 
@@ -82,16 +101,16 @@ describe('useMachinePresenceCounts', () => {
         storage.getState().markMachineListSettled(serverId);
         const hook = await renderHook(() => useMachinePresenceCounts());
         try {
-            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0, unknown: 0 });
             await act(async () => { vi.advanceTimersByTime(60_001); });
-            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1, unknown: 0 });
             const before = storage.getState();
             await act(async () => {
                 storage.getState().applyMachines([machine('laptop')], false, { sourceServerId: serverId, sourceAccountId: 'account' });
             });
             expect(storage.getState().machines).toBe(before.machines);
             expect(storage.getState().machineListByServerId).toBe(before.machineListByServerId);
-            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0, unknown: 0 });
         } finally { await hook.unmount(); }
     });
 
@@ -107,16 +126,16 @@ describe('useMachinePresenceCounts', () => {
             storage.setState({ profileScope: { serverId, accountId: 'account' } });
             setHomeMachines([machine('laptop', { activeAt: now })]);
             const hook = await renderHook(() => useMachinePresenceCounts(), { flushOptions: { cycles: 1, turns: 4 } });
-            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0, unknown: 0 });
 
             await act(async () => {
                 recordMachineRequestFailed({ serverId: homeIdentityId, accountId: 'account', machineId: 'laptop', observedAtMs: now + 1 });
             });
-            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1, unknown: 0 });
             await act(async () => {
                 setHomeMachines([machine('laptop', { activeAt: now + 2 })]);
             });
-            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1, unknown: 0 });
             await hook.unmount();
         } finally {
             storage.setState(previousState);
@@ -137,7 +156,7 @@ describe('useMachinePresenceCounts', () => {
             ]);
             const hook = await renderHook(() => useMachinePresenceCounts(), { flushOptions: { cycles: 1, turns: 4 } });
 
-            expect(hook.getCurrent()).toEqual({ online: 2, offline: 1 });
+            expect(hook.getCurrent()).toEqual({ online: 2, offline: 1, unknown: 0 });
             await hook.unmount();
         } finally {
             storage.setState(previousState);
@@ -170,7 +189,7 @@ describe('useMachinePresenceCounts', () => {
             await act(async () => {
                 setHomeMachines([machine('laptop'), machine('studio')]);
             });
-            expect(hook.getCurrent()).toEqual({ online: 2, offline: 0 });
+            expect(hook.getCurrent()).toEqual({ online: 2, offline: 0, unknown: 0 });
             await hook.unmount();
         } finally {
             storage.setState(previousState);

@@ -56,6 +56,7 @@ function resolveSummaryKind(healthKind: ConnectionHealthKind): HomeConnectionSum
         case 'healthy':
         case 'no_machine':
         case 'machine_offline':
+        case 'machine_unknown':
         case 'machine_not_ready':
             return 'connected';
     }

@@ -44,7 +44,7 @@ export function resolveConnectionHealthPresentation(
                 color: statusColors.connected,
                 isPulsing: false,
                 statusLabelKey: 'status.connected',
-                machineLabelKey: 'status.online',
+                machineLabelKey: resolveKnownMachineLabelKey(health),
             };
         case 'connecting':
             return {
@@ -110,6 +110,7 @@ export function resolveConnectionHealthPresentation(
                 statusLabelKey: 'status.actionRequired',
                 machineLabelKey: 'newSession.noMachinesFound',
             };
+        case 'machine_unknown':
         default:
             return {
                 tone: 'neutral',

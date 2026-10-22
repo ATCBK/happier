@@ -10,7 +10,7 @@ export function resolveMachineConnectionSummary(params: Readonly<{
     hasUnknownMachines: boolean;
     primaryMachineLabel: string | null;
 }>): MachineConnectionSummary {
-    if (params.hasUnknownMachines && params.machineCount === 0) {
+    if (params.hasUnknownMachines) {
         return { kind: 'unknown' };
     }
 

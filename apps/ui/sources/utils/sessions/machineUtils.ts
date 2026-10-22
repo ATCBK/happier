@@ -47,6 +47,6 @@ export function readMachineStatusNextRefreshAtMs(
     return expiresAtMs > nowMs ? expiresAtMs : null;
 }
 
-export type MachinePresenceCounts = Readonly<{ online: number; offline: number }>;
+export type MachinePresenceCounts = Readonly<{ online: number; offline: number; unknown: number }>;
 
 export { getMachineDisplayName, resolveMachineDisplayNames } from './machineDisplayNames';

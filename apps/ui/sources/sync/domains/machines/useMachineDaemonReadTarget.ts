@@ -16,7 +16,7 @@ export type MachineDaemonReadTargetInput = Readonly<{
     expectedAccountId?: string | null;
     daemonStateVersion?: number | null;
     enabled?: boolean;
-    online?: boolean;
+    online?: boolean | null;
 }>;
 
 type MachineDaemonReadIdentity = Readonly<{
@@ -76,9 +76,9 @@ export function useMachineDaemonReadTarget(input: MachineDaemonReadTargetInput):
     const presence = useMachinePresenceSummary(serverId, input.machineId);
     const selectVersion = React.useCallback((state: Parameters<typeof resolveServerScopedMachine>[0]) => resolveServerScopedMachine(state, serverId, input.machineId)?.daemonStateVersion, [input.machineId, serverId]);
     const reportedVersion = storage(selectVersion);
-    const online = input.online ?? (presence.reachability !== 'unreachable');
+    const online = input.online !== false && input.online !== null && presence.reachability === 'reachable';
     const enabled = identity.enabled && online;
-    return { key, enabled, offline: !online, accountBinding: binding, accountMatches: identity.accountMatches,
+    return { key, enabled, offline: presence.reachability === 'unreachable', accountBinding: binding, accountMatches: identity.accountMatches,
         daemonStateVersion: input.daemonStateVersion ?? reportedVersion };
 }
 
@@ -91,13 +91,13 @@ export type MachineDaemonReadTargetEntry = Readonly<{ key: MachineDaemonReadKey;
 export function useMachineDaemonReadTargets(input: Readonly<{ serverId?: string | null; machineIds: readonly string[]; enabled?: boolean }>): readonly MachineDaemonReadTargetEntry[] {
     const identities = useMachineDaemonReadIdentities(input.machineIds.map(machineId => ({ ...input, machineId })));
     const presence = useMachinePresenceSummaries(input.serverId, input.machineIds);
-    const onlineKey = JSON.stringify(presence.map(machine => machine.reachability !== 'unreachable'));
+    const presenceKey = JSON.stringify(presence.map(machine => machine.reachability));
     return React.useMemo(() => {
-        const online = JSON.parse(onlineKey) as boolean[];
+        const reachability = JSON.parse(presenceKey) as Array<typeof presence[number]['reachability']>;
         return identities.map((identity, index) => ({
             key: identity.key,
-            enabled: identity.enabled && online[index] === true,
-            offline: online[index] !== true,
+            enabled: identity.enabled && reachability[index] === 'reachable',
+            offline: reachability[index] === 'unreachable',
         }));
-    }, [identities, onlineKey]);
+    }, [identities, presenceKey]);
 }

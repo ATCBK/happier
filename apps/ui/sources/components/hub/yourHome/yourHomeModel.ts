@@ -8,7 +8,7 @@ export type YourHomeSessionState = 'need' | 'work' | 'idle';
 export type YourHomeMachineInput = Readonly<{
   id: string;
   name: string;
-  online: boolean;
+  online: boolean | null;
   /** When an offline machine was last seen, for its "last seen" line. */
   lastSeenAt: number | null;
   isThisComputer: boolean;
