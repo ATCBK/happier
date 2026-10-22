@@ -139,8 +139,11 @@ function usePluginExecutionOriginMachineSnapshots(params: Readonly<{
                 if (inputs) {
                     if (connection) connection.updateInputs(inputs);
                     else connection = executionOriginMachineSnapshotPublication.connect(inputs, notify);
-                } else { connection?.dispose(); connection = null; }
-                notify();
+                } else {
+                    const previous = connection?.getSnapshot() ?? EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION;
+                    connection?.dispose(); connection = null;
+                    if (previous !== EMPTY_EXECUTION_ORIGIN_MACHINE_SELECTION) notify();
+                }
             },
             dispose() { connection?.dispose(); connection = null; },
         };

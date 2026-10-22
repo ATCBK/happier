@@ -996,6 +996,24 @@ describe('execution-origin plugin identity with real Account and machine owners'
         expect(currentBefore).not.toEqual(before);
         expect(retained()).toBe(before);
         expect(current()).toBe(currentBefore);
+        const adapter = vi.mocked(React.useMemo).mock.results.map(result => result.type === 'return' ? result.value : null)
+            .filter((value): value is { get: () => unknown; subscribe: (listener: () => void) => () => void; publish: (inputs: null) => void } => {
+            return Boolean(value && typeof value === 'object' && 'get' in value && value.get === current
+                && 'subscribe' in value && typeof value.subscribe === 'function'
+                && 'publish' in value && typeof value.publish === 'function');
+        }).at(-1);
+        expect(adapter).toBeDefined();
+        if (!adapter) throw new Error('missing origin snapshot adapter');
+        const notify = vi.fn();
+        const stop = adapter.subscribe(notify);
+        await act(async () => { adapter.publish(null); });
+        expect(notify).toHaveBeenCalledTimes(1);
+        const disabled = current();
+        notify.mockClear();
+        await act(async () => { adapter.publish(null); });
+        expect(current()).toBe(disabled);
+        expect(notify).not.toHaveBeenCalled();
+        stop();
         await hook.unmount();
     });
 
