@@ -4,8 +4,8 @@ import { stripMarkdown as stripMarkdownSource } from '@happier-dev/protocol/mess
 import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
 /** Preview callers can receive unbound token text, including inside literal code. */
-export function stripMarkdown(text: string): string {
-  return stripMarkdownSource(readableMessageText(text));
+export function stripMarkdown(text: string, options?: Parameters<typeof stripMarkdownSource>[1]): string {
+  return stripMarkdownSource(readableMessageText(text), options);
 }
 
 /**

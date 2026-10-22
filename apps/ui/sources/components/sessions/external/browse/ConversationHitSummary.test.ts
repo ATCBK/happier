@@ -38,6 +38,12 @@ describe('resolveConversationHitSnippet', () => {
       .toBe('First Second User: keep this role label Assistant: keep this one too');
   });
 
+  it('keeps numbered search matches while flattening role-labelled message Markdown', () => {
+    expect(resolveConversationHitSnippet({ title: 'Other conversation',
+      snippet: 'User: # First\n554. **Second**\nAssistant: ## Keep issue #42 and C# literal\n`User: # literal`', query: '554' }))
+      .toBe('First 554. Second Keep issue #42 and C# literal User: # literal');
+  });
+
   const title = 'Reply with exactly: amber orchard, silver meadow. Do not use tools, read files, run commands, or change anything.';
 
   it('drops a snippet that is a clip of the title, which then carries the match', () => {

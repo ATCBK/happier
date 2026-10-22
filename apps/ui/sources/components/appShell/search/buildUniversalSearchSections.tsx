@@ -15,7 +15,7 @@ import { Text } from '@/components/ui/text/Text';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { ConversationHitSummary, resolveConversationHitSnippet } from '@/components/sessions/external/browse/ConversationHitSummary';
+import { ConversationHitSummary, formatConversationHitSnippet, resolveConversationHitSnippet } from '@/components/sessions/external/browse/ConversationHitSummary';
 import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { KeyboardCommandHint, KeyHint } from '@/components/ui/keyboard/KeyHint';
@@ -547,13 +547,13 @@ function toOption(
         ...(result.conversation ? {
             contentAlign: 'start' as const,
             labelHighlightQuery: result.conversation.query.trim() || undefined,
-            subtitle: stripMarkdown(result.conversation.snippet),
+            subtitle: formatConversationHitSnippet(result.conversation.snippet),
             subtitleContent: () => <ConversationHitSummary
                 snippet={resolveConversationHitSnippet({ title: result.title, snippet: result.conversation!.snippet, query: result.conversation!.query })}
                 query={result.conversation!.query}
                 where={result.conversation!.machineLabel} atMs={result.conversation!.atMs} />,
             // The row's spoken name is what it shows: the conversation, what matched, where.
-            accessibilityLabel: [stripMarkdown(result.title), stripMarkdown(result.conversation.snippet), result.conversation.machineLabel].filter(Boolean).join(', '),
+            accessibilityLabel: [stripMarkdown(result.title), formatConversationHitSnippet(result.conversation.snippet), result.conversation.machineLabel].filter(Boolean).join(', '),
         } : {}),
         ...(result.searchText ? { searchText: result.searchText } : {}),
         ...(result.exactSearchText ? { exactSearchText: result.exactSearchText } : {}),

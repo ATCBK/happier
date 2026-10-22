@@ -70,6 +70,11 @@ function comparableText(text: string): string {
   return text.replace(/…|\.{3}/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
+/** One plain-text projection for visible, searchable and spoken conversation snippets. */
+export function formatConversationHitSnippet(text: string): string {
+  return stripMarkdown(text, { omitRolePrefixes: true, preserveOrderedListNumbers: true });
+}
+
 /**
  * The snippet a hit row shows beneath its title. A conversation is titled by its first message, so the
  * matched text is often the title itself: the title carries the match tint (`Item.titleHighlightQuery`)
@@ -80,7 +85,7 @@ export function resolveConversationHitSnippet(
   input: Readonly<{ title: string; snippet: string | null | undefined; query: string | undefined }>,
 ): string | null {
   // Match the native corpus elsewhere; preview and highlight the displayed text here.
-  const snippet = input.snippet == null ? null : stripMarkdown(input.snippet);
+  const snippet = input.snippet == null ? null : formatConversationHitSnippet(input.snippet);
   const title = stripMarkdown(input.title);
   const query = input.query?.trim();
   if (!snippet || !query) return snippet;
