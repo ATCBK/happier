@@ -1,0 +1,58 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PluginServices } from '@happier-dev/plugin-sdk';
+import type { SessionSendRequest } from '@happier-dev/plugin-sdk/sessions';
+import { createChannelsJourneyFixture } from '../../channels/src/testkit/channelsJourney.js';
+import { EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
+import { createEmailTransportFixture as fixture, incoming, connection, delivery } from '../testkit/emailTransportFixture.js';
+
+describe('Email parser runtime recovery', () => {
+  let f: Awaited<ReturnType<typeof fixture>>;
+  let journey: Awaited<ReturnType<typeof createChannelsJourneyFixture>>;
+  let admitted: SessionSendRequest[];
+  beforeEach(async () => {
+    f = await fixture();
+    admitted = [];
+    const sessions = { async get() { return {
+      async summary() { return { id: 'fixture-session', machineId: 'fixture-machine', state: 'idle',
+        runtimeAvailability: { status: 'available' }, storagePolicy: 'optional', encryptionMode: 'plain', updatedAtMs: 1 }; },
+      async send(request: SessionSendRequest) { admitted.push(request); return { status: 'accepted', localId: `input-${admitted.length}` }; },
+    }; } } as unknown as PluginServices['sessions'];
+    journey = await createChannelsJourneyFixture({ provider: f.email, state: f.state,
+      connection: { id: connection.connectionId }, binding: {}, sessions,
+      actions: { async execute() { throw new Error('Unexpected host Action'); } } as unknown as PluginServices['actions'],
+      resolveCurrentProviderExecutionOrigin: () => ({ serverIdentityId: 'srv_plugin_testkit', materializationRef: f.materializationRef }),
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(f.receivedAtMs);
+    f.setMessages([]);
+    await expect(journey.poll()).resolves.toMatchObject({ kind: 'committed' });
+  });
+  afterEach(async () => { vi.doUnmock('mailparser'); vi.useRealTimers(); await journey?.dispose(); await f?.dispose(); });
+  it('retries the entire poll after a module-load failure without anonymous observations or checkpoint loss', async () => {
+    const checkpoint = () => [...f.state.rows.values()].find(row => row.value['record-kind'] === 'checkpoint')!.value;
+    const baseline = checkpoint();
+    // Only the module-loading boundary is faulted; the MIME parser stays real.
+    // Email Actions, trust, Channels admission, Collection CAS and backoff stay real.
+    vi.doMock('mailparser', () => { throw new Error("Cannot find module 'mailparser'"); });
+    f.setMessages([['opaque-incoming', incoming], ['second', Buffer.from(incoming.toString().replaceAll('incoming@example.com', 'second@example.com'))]]);
+    await expect(journey.poll()).resolves.toMatchObject({ kind: 'retry' });
+    const failed = (await f.state.get(connection.connectionId))!.value;
+    expect(failed.payload).toMatchObject({ pollFailure: { phase: 'retryDue', attemptCount: 1, evidence: { kind: 'provider', reason: 'network' } } });
+    expect(checkpoint()).toEqual(baseline);
+    expect(admitted).toEqual([]);
+    expect([...f.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census')).toEqual([]);
+    await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'safe', code: 'network' });
+    await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<incoming@example.com>', attachmentIds: ['mime:1'] }))
+      .resolves.toMatchObject({ kind: 'notReady', reason: 'network' });
+    expect(f.submissions).toEqual([]);
+    const payload = failed.payload as { pollFailure: { retryNotBeforeMs: number } };
+    vi.doUnmock('mailparser');
+    vi.setSystemTime(payload.pollFailure.retryNotBeforeMs);
+    await expect(journey.poll()).resolves.toMatchObject({ kind: 'committed' });
+    expect(admitted).toHaveLength(2);
+    expect((await f.state.get(connection.connectionId))!.value.payload).toMatchObject({ pollFailure: null });
+    expect(checkpoint().payload).toMatchObject({ opaqueToken: { position: 1 } });
+    await expect(journey.poll()).resolves.toMatchObject({ kind: 'committed' });
+    expect(admitted).toHaveLength(2);
+  });
+});

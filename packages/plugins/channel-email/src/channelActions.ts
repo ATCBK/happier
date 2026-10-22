@@ -57,6 +57,16 @@ async function fetchMail(ref: string, config: EmailConfig, request: Conversation
   return execution.result;
 }
 
+async function parseProviderEmail(raw: Uint8Array, options: Parameters<typeof parseEmail>[1],
+  context: PluginInvocationContext): Promise<ParsedEmail | ConversationProviderFailureV1> {
+  try {
+    return await parseEmail(raw, options);
+  } catch (error) {
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
+    return { kind: 'notReady', reason: 'network', diagnostic: 'The Email parser is temporarily unavailable.' };
+  }
+}
+
 /** Safe setup authenticates the mailbox; trust-marker support is observed on real inbound mail. */
 export async function setupEmailChannels(input: unknown, context: PluginInvocationContext): Promise<ConversationProviderSetupOutcomeV1> {
   assertConversationChannelsCoreCallerV1(context);
@@ -158,17 +168,11 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
     const raw = await fetchMail(ref, config, request, transport, context);
     if (raw.kind !== 'raw') return raw;
     const bytes = Buffer.from(raw.mimeBase64, 'base64');
-    let mail: ParsedEmail;
-    try {
-      mail = await parseEmail(bytes, { ...config, knownThread: identity =>
+    const mail = await parseProviderEmail(bytes, { ...config, knownThread: identity =>
         request.bindings?.some(binding => binding.endpoint.kind === 'thread' && binding.endpoint.id === emailThreadKey(identity)
           && binding.endpoint.parentId === config.mailbox
-          && (identity.messageId === null || !binding.excludedMessageIds?.includes(identity.messageId))) ?? false });
-    } catch (error) {
-      rethrowConversationProviderLifecycleFailureV1(error, context.signal);
-      mail = { headers: new Map(), messageId: null, references: [], inReplyTo: null, from: null, sender: null,
-        subject: '', text: '', forwarded: false, attachments: [], receivedAtMs: null };
-    }
+          && (identity.messageId === null || !binding.excludedMessageIds?.includes(identity.messageId))) ?? false }, context);
+    if ('kind' in mail) return mail;
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
     const identity = mail.messageId ?? ref;
@@ -220,7 +224,8 @@ export async function deliverEmailMessage(input: unknown, context: PluginInvocat
     if (raw.kind !== 'raw') return raw.retryAfterMs !== undefined
       ? { kind: 'notDelivered', retry: 'after', retryAfterMs: raw.retryAfterMs, code: raw.reason }
       : { kind: 'notDelivered', retry: raw.reason === 'network' || raw.reason === 'rateLimited' ? 'safe' : 'never', code: raw.reason };
-    const mail = await parseEmail(Buffer.from(raw.mimeBase64, 'base64'), { quotedHistory: 'never', stripSignatures: false, bodyFormat: 'text' });
+    const mail = await parseProviderEmail(Buffer.from(raw.mimeBase64, 'base64'), { quotedHistory: 'never', stripSignatures: false, bodyFormat: 'text' }, context);
+    if ('kind' in mail) return { kind: 'notDelivered', retry: 'safe', code: 'network' };
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
     const candidate = mail.from === null ? null : normalizeEmailAddress(mail.from);
@@ -288,7 +293,8 @@ export async function fetchEmailAttachment(input: unknown, context: PluginInvoca
   const transport = await readEmailTransport(config.transport, context);
   const raw = await fetchMail(request.messageId, config, request, transport, context);
   if (raw.kind !== 'raw') return raw;
-  const mail = await parseEmail(Buffer.from(raw.mimeBase64, 'base64'), { ...config, knownThread: true });
+  const mail = await parseProviderEmail(Buffer.from(raw.mimeBase64, 'base64'), { ...config, knownThread: true }, context);
+  if ('kind' in mail) return mail;
   const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
   const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
   if (mail.messageId !== request.messageId || !trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf) {

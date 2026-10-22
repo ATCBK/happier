@@ -1,4 +1,4 @@
-import { expect, vi } from 'vitest';
+import { expect } from 'vitest';
 import type { JsonValue, PluginServices } from '@happier-dev/plugin-sdk';
 import type { PluginWebSocketConnection, PluginWebSocketMessage } from '@happier-dev/plugin-sdk/http';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -37,10 +37,11 @@ function socketBoundary(frames: readonly unknown[]) {
   const closed = new Promise<Readonly<{ kind: 'local'; wasClean: true }>>(resolve => {
     close = () => resolve({ kind: 'local', wasClean: true });
   });
-  const sent: PluginWebSocketMessage[] = [];
+  let acknowledge!: (message: PluginWebSocketMessage) => void;
+  const acknowledged = new Promise<PluginWebSocketMessage>(resolve => { acknowledge = resolve; });
   const socket: PluginWebSocketConnection = {
     url: 'wss://wss.slack.com/link?ticket=fixture', protocol: '', closed,
-    async send(message) { sent.push(message); },
+    async send(message) { acknowledge(message); },
     async receive(options) {
       if (options?.signal?.aborted) throw options.signal.reason;
       const frame = queue.shift();
@@ -53,7 +54,7 @@ function socketBoundary(frames: readonly unknown[]) {
     },
     close, dispose: close,
   };
-  return { socket, sent };
+  return { socket, acknowledged };
 }
 
 async function slackAdapter(): Promise<ProviderConformanceAdapter> {
@@ -134,19 +135,19 @@ async function slackAdapter(): Promise<ProviderConformanceAdapter> {
         } } }]);
         sockets.add(boundary.socket);
         let ingressFailure: unknown;
-        let stopped: Awaited<SlackSocketWorker['result']> | undefined;
         worker = startSlackSocketWorker({ connection: { connectionId, authorityEpoch: 1, identity }, api,
           webSockets: { openWebSocket: async () => boundary.socket }, signal: new AbortController().signal,
           admitObservation: async input => {
             try { await journey.ingest(input); } catch (error) { ingressFailure = error; throw error; }
           } });
-        void worker.result.then(result => { stopped = result; });
         try {
-          await vi.waitFor(() => {
+          // Durable composed ingress shares the containing test's deadline;
+          // Socket Mode does not impose a shorter local admission deadline.
+          const acknowledgement = await Promise.race([boundary.acknowledged, worker.result.then(result => {
             if (ingressFailure) throw ingressFailure;
-            if (stopped) throw new Error(`Slack worker stopped before ACK: ${JSON.stringify(stopped)}`);
-            expect(boundary.sent).toContainEqual({ kind: 'text', text: JSON.stringify({ envelope_id: `envelope-${message.id}` }) });
-          });
+            throw new Error(`Slack worker stopped before ACK: ${JSON.stringify(result)}`);
+          })]);
+          expect(acknowledgement).toEqual({ kind: 'text', text: JSON.stringify({ envelope_id: `envelope-${message.id}` }) });
         } finally { worker.stop(); await worker.result; worker = undefined; }
       },
       async gap(journey) {

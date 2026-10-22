@@ -394,11 +394,13 @@ type ChannelDeliveriesCollection = Pick<
 /**
  * The privacy-safe projection used by mounted management UI. It deliberately
  * keeps content, provider evidence, and delivery identity inside the Account
- * envelope, exposing CAS facts and the parent required to confirm a new thread.
+ * envelope, exposing CAS facts, the owning binding, and the parent required to
+ * confirm a new thread. Connection-only custody has no owning binding.
  */
 export type ConversationOutwardDeliveryResolutionRow = Readonly<{
   recommendedRecovery?: ConversationRecommendedRecoveryV1 | null;
   custodyId: string;
+  bindingId?: string;
   revision: number;
   state: 'partial' | 'outcomeUnknown' | 'archiveRecoverable';
   /**
@@ -1051,6 +1053,7 @@ export async function readConversationOutwardDeliveryResolutionPage(input: Reado
     if (state === undefined) continue;
     rows.push({
       custodyId: record.custodyId,
+      ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
       revision: record.revision,
       state,
       acceptedPartCount: record.custody.providerMessageIds.length,

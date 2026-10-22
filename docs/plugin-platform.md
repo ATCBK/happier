@@ -873,6 +873,11 @@ admitted source and authority remain current reuses the decision and claims
 execution before any effect; it does not create a new approval. An existing
 execution claim retains its unknown-outcome protection.
 
+A plugin module runtime failure while decoding provider content surfaces as
+that provider's retryable failure, never as a fabricated anonymous observation;
+only content the codec rejects becomes a terminal non-admission. The Email
+channel's behavior is documented in `apps/docs/content/docs/extending/email-channel.mdx`.
+
 In unreleased 0.3 source, Channels' existing testkit also owns the reusable
 `defineProviderConformanceJourneys` suite in
 `packages/plugins/channels/src/testkit/providerConformance.ts`. The native

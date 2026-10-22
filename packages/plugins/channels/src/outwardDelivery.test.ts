@@ -2324,7 +2324,7 @@ describe('Channels control-response outward custody', () => {
     const page = await readConversationOutwardDeliveryResolutionPage({
       deliveriesCollection: deliveries as never, connectionId: 'connection-1',
     });
-    expect(page.rows).toEqual([{ custodyId: unknown.record.custodyId, revision: unknown.record.revision,
+    expect(page.rows).toEqual([{ custodyId: unknown.record.custodyId, bindingId: 'binding-1', revision: unknown.record.revision,
       state: 'outcomeUnknown', acceptedPartCount: 0, createdThreadEndpointRequired: { parentId: endpoint.id },
       recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
         input: { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision },
@@ -2338,7 +2338,7 @@ describe('Channels control-response outward custody', () => {
     if (confirmed.kind !== 'updated') throw new Error('Expected retained endpoint');
     expect((await readConversationOutwardDeliveryResolutionPage({
       deliveriesCollection: deliveries as never, connectionId: 'connection-1',
-    })).rows).toEqual([{ custodyId: confirmed.record.custodyId, revision: confirmed.record.revision, state: 'outcomeUnknown',
+    })).rows).toEqual([{ custodyId: confirmed.record.custodyId, bindingId: 'binding-1', revision: confirmed.record.revision, state: 'outcomeUnknown',
       acceptedPartCount: 0,
       recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
         input: { custodyId: confirmed.record.custodyId, expectedRevision: confirmed.record.revision },
@@ -2404,6 +2404,7 @@ describe('Channels control-response outward custody', () => {
       rows: [
         {
           custodyId: partial.record.custodyId,
+          bindingId: 'binding-1',
           revision: partial.record.revision,
           state: 'partial',
           acceptedPartCount: 1,
@@ -2414,6 +2415,7 @@ describe('Channels control-response outward custody', () => {
         },
         {
           custodyId: unknown.record.custodyId,
+          bindingId: 'binding-1',
           revision: unknown.record.revision,
           state: 'outcomeUnknown',
           acceptedPartCount: 1,
@@ -2672,6 +2674,7 @@ describe('Channels control-response outward custody', () => {
     })).resolves.toEqual({
       rows: [{
         custodyId: recoverable.record.custodyId,
+        bindingId: 'binding-1',
         revision: archived.record.revision,
         state: 'archiveRecoverable',
         acceptedPartCount: 0,

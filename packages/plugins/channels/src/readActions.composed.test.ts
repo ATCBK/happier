@@ -4,7 +4,7 @@ import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from './collections.js';
 import { MemoryCollection } from './testkit/memoryCollection.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
-import { ConversationBindingV1Schema, ConversationDeliveryReadResultV1Schema, ConversationNormalizedIngressV1Schema,
+import { ConversationBindingV1Schema, ConversationDeliveryAttentionResultV1Schema, ConversationDeliveryReadResultV1Schema, ConversationNormalizedIngressV1Schema,
   CONVERSATION_OBSERVATION_TRANSPORT_KINDS_V1, CONVERSATION_OBSERVATION_ADDRESSING_EVIDENCE_V1,
   CONVERSATION_MESSAGE_CONTENT_PROVENANCE_V1 } from '@happier-dev/channels-protocol/v1';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
@@ -158,7 +158,7 @@ describe('registered Channels Account read Actions', () => {
         custody: { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [] } });
       expect(updated.kind).toBe('updated');
       const attention = await kit.invokeAction('delivery/attention-v1', { connectionId: 'connection-1', limit: 1 }, { surface: 'agent' });
-      expect(attention).toMatchObject({ rows: [{ custodyId, revision: 2, state: 'outcomeUnknown' }] });
+      expect(attention).toMatchObject({ rows: [{ custodyId, bindingId: 'binding-1', revision: 2, state: 'outcomeUnknown', acceptedPartCount: 0 }] });
       const unknown = await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'agent' });
       expect(unknown).toMatchObject({ kind: 'ready', delivery: { revision: 2, lastOutcome: 'unknown', projection: { attention: true } } });
       expect(unknown).toMatchObject({ kind: 'ready', delivery: { recommendedRecovery: {
@@ -169,11 +169,38 @@ describe('registered Channels Account read Actions', () => {
         custody: { state: 'partial', attemptCount: 1, providerMessageIds: ['accepted-first-chunk'], failedChunk: 1 } });
       expect(partial.kind).toBe('updated');
       const partialRead = await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'agent' });
+      const partialAttention = await kit.invokeAction('delivery/attention-v1', { connectionId: 'connection-1' }, { surface: 'agent' });
+      expect(partialAttention).toMatchObject({ rows: [{ custodyId, bindingId: 'binding-1', revision: 3, state: 'partial', acceptedPartCount: 1, failedChunk: 1 }] });
       expect(partialRead).toMatchObject({ kind: 'ready', delivery: { recommendedRecovery: {
         action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
         input: { custodyId, expectedRevision: 3 }, reason: 'partial', unavailableReason: 'ownerDecisionRequired',
       } } });
-      expect(JSON.stringify([pending, attention, unknown])).not.toMatch(/private-body|private-delivery-key|private-endpoint/);
+      // The installed external provider above owns several conversations on the
+      // same connection; connection-only feedback must not borrow either one.
+      const { bindingId: _bindingId, routeAuthority: _routeAuthority, ...connectionObligation } = accepted.record.obligation;
+      const additionalCustodyIds: string[] = [];
+      for (const bindingId of ['binding-2', undefined]) {
+        const created = await store.ensure({ ...connectionObligation,
+          ...(bindingId === undefined ? { routeAuthority: { connectionAuthorityEpoch: 1 } }
+            : { bindingId, routeAuthority: { connectionAuthorityEpoch: 1, bindingRevision: 1, bindingAuthorityEpoch: 1 } }),
+          deliveryKey: `private-delivery-key-${bindingId ?? 'connection'}`,
+          content: { text: 'private-body' },
+          source: { kind: 'controlResponse', controlId: `control-${bindingId ?? 'connection'}`, controlKind: 'recovery' },
+        });
+        if (created.kind !== 'created') throw new Error('Expected additional custody');
+        additionalCustodyIds.push(created.record.custodyId);
+        expect((await store.compareAndSwap({ custodyId: created.record.custodyId, expectedRevision: 1,
+          custody: { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [] } })).kind).toBe('updated');
+      }
+      const groupedAttention = await kit.invokeAction('delivery/attention-v1', { connectionId: 'connection-1' }, { surface: 'mcp' });
+      expect(groupedAttention).toMatchObject({ rows: expect.arrayContaining([
+        expect.objectContaining({ custodyId, bindingId: 'binding-1' }),
+        expect.objectContaining({ custodyId: additionalCustodyIds[0], bindingId: 'binding-2' }),
+      ]) });
+      const parsedAttention = ConversationDeliveryAttentionResultV1Schema.parse(groupedAttention);
+      expect(parsedAttention.rows).toHaveLength(3);
+      expect(parsedAttention.rows.find(row => row.custodyId === additionalCustodyIds[1])).not.toHaveProperty('bindingId');
+      expect(JSON.stringify([pending, attention, unknown, partialAttention, groupedAttention])).not.toMatch(/private-body|private-delivery-key|private-endpoint|accepted-first-chunk/);
       await store.compareAndSwap({ custodyId, expectedRevision: 3,
         custody: { state: 'delivered', attemptCount: 1, providerMessageIds: ['private-native-id'] } });
       expect(await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'mcp' }))

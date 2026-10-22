@@ -727,6 +727,15 @@ messages before returning optional `evidence.message`; raw provider diagnostics
 remain private. The existing attention description shows this sentence, with
 the code-based recovery description as the fallback when no sentence exists.
 
+### Delivery attention conversation identity (development, unreleased)
+
+Each `delivery/attention-v1` row includes its existing owning `bindingId` when
+the custody is binding-scoped. Join it to `binding/list-v1` for the conversation's
+display label. Connection-only custody omits `bindingId`; it does not borrow a
+conversation identity. Content, native endpoint IDs and provider message IDs
+remain private. The closed result reader validates the optional binding identity
+with the same schema used by binding reads.
+
 ## Protocol evolution
 
 The `/v1` epoch is a semantic compatibility boundary. Channels core applies the

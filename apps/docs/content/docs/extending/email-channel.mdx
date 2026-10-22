@@ -56,6 +56,15 @@ reports a history gap instead of claiming that no messages were missed.
 Submission checks Sent for the deterministic Message-ID and appends a copy
 when the server has not saved one.
 
+If a received message can't be read because of a temporary problem on the
+machine, such as the mail parser failing to load during an update, the poll
+fails as a retryable error and keeps the previous checkpoint. The same message
+is read again on the next retry, and no Agent turn starts from it. Mail that is
+malformed, or that the parser rejects for exceeding its content limits, is
+refused for good. Replies and attachment reads follow the same rule: a
+temporary failure is retried, and no reply is sent until the original message
+can be read.
+
 Keep the existing connection when updating Happier or the Email plugin. In the
 current development source it follows the admitted Email provider on the same
 Home and machine, including a same-identity reinstall or development-source

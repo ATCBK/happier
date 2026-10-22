@@ -34,7 +34,16 @@ function singleAddress(value: HeaderValue | undefined) {
 }
 
 export async function parseEmail(raw: Uint8Array, options: EmailContentOptions = {}): Promise<ParsedEmail> {
-  return parseEmailParts(raw, options, []);
+  try {
+    return await parseEmailParts(raw, options, []);
+  } catch (error) {
+    // Mailparser's MIME splitter explicitly tags content-limit rejections.
+    // Unknown exceptions (including failed lazy imports) are runtime failures,
+    // never evidence that the sender or content was invalid.
+    if (error === null || typeof error !== 'object' || !('code' in error) || error.code !== 'EMAXLEN') throw error;
+    return { headers: new Map(), messageId: null, references: [], inReplyTo: null, from: null, sender: null,
+      subject: '', text: '', forwarded: false, attachments: [], receivedAtMs: null };
+  }
 }
 
 async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, parentParts: readonly string[], inlinePartPrefix = ''): Promise<ParsedEmail> {
