@@ -331,6 +331,11 @@ describe('MCP compiled CLI sign-in journey', () => {
     { name: 'sign-out on an explicitly selected Machine with stale presence', argv: ['mcp', 'servers', 'sign-out', 'linear', '--machine-id', 'selected-machine'], switched: false },
     { name: 'an exact id cannot be shadowed by another display name', argv: ['mcp', 'servers', 'sign-in', 'server-id', '--no-open'], switched: false },
     { name: 'a supplied app through the compiled Action', argv: ['mcp', 'servers', 'sign-in', 'linear', '--client-id', 'person-app', '--client-secret', suppliedSecret, '--no-open'], switched: false },
+    { name: 'canonical JSON app replacement with terminal continuation', argv: ['mcp', 'servers', 'sign-in', '--input-json', JSON.stringify({ serverId: 'server-id', client: { clientId: 'person-app', clientSecret: suppliedSecret } }), '--no-open'], switched: false },
+    { name: 'canonical JSON app removal', argv: ['mcp', 'servers', 'sign-in', '--input-json={"serverId":"server-id","client":null}', '--no-open'], switched: false },
+    { name: 'canonical JSON app removal with JSON output', argv: ['mcp', 'servers', 'sign-in', '--input-json={"serverId":"server-id","client":null}', '--json'], switched: false },
+    { name: 'canonical JSON with a friendly server-name overlay', argv: ['mcp', 'servers', 'sign-in', '--input-json={"client":null}', 'linear', '--no-open'], switched: false },
+    { name: 'canonical JSON sign-out on its specified Machine', argv: ['mcp', 'servers', 'sign-out', '--input-json', JSON.stringify({ machineId: 'selected-machine', account: { service, accountId: 'server-id' }, cleanupGroupReferences: true })], switched: false },
   ])('resolves through the catalog Action and preserves the captured Account: $name', async ({ argv, switched }) => {
     const commands: unknown[] = [];
     const signOut = argv[2] === 'sign-out';
@@ -341,6 +346,7 @@ describe('MCP compiled CLI sign-in journey', () => {
     if (!mode || mode.kind !== 'oauthAuthorizationCode') throw new Error('Expected host MCP OAuth mode');
     let configurationValues: Record<string, unknown> = {};
     let suppliedAppAdmitted = false;
+    let removedAppAdmitted = false;
     const described = { status: 'described', service, descriptor, occurrenceId: 'host-generation', sourceCustody: { kind: 'host' },
       accounts: signOut ? [{ ref: { service, accountId: 'server-id' }, status: 'connected', authenticationModeId: 'oauth',
         configurationReady: true, configurationRevision: 'config-1', scopes: [], revisionSemantics: 'revisioned',
@@ -364,6 +370,7 @@ describe('MCP compiled CLI sign-in journey', () => {
           if (command.operation === 'replaceConfiguration') {
             configurationValues = { ...command.values };
             suppliedAppAdmitted = command.secretValues.clientRegistration === JSON.stringify({ clientId: 'person-app', clientSecret: suppliedSecret });
+            removedAppAdmitted = command.secretValues.clientRegistration === 'null' && command.secretValues.clientSecrets === '{}';
           }
           return { status: command.operation === 'readConfiguration' ? 'configuration' : 'configurationCommitted',
             target: { kind: 'attempt', attemptId: 'attempt', service, modeId: 'oauth' }, mode,
@@ -398,6 +405,7 @@ describe('MCP compiled CLI sign-in journey', () => {
           'connectedServices.authentication.completeOAuth': ['cli'], 'connectedServices.authentication.cancel': ['cli'],
           'connectedServices.accounts.revoke': ['cli'] } }), context) });
     terminal.prompt.mockResolvedValue('https://app.happier.dev/oauth/mcp/callback?code=returned-code&state=attempt.nonce&iss=https%3A%2F%2Fissuer.example.test');
+    const jsonOutput = argv.includes('--json') ? captureConsoleJsonOutput<unknown>() : null;
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     let credentialReads = 0;
     const handled = await tryHandleMcpServerCliCommand({ argv,
@@ -410,18 +418,30 @@ describe('MCP compiled CLI sign-in journey', () => {
       return;
     }
     if (signOut) {
-      expect(commands).toEqual([{ machineId: argv.includes('--machine-id') ? 'selected-machine' : 'machine', command: { operation: 'revokeAccount', account: { service, accountId: 'server-id' },
+      expect(commands).toEqual([{ machineId: argv.includes('--machine-id') || argv.includes('--input-json') ? 'selected-machine' : 'machine', command: { operation: 'revokeAccount', account: { service, accountId: 'server-id' },
         cleanupGroupReferences: true, expectedCredentialRevision: 'csr_1234567890123456789012' } }]);
       expect(terminal.prompt).not.toHaveBeenCalled();
+      return;
+    }
+    if (argv.includes('--json')) {
+      expect(removedAppAdmitted).toBe(true);
+      expect(terminal.prompt).not.toHaveBeenCalled();
+      expect(commands).not.toContainEqual(expect.objectContaining({ command: expect.objectContaining({ operation: 'completeOAuth' }) }));
+      expect(jsonOutput?.json()).toMatchObject({ ok: true, data: { attemptId: 'attempt', machineId: 'machine',
+        authorizationUrl: 'https://issuer.example.test/authorize?state=attempt.nonce' } });
       return;
     }
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'completeOAuth', attemptId: 'attempt',
       completion: { code: 'returned-code', state: 'attempt.nonce', callbackUrl: mode.callbackUrl, iss: 'https://issuer.example.test' } } });
     expect(configurationValues).toMatchObject({ serverId: 'server-id', resource: 'https://resource.example.test/mcp', stepUp: argv.includes('--step-up') });
-    if (argv.includes('--client-id')) {
+    if (argv.includes('--client-id') || argv.some(value => value.includes('person-app'))) {
       expect(suppliedAppAdmitted).toBe(true);
       expect(JSON.stringify(configurationValues).includes(suppliedSecret)).toBe(false);
       expect(JSON.stringify(log.mock.calls).includes(suppliedSecret)).toBe(false);
+    }
+    if (argv.some(value => value.includes('"client":null'))) {
+      expect(removedAppAdmitted).toBe(true);
+      expect(configurationValues.registrations).toEqual({});
     }
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'read', attemptId: 'attempt', waitForProviderStart: true } });
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'cancel', attemptId: 'attempt' } });

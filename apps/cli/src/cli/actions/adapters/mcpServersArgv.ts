@@ -293,8 +293,10 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
   const callerTokens = stripTransportTokens(list, argv.slice(3)).filter(token => token !== '--no-open');
   const parsed = parseActionCliInput(command, callerTokens);
   if (!parsed.ok) throw Object.assign(new Error(parsed.message), { code: parsed.code });
+  const canonicalInput = parsed.canonicalBase !== null;
   const requestedName = parsed.callerOverlay.itemId;
-  if (typeof requestedName !== 'string' || !requestedName) throw Object.assign(new Error('Supply an MCP server name or id'), { code: 'invalid_arguments' });
+  const resolveName = !canonicalInput || requestedName !== undefined;
+  if (resolveName && (typeof requestedName !== 'string' || !requestedName)) throw Object.assign(new Error('Supply an MCP server name or id'), { code: 'invalid_arguments' });
   const serverId = readActionCliServerId(argv, true);
   const preferredMachineId = readTransportMachineId(list, argv);
   const transport = [...(serverId ? ['--server-id', serverId] : []), ...(preferredMachineId ? ['--machine-id', preferredMachineId] : [])];
@@ -316,7 +318,7 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
       return executor;
     } };
   let resolvedId: string | undefined;
-  await runCompiledActionCliCommand({ command: list, argv: [...list.path, ...transport, ...(options.includes('--json') ? ['--json'] : [])], signal: params.signal, deps,
+  if (resolveName) await runCompiledActionCliCommand({ command: list, argv: [...list.path, ...transport, ...(options.includes('--json') ? ['--json'] : [])], signal: params.signal, deps,
     consumeSuccess: payload => {
       const snapshot = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(payload);
       if (snapshot.status !== 'ready' || snapshot.authority !== 'active') throw Object.assign(new Error('MCP catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
@@ -325,9 +327,11 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
       if (!resolvedId) throw Object.assign(new Error('MCP server was not found'), { code: 'mcp_server_not_found' });
       return true;
     } });
-  if (!captured || !resolvedId) return true;
-  const current = captured;
+  if (resolveName && (!captured || !resolvedId)) return true;
   const composeArgv = (machineId?: string) => {
+    // Whole-input JSON and any friendly overlay are composed by the compiler.
+    // Do not manufacture itemId: it would replace the canonical server/account.
+    if (!resolveName) return [...command.path, ...callerTokens, ...transport, ...(options.includes('--json') ? ['--json'] : [])];
     const composed = composeActionCliInput({ parsed: { ...parsed, callerOverlay: { ...parsed.callerOverlay, itemId: resolvedId,
       ...(argv[2] === 'sign-out' && machineId ? { machineId } : {}) } }, canonicalSchema: command.spec.inputSchema,
       wholeInputSchema: command.wholeInputSchema, callerSchema: command.callerSchema, bindInput: command.spec.cli?.bindInput,
@@ -337,6 +341,11 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
       ...(options.includes('--json') ? ['--json'] : []), ...(command.routesByTransportMachineId && machineId ? ['--machine-id', machineId] : [])];
   };
   if (argv[2] === 'sign-out') {
+    if (!resolveName) {
+      await runCompiledActionCliCommand({ command, argv: composeArgv(), signal: params.signal, deps });
+      return true;
+    }
+    const current = captured!;
     const machineId = await resolveCurrentAccountAdministrationMachine({ token: current.params.credentials.token,
       serverHttpBaseUrl: current.homeUrl, requestedMachineId: preferredMachineId ?? undefined, signal: params.signal });
     if (!machineId) throw Object.assign(new Error('No machine is online'), { code: 'no_machine_online' });
@@ -346,6 +355,7 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
   await runCompiledActionCliCommand({ command, argv: composeArgv(preferredMachineId ?? undefined), signal: params.signal, deps,
     consumeSuccess: async payload => {
       if (options.includes('--json')) return false;
+      const current = captured!;
       const started = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.signIn.start'].parse(payload);
       const client = createConnectedAccountDaemonClient({ credentials: current.params.credentials,
         machineId: started.machineId, actionExecutor: current.executor, signal: params.signal });
