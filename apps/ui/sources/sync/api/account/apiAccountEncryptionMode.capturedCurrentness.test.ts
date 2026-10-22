@@ -14,6 +14,13 @@ import { fetchAccountEncryptionMode } from './apiAccountEncryptionMode';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createOperationAccountCurrentnessSource } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
+import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { invalidateAccountEncryptionModeCache } from './apiAccountEncryptionMode';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -105,4 +112,121 @@ it('keeps captured-Home readiness failure out of the selected Home recovery flow
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(new URL(String(fetchMock.mock.calls[0]?.[0])).origin).toBe('https://captured-currentness.test');
+});
+
+it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'holder-retired', 'credential-retired', 'home-retired', 'fresh-denied'] as const)(
+    'revalidates finite Session hydration across socket loss (%s)', async outcome => {
+    const accountId = `finite-${outcome}`;
+    const serverUrl = `https://finite-${outcome}.test`;
+    const credentials = { token: createAccountTokenForTests(accountId, { currentAccount: true }) };
+    const serverId = await home.addHome({ name: 'Finite Session', serverUrl, accountId, credentials,
+        accountEncryptionMode: 'plain', currentAccount: true });
+    let currentness: AccountEncryptionCurrentnessResponse = createPlainAccountEncryptionCurrentnessFixture();
+    let denied = false;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let detailStarted = false;
+    const sessionId = 'finite-session';
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (rawUrl, init) => {
+        const path = new URL(String(rawUrl)).pathname;
+        if (path === '/v1/account/encryption/currentness') return denied
+            ? Response.json({ error: 'forbidden' }, { status: 403 }) : Response.json(currentness);
+        if (path === `/v2/sessions/${sessionId}`) {
+            detailStarted = true;
+            await held;
+            return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }) });
+        }
+        if (path === `/v1/sessions/${sessionId}/turns`) return Response.json({ v: 1, sessionId, updatedAt: 1, turns: [] });
+        return home.request(rawUrl, init);
+    }));
+    let socket: Socket | undefined;
+    installDisconnectedServerSocketBoundary(current => { socket = current; configureConnectedServerSocketBoundary(current); });
+    const request = createServerFetchAtEndpoint({ endpointUrl: serverUrl, serverId, credentials });
+    apiSocket.initialize({ endpoint: serverUrl, serverId, token: credentials.token, credentials,
+        generation: getActiveServerSnapshot().generation, request, isCurrent: () => true }, null);
+    await waitForHomeGovernance(() => expect(socket?.connected).toBe(true));
+    const context = await captureLazyActionAccountContext(serverId);
+    let operationReads = 0;
+    const explicitCredentials: string[] = [];
+    const source = createOperationAccountCurrentnessSource({ credentials, serverId,
+        request: (path, init) => {
+            operationReads += 1;
+            explicitCredentials.push(new Headers(init.headers).get('Authorization') ?? '');
+            return context.request(path, init);
+        } });
+    try {
+        await source.read();
+        const reading = runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope,
+            activeRequest: context.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId,
+                accountCurrentnessSource: source, isCurrent: context.accountLifetime.isCurrent }))
+            .then(value => ({ value }), (error: unknown) => ({ error }));
+        await waitForHomeGovernance(() => expect(detailStarted).toBe(true));
+        socket!.connected = false;
+        for (const listener of socket!.listeners('disconnect')) listener('ping timeout');
+        if (outcome === 'mode') currentness = { ...currentness, mode: 'e2ee', signingKeyFingerprint: 'signing-new',
+            contentKeyFingerprint: 'content-new', recipientEnvelopeReadiness: { status: 'available' } };
+        if (outcome === 'fingerprint') currentness = { ...currentness, signingKeyFingerprint: 'changed-anchor' };
+        denied = outcome === 'fresh-denied';
+        socket!.connect();
+        if (outcome === 'update' || outcome === 'malformed-update') {
+            const update = { id: 'encryption-change', seq: 2, createdAt: 2,
+                body: { t: 'update-account', id: accountId, encryptionCurrentness: outcome === 'update'
+                    ? { ...currentness, updatedAt: 2, version: 2 } : { mode: 'plain' } } };
+            for (const listener of socket!.listenersAny()) listener('update', update);
+        }
+        if (outcome === 'scope-reset') invalidateAccountEncryptionModeCache({ reason: 'scope-reset' });
+        if (outcome === 'holder-retired') apiSocket.disconnect();
+        if (outcome === 'credential-retired' || outcome === 'home-retired') {
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId });
+            if (outcome === 'home-retired') {
+                const { removeServerProfile } = await import('@/sync/domains/server/serverProfiles');
+                await removeServerProfile(serverId);
+            }
+        }
+        release();
+        const result = await reading;
+        if (outcome === 'unchanged') {
+            expect(result).toMatchObject({ value: { session: { id: sessionId } } });
+            expect(source.isCurrent()).toBe(true);
+            expect(operationReads).toBe(2);
+            await Promise.all([source.read(), source.read()]);
+            expect(operationReads).toBe(2);
+            expect(explicitCredentials).toEqual([`Bearer ${credentials.token}`, `Bearer ${credentials.token}`]);
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            await expect(TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId })).resolves.toEqual(credentials);
+        } else {
+            expect(result).toHaveProperty('error');
+            if (['mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'holder-retired'].includes(outcome)) {
+                expect(result).toMatchObject({ error: { code: 'account_encryption_currentness_changed' } });
+                expect(source.isCurrent()).toBe(false);
+            }
+        }
+    } finally { release(); source.dispose(); context.dispose(); }
+});
+
+it('shares the fresh replacement of a withdrawn pending finite currentness read', async () => {
+    const initial = createPlainAccountEncryptionCurrentnessFixture();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let requests = 0;
+    const source = createOperationAccountCurrentnessSource({ credentials: { token: 'finite-pending' }, initial,
+        request: async () => {
+            requests += 1;
+            const version = requests + 1;
+            if (requests === 1) await held;
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version }));
+        } });
+    try {
+        invalidateAccountEncryptionModeCache({ reason: 'transport-withdrawal' });
+        const first = source.read();
+        expect(requests).toBe(1);
+        invalidateAccountEncryptionModeCache({ reason: 'transport-withdrawal' });
+        const second = source.read();
+        expect(requests).toBe(1);
+        release();
+        const results = await Promise.all([first, second]);
+        expect(results.map(result => result.version)).toEqual([3, 3]);
+        expect(requests).toBe(2);
+    } finally { release(); source.dispose(); }
 });

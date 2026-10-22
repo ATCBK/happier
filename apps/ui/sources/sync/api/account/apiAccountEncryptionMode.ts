@@ -48,7 +48,7 @@ export class AccountEncryptionCurrentnessReadinessError extends HappyError {
 }
 
 const accountEncryptionModeReads = createScopedResolutionSingleFlight<AccountEncryptionModeResult>();
-type AccountEncryptionInvalidation = Readonly<{ reason?: 'scope-reset'; serverId?: string | null }>;
+type AccountEncryptionInvalidation = Readonly<{ reason?: 'scope-reset' | 'transport-withdrawal'; serverId?: string | null }>;
 type AccountEncryptionHomeBinding = Readonly<{ profileId: string; portableIdentity: string | null }>;
 type AccountEncryptionInvalidationEvent = AccountEncryptionInvalidation & Readonly<{
     home: AccountEncryptionHomeBinding | null;
@@ -135,7 +135,8 @@ export function createSocketAccountEncryptionObservation(options: Readonly<{
         observation.invalidate();
     };
     accountEncryptionModeCacheInvalidationListeners.add(invalidate);
-    const notify = () => publishAccountEncryptionInvalidation({ serverId: options.serverId }, observation);
+    const notify = (reason?: AccountEncryptionInvalidation['reason']) =>
+        publishAccountEncryptionInvalidation({ serverId: options.serverId, reason }, observation);
     const binding: AccountEncryptionObservationBinding = {
         credentials: options.credentials,
         credentialScopeKey: resolveAuthCredentialsScopeKey(options.credentials),
@@ -154,8 +155,8 @@ export function createSocketAccountEncryptionObservation(options: Readonly<{
     };
     return {
         binding,
-        connected: () => { if (options.isCurrent()) { observation.connected(); notify(); } },
-        disconnected: () => { observation.disconnected(); notify(); },
+        connected: () => { if (options.isCurrent()) { observation.connected(); notify('transport-withdrawal'); } },
+        disconnected: () => { observation.disconnected(); notify('transport-withdrawal'); },
         update: (raw: unknown) => {
             if (options.isCurrent() && observation.update(raw)) notify();
         },
@@ -194,14 +195,13 @@ export function getAccountEncryptionModeCacheRevision(): number {
 }
 
 /** A finite observation belongs to its captured Home, not the ambient focus. */
-export function captureAccountEncryptionCurrentness(serverId?: string | null): Readonly<{
+export function captureAccountEncryptionCurrentness(serverId?: string | null, onTransportWithdrawal?: () => void): Readonly<{
     isCurrent: () => boolean;
     dispose: () => void;
 }> {
     const home = readAccountEncryptionHomeBinding(serverId);
     let current = true;
     const invalidate = (event: AccountEncryptionInvalidationEvent): void => {
-        if (event.reason === 'scope-reset') return;
         if (home && event.home && home.profileId !== event.home.profileId) {
             if (home.portableIdentity && event.home.portableIdentity) {
                 if (home.portableIdentity !== event.home.portableIdentity) return;
@@ -210,6 +210,10 @@ export function captureAccountEncryptionCurrentness(serverId?: string | null): R
                 // ids for legacy Homes without a portable identity.
                 return;
             }
+        }
+        if (event.reason === 'transport-withdrawal') {
+            onTransportWithdrawal?.();
+            return;
         }
         // Unknown or incomparable bindings remain conservative, including a
         // legacy Home learning its portable identity during this operation.

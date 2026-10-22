@@ -111,6 +111,7 @@ export async function readSessionSnapshotsForAuthority(params: Readonly<{
                 return [sessionId, { ok: true, snapshot }];
             } catch (error) { return [sessionId, { ok: false, error }]; }
         }));
+        await currentness.ensureCurrent();
         assertCurrent();
         return new Map(results);
     } finally { if (!params.accountCurrentnessSource) currentness.dispose(); }
@@ -148,6 +149,7 @@ export async function readSessionEncryptionContextsForAuthority(params: Readonly
         assertCurrent();
         return [sessionId, result] as const;
     }));
+    await params.accountCurrentnessSource.ensureCurrent();
     assertCurrent();
     return new Map(results);
 }

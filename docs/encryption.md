@@ -66,6 +66,15 @@ Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.
 
+Ordinary socket loss withdraws that settled observation, but does not retire a
+captured finite operation. Its exact-witness owner discards the withdrawn HTTP
+witness and shares one fresh read with the original explicit credential before
+publishing hydrated content. An unchanged encryption identity may continue;
+changed mode, key fingerprints or encryption identity timestamp, an actual or
+malformed encryption update, authentication failure, holder retirement and scope
+reset remain terminal. Home, credential and invocation retirement retain their
+independent admission checks. A failed fresh read never becomes Plain authority.
+
 Observed encryption identity does not contain `version` or `settingsVersion`.
 The former is the Account-wide sequence, not an encryption-only revision.
 Exact cursor witnesses and final authority checks keep a fresh server observation

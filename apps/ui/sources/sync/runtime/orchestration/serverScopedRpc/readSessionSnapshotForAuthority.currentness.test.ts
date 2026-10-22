@@ -44,13 +44,8 @@ it.each(['scope-reset', 'account-encryption-change', 'same-home-resume', 'same-h
     expect(home!.httpRequests.filter(request => request.path === '/v1/account/encryption/currentness')).toHaveLength(before + 1);
     const detailReads = sessions.componentRequests.filter(request => request.path === '/v2/sessions/batch-3').length;
     if (invalidation === 'scope-reset') {
-      // Evict ambient mode/disclosure state without changing this captured Home's authority.
+      // Retiring the runtime scope is terminal for its finite observations.
       invalidateAccountEncryptionModeCache({ reason: 'scope-reset' });
-      expect(currentness.isCurrent()).toBe(true);
-      expect((await readSessionSnapshotForAuthority({ authority, sessionId: 'batch-3', accountCurrentnessSource: currentness })).session.id)
-        .toBe('batch-3');
-      expect(home!.httpRequests.filter(request => request.path === '/v1/account/encryption/currentness')).toHaveLength(before + 1);
-      return;
     }
     // Mode/key replacement is announced by the existing encryption owner. A
     // completed observation must become unusable, rather than serve stale mode.
@@ -64,7 +59,7 @@ it.each(['scope-reset', 'account-encryption-change', 'same-home-resume', 'same-h
       await setServerProfileIdentityForUrl(home!.homes.a!.serverUrl, 'srv_currentness_promoted');
       invalidateAccountEncryptionModeCache({ serverId: 'srv_currentness_promoted' });
     }
-    else invalidateAccountEncryptionModeCache();
+    else if (invalidation !== 'scope-reset') invalidateAccountEncryptionModeCache();
     expect(currentness.isCurrent()).toBe(false);
     await expect(readSessionSnapshotForAuthority({ authority, sessionId: 'batch-3', accountCurrentnessSource: currentness }))
       .rejects.toMatchObject({ code: 'account_encryption_currentness_changed' });

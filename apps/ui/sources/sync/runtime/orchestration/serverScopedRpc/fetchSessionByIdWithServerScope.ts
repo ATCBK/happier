@@ -34,6 +34,7 @@ import {
 } from '@/sync/domains/settings/clientEncryptionRequirement';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { CapturedServerReadTransport } from './capturedServerReadTransport';
+import { sameAccountEncryptionIdentity } from '@happier-dev/sync-client';
 
 type AppliedSession = Omit<Session, 'presence'> & { presence?: 'online' | number };
 
@@ -57,33 +58,53 @@ export function createOperationAccountCurrentnessSource(params: Readonly<{
     initial?: AccountEncryptionCurrentnessResponse;
     serverId?: string | null;
 }>) {
-    const observation = captureAccountEncryptionCurrentness(params.serverId);
+    let currentness = params.initial;
+    let expected = params.initial;
+    let inFlight: Promise<AccountEncryptionCurrentnessResponse> | null = null;
+    let readWithdrawn = false;
+    const observation = captureAccountEncryptionCurrentness(params.serverId, () => {
+        currentness = undefined;
+        // Finish a pending read before starting its replacement; concurrent
+        // borrowers still share one HTTP read through this finite owner.
+        if (inFlight) readWithdrawn = true;
+    });
     const isCurrent = observation.isCurrent;
     const assertCurrent = () => {
         if (!isCurrent()) throw Object.assign(new Error('Account encryption currentness changed'),
             { code: 'account_encryption_currentness_changed' });
     };
-    let currentness = params.initial;
-    let inFlight: Promise<AccountEncryptionCurrentnessResponse> | null = null;
+    const read = async (): Promise<AccountEncryptionCurrentnessResponse> => {
+        assertCurrent();
+        if (currentness) return currentness;
+        if (!inFlight) {
+            readWithdrawn = false;
+            inFlight = fetchAccountEncryptionCurrentness(params.credentials, { request: params.request });
+        }
+        const pending = inFlight;
+        const observed = await pending;
+        assertCurrent();
+        if (pending !== inFlight) return await read();
+        inFlight = null;
+        if (readWithdrawn) return await read();
+        if (expected && !sameAccountEncryptionIdentity(expected, observed)) {
+            observation.dispose();
+            assertCurrent();
+        }
+        expected ??= observed;
+        currentness = observed;
+        return observed;
+    };
     return {
         isCurrent,
         assertCurrent,
         dispose: observation.dispose,
         peek: () => { assertCurrent(); return currentness; },
-        read: async (): Promise<AccountEncryptionCurrentnessResponse> => {
+        ensureCurrent: async () => {
             assertCurrent();
-            if (currentness) return currentness;
-            if (!inFlight) {
-                inFlight = fetchAccountEncryptionCurrentness(
-                    params.credentials,
-                    { request: params.request },
-                );
-            }
-            const observed = await inFlight;
+            if (expected && !currentness) await read();
             assertCurrent();
-            currentness = observed;
-            return currentness;
         },
+        read,
     };
 }
 
@@ -246,11 +267,11 @@ function withMetadataTupleWriterContext<T extends Awaited<
         );
     }
     const encryptPayload = async (payload: unknown) => {
-        params.accountCurrentnessSource.assertCurrent();
+        await params.accountCurrentnessSource.ensureCurrent();
         const encrypted = params.result.session?.encryptionMode === 'plain'
             ? JSON.stringify(payload)
             : await sessionEncryption!.encryptRaw!(payload);
-        params.accountCurrentnessSource.assertCurrent();
+        await params.accountCurrentnessSource.ensureCurrent();
         return encrypted;
     };
     if (mutationSnapshot.mode === 'shared_editor') {
@@ -395,6 +416,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             credentials: params.activeCredentials,
             accountCurrentness: accountCurrentnessSource.peek(),
             fetchAccountCurrentness: accountCurrentnessSource.read,
+            ensureAccountCurrentness: accountCurrentnessSource.ensureCurrent,
             encryption: activeEncryption,
             sessionDataKeys: params.sessionDataKeys,
             sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
@@ -465,6 +487,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         credentials: context.credentials,
         accountCurrentness: accountCurrentnessSource.peek(),
         fetchAccountCurrentness: accountCurrentnessSource.read,
+        ensureAccountCurrentness: accountCurrentnessSource.ensureCurrent,
         encryption: scopedEncryption,
         sessionDataKeys: params.sessionDataKeys,
         sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,

@@ -1542,7 +1542,7 @@ class ApiSocket {
             transport.onDisconnected((event: TransportDisconnectEvent) => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
                 if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
-                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId });
+                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId, reason: 'transport-withdrawal' });
                 if (!event.intentional && event.reason === 'io server disconnect' && transportConfig?.request) {
                     // Revocation and expiry are server-forced disconnects, not transient transport loss.
                     const supervisor = this.scopedConnectionSupervisor;
@@ -1563,7 +1563,7 @@ class ApiSocket {
             transport.onError((error: unknown) => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
                 if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
-                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId });
+                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId, reason: 'transport-withdrawal' });
                 this.setError(error instanceof Error ? error : new Error(String(error)));
                 this.invalidateReachabilityAfterSocketTransportFailure(error);
             }),
@@ -1858,6 +1858,9 @@ class ApiSocket {
                 this.updateStatus('connecting');
                 return;
             case 'auth_failed':
+                if (this.socketClientType === 'user-scoped') {
+                    invalidateAccountEncryptionModeCache({ serverId: this.config?.serverId });
+                }
                 this.updateStatus('error');
                 return;
             case 'online':

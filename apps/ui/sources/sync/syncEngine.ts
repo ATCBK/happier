@@ -3194,7 +3194,7 @@ class Sync {
                             for (const [sessionId, result] of results) contexts.set(sessionId,
                                 result.ok ? readContext(sessionId, result.encryptionMode, authority.context.encryption) : null);
                             const value = await operation(contexts);
-                            currentness.assertCurrent();
+                            await currentness.ensureCurrent();
                             return value;
                         } finally { currentness.dispose(); }
                     });

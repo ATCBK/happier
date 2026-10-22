@@ -583,6 +583,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                     }
                   }
                 }
+                await accountCurrentnessSource.ensureCurrent();
                 requireCurrent(context, signal);
                 assertCurrent();
                 return { session, callerDataKeyEnvelope, detail, messageEvidence, completeMessageCoverage };

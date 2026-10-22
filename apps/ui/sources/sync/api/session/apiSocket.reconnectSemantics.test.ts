@@ -72,16 +72,29 @@ describe('apiSocket reconnect semantics', () => {
         resetRuntimeFetch(); vi.restoreAllMocks();
     });
 
-    it('withdraws captured Account disclosure synchronously on its socket disconnect', async () => {
-        const { captureAccountEncryptionCurrentness } = await import('../account/apiAccountEncryptionMode');
+    it('preserves finite Account currentness on transport loss while withdrawing disclosure', async () => {
+        const { captureAccountEncryptionCurrentness, getAccountEncryptionModeCacheRevision } = await import('../account/apiAccountEncryptionMode');
         const { socket, trigger } = await boot();
         await connect(socket);
         const disclosure = captureAccountEncryptionCurrentness();
         try {
             expect(disclosure.isCurrent()).toBe(true);
+            const revision = getAccountEncryptionModeCacheRevision();
             trigger('disconnect', 'transport close');
-            expect(disclosure.isCurrent()).toBe(false);
+            expect(disclosure.isCurrent()).toBe(true);
+            expect(getAccountEncryptionModeCacheRevision()).toBeGreaterThan(revision);
         } finally { disclosure.dispose(); }
+    });
+
+    it('keeps authentication failure terminal for finite Account currentness', async () => {
+        const { captureAccountEncryptionCurrentness } = await import('../account/apiAccountEncryptionMode');
+        const { socket } = await boot();
+        await connect(socket);
+        const currentness = captureAccountEncryptionCurrentness();
+        try {
+            emitReachability('auth_failed');
+            expect(currentness.isCurrent()).toBe(false);
+        } finally { currentness.dispose(); }
     });
 
     it('borrows the admitted Account socket identity without recurring mode HTTP after warm-up', async () => {
