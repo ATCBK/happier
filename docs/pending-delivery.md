@@ -25,7 +25,7 @@ the loaded runtime; source tests alone do not certify it.
 
 Pending position allocation runs through `inPendingQueuePositionTx`. Its shared
 `acquireSessionAccountCursorLocksInTx` owner locks the complete publication audience
-in Account id order, including the owner and direct ReportsTo projection recipients.
+in Account id order, including the owner and manager Follow projection recipients.
 On PostgreSQL, it then locks the Session row before admission reads, so concurrent
 startup metadata or activity writes cannot commit between that read and the
 queue-counter update. This Account-before-Session order retains same-Account

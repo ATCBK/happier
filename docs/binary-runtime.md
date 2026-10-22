@@ -687,6 +687,17 @@ mutation queue. Worker mirrors retain their explicit remote bootstrap. Dependenc
 lock waiters, including Expo startup, report the holder through the existing
 workspace wait notifier; a live installer retains ownership until it exits.
 
+In 0.3 development worker mirrors, pnpm readiness also proves a clean root
+installation. Earlier input-only admissions cannot prove that pnpm removed
+unrecorded Yarn-era packages. The existing refresh writer therefore replaces an
+unproven root `node_modules` tree before its canonical installation, without
+following workspace links into source-owned private dependencies. The same
+readiness record binds that proof to the pinned package manager and produced
+`.modules.yaml`; missing or changed metadata or a Yarn integrity file invalidates
+it. Unchanged proven installations stay warm, and adoption cannot certify an
+unproven worker tree. This does not add a continuous inventory of manually copied
+packages or change primary checkout validation's read-only policy.
+
 Finite source runtime, web and workspace-package construction reuses that same
 dependency lock through capture, consumption and cleanup. Dependency custody
 participates in the native owner's joint admission with publication scopes;

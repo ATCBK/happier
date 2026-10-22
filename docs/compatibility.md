@@ -378,9 +378,17 @@ in the encrypted Artifact header's `skillLock`. The current content reader carri
 that single directory segment to the Session materializer; edits preserve it.
 Headers and Session manifests without it keep declared-name delivery, with no
 migration. This is an unreleased 0.3 extension of the closed lock and daemon
-materialization request, not a new plaintext Artifact field or an SDK change.
-The one-way upgrade does not support old 0.3 development daemons reading the new
-request; reload the runner and daemon together before replaying it.
+materialization request, not a new plaintext Artifact field. The current SDK
+delivery also requires each item's absolute `directory`, returned by the
+materializer and forwarded by the runner. Plugins use it for path reads, copies
+and identity matching; deriving the folder from the declared name loses accepted
+imports and renames. The delivery envelope, each item and each native-disable
+record remain closed; no optional unknown field acquires path authority. This
+is an in-place correction of the unpublished 0.3 delivery contract, independent
+of package SemVer, with no released epoch transition or old-development fallback.
+The one-way upgrade does not support old 0.3 development daemons or Agent adapters
+reading the new shape; reload the runner, daemon and plugin adapters together
+before replaying it. Retained headers and Session manifests do not change.
 
 Well-known skill indexes and pack links add a `wellKnown` provenance arm in
 unreleased 0.3: `indexUrl`, item `name`, the materialized bundle `digest`, and an
@@ -3069,7 +3077,7 @@ parallel format. Refresh that dirty sibling's relevant bytes before activation.
 In unreleased 0.3, the existing post-commit source-key preparation `waiting`
 result may also carry a bounded `cause` diagnostic. Its strict Protocol schema
 accepts omission from earlier writers and rejects arbitrary error text or extra
-fields. Follow partial results and committed Reports-to/spawn results retain the
+fields. Follow partial results and committed manager/spawn results retain the
 same cause. These codes identify the observed preparation branch; they grant no
 authority and do not promise that a retained creation settlement will refresh
 when a Runner later registers. The private preparation RPC request,

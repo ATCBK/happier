@@ -3134,6 +3134,13 @@ bytes across ordinary documents. Plain
 server-sealing overhead counts toward these storage limits.
 
 Sharing remains with `artifact.access.grants.*` and the server grant owner.
+In 0.3 development, an acknowledged grant set/remove keeps its committed receipt
+if the key-holding host's follow-up preparation fails, including cancellation
+after acknowledgement. The canonical mutation result then includes
+`preparation: { status: 'pending' }`. This does not certify current content or
+recipient key readiness. An ordinary fresh Artifact read retries preparation
+under the existing access, Account-mode and envelope checks; failed reads remain
+unavailable. Grant list remains a read and does not turn failure into a receipt.
 `getArtifactUseTargetV1` selects both recipient intent and the existing kind
 owner's sharing validation in one Protocol policy: prompt document, prompt
 bundle, workflow, role, launch profile, Board or generic Artifact opening.
@@ -5349,7 +5356,13 @@ before its write.
 
 Semantic insertions, including archive restoration, return
 `memory_duplicate_choice_required` when the admitted document contains exact or
-lexically related active facts. The result names that document, its full revision
+lexically related active facts. The candidate owner is
+`prompts/library/memoryFactCandidatesV1.ts`: exact comparison normalizes Unicode,
+whitespace and case; a related candidate requires at least two distinct shared
+meaningful tokens from `memory/memorySearchText.ts`. Single characters and English
+function stop-words are ignored for candidate review; CJK bigrams remain eligible.
+One shared word alone does not interrupt saving. This filter leaves recall/search
+tokenization unchanged. The result names that document, its full revision
 and possible candidates. Resubmit `duplicateChoice` with that revision: Update or
 Replace a selected `factId`, or explicitly Keep both. Update/Replace archive the
 selected fact through the existing history owner. A stale choice refuses; it
@@ -6103,9 +6116,13 @@ Actions policy. A known cross-Account requester gets a signed
 `requesterConfirmation` binding the request, exact Action/input digest, admitting
 Bot Session and execution Account. The original executor checks a current
 authenticated decision from that requester; another person cannot substitute.
-An unknown requester keeps the ordinary Account approval flow and its unknown
-attribution. It cannot acquire a requester-specific binding, and the person
-approving the effect does not become the attributed requester.
+When confirmation is required but the requester cannot be bound, admission
+returns `approval_requester_unavailable` without creating an owner-decided
+approval. Attribution stays unknown. Requester consent never promotes the
+Bot's execution authority to present-person authority; a person-only Action
+still requires its own entitled person. Ordinary same-Account approvals retain
+their existing authority, and an explicitly waived prompt still requires the
+Bot's ordinary execution permission.
 The existing Artifact recipient path adds the entitled requester as a preview
 recipient. The original admitted executor runs the effect with the credentials
 selected and rechecked by the existing credential owner; it does not substitute

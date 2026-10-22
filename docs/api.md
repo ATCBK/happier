@@ -78,8 +78,11 @@ The safe view carries the current indexability bit so output adapters do not
 become independent consent readers.
 
 The key-holding preview uses the same projection core and a derived local view
-whose appearance contains the retained prepared pixels. Anonymous views accept
-only applied publication references, never those pixels. Preview inputs/results
+whose appearance contains the retained prepared pixels. Its service and URLs may
+be absent before public ingress or Report contact is configured; the local page
+omits Report in that case. Publish still requires both prerequisites. Anonymous
+views require canonical service/URLs and accept only applied publication
+references, never prepared pixels. Preview inputs/results
 and prepared publication effects use existing live-only Action custody;
 approval Artifacts and observations omit computed snapshots, image content and
 the original metadata selection. Resolved consented metadata can still describe
@@ -122,6 +125,12 @@ or dark selects that edition, and automatic/default rasterization uses light.
 OG remains 1200×630 and dark regardless of query theme. Every representation
 reads current admission before comparing its ETag; an unavailable edition has
 no reusable validator. An older OG cache-buster never selects historical data.
+Asynchronous glyph, image and cold-page painting rechecks the same Account and
+complete safe result after materialization. A changed edition discards the
+painted bytes (or rendering failure) and returns the generic unavailable edition
+without a validator. Cold HTML consumes the shared responsive hero band at its
+wide/phone geometry, with 1×/2× Brand or admitted A1 picture pixels and frozen
+credit; it does not introduce another atmosphere or layout owner.
 
 Reviewed picture Apply uses the existing Account private-file custody owner:
 normalize/write before the winning publication transaction, then settle and bind
@@ -1860,18 +1869,18 @@ mutations. Their row, generation and revision CAS checks remain authoritative.
 Session archive/unarchive use the same ReadCommitted default and prepare their full
 publication audience before each attempt through `inTx.prepare`. The returned
 fence locks and rechecks that audience before authorization and Session reads;
-an expanded audience replays with fresh preparation. The same Follow/Reports-to
+an expanded audience replays with fresh preparation. The same Follow/manager
 transition owner and durable publication remain inside the transaction.
 Ordinary Layout-1 tag rejoin likewise uses the default behind its
 prepared Account audience fence when admission is covered by that audience.
 Empty grants, initial triggers and Team credential-binding lists introduce no
 additional admission predicate. Restoring an archived tag keeps the same Session
 identity; nonempty composed admission retains its explicit isolation choice.
-Reports-to and Session-context Follow writes likewise use the default behind their
-ordered Account audience fence; Reports-to retains its preceding Home graph fence.
+Manager and Session-context Follow writes likewise use the default behind their
+ordered Account audience fence; manager changes retain their preceding Home graph fence.
 Personal Follow, Voice membership, auto-Follow preferences and viewer read-frontier
 writes take the existing single-Account publication fence before admission reads.
-Stale Reports-to expectations still return `reports_to_cas_conflict`/409, while a
+Stale manager expectations return `manager_cas_conflict`/409, while a
 confirmed exhausted database rollback uses the global typed503 response above.
 Read-only Account catalog,
 plugin Settings/storage HTTP reads, prompt-library row/list reads, Settings-history
