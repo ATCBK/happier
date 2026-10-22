@@ -1569,7 +1569,7 @@ describe("external Action execution authorization", () => {
         const runId = crypto.randomUUID();
         const target = { kind: 'machine' as const, machineId: fixture.machine.id,
             project: { machineId: fixture.machine.id, directory: '/repo' } };
-        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get') => {
+        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get' | 'workflow.run.wait') => {
             const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
                 caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
                 sourceTurnId: 'workflow-turn', callerPermissionMode: 'default', causalPermissionAuthority: null,
@@ -1590,6 +1590,8 @@ describe("external Action execution authorization", () => {
             const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
             expect(authorization.binding).toMatchObject({ authentication: { kind: 'account' },
                 ...(caller === 'session' ? { sessionActionOrigin: origin } : {}) });
+            expect(await auth.verifyExternalActionExecutionAuthorization(authorization.token) !== null,
+                'The real issuer must create a verifiable Workflow root').toBe(true);
             authorizationRequests.set(authorization.token, { target, installationId: source.installationId, requestId: origin.requestId });
             return authorization;
         };
@@ -1666,6 +1668,27 @@ describe("external Action execution authorization", () => {
             const missingInvocation = await post(start, invocationRead);
             expect(missingInvocation.statusCode, missingInvocation.body).toBe(404);
             expect(missingInvocation.json()).toEqual({ error: 'run_not_found' });
+            // Wait checks active invocations for a self-dependency before and
+            // after observation. It must spend the same read authority as Get.
+            for (const actionId of caller === 'session' ? ['workflow.run.get', 'workflow.run.wait'] as const : []) {
+                const reader = await issue(actionId);
+                expect((await post(reader, read)).statusCode).toBe(200);
+                const invocations = await post(reader, history);
+                expect(invocations.statusCode, `${actionId}: ${invocations.body}`).toBe(200);
+                const invocation = await post(reader, invocationRead);
+                expect(invocation.statusCode, invocation.body).toBe(404);
+                expect(invocation.json()).toEqual({ error: 'run_not_found' });
+                if (actionId === 'workflow.run.wait') {
+                    const waited = await post(reader, { operation: 'wait', publisherMachineId: fixture.machine.id,
+                        runId, timeoutSeconds: 0 });
+                    expect(waited.statusCode, waited.body).toBe(200);
+                    expect(waited.json()).toMatchObject({ run: { id: runId, state: 'queued' } });
+                }
+                expect((await post(reader, { operation: 'cancel', publisherMachineId: fixture.machine.id,
+                    runId, expectedRevision: 0 })).statusCode).toBe(401);
+                expect((await post(reader, history, { publisher: false })).statusCode).toBe(401);
+                expect((await post(reader, { ...history, publisherMachineId: crypto.randomUUID() })).statusCode).toBe(401);
+            }
             expect((await post(start, history, { publisher: false })).statusCode).toBe(401);
             expect((await post(start, { ...history, publisherMachineId: crypto.randomUUID() })).statusCode).toBe(401);
             expect((await post(start, history, { effectActionId: 'workflow.run.cancel' })).statusCode).toBe(401);
@@ -1684,11 +1707,7 @@ describe("external Action execution authorization", () => {
                 headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'workflow.run.start',
                     method: 'GET', path: unrelatedCurrentnessPath, body: undefined,
                     privateKey: fixture.keyPair.secretKey }) })).statusCode).toBe(401);
-            if (caller === 'session') {
-                const getter = await issue('workflow.run.get');
-                expect((await post(getter, read)).statusCode).toBe(200);
-                expect((await post(getter, { operation: 'cancel', publisherMachineId: fixture.machine.id, runId, expectedRevision: 0 })).statusCode).toBe(401);
-            } else {
+            if (caller === 'host') {
                 // Human read Actions stay on the incumbent Account transport;
                 // they do not mint a Machine root merely to observe a Run.
                 const observed = await app.inject({ method: 'POST', url: path,

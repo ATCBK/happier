@@ -1528,7 +1528,9 @@ function isWorkflowRunActionHttpPurpose(verified: VerifiedExternalActionExecutio
         'workflow.run.get': invocationReads,
         'workflow.run.list': ['list', 'run-key.commit'],
         'workflow.run.summaries': ['summaries'],
-        'workflow.run.wait': [...reads, 'wait'],
+        // Wait reads the same invocation history as Get to reject a wait
+        // that would occupy its own target conversation.
+        'workflow.run.wait': [...invocationReads, 'wait'],
         'workflow.run.pause': [...reads, 'pause'],
         'workflow.run.cancel': [...reads, 'cancel'],
         'workflow.run.delete': [...reads, 'delete'],
