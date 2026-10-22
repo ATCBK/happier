@@ -40,22 +40,44 @@ const cases: readonly (readonly [McpServerActionIdV1, unknown, readonly string[]
 ];
 
 describe('MCP danger approval review', () => {
-  it('keeps a supplied OAuth app secret out of durable approval, review and observation', async () => {
+  it.each([
+    [undefined, undefined],
+    [{ clientId: 'public-app' }, { oauthApp: 'set', clientId: 'public-app' }],
+    [{ clientId: 'replacement-app', clientSecret: 'private-secret-sentinel' }, { oauthApp: 'set', clientId: 'replacement-app' }],
+    [null, { oauthApp: 'remove' }],
+  ] as const)('reviews an OAuth app change without retaining its secret: %j', async (client, change) => {
     const clientSecret = crypto.randomUUID();
-    const raw = { serverId: 'mcp-a', client: { clientId: 'person-app', clientSecret } };
+    const raw = { serverId: 'mcp-a', ...(client === undefined ? {} : { client: client && {
+      ...client, ...('clientSecret' in client ? { clientSecret } : {}),
+    } }) };
     const spec = getActionSpec('mcp.servers.signIn.start');
-    let stored: unknown;
+    let stored: import('../approvals/approvalRequestV1.js').ApprovalRequestV2 | undefined;
     const executor = createActionExecutor({ isActionApprovalRequired: () => true,
-      approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'oauth-review' }; },
+      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'oauth-review' }; },
       approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request: { ...request, status: 'rejected' } }),
     });
     await executor.execute(spec.id, raw, { surface: 'cli', authority: 'account_automation', serverId: 'home',
       actionCaller: { kind: 'host' }, actionRequestId: 'live-oauth-review' });
-    expect(stored !== undefined).toBe(true);
+    expect(spec.approvalPresentation?.projectInput?.(raw)).toEqual({ serverId: 'mcp-a', ...change });
+    if (!stored) throw new Error('No OAuth approval was created');
     expect(JSON.stringify(stored).includes(clientSecret)).toBe(false);
     expect(JSON.stringify(spec.projectObservationInput!(raw)).includes(clientSecret)).toBe(false);
     expect(JSON.stringify(spec.approvalPresentation?.projectInput?.(raw)).includes(clientSecret)).toBe(false);
     expect(spec.inputHints?.fields.find(field => field.path === 'client.clientSecret')?.widget).toBe('secret');
+    const pending = describeApprovalRequestFields(stored);
+    expect(pending.unrepresentable).toBeNull();
+    const visible = JSON.stringify(pending);
+    if (change) {
+      expect(pending.rows).toContainEqual(expect.objectContaining({ path: 'oauthApp', value: change.oauthApp === 'set'
+        ? 'Set or replace OAuth app' : 'Remove OAuth app' }));
+      if ('clientId' in change) expect(visible).toContain(change.clientId);
+    } else expect(pending.rows.some(row => row.path === 'oauthApp')).toBe(false);
+    const settled = { ...stored, status: 'rejected' as const, actionArgs: settleApprovalRequestActionArgs(stored) };
+    expect(describeApprovalRequestFields(settled)).toEqual(pending);
+    for (const presentation of [pending, settled]) {
+      expect(JSON.stringify(presentation)).not.toContain(clientSecret);
+      expect(JSON.stringify(presentation)).not.toContain('clientSecret');
+    }
   });
   it('the actual live-only approval producer stores safe review but never raw import replay arguments', async () => {
     const spec = getActionSpec('mcp.servers.import');

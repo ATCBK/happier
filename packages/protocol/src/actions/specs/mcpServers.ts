@@ -32,6 +32,7 @@ const mcpReviewInput = z.strictObject({
   where: z.optional(ReachRulesChangeV1Schema), machineId: z.optional(z.string().check(z.minLength(1))), directory: z.optional(z.string()),
   default: McpServerToolSettingsPatchV1Schema.shape.default, tools: McpServerToolSettingsPatchV1Schema.shape.tools,
   removeBindings: z.optional(z.boolean()), stepUp: z.optional(z.boolean()), dryRun: z.optional(z.boolean()),
+  oauthApp: z.optional(z.enum(['set', 'remove'])), clientId: z.optional(z.string().check(z.minLength(1))),
   configOverrides: z.optional(z.array(reviewedOverride)),
 });
 
@@ -78,6 +79,12 @@ function projectMcpApprovalInput(id: McpServerActionIdV1, raw: unknown) {
     return mcpReviewSchema(id).parse({ servers: prepareDetectedMcpServerImportV1(value.items, value.machineId).servers.map(reviewServer),
       machineId: value.machineId, where: value.where ?? defaultMcpWhere });
   }
+  if (id === 'mcp.servers.signIn.start') {
+    const value = inputs[id].parse(input);
+    return mcpReviewSchema(id).parse({ serverId: value.serverId, stepUp: value.stepUp,
+      ...(value.client === null ? { oauthApp: 'remove' }
+        : value.client ? { oauthApp: 'set', clientId: value.client.clientId } : {}) });
+  }
   const value = readRecord(input);
   const entry = value.entry;
   const servers = entry ? [reviewServer(McpServerCatalogEntryV1Schema.parse(entry))] : undefined;
@@ -102,6 +109,11 @@ function projectMcpApprovalInput(id: McpServerActionIdV1, raw: unknown) {
 
 const mcpReviewFields: NonNullable<PreNormalizedActionSpec['inputHints']>['fields'] = [
   { path: 'serverId', title: 'MCP server', widget: 'text' },
+  { path: 'oauthApp', title: 'OAuth app', widget: 'select', options: [
+    { value: 'set', label: 'Set or replace OAuth app', labelKey: 'capabilities.mcpSignIn.reviewSetApp' },
+    { value: 'remove', label: 'Remove OAuth app', labelKey: 'capabilities.mcpSignIn.reviewRemoveApp' },
+  ] },
+  { path: 'clientId', title: 'Client ID', widget: 'text' },
   { path: 'name', title: 'Server name', widget: 'text' }, { path: 'title', title: 'Server title', widget: 'text' },
   { path: 'servers', title: 'Server configuration', widget: 'json' },
   { path: 'from', title: 'Registry item', widget: 'json' },

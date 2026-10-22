@@ -85,6 +85,34 @@ it('keeps the exact identity of a Home this device cannot name in Technical deta
     expect(screen.getTextContent()).toContain(identity);
 });
 
+it.each([
+    [{ clientId: 'public-oauth-app', clientSecret: 'private-oauth-secret' }, 'set'],
+    [null, 'remove'],
+] as const)('renders the reviewed OAuth app change in pending and settled approval anatomies: %j', async (client, operation) => {
+    const spec = getActionSpec('mcp.servers.signIn.start');
+    const raw = spec.inputSchema.parse({ serverId: 'mcp-oauth', client });
+    const open = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, actionId: spec.id, summary: spec.title,
+        actionArgs: spec.projectObservationInput!(raw),
+        preview: { actionId: spec.id, actionArgs: spec.approvalPresentation!.projectInput!(raw) },
+        executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+            serverId: 'home', actionId: spec.id, requestId: 'oauth-review' },
+    });
+    for (const status of ['open', 'rejected'] as const) {
+        const request = status === 'open' ? open : { ...open, status, actionArgs: settleApprovalRequestActionArgs(open) };
+        for (const anatomy of ['page', 'card'] as const) {
+            const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy}
+                presentation={describeApprovalRequestFields(request)} />);
+            const text = screen.getTextContent();
+            expect(text).toContain(t(operation === 'set' ? 'capabilities.mcpSignIn.reviewSetApp' : 'capabilities.mcpSignIn.reviewRemoveApp'));
+            if (client) expect(text).toContain(client.clientId);
+            expect(text).not.toContain('private-oauth-secret');
+            expect(text).not.toContain('Client secret');
+            await screen.unmount();
+        }
+    }
+});
+
 it.each(['open', 'executed'] as const)('names the MCP catalog title in %s approvals and keeps the id in Technical details', async (status) => {
     const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://mcp-approval-title.test' });
     profiles.push(home.id);

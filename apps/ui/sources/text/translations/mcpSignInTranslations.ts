@@ -65,6 +65,8 @@ export type McpSignInTranslation = Readonly<{
   invalidClientTitle: string;
   invalidClientBody: string;
   ownAppNotNeeded: string;
+  reviewSetApp: string;
+  reviewRemoveApp: string;
   callback: Readonly<{
     finishing: string;
     closeTitle: string;
@@ -153,6 +155,8 @@ const en: McpSignInTranslation = {
   invalidClientTitle: 'The OAuth app was rejected',
   invalidClientBody: 'Check the Client ID, secret and registered callback URL, then sign in again.',
   ownAppNotNeeded: 'This service accepts Happier’s app identity. Your own OAuth app is not needed.',
+  reviewSetApp: 'Set or replace OAuth app',
+  reviewRemoveApp: 'Remove OAuth app',
   callback: {
     finishing: 'Finishing sign-in…',
     closeTitle: 'Signed in',
@@ -247,6 +251,8 @@ const ca: McpSignInTranslation = {
   invalidClientTitle: 'S’ha rebutjat l’aplicació OAuth',
   invalidClientBody: 'Comprova l’ID del client, el secret i l’URL de retorn registrat, i torna a iniciar sessió.',
   ownAppNotNeeded: 'Aquest servei accepta la identitat de Happier. No cal la teva aplicació OAuth.',
+  reviewSetApp: 'Estableix o substitueix l’aplicació OAuth',
+  reviewRemoveApp: 'Elimina l’aplicació OAuth',
   callback: {
     finishing: 'Acabant l’inici de sessió…',
     closeTitle: 'Sessió iniciada',
@@ -343,6 +349,8 @@ const de: McpSignInTranslation = {
   invalidClientTitle: 'Die OAuth-App wurde abgelehnt',
   invalidClientBody: 'Prüfe Client-ID, Geheimnis und registrierte Rückruf-URL und melde dich erneut an.',
   ownAppNotNeeded: 'Dieser Dienst akzeptiert Happiers App-Identität. Deine eigene OAuth-App wird nicht benötigt.',
+  reviewSetApp: 'OAuth-App festlegen oder ersetzen',
+  reviewRemoveApp: 'OAuth-App entfernen',
   callback: {
     finishing: 'Anmeldung wird abgeschlossen…',
     closeTitle: 'Angemeldet',
@@ -438,6 +446,8 @@ const es: McpSignInTranslation = {
   invalidClientTitle: 'Se ha rechazado la aplicación OAuth',
   invalidClientBody: 'Comprueba el ID, el secreto y la URL de retorno registrada, y vuelve a iniciar sesión.',
   ownAppNotNeeded: 'Este servicio acepta la identidad de Happier. No necesitas tu propia aplicación OAuth.',
+  reviewSetApp: 'Establecer o reemplazar la aplicación OAuth',
+  reviewRemoveApp: 'Eliminar la aplicación OAuth',
   callback: {
     finishing: 'Terminando el inicio de sesión…',
     closeTitle: 'Sesión iniciada',
@@ -533,6 +543,8 @@ const fr: McpSignInTranslation = {
   invalidClientTitle: 'L’application OAuth a été refusée',
   invalidClientBody: 'Vérifiez l’ID client, le secret et l’URL de retour enregistrée, puis reconnectez-vous.',
   ownAppNotNeeded: 'Ce service accepte l’identité de Happier. Votre application OAuth n’est pas nécessaire.',
+  reviewSetApp: 'Définir ou remplacer l’application OAuth',
+  reviewRemoveApp: 'Supprimer l’application OAuth',
   callback: {
     finishing: 'Finalisation de la connexion…',
     closeTitle: 'Connecté',
@@ -627,6 +639,8 @@ const it: McpSignInTranslation = {
   invalidClientTitle: 'L’app OAuth è stata rifiutata',
   invalidClientBody: 'Controlla ID client, segreto e URL di ritorno registrato, poi accedi di nuovo.',
   ownAppNotNeeded: 'Questo servizio accetta l’identità di Happier. La tua app OAuth non è necessaria.',
+  reviewSetApp: 'Imposta o sostituisci l’app OAuth',
+  reviewRemoveApp: 'Rimuovi l’app OAuth',
   callback: {
     finishing: 'Completamento dell’accesso…',
     closeTitle: 'Accesso effettuato',
@@ -719,6 +733,8 @@ const ja: McpSignInTranslation = {
   invalidClientTitle: 'OAuth アプリが拒否されました',
   invalidClientBody: 'クライアント ID、シークレット、登録したコールバック URL を確認して、再度サインインしてください。',
   ownAppNotNeeded: 'このサービスは Happier のアプリ ID に対応しています。独自の OAuth アプリは不要です。',
+  reviewSetApp: 'OAuth アプリを設定または置換',
+  reviewRemoveApp: 'OAuth アプリを削除',
   callback: {
     finishing: 'サインインを完了しています…',
     closeTitle: 'サインインしました',
@@ -812,6 +828,8 @@ const pl: McpSignInTranslation = {
   invalidClientTitle: 'Aplikacja OAuth została odrzucona',
   invalidClientBody: 'Sprawdź identyfikator, sekret i zarejestrowany adres zwrotny, a następnie zaloguj się ponownie.',
   ownAppNotNeeded: 'Ta usługa akceptuje tożsamość Happier. Własna aplikacja OAuth nie jest potrzebna.',
+  reviewSetApp: 'Ustaw lub zastąp aplikację OAuth',
+  reviewRemoveApp: 'Usuń aplikację OAuth',
   callback: {
     finishing: 'Kończenie logowania…',
     closeTitle: 'Zalogowano',
@@ -906,6 +924,8 @@ const pt: McpSignInTranslation = {
   invalidClientTitle: 'O aplicativo OAuth foi recusado',
   invalidClientBody: 'Confira o ID, o segredo e a URL de retorno registrada e entre novamente.',
   ownAppNotNeeded: 'Este serviço aceita a identidade do Happier. Seu aplicativo OAuth não é necessário.',
+  reviewSetApp: 'Definir ou substituir o aplicativo OAuth',
+  reviewRemoveApp: 'Remover o aplicativo OAuth',
   callback: {
     finishing: 'Concluindo a entrada…',
     closeTitle: 'Entrada concluída',
@@ -998,6 +1018,8 @@ const ru: McpSignInTranslation = {
   invalidClientTitle: 'OAuth-приложение отклонено',
   invalidClientBody: 'Проверьте ID клиента, секрет и зарегистрированный адрес возврата, затем войдите снова.',
   ownAppNotNeeded: 'Этот сервис принимает идентификатор Happier. Ваше OAuth-приложение не требуется.',
+  reviewSetApp: 'Задать или заменить OAuth-приложение',
+  reviewRemoveApp: 'Удалить OAuth-приложение',
   callback: {
     finishing: 'Завершение входа…',
     closeTitle: 'Вход выполнен',
@@ -1082,6 +1104,8 @@ const zhHans: McpSignInTranslation = {
   invalidClientTitle: 'OAuth 应用被拒绝',
   invalidClientBody: '检查客户端 ID、密钥和已注册的回调网址，然后重新登录。',
   ownAppNotNeeded: '此服务接受 Happier 的应用身份，无需使用自己的 OAuth 应用。',
+  reviewSetApp: '设置或替换 OAuth 应用',
+  reviewRemoveApp: '移除 OAuth 应用',
   callback: {
     finishing: '正在完成登录…',
     closeTitle: '已登录',
@@ -1165,6 +1189,8 @@ const zhHant: McpSignInTranslation = {
   invalidClientTitle: 'OAuth 應用程式遭到拒絕',
   invalidClientBody: '檢查用戶端 ID、密鑰及已註冊的回呼網址，然後重新登入。',
   ownAppNotNeeded: '此服務接受 Happier 的應用程式身分，無須使用自己的 OAuth 應用程式。',
+  reviewSetApp: '設定或取代 OAuth 應用程式',
+  reviewRemoveApp: '移除 OAuth 應用程式',
   callback: {
     finishing: '正在完成登入…',
     closeTitle: '已登入',
