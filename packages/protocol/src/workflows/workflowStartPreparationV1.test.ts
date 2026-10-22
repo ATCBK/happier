@@ -1,7 +1,18 @@
 import { expect, it } from 'vitest';
 import { WorkflowRunAcceptedContextV1Schema, WorkflowRunStartRequestV1Schema } from './actionsV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
-import { prepareWorkflowRunStartV1 } from './workflowStartPreparationV1.js';
+import { prepareWorkflowRunStartV1, resolveWorkflowContextInputsV1 } from './workflowStartPreparationV1.js';
+
+it('requires distinct admitted participants when the authored comparison declares a minimum', async () => {
+  const definition = { inputs: [{ name: 'participants', valueType: 'json' as const, required: true, multiple: true,
+    inputType: { hostType: 'agentParticipant' as const }, minItems: 2, uniqueItems: true }] };
+  const participant = { kind: 'session', session: { serverId: 'home', sessionId: 'one' } };
+  for (const participants of [[participant], [participant, participant]]) {
+    await expect(resolveWorkflowContextInputsV1({ definition, inputs: { participants } })).rejects.toMatchObject({ code: 'invalid_input' });
+  }
+  await expect(resolveWorkflowContextInputsV1({ definition, inputs: { participants: [participant,
+    { kind: 'session', session: { serverId: 'home', sessionId: 'two' } }] } })).resolves.toHaveProperty('participants');
+});
 
 it('prepares an accepted repeat with its concrete target and inputs through the strict start consumer', () => {
   const checked = validateWorkflowDefinition({ version: 1, defaults: {

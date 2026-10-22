@@ -6,6 +6,7 @@ import { REVIEW_AND_CONVERGE_WORKFLOW_V1 } from './builtins/reviewAndConverge.js
 import { admitAgentStartV1 } from '../account/settings/admitAgentStartV1.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
 import { LaunchProfileV2Schema } from '../profiles/v2/schema.js';
+import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 
 const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const context = {
@@ -23,6 +24,35 @@ function materialize(overrides: Partial<MaterializeWorkflowAcceptedSnapshotV1Inp
 }
 
 describe('accepted Workflow selection bindings', () => {
+  it('preserves a configured Agent identity from an engine option key through admission', async () => {
+    const configured = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'configured' };
+    const authored = { version: 1, defaults: {}, inputs: [{ name: 'engines', valueType: 'json', required: true }], blocks: [{
+      kind: 'loop', id: 'planners', repetition: { kind: 'items', items: { kind: 'input', name: 'engines' }, execution: 'parallel', failurePolicy: 'collect_outcomes' },
+      body: [{ ...definition.blocks[0], execution: { engine: { kind: 'item', field: 'value' } } }],
+    }] };
+    expect(await materialize({ definition: authored, context: { ...context, inputs: { engines: [buildBackendTargetKeyV2(configured)] } } }))
+      .toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ selection: { agentTarget: configured } }] } });
+  });
+  it('freezes an input roster for result-selected participants without admitting a new identity', async () => {
+    const participants = [{ kind: 'session', session: { serverId: 'home', sessionId: 'one' } },
+      { kind: 'session', session: { serverId: 'home', sessionId: 'two' } }];
+    const authored = { version: 1, defaults: {}, inputs: [{ name: 'participants', valueType: 'json', required: true,
+      multiple: true, inputType: { hostType: 'agentParticipant' } }], blocks: [
+      { kind: 'step', id: 'select', document: { text: 'Select', references: [], attachments: [] }, execution: { agentTarget } },
+      { kind: 'loop', id: 'speakers', repetition: { kind: 'items', items: { kind: 'result', producer: { blockId: 'select', scope: { kind: 'current' } }, path: [] },
+        execution: 'parallel', failurePolicy: 'collect_outcomes' }, body: [{ ...definition.blocks[0],
+        execution: { participant: { kind: 'item', field: 'value', roster: 'participants' } } }] },
+    ] };
+    const result = await materialize({ definition: authored, context: { ...context, inputs: { participants } }, effects: {
+      resolveTargetAvailability: available, resolveSessionTarget: async value => ({ address: value as { serverId: string; sessionId: string }, machineId: 'machine' }),
+    } });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    const leaf = result.snapshot.materializedLeaves.find(leaf => leaf.blockId === 'work')!;
+    expect(resolveWorkflowAcceptedStepSelectionV1(leaf, participants[1]).participant).toMatchObject({ kind: 'session', session: participants[1]!.session });
+    expect(() => resolveWorkflowAcceptedStepSelectionV1(leaf, { kind: 'session', session: { serverId: 'home', sessionId: 'unadmitted' } }))
+      .toThrow(expect.objectContaining({ code: 'invalid_input' }));
+  });
   it.each(['direct', 'engine_binding', 'child'] as const)('refuses unsupported Discussion delivery to a detached %s Agent before target effects', async topology => {
     const detached = { ...definition, blocks: [{ ...definition.blocks[0], execution: {
       executionTarget: { kind: 'detached_run' }, conversation: { kind: 'fresh' } } }] };
@@ -118,7 +148,9 @@ describe('accepted Workflow selection bindings', () => {
       .toMatchObject({ ok: false });
     expect(await materialize({ definition: { ...authored, blocks: [{ ...definition.blocks[0],
       execution: { participant: { kind: 'input', name: 'chosen' }, permissionMode: 'read-only' } }] },
-      context: contextWithChoice })).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+      context: contextWithChoice })).toMatchObject({ ok: true,
+        snapshot: { materializedLeaves: [{ selection: { permissionMode: 'read-only' } }] },
+        agentStartLeaves: [{ facts: { permissionMode: 'yolo' } }] });
   });
 
   it('freezes ordinary role model, profile and effort without dropping Team binding intent', async () => {

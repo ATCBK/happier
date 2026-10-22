@@ -445,7 +445,7 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
   it.each([
     ['Review & converge', REVIEW_AND_CONVERGE_WORKFLOW_V1, { engines: ['agent:happier.agent.codex/codex'] }, 'review'],
     ['Plan with a panel', PLAN_WITH_A_PANEL_WORKFLOW_V1, { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, 'plan'],
-  ] as const)('admits an agent start of %s with runtime-bound Action engines', async (_name, authored, inputs, actionBlockId) => {
+  ] as const)('admits an agent start of %s with accepted engine choices', async (_name, authored, inputs, actionBlockId) => {
     const result = await materialize({ definition: authored,
       context: { ...context, actionCaller: policyActionContext.actionCaller,
         authorization: { principal: { kind: 'session', sessionId: 'origin' } }, inputs, origin: { kind: 'direct', originSessionId: 'origin' } },
@@ -462,7 +462,11 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
     });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, snapshot: { workDepth: 2,
       materializedLeaves: expect.arrayContaining([expect.objectContaining({ sourceKey: '$root', blockId: actionBlockId,
-        kind: 'action', actionInput: expect.objectContaining({ [actionBlockId === 'review' ? 'engineIds' : 'backendTargetKeys']: [{ kind: 'unresolved' }] }) })]) } });
+        ...(actionBlockId === 'review' ? { kind: 'action', actionInput: expect.objectContaining({ engineIds: [{ kind: 'unresolved' }] }) }
+          : { kind: 'step', selection: expect.objectContaining({ agentTarget, permissionMode: 'read-only' }),
+            engineBindings: expect.objectContaining({ selections: expect.arrayContaining([
+              expect.objectContaining({ selection: expect.objectContaining({ agentTarget, permissionMode: 'read-only' }) }),
+            ]) }) }) })]) } });
     if (!result.ok) throw new Error(result.error.code);
     const reread = await readWorkflowAcceptedAgentStartLeavesV1(result.snapshot);
     expect(reread.filter((leaf) => leaf.blockId === actionBlockId)).toMatchObject([

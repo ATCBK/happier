@@ -17,9 +17,9 @@ import { WorkflowAcceptedSnapshotV1Schema, WorkflowMaterializedLeafV1Schema, Wor
   type WorkflowMaterializedLeafV1, type WorkflowResolvedInputsV1, type WorkflowRoleOverridesV1,
   type WorkflowReplayAgentOverrideV1,
   type WorkflowRunExecutionTargetV1 } from './workflowDefinitionV1.js';
-import { listWorkflowAcceptedLeafSelectionsV1, resolveWorkflowAcceptedStepSelectionV1, resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1, type WorkflowRoleSelectionContextV1 } from './workflowStepSelectionV1.js';
+import { listWorkflowAcceptedLeafSelectionsV1, parseWorkflowLiteralEngineSelectionV1, resolveWorkflowAcceptedStepSelectionV1, resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1, type WorkflowRoleSelectionContextV1 } from './workflowStepSelectionV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
-import { WorkflowLiteralEngineSelectionV1Schema, WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type WorkflowDefinitionV1,
+import { WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type WorkflowDefinitionV1,
   type WorkflowIngressContextV1, type WorkflowLeafV1, type WorkflowStepSelectionV1,
   type WorkflowActionValueReferenceV1,
   type WorkflowValidationIssue } from './workflowV1.js';
@@ -319,7 +319,10 @@ function actionItemContexts(definition: WorkflowDefinitionV1, blockId: string, c
           bodyItems = expanded;
           if (items === null) bodyItems = null;
           else for (const item of items) {
-            const values = boundValue(block.repetition.items, context, block.id, 'run', item);
+            const source = block.repetition.items;
+            if (source.kind === 'input' && !Object.hasOwn(context.inputs, source.name)
+              && definition.inputs.some(field => field.name === source.name && !field.required)) continue;
+            const values = boundValue(source, context, block.id, 'run', item);
             if (!Array.isArray(values)) { bodyItems = null; break; }
             values.forEach((value, index) => expanded.push({ value, index, position: index + 1, count: values.length }));
           }
@@ -627,16 +630,23 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
           if (leaf.kind !== 'step'
             || frozen && (!frozen.participantBindings
               || !sameStrictJsonValue(frozen.participantBindings.reference, participantBinding))
-            || !frozen && Object.keys(leaf.execution ?? {}).some(key => key !== 'participant'
+            || !frozen && (leaf.execution?.permissionMode !== undefined && leaf.execution.permissionMode !== 'read-only'
+              || Object.keys(leaf.execution ?? {}).some(key => key !== 'participant' && key !== 'permissionMode'
               && !(key === 'workspace' && leaf.execution?.workspace?.kind === 'inherit')
-              && !(key === 'executionTarget' && leaf.execution?.executionTarget?.kind === 'session'))) return invalidInput(leaf.id);
+              && !(key === 'executionTarget' && leaf.execution?.executionTarget?.kind === 'session')))) return invalidInput(leaf.id);
           boundParticipants = { reference: participantBinding, selections: [] };
           for (const inputs of frameInputs) {
             const items = participantBinding.kind === 'item'
-              ? actionItemContexts(authored, leaf.id, { inputs, origin: input.context.origin }) : [undefined];
+              ? participantBinding.roster !== undefined
+                ? Array.isArray(inputs[participantBinding.roster])
+                  ? (inputs[participantBinding.roster] as JsonValue[]).map((value, index, roster) => ({ value, index, position: index + 1, count: roster.length }))
+                  : null
+                : actionItemContexts(authored, leaf.id, { inputs, origin: input.context.origin }) : [undefined];
             if (items === null || participantBinding.kind === 'item' && items.some(item => item === undefined)) return invalidInput(leaf.id);
             for (const item of items) {
               const raw = participantBinding.kind === 'item' ? item!.value : inputs[participantBinding.name];
+              if (raw === undefined && participantBinding.kind === 'input'
+                && authored.inputs.some(field => field.name === participantBinding.name && !field.required)) continue;
               const selectedValue = raw === undefined ? undefined : readWorkflowValuePathV1(raw, participantBinding.path ?? []);
               const value = normalizeExecutableParticipantSelectionV1(selectedValue);
               if (!value) return invalidInput(leaf.id);
@@ -732,6 +742,10 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
               }
             }
           }
+          if (leaf.execution?.permissionMode === 'read-only') {
+            boundParticipants.selections = boundParticipants.selections.map(choice => ({ ...choice,
+              selection: { ...choice.selection, permissionMode: 'read-only' } }));
+          }
         }
         if (frozen?.sessionBindings) {
           boundSessions = structuredClone(frozen.sessionBindings);
@@ -778,7 +792,7 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
             if (items === null || binding.kind === 'item' && items.some(item => item === undefined)) return invalidInput(leaf.id);
             for (const item of items) {
               const raw = binding.kind === 'item' ? item!.value : inputs[binding.name];
-              const value = WorkflowLiteralEngineSelectionV1Schema.safeParse(raw === undefined ? undefined : readWorkflowValuePathV1(raw, binding.path ?? []));
+              const value = parseWorkflowLiteralEngineSelectionV1(raw === undefined ? undefined : readWorkflowValuePathV1(raw, binding.path ?? []));
               if (!value.success) return invalidInput(leaf.id);
               const selected = resolveSelection(item?.value, inputs);
               boundEngines.selections.push({ value: value.data, selection: selected.selection,

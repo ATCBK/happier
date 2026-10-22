@@ -52,6 +52,9 @@ export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.strictObject(
   name: WorkflowInputNameSchema,
   valueType: z.enum(['string', 'number', 'boolean', 'json']),
   multiple: z.optional(z.boolean()),
+  minItems: z.optional(z.number().check(z.int(), z.positive())),
+  uniqueItems: z.optional(z.boolean()),
+  conflictsWith: z.optional(z.array(WorkflowInputNameSchema)),
   enum: z.optional(z.array(z.string()).check(z.minLength(1))),
   required: z.boolean(),
   default: zMini.optional(StrictJsonValueSchema),
@@ -61,6 +64,9 @@ export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.strictObject(
   optionsSourceId: z.optional(z.string().check(z.minLength(1))),
   inputType: zMini.optional(InputTypeReferenceV1Schema),
 }).check(z.superRefine((value, ctx) => {
+  if ((value.minItems !== undefined || value.uniqueItems !== undefined) && !value.multiple) {
+    ctx.addIssue({ code: 'custom', path: ['multiple'], message: 'List constraints require a participant list' });
+  }
   if (value.multiple && (value.valueType !== 'json' || !value.inputType || !('hostType' in value.inputType)
     || value.inputType.hostType !== 'agentParticipant')) {
     ctx.addIssue({ code: 'custom', path: ['multiple'], message: 'Participant lists require the executable participant input type' });
@@ -216,6 +222,12 @@ export const WorkflowSelectionBindingV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('item'), field: z.literal('value'), path: z.optional(WorkflowResultPathSchema) }),
 ]));
 export type WorkflowSelectionBindingV1 = z.infer<typeof WorkflowSelectionBindingV1Schema>;
+/** Result-selected items can narrow this admitted input roster, never introduce an executable identity. */
+export const WorkflowParticipantBindingV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema, path: z.optional(WorkflowResultPathSchema) }),
+  z.strictObject({ kind: z.literal('item'), field: z.literal('value'), path: z.optional(WorkflowResultPathSchema),
+    roster: z.optional(WorkflowInputNameSchema) }),
+]));
 export const WorkflowLiteralEngineSelectionV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ role: z.string().check(z.minLength(1)) }),
   z.strictObject({ agentTarget: AgentExecutionTargetV1Schema,
@@ -227,7 +239,7 @@ export const WorkflowEngineSelectionV1Schema = lazyZodSchema(() => z.union([
 export type WorkflowEngineSelectionV1 = z.infer<typeof WorkflowEngineSelectionV1Schema>;
 export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStepExecutionSelectionSchema, {
   engine: z.optional(WorkflowEngineSelectionV1Schema),
-  participant: z.optional(WorkflowSelectionBindingV1Schema),
+  participant: z.optional(WorkflowParticipantBindingV1Schema),
   executionTarget: z.optional(WorkflowLeafExecutionTargetV1Schema),
 })).check(z.superRefine((selection, context) => {
   if (selection.participant !== undefined && (selection.engine !== undefined || selection.conversation !== undefined

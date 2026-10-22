@@ -10,6 +10,7 @@ import {
   WorkflowStepExecutionSelectionSchema,
   WorkflowLiteralEngineSelectionV1Schema,
   WorkflowSelectionBindingV1Schema,
+  WorkflowParticipantBindingV1Schema,
   WorkflowLeafExecutionTargetV1Schema as WorkflowRunExecutionTargetV1Schema,
 } from './workflowV1.js';
 import { WorkflowDefinitionIdV1Schema } from './workflowIdsV1.js';
@@ -168,7 +169,7 @@ export const WorkflowMaterializedLeafV1Schema = lazyZodSchema(() => z.strictObje
     })),
   })),
   participantBindings: z.optional(z.strictObject({
-    reference: WorkflowSelectionBindingV1Schema,
+    reference: WorkflowParticipantBindingV1Schema,
     selections: z.array(z.strictObject({
       value: ExecutableParticipantSelectionV1Schema,
       participant: WorkflowAcceptedParticipantV1Schema,

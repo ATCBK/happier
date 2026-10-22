@@ -599,6 +599,13 @@ function validateStepExecution(state: WalkState, step: WorkflowLeafV1, path: str
   const engine = execution?.engine ?? state.workflowDefaults.engine;
   const participant = execution?.participant ?? state.workflowDefaults.participant;
   if (participant) {
+    if (participant.kind === 'item' && participant.roster) {
+      const roster = state.workflowInputByName.get(participant.roster);
+      if (!roster?.multiple || !roster.inputType || !('hostType' in roster.inputType) || roster.inputType.hostType !== 'agentParticipant') {
+        state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'participant', 'roster'),
+          'A result-selected participant requires a declared executable participant roster.', step.id));
+      }
+    }
     validateValueReference(state, participant.kind === 'input' ? { kind: 'input', name: participant.name } : participant,
       joinPath(path, 'execution', 'participant'), step.id);
     if (step.kind !== 'step') state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'participant'),

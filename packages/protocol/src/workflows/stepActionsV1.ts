@@ -2,9 +2,9 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import type { PreNormalizedActionSpec } from '../actions/actionSpecs.js';
+import { WorkflowDiscussionRoundProjectInputV1Schema, WorkflowDiscussionRoundProjectResultV1Schema } from './workflowDiscussionRoundV1.js';
 
-export const WORKFLOW_EFFECT_ACTION_IDS_V1 = ['webhooks.call', 'machines.command.run'] as const;
-export type WorkflowEffectActionIdV1 = typeof WORKFLOW_EFFECT_ACTION_IDS_V1[number];
+export { WORKFLOW_EFFECT_ACTION_IDS_V1, type WorkflowEffectActionIdV1 } from './workflowEffectActionIdsV1.js';
 
 export const WorkflowWebhookInputV1Schema = lazyZodSchema(() => z.strictObject({
   url: z.string().check(z.trim(), z.url(), z.refine((url) => /^https?:/u.test(url), 'Use HTTP or HTTPS')),
@@ -27,15 +27,25 @@ export function isWorkflowActionLiteralFieldV1(actionId: string, field: string):
 }
 
 export const WorkflowEffectActionInputSchemasV1 = {
+  'workflow.discussion.round.project': WorkflowDiscussionRoundProjectInputV1Schema,
   'webhooks.call': WorkflowWebhookInputV1Schema,
   'machines.command.run': WorkflowMachineCommandInputV1Schema,
 } as const;
 export const WorkflowEffectActionOutputSchemasV1 = {
+  'workflow.discussion.round.project': WorkflowDiscussionRoundProjectResultV1Schema,
   'webhooks.call': WorkflowWebhookOutputV1Schema,
   'machines.command.run': WorkflowMachineCommandOutputV1Schema,
 } as const;
 
 export const WORKFLOW_EFFECT_ACTION_SPECS_V1 = [
+  {
+    id: 'workflow.discussion.round.project', approval: { result: 'required' }, title: 'Read Discussion round outcomes',
+    description: 'Project completed participant outcomes in the current accepted Workflow frame. Pass and next speakers come from exact reply custody, never prose.',
+    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
+    bindings: { mcpToolName: 'workflow_discussion_round_project', rpcMethod: 'workflow.discussion.round.project' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
+    inputSchema: WorkflowDiscussionRoundProjectInputV1Schema, outputSchema: WorkflowDiscussionRoundProjectResultV1Schema,
+  },
   {
     id: 'webhooks.call', approval: {result: 'required'}, title: 'Call a webhook',
     description: 'POST typed JSON through the host webhook destination policy. Retains the response; status 300 or higher fails.',

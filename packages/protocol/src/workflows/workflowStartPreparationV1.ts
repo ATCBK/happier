@@ -1,4 +1,5 @@
 import type { JsonValue } from '../json/strictJsonValue.js';
+import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { WorkflowRunAcceptedContextV1, WorkflowRunStartRequestV1 } from './actionsV1.js';
 import type { WorkflowDefinitionV1 } from './workflowV1.js';
 import type { WorkflowAcceptedSnapshotV1 } from './workflowDefinitionV1.js';
@@ -45,6 +46,11 @@ export async function resolveWorkflowContextInputsV1(params: Readonly<{
   }
   const inputs = resolveWorkflowRunStartInputsV1(params.definition, supplied);
   for (const field of params.definition.inputs) {
+    if (inputs[field.name] !== undefined && field.conflictsWith?.some(name => inputs[name] !== undefined)) {
+      throw workflowInputErrorV1(field.name, 'invalid_input');
+    }
+  }
+  for (const field of params.definition.inputs) {
     const value = inputs[field.name];
     if (value === undefined || !field.inputType || !('hostType' in field.inputType)
       || !field.defaultFrom && field.inputType.hostType !== 'agentParticipant') continue;
@@ -54,6 +60,12 @@ export async function resolveWorkflowContextInputsV1(params: Readonly<{
     const validation = validateInputFieldSchema({ field: workflowInputToFieldHint(field), value });
     if (validation.status !== 'valid') throw workflowInputErrorV1(field.name, 'invalid_input');
     inputs[field.name] = validation.value;
+    if (field.multiple && Array.isArray(validation.value)) {
+      if (field.minItems !== undefined && validation.value.length < field.minItems
+        || field.uniqueItems && validation.value.some((value, index, values) => values.slice(0, index).some(other => sameStrictJsonValue(value, other)))) {
+        throw workflowInputErrorV1(field.name, 'invalid_input');
+      }
+    }
   }
   return inputs;
 }

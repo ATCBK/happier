@@ -27,6 +27,8 @@ export * from './workflowRunVisibilityV1.js';
 export * from './workflowRunDataKeyV1.js';
 export * from './workflowRunAccountEncryptionV1.js';
 export * from './workflowSessionContextV1.js';
+export * from './workflowDiscussionContextV1.js';
+export * from './workflowDiscussionRoundV1.js';
 export * from './composeWorkflowRunWorkerUpdateV1.js';
 export * from './actionsV1.js';
 export * from './workflowStartPreparationV1.js';

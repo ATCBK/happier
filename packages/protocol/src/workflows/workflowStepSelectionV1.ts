@@ -48,6 +48,16 @@ export class WorkflowStepSelectionErrorV1 extends Error {
   }
 }
 
+/** Existing engine-option keys enter the same typed engine owner as authored object selections. */
+export function parseWorkflowLiteralEngineSelectionV1(value: unknown): ReturnType<typeof WorkflowLiteralEngineSelectionV1Schema.safeParse> {
+  if (typeof value === 'string') {
+    const key = BackendTargetKeyV2Schema.safeParse(value);
+    const target = key.success ? parseBackendTargetKeyV2(key.data) : null;
+    if (target?.kind === 'agent') value = { agentTarget: target };
+  }
+  return WorkflowLiteralEngineSelectionV1Schema.safeParse(value);
+}
+
 /** Invocation admission can choose only a concrete engine already approved in this leaf. */
 export function listWorkflowAcceptedLeafSelectionsV1(leaf: WorkflowMaterializedLeafV1): readonly WorkflowMaterializedLeafV1[] {
   const participants = leaf.participantBindings ? leaf.participantBindings.selections.map(selected => ({ ...leaf,
@@ -86,7 +96,7 @@ export function resolveWorkflowAcceptedStepSelectionV1(leaf: WorkflowMaterialize
   const reference = leaf.engineBindings.reference;
   const raw = reference.kind === 'item' ? itemValue : inputs?.[reference.name];
   const value = raw === undefined ? undefined : readWorkflowValuePathV1(raw, reference.path ?? []);
-  const parsed = WorkflowLiteralEngineSelectionV1Schema.safeParse(value);
+  const parsed = parseWorkflowLiteralEngineSelectionV1(value);
   const selected = parsed.success ? leaf.engineBindings.selections.find(candidate => sameStrictJsonValue(candidate.value, parsed.data)) : undefined;
   if (!selected) throw new WorkflowStepSelectionErrorV1({ code: 'invalid_input' });
   return { ...leaf, selection: { ...selected.selection,
@@ -104,7 +114,7 @@ export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelecti
   if (engine && 'kind' in engine && input.purpose !== 'authoring') {
     const value = engine.kind === 'input' ? input.inputs?.[engine.name] : input.itemValue;
     const selected = value === undefined ? undefined : readWorkflowValuePathV1(value, engine.path ?? []);
-    const parsed = WorkflowLiteralEngineSelectionV1Schema.safeParse(selected);
+    const parsed = parseWorkflowLiteralEngineSelectionV1(selected);
     if (!parsed.success) throw new WorkflowStepSelectionErrorV1({ code: 'invalid_input' });
     engine = parsed.data;
   }
