@@ -1,9 +1,12 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
 
-const settings = vi.hoisted(() => ({ fontScale: 1, osFontScale: 1 }));
+const settings = vi.hoisted(() => ({ osFontScale: 1 }));
+const initialLocalSettings = storage.getState().localSettings;
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
@@ -23,16 +26,10 @@ vi.mock('react-native-unistyles', async () => {
   return createUnistylesMock();
 });
 
-// The in-app text size is device-local storage, outside the text owner.
-vi.mock('@/sync/store/hooks', () => ({
-  useLocalSetting: () => settings.fontScale,
-}));
-
 afterEach(() => {
-  settings.fontScale = 1;
   settings.osFontScale = 1;
   standardCleanup();
-  vi.resetModules();
+  storage.setState({ localSettings: initialLocalSettings });
 });
 
 const TWO_FACTS = {
@@ -44,7 +41,11 @@ async function renderLine(
   fontScale: number,
   large: boolean,
 ) {
-  settings.fontScale = fontScale;
+  // Both the header and Text must read the same real preference. Mocking only the legacy
+  // hooks barrel gave the row 1.3 while Text's direct settings reader still observed 1.
+  await act(async () => {
+    storage.setState(state => ({ localSettings: { ...state.localSettings, uiFontScale: fontScale } }));
+  });
   const { Platform } = await import('react-native');
   Object.defineProperty(Platform, 'OS', {
     configurable: true,
@@ -59,11 +60,14 @@ async function renderLine(
   );
   const firstFact = screen.findAllByType('Text' as never)[0]!;
   const secondFact = screen.findAllByType('Text' as never)[1]!;
-  return {
+  const result = {
     facts,
     firstFactStyle: flattenTestStyle(firstFact.props.style),
+    allowFontScaling: firstFact.props.allowFontScaling,
     separator: String(secondFact.props.children[0] ?? ''),
   };
+  await screen.unmount();
+  return result;
 }
 
 describe('PaneHeaderLineView facts clip', { timeout: 240_000 }, () => {
@@ -74,9 +78,13 @@ describe('PaneHeaderLineView facts clip', { timeout: 240_000 }, () => {
     ['large', true, 2, 'maxHeight'],
   ] as const)('%s facts row', (_name, large, lines, clip) => {
     it('clips to the lines the native Text renders at default, the largest in-app size and an OS font scale', async () => {
-      for (const [uiScale, osScale] of [[1, 1], [1.3, 1], [1, 1.5]] as const) {
+      let defaultLineHeight = 0;
+      for (const [uiScale, osScale] of [[1, 1], [1.3, 1], [1, 1.5], [1.3, 1.5]] as const) {
         settings.osFontScale = osScale;
-        const { facts, firstFactStyle } = await renderLine('ios', uiScale, large);
+        const { facts, firstFactStyle, allowFontScaling } = await renderLine('ios', uiScale, large);
+        if (uiScale === 1 && osScale === 1) defaultLineHeight = firstFactStyle.lineHeight as number;
+        expect(firstFactStyle.lineHeight as number).toBeCloseTo(defaultLineHeight * uiScale, 5);
+        expect(allowFontScaling).toBe(true);
         expect(facts).toMatchObject({ overflow: 'hidden', flexWrap: 'wrap' });
         // Native Text scales its own line height by the in-app size; the host scales it again by the OS size.
         expect(facts[clip] as number).toBeCloseTo((firstFactStyle.lineHeight as number) * osScale * lines, 5);
