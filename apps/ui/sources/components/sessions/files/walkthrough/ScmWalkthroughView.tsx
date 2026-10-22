@@ -8,7 +8,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
+import { resolveExecutionRunAgentMarkId, resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
+import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { getPreferredLanguage, t } from '@/text';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 
@@ -121,6 +122,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         };
     }, [bound.isCurrent, cwd, discussion, onOpenComposer, props.sessionId, props.onAskStop, scope?.serverId, scope?.accountId, viewModel?.savedResult]);
     const saved = viewModel?.savedResult;
+    const updateWitnessed = useWitnessedUpdateNotice(saved);
     const nativeTurns = !sessionId ? viewModel?.latestRun?.inputTurns : null;
     const nativeTerminalTurn = nativeTurns?.current?.state === 'completed' ? nativeTurns.current
         : nativeTurns?.last?.state === 'completed' ? nativeTurns.last : null;
@@ -215,7 +217,16 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const reviewStatus = review ? <ReviewWalkthroughSteps progress={review.progress} phone={phone} /> : null;
 
     const { theme } = useUnistyles();
-    const markAgentId = resolveExecutionRunAgentMarkId(viewModel?.latestRun?.backendTarget, theme);
+    const producerTarget = viewModel?.latestRun?.backendTarget ?? saved?.generator?.backendTarget;
+    const markAgentId = resolveExecutionRunAgentMarkId(producerTarget, theme);
+    // Who wrote the reading, by name ("Opus 5.5 read all 14"): the model when the result records it, else the
+    // Agent beside its mark ("Codex read all 2"), and only then the generic "The model".
+    const producerModelId = viewModel?.producer?.modelId
+        ?? (viewModel?.producer?.kind !== 'review' ? saved?.generator?.modelId : undefined);
+    const producerLabel = React.useMemo(() => {
+        if (producerModelId) return resolveRunNativeModelLabel(producerTarget)(producerModelId) ?? producerModelId;
+        try { return resolveExecutionRunBackendLabel(producerTarget); } catch { return null; }
+    }, [producerModelId, producerTarget]);
     const marksAvailable = capturedComparison !== null && marks.record !== null && marks.unavailableReason === null;
     const setReviewed = marks.setReviewed;
     const onToggleReviewed = React.useMemo(() => (marksAvailable
@@ -228,7 +239,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         nativeDiscussion: !sessionId,
         nativeDiscussionReply,
         onUndo, undoing,
-        undoInNotice: Boolean(saved.updateNotice && onUndo),
+        undoInNotice: Boolean(updateWitnessed && onUndo),
         phone: props.layout === 'phone',
         canGenerate: canSend && launch.canLaunchExecutionRuns,
         disabledReason: !canControl ? t('walkthroughStart.unavailable') : null,
@@ -258,7 +269,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onCheckAdmission={bound.checkAdmission}
                 scopeLabel={props.scopeLabel}
                 scopeDetail={props.scopeDetail}
-                modelLabel={viewModel?.producer?.modelId ?? null}
+                modelLabel={producerLabel}
                 analysisMark={markAgentId ? <AgentIcon agentId={markAgentId} size={ICON_SIZE.xs} /> : null}
                 generatedLabel={reviewView?.generatedLabel ?? null}
                 review={reviewView?.slots ?? null}
@@ -271,7 +282,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onOpenFile={props.onOpenFile}
                 onShowFiles={props.onShowFiles}
                 // The band is the way back from the last change; without Undo the reading's own provenance marks carry it.
-                update={saved?.updateNotice && onUndo ? { title: t('walkthrough.saved.updated'), onUndo } : null}
+                update={updateWitnessed && onUndo ? { title: t('walkthrough.saved.updated'), onUndo } : null}
                 stale={capturedComparison?.freshness === 'stale' ? { ...(canSend && launch.canLaunchExecutionRuns ? { onRefresh: () => {
                     if (!bound.isCurrent()) return;
                     if (!modelAvailable) modelChoice.choose();
@@ -297,3 +308,15 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         </View>
     );
 });
+
+/**
+ * "Saved result updated · Undo" confirms an update this view saw arrive (a merge, an edit, a regeneration).
+ * A notice already on the result when the view first showed it is history: the stops' own changed marks
+ * carry it, and Undo stays in the comparison menu, so the band doesn't sit on the page indefinitely.
+ */
+function useWitnessedUpdateNotice(saved: Readonly<{ resultId: string; revision: number; updateNotice?: Readonly<{ revision: number }> }> | null | undefined): boolean {
+    const [baseline, setBaseline] = React.useState<Readonly<{ resultId: string; revision: number }> | null>(null);
+    const current = saved ? (baseline?.resultId === saved.resultId ? baseline : { resultId: saved.resultId, revision: saved.revision }) : baseline;
+    if (current !== baseline) setBaseline(current);
+    return Boolean(saved?.updateNotice && current && saved.updateNotice.revision > current.revision);
+}

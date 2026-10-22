@@ -943,6 +943,26 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(generationCalls()).toEqual([]);
     }, 120_000);
 
+    it('names the Agent that wrote a reading with no recorded model and keeps an update it did not see arrive off the page', async () => {
+        boundary.savedSessionId = 'reopened-update';
+        const source = { kind: 'workingTree' };
+        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ resultId: 'reopened-result', revision: 2, canUndo: true,
+            generator: { backendTarget: { kind: 'backend', backendId: 'claude' } },
+            updateNotice: { kind: 'edit', revision: 2, affectedStopIds: [] },
+            output: { success: true, resultId: 'reopened-result', revision: 2, sourceKey: 'reopened-comparison',
+                metadata: { sourceKey: 'reopened-comparison', source }, requestedOutputs: ['walkthrough'],
+                comparison: { id: 'reopened-comparison', source, repository: { rootPath: '/repo/exact' }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Reopened reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        const { screen } = await mount({ kind: 'workingTree' }, boundary.savedSessionId);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Reopened reading'));
+        expect(screen.getTextContent()).toContain('Generated · Claude');
+        // The edit landed before this view opened: its band is history, so it isn't shown.
+        expect(screen.findByTestId('walkthrough-notice-update')).toBeNull();
+        expect(generationCalls()).toEqual([]);
+    }, 120_000);
+
     it('waits for live conversation evidence before showing a restored walkthrough as unavailable', async () => {
         boundary.savedSessionId = 'restored-conversation';
         const source = { kind: 'workingTree' };

@@ -962,10 +962,12 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.space.s40,
     paddingBottom: 140,
   },
+  // The reading measure stays fixed; on a wide pane the column sits centred in it rather than leaving
+  // the whole right side empty (≥1920 and ultra-wide).
   column: {
     width: '100%',
     maxWidth: STREAM_COLUMN_MAX_WIDTH_PX,
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
   },
   stopDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
