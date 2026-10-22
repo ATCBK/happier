@@ -269,7 +269,10 @@ it('compares actual selections and carries admitted depth only as host context',
 it('fails closed when the host cannot resolve an agent start baseline', async () => {
   const deps = createDeps({ resolveAgentStartContext: async () => null });
   const result = await createActionExecutor(deps).execute('execution.run.start', RUN_START_BASE, RUN_DISPATCHER_CALLER);
-  expect(result).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+  expect(result).toMatchObject({ ok: false, errorCode: 'target_unavailable', details: {
+    issues: [{ code: 'unavailable', path: ['host'] }],
+    executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+  } });
   expect(deps.executionRunStart).not.toHaveBeenCalled();
 });
 

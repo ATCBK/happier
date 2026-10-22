@@ -150,11 +150,13 @@ export async function buildAgentInventorySelectionArgs(params: Readonly<{
 function readDynamicOptionMachineId(
   input: Record<string, unknown>,
   actionId: ActionId | null,
+  context?: ActionExecutorContext,
 ): string | undefined {
   if (actionId === 'session.spawn_new') {
     return readNonEmptyString(readRecord(input.executionTarget).machineId);
   }
-  return typeof input.machineId === 'string' ? input.machineId : undefined;
+  return readNonEmptyString(input.machineId)
+    ?? (actionId === 'execution.run.start' ? readNonEmptyString(context?.defaultSessionMachineId) : undefined);
 }
 
 function readDynamicOptionModelId(
@@ -287,7 +289,7 @@ export async function resolveInputOptions(params: Readonly<{
 }>> {
   const { deps, ctx, actionId, optionsSourceId } = params;
   const input = projectInputOptionsDependencies(params.input);
-  const machineId = readDynamicOptionMachineId(input, actionId);
+  const machineId = readDynamicOptionMachineId(input, actionId, ctx);
   const serverId = actionId === 'session.spawn_new'
     ? readNonEmptyString(readRecord(input.executionTarget).serverId)
     : readNonEmptyString(ctx.serverId);
@@ -724,7 +726,6 @@ export async function resolveInputOptions(params: Readonly<{
     }
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
     if ('ok' in selectionArgs) return selectionArgs;
-    const machineId = readDynamicOptionMachineId(input, actionId);
     const result = await deps.spawnConnectedServicesList({
       ...selectionArgs,
       ...(machineId ? { machineId } : {}),

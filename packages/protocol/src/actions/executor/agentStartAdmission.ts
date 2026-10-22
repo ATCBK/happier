@@ -26,7 +26,7 @@ import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { ManagedAcquireAgentStartV1Schema } from '../../machines/managed/agentStartV1.js';
 import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1, parseProfileActionRequestV1 } from '../../profiles/profileActionsV1.js';
 import { SessionCapabilitySelectionAuthoringV1Schema, SessionSkillSelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
-import { actionInputIssueFailure } from './actionInputValidation.js';
+import { actionInputIssueFailure, ActionInputIssueSchema } from './actionInputValidation.js';
 
 /** Only fresh Session creation admits a Profile; resume keeps its stored session selection. */
 export async function resolveProfileSkillSeedsAtAdmissionV1(input: Readonly<Record<string, unknown>>,
@@ -455,8 +455,11 @@ export function admitActionAgentStartV1(context: ActionExecutorContext, request:
     const policy = SessionAgentSpawnPolicyV1StrictSchema.safeParse(context.sessionAgentSpawnPolicyV1 ?? {});
     if (!resolved || !policy.success) {
         const reason = !resolved ? 'agent_start_context_unavailable' as const : 'spawn_policy_invalid' as const;
+        const error = actionStartTargetUnavailableV1(context, 'agent_start_context', reason);
         return { ok: false as const, refusal: { code: 'target_unavailable' as const, reason },
-            error: actionStartTargetUnavailableV1(context, 'agent_start_context', reason) };
+            error: { ...error, details: { ...error.details,
+                issues: [ActionInputIssueSchema.parse({ code: 'unavailable', path: ['host'] })],
+            } } };
     }
     const admission = admitAgentStartV1(policy.data, request, resolved);
     if (!admission.ok && admission.refusal.code === 'target_unavailable' && admission.refusal.reason)
