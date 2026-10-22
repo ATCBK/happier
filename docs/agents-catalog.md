@@ -65,6 +65,20 @@ contain that mode. Explicit requested modes retain their pending state even when
 discovery is unavailable. ACP usage notifications remain the authority for live
 context counts; a mode descriptor or model name cannot supply usage telemetry.
 
+### Session identity in UI (development source)
+
+Session presentation reads `resolveAgentIdFromSessionMetadata` from
+`@happier-dev/agents`: a declared runtime identity wins over `flavor`, followed
+by an unambiguous vendor resume key. Resolve this identity before projecting
+compact list metadata or writing its warm cache; the compact `flavor` field
+carries that resolved identity, not a competing interpretation of raw metadata.
+Unknown Session identity uses the neutral `AgentIcon` mark in lists, cockpit
+navigation, and composer controls, and has no avatar provider badge. Composer
+engine marks describe the selected or armed continuation Agent, while runtime
+policy reads the running Session's canonical identity. A policy default for an
+unidentified existing Session is not presentation evidence; an explicit new-Session
+selection or armed continuation still supplies its own identity.
+
 ### 2) Cross-boundary contracts: `@happier-dev/protocol`
 
 Where:
