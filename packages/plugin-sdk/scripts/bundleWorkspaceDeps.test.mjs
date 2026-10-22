@@ -299,10 +299,38 @@ test('internal SDK dependency builds admit a stale Action map while publication 
     "throw new Error('Generated Action type map is stale: result field changed');\n");
   await assert.doesNotReject(() => runPluginSdkPreparedScript('build:prepared', { pluginSdkDir: directory }));
   assert.equal(await readFile(resolve(directory, 'compiled'), 'utf8'), 'runtime emitted');
-  for (const gate of ['check:prepare:api-governance:prepared', 'prepack:prepared', 'prepare:declarations:prepared', 'generated:finite']) {
+  for (const gate of ['check:prepare:api-governance:prepared', 'prepack:prepared', 'check:action-type-map', 'generated:finite']) {
     await assert.rejects(() => runPluginSdkPreparedScript(gate, { pluginSdkDir: directory }),
       undefined, `${gate} must retain rejection of the stale Action map`);
   }
+});
+
+test('declaration preparation derives stale Plugin SDK DTOs through the canonical producer', async t => {
+  const repo = fileURLToPath(new URL('../../../', import.meta.url));
+  const cache = resolve(repo, 'packages/plugin-sdk/node_modules/.cache');
+  await mkdir(cache, { recursive: true });
+  const root = await mkdtemp(resolve(cache, 'happier-sdk-dto-preparation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sdk = resolve(root, 'packages/plugin-sdk');
+  const linkDirectory = async (source, target) => symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+  await mkdir(resolve(sdk, 'scripts'), { recursive: true });
+  await mkdir(resolve(sdk, 'src/actions'), { recursive: true });
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  await writeFile(resolve(sdk, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: manifest.scripts }));
+  for (const script of ['generateActionTypeMap.mjs', 'deriveActionDtos.mjs']) {
+    await copyFile(new URL(script, import.meta.url), resolve(sdk, 'scripts', script));
+  }
+  await linkDirectory(resolve(repo, 'packages/protocol'), resolve(root, 'packages/protocol'));
+  await linkDirectory(resolve(repo, 'scripts'), resolve(root, 'scripts'));
+  await linkDirectory(resolve(repo, 'apps'), resolve(root, 'apps'));
+  const output = resolve(sdk, 'src/actions/actionTypeMap.generated.ts');
+  await writeFile(output, '// stale DTOs\n');
+  const options = { pluginSdkDir: sdk, env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: 'false' } };
+  await runPluginSdkPreparedScript('prepare:declarations:prepared', options);
+  assert.match(await readFile(output, 'utf8'), /export type PluginActionInputById/u);
+  await runPluginSdkPreparedScript('check:action-type-map', options);
+  await writeFile(output, '// stale DTOs again\n');
+  await assert.rejects(() => runPluginSdkPreparedScript('check:action-type-map', options));
 });
 
 test('SDK runtime preparation regenerates the guest after a source edit while its generated check rejects drift', async (t) => {

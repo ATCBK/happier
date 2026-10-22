@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 import {
   derivePublicToolchainCompatibilityV1,
@@ -402,6 +403,49 @@ test('checks the generated packet against source facts and rejects a stale publi
   });
   assert.notEqual(stale.status, 0);
   assert.match(stale.stderr, /output is stale/i);
+});
+
+test('Plugin UI local typecheck derives a stale toolchain packet before compiling', async t => {
+  const root = await createFixtureRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sdkPath = join(root, 'packages/plugin-sdk/package.json');
+  const sdk = JSON.parse(await readFile(sdkPath, 'utf8'));
+  const sdkScripts = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).scripts;
+  // The fixture already supplies built Protocol facts. Execute the real prepared
+  // producer/checker instead of rebuilding unrelated workspace declarations.
+  await mkdir(join(root, 'packages/plugin-sdk/scripts'), { recursive: true });
+  await copyFile(GENERATOR_PATH, join(root, 'packages/plugin-sdk/scripts/generatePublicToolchainCompatibility.mjs'));
+  await symlink(fileURLToPath(new URL('../../protocol/dist/plugins/publicToolchainCompatibilityV1.js', import.meta.url)),
+    join(root, 'packages/protocol/dist/plugins/publicToolchainCompatibilityV1.js'));
+  await symlink(fileURLToPath(new URL('../../../node_modules', import.meta.url)), join(root, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  sdk.scripts = {
+    'generate:public-toolchain': sdkScripts['generate:public-toolchain:prepared'] + ' --repo-root ../..',
+    'check:public-toolchain': sdkScripts['check:public-toolchain:prepared'] + ' --repo-root ../..',
+  };
+  await writeJson(sdkPath, sdk);
+  const uiPath = join(root, 'packages/plugin-ui/package.json');
+  const ui = JSON.parse(await readFile(uiPath, 'utf8'));
+  const uiScripts = JSON.parse(await readFile(new URL('../../plugin-ui/package.json', import.meta.url), 'utf8')).scripts;
+  ui.scripts = { 'typecheck:local': uiScripts['typecheck:local'] };
+  await writeJson(uiPath, ui);
+  // The compiler process is the boundary; preparation and the generator are real.
+  await writeSource(join(root, 'scripts/workspaces/runTypeScriptCli.mjs'),
+    "import { writeFileSync } from 'node:fs'; writeFileSync('compiled', 'prepared');\n");
+  const output = join(root, 'packages/plugin-sdk/src/ui/build/publicToolchainCompatibility.generated.ts');
+  await writeSource(output, '// stale output\n');
+  const invocation = resolvePnpmCommandInvocation(['--silent', 'run', 'typecheck:local']);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: join(root, 'packages/plugin-ui'), encoding: 'utf8',
+    // Dependencies are supplied above; fixture manifests must never trigger an install.
+    env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: 'false' },
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(await readFile(join(root, 'packages/plugin-ui/compiled'), 'utf8'), 'prepared');
+  assert.equal(await readFile(output, 'utf8'), renderPublicToolchainCompatibilityModule(
+    await derivePublicToolchainCompatibilityV1({ repoRoot: root })));
+  const checked = spawnSync(process.execPath, [GENERATOR_PATH, '--repo-root', root, '--check'], { encoding: 'utf8' });
+  assert.equal(checked.status, 0, checked.stderr);
 });
 
 test('keeps every generated example and external-fixture package dependency on the one packet', async () => {

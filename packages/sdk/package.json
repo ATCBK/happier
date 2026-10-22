@@ -57,7 +57,7 @@
   "scripts": {
     "generate:actions": "node --import tsx ./scripts/generateActions.ts --write",
     "check:actions": "node --import tsx ./scripts/generateActions.ts --check",
-    "prepare:declarations": "pnpm --silent run check:actions",
+    "prepare:declarations": "pnpm --silent run generate:actions",
     "prepare:api-governance": "pnpm --silent run prepare:declarations && node ./scripts/bundleWorkspaceDeps.mjs --artifact && pnpm --silent run build:compiled",
     "api-governance": "pnpm --silent run prepare:api-governance && pnpm --silent run api-governance:emit",
     "api-governance:emit": "node ../../scripts/api-governance/cli.mjs --profile sdk --write",
@@ -69,7 +69,7 @@
     "prebuild": "pnpm --silent run prepare:declarations",
     "build:compiled": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
     "build": "pnpm --silent run build:compiled",
-    "prepack": "pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && pnpm --silent run check:api-governance:prepared",
+    "prepack": "pnpm --silent run check:actions && pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && pnpm --silent run check:api-governance:prepared",
     "test": "../../apps/stack/bin/hstack-exec --script=test:local",
     "test:local": "vitest run --config ./vitest.config.ts && node --import tsx --test ./scripts/*.test.mjs",
     "test:finite": "pnpm --silent run test:local",

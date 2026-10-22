@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -13,8 +16,40 @@ import {
   resolveActionSdkMethodName,
 } from '../../protocol/src/actions/actionSpecs.js';
 import { validateSdkMethodRows } from './generateActions.ts';
+import { resolvePnpmCommandInvocation } from '../../../scripts/workspaces/execPnpmCommand.mjs';
 
 const generatedSourcePath = new URL('../src/actions/generated.ts', import.meta.url);
+
+test('declaration preparation derives stale Action output while the explicit freshness check rejects it', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-sdk-declaration-preparation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sdk = join(root, 'packages/sdk');
+  await mkdir(join(sdk, 'scripts'), { recursive: true });
+  await mkdir(join(sdk, 'src/actions'), { recursive: true });
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  await writeFile(join(sdk, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: manifest.scripts }));
+  await copyFile(new URL('./generateActions.ts', import.meta.url), join(sdk, 'scripts/generateActions.ts'));
+  await symlink(fileURLToPath(new URL('../../protocol', import.meta.url)), join(root, 'packages/protocol'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(fileURLToPath(new URL('../../../node_modules', import.meta.url)), join(sdk, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  const output = join(sdk, 'src/actions/generated.ts');
+  await writeFile(output, '// stale generated output\n');
+  const run = script => {
+    const invocation = resolvePnpmCommandInvocation(['--silent', 'run', script]);
+    return spawnSync(invocation.command, invocation.args, {
+      cwd: sdk, encoding: 'utf8', env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: 'false' },
+    });
+  };
+  const stale = run('check:actions');
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, /Action layer is stale/u);
+  const prepared = run('prepare:declarations');
+  assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
+  assert.deepEqual(emittedActionIds(await readFile(output, 'utf8')).sort(), [...PUBLIC_ACTION_IDS].sort());
+  const current = run('check:actions');
+  assert.equal(current.status, 0, current.stdout + current.stderr);
+});
 
 async function readGeneratedActionSource() {
   return await readFile(generatedSourcePath, 'utf8');

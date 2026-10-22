@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     return;
   }
   const existing = await readFile(outputPath, 'utf8').catch(() => '');
-  if (existing !== output) throw new Error('Generated SDK Action layer is stale. Run yarn generate:actions.');
+  if (existing !== output) throw new Error('Generated SDK Action layer is stale. Run pnpm --dir packages/sdk run generate:actions from the repository root.');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

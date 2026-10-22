@@ -765,7 +765,7 @@ async function main() {
     if (cause?.code !== 'ENOENT') throw cause;
   }
   if (options.check) {
-    if (current !== expected) throw new Error(`Public toolchain compatibility output is stale: ${outputPath}`);
+    if (current !== expected) throw new Error(`Public toolchain compatibility output is stale: ${outputPath}. Run pnpm --dir packages/plugin-sdk run generate:public-toolchain from the repository root.`);
     await checkGeneratedConsumerPackageOutputs(options.repoRoot, packet);
     await checkGeneratedSourceBindings(options.repoRoot);
     await checkGeneratedDocumentationOutputs(options.repoRoot, packet);

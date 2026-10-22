@@ -460,7 +460,7 @@ export async function publishPreparedActionTypeMap(mode, prepared, { assertOwned
       const current = await readFile(path, 'utf8');
       if (current !== text) {
         throw new Error(
-          `Generated Action type map is stale: ${path} (${describeFirstDifference(current, text)}). Run yarn generate:action-type-map.`,
+          `Generated Action type map is stale: ${path} (${describeFirstDifference(current, text)}). Run pnpm --dir packages/plugin-sdk run generate:action-type-map from the repository root.`,
         );
       }
     }
