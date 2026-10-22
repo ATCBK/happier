@@ -8571,12 +8571,12 @@ describe('Conversation checkpointed-poll ingress', () => {
     }
   });
 
-  it('durably blocks a generic contributed poll Action failure without retaining its cause', async () => {
+  it.each([false, true])('honours contributed poll Action retryability without retaining its cause: %s', async (retryable) => {
     const harness = createIngressHarness({
       pollExecutionError: new PluginError({
         code: 'provider_transport_exploded',
         message: 'The provider transport failed with an internal detail that must not be retained.',
-        retryable: true,
+        retryable,
         details: { providerDiagnostic: 'do not retain this' },
       }),
     });
@@ -8584,12 +8584,12 @@ describe('Conversation checkpointed-poll ingress', () => {
     await expect(runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
       waitMs: 0,
-    }, harness.context)).resolves.toEqual({ kind: 'blocked' });
+    }, harness.context)).resolves.toEqual({ kind: retryable ? 'retry' : 'blocked' });
 
-    expect(record(record(harness.rows.get('connection-1')?.value).payload).pollFailure).toEqual({
-      phase: 'blocked',
+    expect(record(record(harness.rows.get('connection-1')?.value).payload).pollFailure).toMatchObject({
+      phase: retryable ? 'retryDue' : 'blocked',
       attemptCount: 1,
-      retryNotBeforeMs: null,
+      retryNotBeforeMs: retryable ? expect.any(Number) : null,
       evidence: {
         kind: 'action',
         code: 'provider_transport_exploded',

@@ -8083,7 +8083,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
       context,
       connection,
       evidence: pollActionFailureEvidence(cause),
-      retryableProviderResult: false,
+      retryableProviderResult: isPluginError(cause) && cause.retryable === true,
     });
     if (failure.kind === 'ineligible') {
       await settleCapturedCheckpointedPollStop({

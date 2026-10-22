@@ -33,17 +33,19 @@ describe('Email parser runtime recovery', () => {
     const baseline = checkpoint();
     // Only the module-loading boundary is faulted; the MIME parser stays real.
     // Email Actions, trust, Channels admission, Collection CAS and backoff stay real.
-    vi.doMock('mailparser', () => { throw new Error("Cannot find module 'mailparser'"); });
+    vi.doMock('mailparser', () => { throw new SyntaxError('Synthetic private module detail must never reach poll evidence'); });
     f.setMessages([['opaque-incoming', incoming], ['second', Buffer.from(incoming.toString().replaceAll('incoming@example.com', 'second@example.com'))]]);
     await expect(journey.poll()).resolves.toMatchObject({ kind: 'retry' });
     const failed = (await f.state.get(connection.connectionId))!.value;
-    expect(failed.payload).toMatchObject({ pollFailure: { phase: 'retryDue', attemptCount: 1, evidence: { kind: 'provider', reason: 'network' } } });
+    expect(failed.payload).toMatchObject({ pollFailure: { phase: 'retryDue', attemptCount: 1,
+      evidence: { kind: 'action', code: 'email_parser_syntax_error' } } });
+    expect(JSON.stringify(failed.payload)).not.toContain('Synthetic private module detail');
     expect(checkpoint()).toEqual(baseline);
     expect(admitted).toEqual([]);
     expect([...f.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census')).toEqual([]);
-    await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'safe', code: 'network' });
+    await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'safe', code: 'email_parser_syntax_error' });
     await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<incoming@example.com>', attachmentIds: ['mime:1'] }))
-      .resolves.toMatchObject({ kind: 'notReady', reason: 'network' });
+      .rejects.toMatchObject({ code: 'email_parser_syntax_error', retryable: true });
     expect(f.submissions).toEqual([]);
     const payload = failed.payload as { pollFailure: { retryNotBeforeMs: number } };
     vi.doUnmock('mailparser');
