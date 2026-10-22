@@ -1593,7 +1593,8 @@ describe("external Action execution authorization", () => {
                 requestId: crypto.randomUUID() });
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId, target,
                 input: actionId === 'workflow.run.start' ? { runId,
-                    source: { kind: 'inline', definition: { version: 1, blocks: ['work'] } } } : { runId } });
+                    source: { kind: 'inline', definition: { version: 1, blocks: ['work'] } } }
+                    : actionId === 'workflow.run.wait' ? { runId, conditions: ['terminal'], timeoutSeconds: 300 } : { runId } });
             const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
             const installationProof = signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
                 payload: { version: 1, accountId: fixture.account.id, ...source, externalActionOrigin: {
