@@ -7,8 +7,6 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { resetMmkvStoresForTests } from '@/dev/reactNativeMmkvStub';
 import { buildGuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
-import { parseNotificationTap } from '@/activity/notifications/notificationRouting';
-import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
 import * as React from 'react';
 import { createDeferred, renderScreen, flushHookEffects } from '@/dev/testkit';
 
@@ -46,6 +44,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes); installDisconnectedServerSocketBoundary();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { parseNotificationTap } = await import('@/activity/notifications/notificationRouting');
+const { createMachineGuardViewFixture } = await import('@/sync/domains/machines/guard/guardViewFixtures');
 const { executeMachineProcessesActionV1, executeMachineProcessesLeftBehindCleanUpV1, executeMachineProcessesStartAgainV1 } = await import('@/sync/domains/machines/processes/machineProcessesActions');
 const { createFrontDoorRuntimeActionExecutor } = await import('./frontDoorRuntimeActionExecutor');
 const { keepMachineGuardWorkRunningViaAction, undoMachineGuardActivityViaAction } = await import('@/sync/domains/machines/guard/machineGuardRpc');

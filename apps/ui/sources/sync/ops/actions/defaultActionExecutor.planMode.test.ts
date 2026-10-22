@@ -332,10 +332,11 @@ describe('default Action executor mode and catalog contracts', () => {
   });
   it.each(['focus-switch', 'credential-replacement'] as const)(
     'keeps explicit Home metadata authority independent from ambient %s', async change => {
+    // Published Homes carry a portable identity, so their Account encryption scopes are comparable.
     const targetServerId = await homes.addHome({ name: 'Target metadata Home', serverUrl: 'https://target-metadata.test',
-      accountId: 'bob', currentAccount: true });
+      serverIdentityId: 'srv_target_metadata', accountId: 'bob', currentAccount: true });
     const nextServerId = await homes.addHome({ name: 'Next ambient Home', serverUrl: 'https://next-ambient.test',
-      accountId: 'carol', currentAccount: true });
+      serverIdentityId: 'srv_next_ambient', accountId: 'carol', currentAccount: true });
     const sessionId = 'explicit-home-metadata';
     const read = installSession(sessionId, { path: '/private/target-account', flavor: 'claude' }, targetServerId);
     storage.setState({ sessions: {} });

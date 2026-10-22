@@ -340,6 +340,9 @@ describe('useServerCredentialAccountScopeResolutions', () => {
         harness.credentialReadGate = new Promise<void>((resolve) => {
             releaseCredentialRead = resolve;
         });
+        // Only an actual credential lookup-target change (the Home's URL) retires the binding;
+        // a metadata-only publication keeps it.
+        harness.profiles.set('home-a', { id: 'home-a', serverUrl: 'https://home-a-moved.example.test' });
         harness.profilesGeneration += 1;
         await hook.rerender();
 

@@ -493,10 +493,9 @@ describe('active Plugin Collection candidate preparation', () => {
         const harness = await loadPreparationHarness({ sourcePage: async () => await sourcePage });
 
         const pending = harness.operation.prepare();
-        await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith(
-            '/v1/plugins/data/candidate-preparation/source-page',
-            expect.anything(),
-        ));
+        await vi.waitFor(() => expect(harness.request.mock.calls.some(([path]) => (
+            path === '/v1/plugins/data/candidate-preparation/source-page'
+        ))).toBe(true));
         harness.account.retire();
         resolveSourcePage(jsonResponse({ rows: [sourceRow] }));
 
@@ -508,12 +507,9 @@ describe('active Plugin Collection candidate preparation', () => {
         expect(harness.request.mock.calls.some(([path]) => (
             path === '/v1/plugins/data/candidate-preparation/stage'
         ))).toBe(false);
-        await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith(
-            '/v1/plugins/data/candidate-preparation/retire',
-            expect.objectContaining({
-                body: JSON.stringify({ binding }),
-            }),
-        ));
+        await vi.waitFor(() => expect(harness.request.mock.calls.some(([path, init]) => (
+            path === '/v1/plugins/data/candidate-preparation/retire' && init?.body === JSON.stringify({ binding })
+        ))).toBe(true));
     });
 
     it('does not invoke candidate code or stage an exact source revision the server already staged', async () => {
@@ -553,10 +549,9 @@ describe('active Plugin Collection candidate preparation', () => {
         const harness = await loadPreparationHarness({ sourcePage: async () => await sourcePage });
 
         const pending = harness.operation.prepare();
-        await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith(
-            '/v1/plugins/data/candidate-preparation/source-page',
-            expect.anything(),
-        ));
+        await vi.waitFor(() => expect(harness.request.mock.calls.some(([path]) => (
+            path === '/v1/plugins/data/candidate-preparation/source-page'
+        ))).toBe(true));
         const retiring = harness.operation.retire();
         expect(harness.request.mock.calls.some(([path]) => (
             path === '/v1/plugins/data/candidate-preparation/retire'

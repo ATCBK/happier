@@ -20,7 +20,3 @@ export function isMachineVisibleForSelection(machine: MachineSelectionVisibility
 export function isMachineVisibleForLaunchSelection(machine: MachineSelectionVisibilityFacts): boolean {
     return isMachineVisibleForSelection(machine) && !isMachineReplaced(machine);
 }
-
-export function filterVisibleMachinesForLaunchSelection(machines: ReadonlyArray<Machine>): Machine[] {
-    return machines.filter(isMachineVisibleForLaunchSelection);
-}

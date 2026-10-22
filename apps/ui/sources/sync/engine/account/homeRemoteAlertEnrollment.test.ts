@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 const native = vi.hoisted(() => ({
     prepareContext: vi.fn((_serialized: string) => true),
@@ -156,6 +157,9 @@ function installHomeResponses(options: Readonly<{
         }
         return new Response(null, { status: 204 });
     });
+    // `retry: 'none'` requests (currentness read, token registration) travel through the canonical HTTP
+    // owner, whose only boundary is the runtime fetch; route it to the same recorder.
+    setRuntimeFetch((input, init) => runtimeFetch({ url: String(input), init }));
     return { releaseEncryptionRead: () => encryptionRead.resolve(), encryptionReadStarted };
 }
 
@@ -170,6 +174,7 @@ describe('exact-Home remote alert enrollment against device policy mutations', (
     });
 
     afterEach(() => {
+        resetRuntimeFetch();
         vi.clearAllMocks();
     });
 

@@ -281,12 +281,13 @@ async function requestAtEndpoint<T>(
     options: ServerFetchOptions = {},
     consumeResponse?: (response: Response) => Promise<T>,
 ): Promise<Response | T> {
+    // A retired binding is a typed stale outcome even when its retirement also aborted the context signal.
+    assertRequestContextCurrent(context);
     throwIfAborted(context.signal);
     throwIfAborted(init?.signal ?? undefined);
     const localAbortSequence = context.active ? abortSequence : null;
     const usesReachabilitySupervision = context.active || context.superviseReachability === true;
     const recoversStoredCredentials = context.active || context.recoverStoredCredentials === true;
-    assertRequestContextCurrent(context);
     if (!context.active) {
         const targetOrigin = tryParseUrl(context.runtimeOrigin);
         if (

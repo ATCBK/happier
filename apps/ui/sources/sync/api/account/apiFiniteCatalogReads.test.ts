@@ -41,8 +41,15 @@ it.each(['prompts', 'notifications'] as const)('admits a finite %s borrower whil
             ? (await import('./apiPromptLibraryCatalog')).readPromptLibraryCatalogProjectionInContext(context)
             : (await import('./apiNotificationChannelCatalog')).readNotificationChannelCatalogProjectionInContext(context);
         void reading.then(value => { projected = value; });
-        await expect.poll(() => historyStarted).toBe(true);
-        expect(projected).toMatchObject({ catalog: { status: 'ready' } });
+        if (domain === 'prompts') {
+            // The observed Account catalog loader owns prompts source maintenance; a finite
+            // borrower is admitted from the complete rows without starting retained history.
+            await expect.poll(() => projected).toMatchObject({ catalog: { status: 'ready' } });
+            expect(historyStarted).toBe(false);
+        } else {
+            await expect.poll(() => historyStarted).toBe(true);
+            expect(projected).toMatchObject({ catalog: { status: 'ready' } });
+        }
     } finally {
         releaseHistory();
         await reading;

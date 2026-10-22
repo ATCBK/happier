@@ -109,9 +109,12 @@ describe('selected Machine reads through the real Home admission owner', () => {
                 expect(requests()).toHaveLength(3);
                 await db.machineAccountGrant.create({ data: { machineId: ids[0]!, accountId: foreign.id,
                     accessLevel: 'view', createdByAccountId: owner.id } });
-                const pendingKey = await readMachineRows({ readTransport: next.readTransport, machineIds: [ids[0]!] });
+                // One absent member must not withdraw a different admitted Machine.
+                const pendingKey = await readMachineRows({ readTransport: next.readTransport, machineIds: ids.slice(0, 2) });
                 expect(pendingKey.get(ids[0]!)).toMatchObject({ metadata: null, daemonState: null, dataEncryptionKey: null,
                     access: { role: 'use', accessState: 'key_pending' } });
+                expect(pendingKey.has(ids[1]!)).toBe(true);
+                expect(pendingKey.get(ids[1]!)).toBeNull();
                 await db.machineAccountGrant.deleteMany({ where: { machineId: ids[0]!, accountId: foreign.id } });
                 const withdrawn = await readMachineRows({ readTransport: next.readTransport, machineIds: [ids[0]!] });
                 expect(withdrawn.get(ids[0]!)).toBeNull();
