@@ -41,7 +41,9 @@ const group = createProviderModelProjectionGroupFixture({ connectionId: 'pc_x', 
 
 let open: ((onSelect: (selection: unknown) => void) => void) | null = null;
 function Host() {
-  open = useExactModelChoice({ agentTargetKey, agentId: null, machineId: 'm', serverId: 's', selected: null, title: 'Model', fallbackLabel: 'Choose' }).open as typeof open;
+  // This controlled Account-dialog test has no Machine declaration producer.
+  // Exact-Machine discovery is exercised by useExactModelChoice.machineCatalog.test.tsx.
+  open = useExactModelChoice({ agentTargetKey, agentId: null, machineId: null, serverId: 's', selected: null, title: 'Model', fallbackLabel: 'Choose' }).open as typeof open;
   return null;
 }
 

@@ -31,7 +31,7 @@ import {
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
-import { readProviderConnectionPickerKind } from '@/providers/catalog/accountProviderDeclarations';
+import { providerDeclarationContext, readProviderConnectionPickerKind } from '@/providers/catalog/accountProviderDeclarations';
 import { providerConnectionModelsRoute, resolveProviderConnectionIcon } from '@/components/settings/providers/collection/providerCollectionModel';
 import {
     providerModelLoadRecoveryForError,
@@ -92,11 +92,15 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     const router = useRouter();
     const focused = useIsFocused();
     const enabled = useFeatureEnabled('providers');
-    const administration = useAgentAdministrationCatalog({ loadProjection: false });
+    const administration = useAgentAdministrationCatalog({ loadProjection: focused });
+    const declarationProjection = administration.declarationProjection ?? null;
     const administrationTargetSelection = administration.targetSelection;
     const executionTarget = administration.executionTarget;
     const accountScope = useAccountSettingsScope();
     const machineId = executionTarget?.machine.id ?? null;
+    const declarationMachineId = administrationTargetSelection.selectedTarget?.machineId ?? null;
+    const declarationContext = React.useMemo(() => providerDeclarationContext(declarationMachineId, declarationProjection),
+        [declarationMachineId, declarationProjection]);
     // A selected machine retains its exact Home even offline; only an absent
     // selection falls back to Account-only model management.
     const serverId = administration.projectionScope?.serverId
@@ -198,16 +202,16 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     const renderSourceMark = React.useCallback((connectionId: string) => {
         const connection = providerSettings.connections.find(item => item.id === connectionId);
         const source = connection?.source;
-        const icon = connection ? resolveProviderConnectionIcon(connection) : null;
+        const icon = connection ? resolveProviderConnectionIcon(connection, declarationContext) : null;
         return <ProviderIcon contributionKey={source?.kind === 'contribution' ? source.contributionKey : null}
             icon={icon} size={markSize} color={theme.colors.text.secondary} />;
-    }, [markSize, providerSettings.connections, theme.colors.text.secondary]);
+    }, [declarationContext, markSize, providerSettings.connections, theme.colors.text.secondary]);
     const renderSourceAccessory = React.useCallback((connectionId: string) => {
-        const kind = readProviderConnectionPickerKind(providerSettings.connections.find(item => item.id === connectionId)?.source);
+        const kind = readProviderConnectionPickerKind(providerSettings.connections.find(item => item.id === connectionId)?.source, declarationContext);
         return kind
             ? <AgentSourceVisibility connectionId={connectionId} kind={kind} serverId={serverId} readOnly={!settingsAccess.writable} onStateChange={handleSourceVisibilityState} />
             : null;
-    }, [handleSourceVisibilityState, providerSettings.connections, serverId, settingsAccess.writable]);
+    }, [declarationContext, handleSourceVisibilityState, providerSettings.connections, serverId, settingsAccess.writable]);
     const reviewCurrentState = React.useCallback(async (): Promise<void> => {
         if (!accountLifetime?.isCurrent() || !serverId
             || !areServerProfileIdentifiersEquivalent(accountLifetime.scope.serverId, serverId)) return;
@@ -240,7 +244,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
             : t('settingsAgents.detailPage.modelsNativeFallbackDescription'),
         connectionDescription: t('settingsAgents.detailPage.modelsSourceShownDescription'),
         isSourceShown: connectionId => {
-            const kind = readProviderConnectionPickerKind(providerSettings.connections.find(connection => connection.id === connectionId)?.source);
+            const kind = readProviderConnectionPickerKind(providerSettings.connections.find(connection => connection.id === connectionId)?.source, declarationContext);
             return kind ? resolveProviderModelPickerVisibility({ connectionId, kind,
                 modelPickerVisibilityByConnectionId: providerCatalog?.data?.modelPickerVisibilityByConnectionId }).shown : null;
         },
@@ -253,7 +257,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         renderSourceAccessory,
         nativeMark,
         renderSourceMark,
-    }), [agentEntry, agentTitle, defaultSelection, favoriteRefs, favoritesInScope, nativeMark, providerCatalog?.data?.modelPickerVisibilityByConnectionId, providerSettings.connections, renderSourceAccessory, renderSourceMark, setDefault, settingsAccess.writable, toggleFavorite]);
+    }), [agentEntry, agentTitle, declarationContext, defaultSelection, favoriteRefs, favoritesInScope, nativeMark, providerCatalog?.data?.modelPickerVisibilityByConnectionId, providerSettings.connections, renderSourceAccessory, renderSourceMark, setDefault, settingsAccess.writable, toggleFavorite]);
     const refreshLoadedModel = React.useCallback(async (connectionId: string, modelId: string) => {
         if (!resolveCurrentExecutionTarget()) return false;
         const result = await projection.refreshWithResult();

@@ -113,7 +113,7 @@ describe('New workflow entry', () => {
         const props = {
             ...panelProps(), agentType: 'claude', modelMode: ref.modelId,
             agentPickerOptions: [{ id: ref.agentTargetKey, label: 'Claude', icon: <AgentIcon agentId="claude" size={20} /> }],
-            modelPickerPresentation: { agentTargetKey: ref.agentTargetKey, selected: group.rows[0]!.ref, nativeModels: [],
+            modelPickerPresentation: { declarationContext: { kind: 'account' as const }, agentTargetKey: ref.agentTargetKey, selected: group.rows[0]!.ref, nativeModels: [],
                 providerGroups: [group], hiddenNativeModelKeys: new Set<string>(), providerProjectionAuthoritative: true,
                 fallbackLabel: 'Loading model', fieldLabel: 'Model' },
         };

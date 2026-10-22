@@ -37,6 +37,7 @@ export function useMachineAgentAuthentication(input: Readonly<{
     const features = useServerFeaturesSnapshotForServerId(serverId, { enabled });
     const localize = useProjectedPluginLocalizedTextResolver();
     const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId,
+        machineId: input.sourceMachineId,
         enabled: enabled && Boolean(purposeCatalog.value?.teamResourceSelections?.length) });
     const teamCredentialResources = teamCatalog.current ? teamCatalog.resources : undefined;
     return React.useCallback((projection: DaemonMergedProjectionInputsState): Pick<MachineAgentInventoryObservation,

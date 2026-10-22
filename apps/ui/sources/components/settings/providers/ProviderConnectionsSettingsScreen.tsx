@@ -95,18 +95,19 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
     const providerTarget = useProviderSettingsTarget();
     const { machineId, machineRows, resolveCurrentTarget, accountServerId: serverId, accountAddressAvailable } = providerTarget;
-    const catalogCounts = useProviderCatalogCounts(serverId);
     const teamCredentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
         serverId: serverId ?? undefined,
     });
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId,
+        machineId,
         enabled: active && accountAddressAvailable && teamCredentialResourcesEnabled,
     });
-    const { data, error, machineError, loading, refresh } = useProviderConnections({
+    const { data, error, machineError, loading, refresh, declarationContext } = useProviderConnections({
         enabled: enabled && accountAddressAvailable, active, machineId, serverId,
     });
+    const catalogCounts = useProviderCatalogCounts(serverId, declarationContext);
     const captureNavigationFocusReturn = useNavigationFocusReturn({
         ready: active && pathname === PROVIDERS_COLLECTION_ROUTE
             && (!enabled || (!loading && (data !== null || error !== null || machineId === null))),
@@ -128,8 +129,8 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const [searchQuery, setSearchQuery] = React.useState('');
     const [discoverySelectionError, setDiscoverySelectionError] = React.useState<ProviderErrorV1 | null>(null);
     const collection = React.useMemo(() => buildProviderCollection({
-        data, query: searchQuery, localDiscoveryEnabled, catalogCounts,
-    }), [catalogCounts, data, localDiscoveryEnabled, searchQuery]);
+        data, query: searchQuery, localDiscoveryEnabled, catalogCounts, declarationContext,
+    }), [catalogCounts, data, declarationContext, localDiscoveryEnabled, searchQuery]);
     const searchable = collection.total > SEARCH_THRESHOLD || searchQuery.trim().length > 0;
     const noMatches = collection.total > 0 && collection.connections.length === 0 && collection.found.length === 0;
     const machineLabel = machineId

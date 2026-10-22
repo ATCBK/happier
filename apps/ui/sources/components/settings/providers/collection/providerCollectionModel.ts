@@ -4,6 +4,8 @@ import type { DaemonProviderConnectionsDescribeResponseV1, DaemonProviderConnect
 import type { ProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/v1';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { AccountProviderCatalogCountV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
+import type { ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 import {
     presentProviderConnection,
@@ -85,20 +87,22 @@ export const PROVIDER_GATEWAY_ICON = 'path';
  * The fallback glyph for rail, detail and Models headers. ProviderIcon resolves the
  * manifest's packaged brand first using the connection's contribution identity.
  */
-export function resolveProviderConnectionIcon(connection: DaemonProviderConnectionViewV1 | ProviderConnectionV1): string | null {
+export function resolveProviderConnectionIcon(connection: DaemonProviderConnectionViewV1 | ProviderConnectionV1,
+    declarationContext: ProviderDeclarationContext): string | null {
     const saved = 'source' in connection;
     const contributionKey = saved
         ? connection.source.kind === 'contribution' ? connection.source.contributionKey : null
         : connection.contributionKey;
-    const purposes = saved ? readProviderGatewayPurposeDeclarations(connection) : readProviderGatewayViewDeclarations(connection);
+    const purposes = saved ? readProviderGatewayPurposeDeclarations(connection, declarationContext) : readProviderGatewayViewDeclarations(connection, declarationContext);
     return (saved ? null : connection.icon)
-        ?? readProviderContributionIcon(contributionKey)
+        ?? readProviderContributionIcon(contributionKey, declarationContext)
         ?? ((purposes?.length ?? 0) > 0 ? PROVIDER_GATEWAY_ICON : null);
 }
 
-function presentConnectionRow(connection: Connection, catalogCount: AccountProviderCatalogCountV1 | null): ProviderCollectionConnectionRow {
+function presentConnectionRow(connection: Connection, catalogCount: AccountProviderCatalogCountV1 | null,
+    declarationContext: ProviderDeclarationContext): ProviderCollectionConnectionRow {
     const presentation = presentProviderConnection(connection);
-    const gateway = (readProviderGatewayViewDeclarations(connection)?.length ?? 0) > 0;
+    const gateway = (readProviderGatewayViewDeclarations(connection, declarationContext)?.length ?? 0) > 0;
     return {
         connectionId: connection.connectionId,
         detailRoute: providerConnectionDetailRoute(connection.connectionId),
@@ -106,7 +110,7 @@ function presentConnectionRow(connection: Connection, catalogCount: AccountProvi
         provenance: presentation.subtitle,
         keySaved: connection.credential?.accountBound === true,
         catalogCount,
-        icon: resolveProviderConnectionIcon(connection),
+        icon: resolveProviderConnectionIcon(connection, declarationContext),
         contributionKey: connection.contributionKey,
         status: presentation.status,
         trouble: TROUBLE_STATUSES.has(presentation.status),
@@ -125,6 +129,7 @@ export function buildProviderCollection(input: Readonly<{
     query: string;
     localDiscoveryEnabled: boolean;
     catalogCounts?: Readonly<Record<string, AccountProviderCatalogCountV1>> | null;
+    declarationContext: ProviderDeclarationContext;
 }>): ProviderCollection {
     const { data } = input;
     if (!data) return EMPTY_COLLECTION;
@@ -134,7 +139,7 @@ export function buildProviderCollection(input: Readonly<{
 
     const connectionIds = new Set(data.connections.map((connection) => connection.connectionId));
     const allConnections = data.connections.map(connection => presentConnectionRow(connection,
-        input.catalogCounts?.[connection.connectionId] ?? null));
+        input.catalogCounts?.[connection.connectionId] ?? null, input.declarationContext));
 
     const allFound: ProviderCollectionFoundRow[] = [];
     if (input.localDiscoveryEnabled) {
@@ -145,7 +150,7 @@ export function buildProviderCollection(input: Readonly<{
                 key: `candidate:${candidate.contributionKey}:${candidate.normalizedEndpointUrl}`,
                 pendingKey: providerCandidatePendingKey(candidate),
                 title: candidate.providerName,
-                icon: readProviderContributionIcon(candidate.contributionKey),
+                icon: readProviderContributionIcon(candidate.contributionKey, input.declarationContext),
                 candidate,
             });
         }
@@ -159,7 +164,7 @@ export function buildProviderCollection(input: Readonly<{
                 key: `installation:${installation.contributionKey}`,
                 pendingKey: providerInstallationPendingKey(installation.contributionKey),
                 title: installation.providerName,
-                icon: readProviderContributionIcon(installation.contributionKey),
+                icon: readProviderContributionIcon(installation.contributionKey, input.declarationContext),
                 installation,
             });
         }
@@ -205,33 +210,37 @@ export type ProviderGatewayCollectionRow = Readonly<{
 /** Immutable vendor declarations distinguish a gateway from other managed sources such as Ollama. */
 export function readProviderGatewayPurposeDeclarations(
     saved: ProviderConnectionV1,
+    declarationContext: ProviderDeclarationContext,
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
     if (saved.deployment.kind !== 'managedLocal' || saved.source.kind !== 'contribution') return null;
-    return readProviderGatewayContributionPurposes(saved.source.contributionKey);
+    return readProviderGatewayContributionPurposes(saved.source.contributionKey, readAccountProviderDeclarations(declarationContext));
 }
 
-/** A projected row uses the same bundled identity rule, even when runtime admission is unavailable. */
+/** Projected rows use the same admitted declaration source as saved connections. */
 export function readProviderGatewayViewDeclarations(
     view: DaemonProviderConnectionViewV1,
+    declarationContext: ProviderDeclarationContext,
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
     if (view.deployment.kind !== 'managedLocal' || !view.contributionKey) return null;
-    return readProviderGatewayContributionPurposes(view.contributionKey);
+    return readProviderGatewayContributionPurposes(view.contributionKey, readAccountProviderDeclarations(declarationContext));
 }
 
 /** Declaration completeness only; unknown sources never block independently admitted gateway rows. */
 export function areProviderGatewayDeclarationsKnown(input: Readonly<{
     connections: readonly ProviderConnectionV1[];
+    declarationContext: ProviderDeclarationContext;
 }>): boolean {
     return input.connections.every(connection => connection.deployment.kind !== 'managedLocal'
-        || readProviderGatewayPurposeDeclarations(connection) !== null);
+        || readProviderGatewayPurposeDeclarations(connection, input.declarationContext) !== null);
 }
 
 /** Saved identity and admitted bundled declarations suffice; no machine projection is required. */
 export function buildProviderGatewayCollection(input: Readonly<{
     connections: readonly ProviderConnectionV1[];
+    declarationContext: ProviderDeclarationContext;
 }>): readonly ProviderGatewayCollectionRow[] {
     return input.connections.flatMap(connection => {
-        const purposes = readProviderGatewayPurposeDeclarations(connection) ?? [];
+        const purposes = readProviderGatewayPurposeDeclarations(connection, input.declarationContext) ?? [];
         if (purposes.length === 0) return [];
         const bound = connection.purposeBindingDefaults ?? {};
         return [{ connectionId: connection.id, title: connection.displayName,

@@ -1,3 +1,4 @@
+import type { ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 import { resolveProviderConnectionIcon } from '@/components/settings/providers/collection/providerCollectionModel';
 
@@ -26,6 +27,7 @@ export type SessionRouteSourceRow = Readonly<{
  * sources browseable when discovery has not produced rows yet.
  */
 export function buildSessionRouteSourceRows(input: Readonly<{
+    declarationContext: ProviderDeclarationContext;
     agentTargetKey: string;
     views: readonly DaemonProviderConnectionViewV1[];
     isGateway: (view: DaemonProviderConnectionViewV1) => boolean;
@@ -49,7 +51,7 @@ export function buildSessionRouteSourceRows(input: Readonly<{
             contributionKey: view.contributionKey,
             label: providerConnectionSourceLabel({ providerName: view.providerName, connectionName: view.displayName,
                 connectionRole: view.role, connectionDisplayNameMode: view.displayNameMode }),
-            icon: resolveProviderConnectionIcon(view),
+            icon: resolveProviderConnectionIcon(view, input.declarationContext),
             // A hidden source can still show its favorites or the current model in the main picker,
             // so its rows there and the ones it withholds add up to what browsing it offers.
             modelCount: shown || hidden ? (shown?.rows.length ?? 0) + (hidden?.modelCount ?? 0) : null,

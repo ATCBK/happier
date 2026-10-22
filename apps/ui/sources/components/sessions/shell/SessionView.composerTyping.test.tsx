@@ -4,8 +4,9 @@ import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -14,6 +15,12 @@ import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/session
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionComposerModel, SessionComposerRenderer } from '@/components/sessions/composer/sessionComposerModel';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 
@@ -83,13 +90,36 @@ const submittedMessages: Array<Readonly<{
   content: ReturnType<typeof SessionStoredMessageContentSchema.parse>;
   requestedAction: ReturnType<typeof PendingRequestedActionV1Schema.parse>;
 }>> = [];
+const composerInventory = createReadyMachineAgentInventoryFixture([
+  { agentId: 'codex', title: 'Codex' }, { agentId: 'claude', title: 'Claude' },
+]);
+const composerProjection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+  protocolVersion: 1,
+  projection: { ...composerInventory.projection,
+    agentsById: Object.fromEntries(Object.entries(composerInventory.projection.agentsById).map(([id, declaration]) => [id, {
+      ...declaration, identity: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.identity,
+    }])),
+  },
+});
+let composerInventoryEnabled = false;
+const composerProjectionRequests: string[] = [];
+const pendingComposerProjections = new Map<string, ReturnType<typeof createDeferred<typeof composerProjection>>>();
 const runtime = installSessionPaneRuntimeTestHarness({
   features: () => {
     const features = createRootLayoutFeaturesResponse();
     features.capabilities.session.pendingInput = { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V3 };
     return features;
   },
-  rpc: async () => { throw new RpcError('Daemon method unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE); },
+  rpc: async (method, _input, targetId) => {
+    if (composerInventoryEnabled) {
+      if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+        composerProjectionRequests.push(targetId);
+        return await (pendingComposerProjections.get(targetId)?.promise ?? composerProjection);
+      }
+      if (method === RPC_METHODS.CAPABILITIES_DETECT) return composerInventory.capabilities;
+    }
+    throw new RpcError('Daemon method unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+  },
   request: async (url, init) => {
     if (new URL(String(url)).pathname !== '/v2/sessions/s1/pending') return null;
     if ((init?.method ?? 'GET') === 'GET') return Response.json({ pending: submittedMessages.map(message => ({
@@ -115,6 +145,8 @@ const shellRenders = vi.spyOn(sessionUtils, 'useSessionStatus');
 const resolver = await import('@/sync/domains/input/slashCommands/resolveSessionComposerSend');
 const resolveSessionComposerSendSpy = vi.spyOn(resolver, 'resolveSessionComposerSend');
 const { SessionView } = await import('./SessionView');
+const { SessionComposerAgentInput } = await import('@/components/sessions/composer/SessionComposerAgentInput');
+const { SessionModelDiscoveryDetail } = await import('@/components/sessions/modelPicker/SessionModelDiscoveryDetail');
 const { getSessionComposerDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 await loadSyncSingletonForTests();
 const { sync } = await import('@/sync/sync');
@@ -149,10 +181,25 @@ function storedDraftText(): unknown {
   return getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: 's1' })?.composer.text.value;
 }
 
+function publishSessionOwnerMetadata(
+  update: (metadata: NonNullable<ReturnType<typeof readSessionOwnerMetadataView>>) => NonNullable<ReturnType<typeof readSessionOwnerMetadataView>>,
+) {
+  const current = storage.getState().sessions.s1;
+  const metadata = readSessionOwnerMetadataView(current);
+  if (!metadata) throw new Error('Expected the real Session owner metadata projection');
+  const next = update(metadata);
+  storage.getState().applySessions([{ ...current, metadataVersion: current.metadataVersion + 1,
+    ...(current.metadataLayoutVersion === 1 ? { ownerMetadataView: next } : { metadata: next }),
+  }]);
+}
+
 describe('SessionView composer typing', () => {
   beforeEach(async () => {
     platformState.os = 'ios';
     submittedMessages.length = 0;
+    composerInventoryEnabled = false;
+    composerProjectionRequests.length = 0;
+    pendingComposerProjections.clear();
     resolveSessionComposerSendSpy.mockClear();
     storage.setState({
       settings: { ...settingsDefaults, experiments: true },
@@ -202,6 +249,147 @@ describe('SessionView composer typing', () => {
       expect(storedDraftText() ?? '').toBe('');
     });
     await reopened.unmount();
+  });
+
+  it('retains populated composer catalog and model props across host rerenders while Agent, target, readiness and model changes remain fresh', async () => {
+    composerInventoryEnabled = true;
+    const firstMachineId = 'composer-producer-first';
+    const secondMachineId = 'composer-producer-second';
+    const firstProjection = createDeferred<typeof composerProjection>();
+    const secondProjection = createDeferred<typeof composerProjection>();
+    pendingComposerProjections.set(firstMachineId, firstProjection);
+    pendingComposerProjections.set(secondMachineId, secondProjection);
+    const modelIntent = (modelId: string, updatedAt: number) => SessionModelSelectionIntentV1Schema.parse({
+      v: 1, updatedAt,
+      selection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId },
+    });
+    storage.getState().applyMachines([
+      createMachineFixture({ id: firstMachineId, activeAt: Date.now() }),
+      createMachineFixture({ id: secondMachineId, activeAt: Date.now() }),
+    ], true, { sourceServerId: runtime.serverId });
+    publishSessionOwnerMetadata(metadata => ({ ...metadata, machineId: firstMachineId,
+      modelSelectionIntentV1: modelIntent('producer-first-model', 10) }));
+    expect(readSessionOwnerMetadataView(storage.getState().sessions.s1)?.machineId).toBe(firstMachineId);
+    const host: SessionComposerRenderer = composer => React.createElement('SessionComposerHost', null, composer.content);
+    const screen = await renderCanonicalScreen(surfaceElement(host), { wrapper: runtime.Wrapper });
+    const readProducerProps = () => screen.tree.findByType(SessionComposerAgentInput).props as React.ComponentProps<typeof SessionComposerAgentInput>;
+    const readModelDetail = () => {
+      const content = readProducerProps().modelContentOverride;
+      if (!React.isValidElement<{ children: React.ReactNode }>(content)) throw new Error('Expected populated Session model content');
+      const detail = React.Children.only(content.props.children);
+      if (!React.isValidElement<React.ComponentProps<typeof SessionModelDiscoveryDetail>>(detail)
+        || detail.type !== SessionModelDiscoveryDetail) throw new Error('Expected the real deferred model discovery detail');
+      return detail;
+    };
+    try {
+      await vi.waitFor(() => expect(composerProjectionRequests).toContain(firstMachineId));
+      expect(readProducerProps().agentCatalogIdentity?.current).not.toBe(true);
+      await renderer.act(async () => { firstProjection.resolve(composerProjection); });
+      await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity).toMatchObject({
+        entry: { qualifiedId: 'happier.agent.codex/codex' }, machineId: firstMachineId, serverId: runtime.serverId, current: true,
+      }));
+      expect(readModelDetail().props).toMatchObject({ agentId: 'codex', selectedModelId: 'producer-first-model' });
+      const initial = readProducerProps();
+      const rendersBefore = shellRenders.mock.calls.length;
+      await screen.update(surfaceElement(composer => host(composer)));
+      expect(shellRenders.mock.calls.length).toBeGreaterThan(rendersBefore);
+      const refreshed = readProducerProps();
+      for (const key of ['composerFileScope', 'sessionTypingPresence', 'agentCatalogIdentity', 'modelContentOverride',
+        'statusBadges', 'extraActionChips', 'attachmentRowItems'] as const) {
+        expect.soft(refreshed[key], key).toBe(initial[key]);
+      }
+
+      // A non-name daemon detail replaces the real Machine row, but changes none
+      // of this Session's badges (in particular, there is no managed-wake banner).
+      const machineBeforeDetail = storage.getState().machines[firstMachineId]!;
+      await renderer.act(async () => {
+        storage.getState().applyMachines([{ ...machineBeforeDetail,
+          metadataVersion: machineBeforeDetail.metadataVersion + 1,
+          metadata: { ...machineBeforeDetail.metadata!, happyCliVersion: 'producer-detail-update' },
+        }], false, {
+          sourceServerId: runtime.serverId,
+        });
+      });
+      const machineAfterDetail = storage.getState().machines[firstMachineId]!;
+      expect(machineAfterDetail).not.toBe(machineBeforeDetail);
+      expect(getMachineSentenceName(machineAfterDetail)).toBe(getMachineSentenceName(machineBeforeDetail));
+      expect(machineAfterDetail.availability).toEqual(machineBeforeDetail.availability);
+      expect(readProducerProps().sessionTypingPresence).toEqual(refreshed.sessionTypingPresence);
+      expect.soft(readProducerProps().statusBadges, 'Machine detail without a managed-wake badge').toBe(refreshed.statusBadges);
+
+      await renderer.act(async () => {
+        publishSessionOwnerMetadata(metadata => ({ ...metadata, modelSelectionIntentV1: modelIntent('producer-next-model', 11) }));
+      });
+      expect(readModelDetail().props.selectedModelId).toBe('producer-next-model');
+      expect(readProducerProps().modelContentOverride).not.toBe(initial.modelContentOverride);
+
+      await renderer.act(async () => {
+        publishSessionOwnerMetadata(metadata => ({ ...metadata, machineId: secondMachineId }));
+      });
+      await vi.waitFor(() => expect(composerProjectionRequests).toContain(secondMachineId));
+      expect(readProducerProps().agentCatalogIdentity?.current).not.toBe(true);
+      await renderer.act(async () => { secondProjection.resolve(composerProjection); });
+      await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity).toMatchObject({
+        machineId: secondMachineId, current: true,
+      }));
+      expect(readProducerProps().composerFileScope).toMatchObject({ machineId: secondMachineId });
+      expect(readModelDetail().props.discovery(settingsDefaults).selectedMachineId).toBe(secondMachineId);
+
+      await renderer.act(async () => {
+        publishSessionOwnerMetadata(({ modelSelectionIntentV1: _previousModel, ...metadata }) => ({ ...metadata, flavor: 'claude' }));
+      });
+      await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity?.entry.qualifiedId).toBe('happier.agent.claude/claude'));
+      expect(readModelDetail().props.agentId).toBe('claude');
+    } finally {
+      // Release transport fixtures even if an assertion fails while a request is pending.
+      firstProjection.resolve(composerProjection);
+      secondProjection.resolve(composerProjection);
+      await screen.unmount();
+      composerInventoryEnabled = false;
+    }
+  });
+
+  it('retains unchanged composer producer props across a host rerender while workspace and permission changes remain fresh', async () => {
+    const host: SessionComposerRenderer = composer => React.createElement('SessionComposerHost', null, composer.content);
+    const screen = await renderCanonicalScreen(surfaceElement(host), { wrapper: runtime.Wrapper });
+    const readProducerProps = () => screen.tree.findByType(SessionComposerAgentInput).props as React.ComponentProps<typeof SessionComposerAgentInput>;
+    try {
+      const initial = readProducerProps();
+      expect(initial.composerFileScope).toMatchObject({ serverId: runtime.serverId, machineId: 'm1', rootPath: '/tmp' });
+      expect(initial.sessionTypingPresence).toEqual({ serverId: runtime.serverId, canSubmitAgentInput: true });
+      expect(initial.extraActionChips?.length).toBeGreaterThan(0);
+      expect(initial.attachmentRowItems).toEqual([]);
+      expect(Array.isArray(initial.statusBadges)).toBe(true);
+      const rendersBefore = shellRenders.mock.calls.length;
+      // Same mounted host and source state; only its caller-owned render callback
+      // changes so the real loaded controller, not a reconstructed hook, reruns.
+      await screen.update(surfaceElement(composer => host(composer)));
+      expect(shellRenders.mock.calls.length).toBeGreaterThan(rendersBefore);
+      const refreshed = readProducerProps();
+      for (const key of ['composerFileScope', 'sessionTypingPresence', 'statusBadges', 'extraActionChips', 'attachmentRowItems'] as const) {
+        expect(refreshed[key], key).toBe(initial[key]);
+      }
+      // The existing input callback still writes to the live draft after the
+      // producer descriptors have survived a parent update.
+      await renderer.act(async () => { initial.onChangeText('retained callback draft'); });
+      expect(findAgentInput(screen).props.value).toBe('retained callback draft');
+      expect(storedDraftText()).toBe('retained callback draft');
+
+      await renderer.act(async () => {
+        publishSessionOwnerMetadata(metadata => ({ ...metadata, path: '/tmp/other-workspace' }));
+      });
+      expect(readProducerProps().composerFileScope).toMatchObject({ serverId: runtime.serverId, machineId: 'm1', rootPath: '/tmp/other-workspace' });
+      expect(readProducerProps().composerFileScope).not.toBe(initial.composerFileScope);
+      await renderer.act(async () => {
+        const current = storage.getState().sessions.s1;
+        storage.getState().applySessions([{ ...current, access: createSessionAccessFixture('view') }]);
+      });
+      expect(readProducerProps().sessionTypingPresence).toEqual({ serverId: runtime.serverId, canSubmitAgentInput: false });
+      expect(readProducerProps().sessionTypingPresence).not.toBe(initial.sessionTypingPresence);
+      expect(findAgentInput(screen).props.value).toBe('retained callback draft');
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it('hosts the same composer contract in the screen or a sheet without copying the draft or send path', async () => {

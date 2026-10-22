@@ -12,6 +12,8 @@ import { t } from '@/text';
 import { sessionModelSelectionKey } from './sessionModelSelectionKey';
 import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { readAccountAgentProviderRequirements, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 
 function providerGroup(input: Readonly<{
     connectionId: string;
@@ -59,11 +61,35 @@ function providerGroup(input: Readonly<{
 }
 
 describe('buildSessionModelPickerSections', () => {
+    it('admits Account rows only with known contextual requirements and never activates recovery while unknown', () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const group = providerGroup({ connectionId: 'pc_independent', modelId: 'model' });
+        const selected = group.rows[0]!.ref;
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
+            codex: { id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+                providerRequirements: readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' }) },
+        } });
+        for (const declarationContext of [
+            { kind: 'machine', projection: null }, { kind: 'machine', projection },
+            { kind: 'machine', projection: null }, { kind: 'account' },
+        ] satisfies ProviderDeclarationContext[]) {
+            const options = buildSessionModelPickerSections({
+                declarationContext, agentTargetKey, nativeModels: [], providerGroups: [group],
+                hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true, selected,
+            }).flatMap(section => section.options);
+            if (declarationContext.kind === 'account' || declarationContext.projection) {
+                expect(options.some(option => !option.disabled && option.value
+                    && 'providerConnectionId' in option.value && option.value.providerConnectionId === selected.providerConnectionId)).toBe(true);
+            } else {
+                expect(options.every(option => option.disabled && !option.onActivate)).toBe(true);
+            }
+        }
+    });
     it.each(['agent:happier.agent.codex/codex', 'agent:happier.agent.claude/claude'])(
         'excludes unsupported tool models from Team and Provider rows for %s while keeping unknown chat models', (agentTargetKey) => {
         // Exercise the canonical publisher's actual declaration through the
         // strict Team schema and the real picker, not copied capability facts.
-        const models = readAccountProviderDeclarations().find(entry => entry.definition.id === 'cliproxyapi')
+        const models = readAccountProviderDeclarations({ kind: 'account' }).find(entry => entry.definition.id === 'cliproxyapi')
             ?.definition.managedRuntime?.connectedAccounts?.find(family => family.purpose === 'openai-upstream')?.staticModels ?? [];
         const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
             id: 'resource-1', teamId: 'team-1', displayName: 'Connected Pool', resourceRevision: 3,
@@ -84,7 +110,7 @@ describe('buildSessionModelPickerSections', () => {
             } },
         });
         const group = providerGroup({ connectionId: 'pc_work', modelId: 'gpt-5.5' });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey, nativeModels: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true,
             teamCredentialResources: [resource],
             providerGroups: [{ ...group, rows: resource.providerModels.map(row => ({
@@ -98,12 +124,12 @@ describe('buildSessionModelPickerSections', () => {
         const triggerInput = { agentTargetKey, nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set<string>(),
             providerProjectionAuthoritative: true, selected: null, selectedTeamCredentialModel: selectedTeam.selection,
             teamCredentialResources: [resource], fallbackLabel: 'Choose', fieldLabel: 'Model' };
-        expect(buildSessionModelSelectedTriggerPresentation(triggerInput)).toMatchObject({
+        expect(buildSessionModelSelectedTriggerPresentation({ declarationContext: { kind: 'account' }, ...triggerInput })).toMatchObject({
             subtitle: selectedTeam.descriptor.name, detail: expect.stringContaining(resource.displayName),
         });
         // Preserve an already-selected model's identity without offering a repair
         // action that could re-admit a model known to lack required capabilities.
-        const retained = buildSessionModelPickerSections({
+        const retained = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey, nativeModels: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true,
             providerGroups: [], teamCredentialResources: [resource],
             selectedTeamCredentialModel: resource.providerModels[0]!.selection,
@@ -120,14 +146,14 @@ describe('buildSessionModelPickerSections', () => {
             fallbackLabel: t('agentInput.model.unavailable'), fieldLabel: t('newSession.selectModelTitle'),
         };
         // Closed pickers deliberately have no catalog yet; that is not a failed machine read.
-        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+        expect(buildSessionModelSelectedTriggerPresentation({ declarationContext: { kind: 'account' }, ...input,
             providerGroups: [], providerProjectionAuthoritative: false,
         })).toEqual({ subtitle: 'same' });
-        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+        expect(buildSessionModelSelectedTriggerPresentation({ declarationContext: { kind: 'account' }, ...input,
             providerGroups: [group], providerProjectionAuthoritative: true,
         })).toMatchObject({ subtitle: 'Provider same', detail: 'Gateway · Work' });
         // A settled projection that cannot recover the exact tuple retains its repair presentation.
-        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+        expect(buildSessionModelSelectedTriggerPresentation({ declarationContext: { kind: 'account' }, ...input,
             providerGroups: [], providerProjectionAuthoritative: true,
         })).toMatchObject({ subtitle: input.fallbackLabel, detail: t('settingsProviders.detail.deletedDescription') });
     });
@@ -137,7 +163,7 @@ describe('buildSessionModelPickerSections', () => {
             providerConnectionId: null,
             modelId: 'gpt-6-luna',
         } as const;
-        expect(buildSessionModelSelectedTriggerPresentation({
+        expect(buildSessionModelSelectedTriggerPresentation({ declarationContext: { kind: 'account' },
             agentTargetKey: selected.agentTargetKey,
             nativeModels: [],
             providerGroups: [],
@@ -152,7 +178,7 @@ describe('buildSessionModelPickerSections', () => {
         });
     });
     it('announces an equal-name source once using the same identity as its heading', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(), nativeModels: [],
             providerProjectionAuthoritative: true,
             providerGroups: [providerGroup({ connectionId: 'pc_work', modelId: 'same',
@@ -189,7 +215,7 @@ describe('buildSessionModelPickerSections', () => {
             providerProjectionAuthoritative: true, providerGroups: [group],
         };
         const titles: Record<string, string> = { codex: 'ChatGPT · Codex pool', work: 'Claude · Work pool' };
-        const grouped = buildSessionModelPickerSections({
+        const grouped = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             ...input,
             gatewaySlotTitle: (candidate) => candidate.target.kind === 'group' ? titles[candidate.target.groupId] ?? null : null,
         });
@@ -199,13 +225,13 @@ describe('buildSessionModelPickerSections', () => {
             ['Gateway · Main', ['manual']],
         ]);
         // Without a slot resolver (the unscoped picker) the source stays one section.
-        expect(buildSessionModelPickerSections(input).map(section => section.options.length)).toEqual([4]);
+        expect(buildSessionModelPickerSections({ declarationContext: { kind: 'account' }, ...input }).map(section => section.options.length)).toEqual([4]);
         // A slot the resolver cannot name does not become a heading; its model stays under the source.
-        const unnamed = buildSessionModelPickerSections({ ...input, gatewaySlotTitle: () => null });
+        const unnamed = buildSessionModelPickerSections({ declarationContext: { kind: 'account' }, ...input, gatewaySlotTitle: () => null });
         expect(unnamed.map(section => section.options.length)).toEqual([4]);
     });
     it('keeps same-name source labels after Favorites move out of their original sections', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(),
             nativeModels: [{ value: 'same', label: 'Provider same' }],
             nativeSourceLabel: 'Work pool', providerProjectionAuthoritative: true,
@@ -222,7 +248,7 @@ describe('buildSessionModelPickerSections', () => {
         ]);
     });
     it('retains source identity when same-name model rows are flattened into search or favorites', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex', nativeModels: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
             providerGroups: [providerGroup({ connectionId: 'pc_work', modelId: 'same', connectionName: 'Work' }),
@@ -241,7 +267,7 @@ describe('buildSessionModelPickerSections', () => {
         ]);
     });
     it('says "via" only where a heading cannot: ambiguous names and Provider favorites', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(),
             nativeModels: [{ value: 'unique-native', label: 'Opus' }, { value: 'shared', label: 'Provider same' }],
             nativeSourceLabel: 'Claude: Work pool',
@@ -288,7 +314,7 @@ describe('buildSessionModelPickerSections', () => {
                 provider: { identity: { pluginId: 'provider.openai', localId: 'openai' }, definitionRevision: 1 },
             },
         });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey, hiddenNativeModelKeys: new Set(),
             nativeModels: [{ value: 'gpt-5.4', label: 'gpt-5.4' }], nativeSourceLabel: 'Codex',
             providerProjectionAuthoritative: true, providerGroups: [], teamCredentialResources: [resource],
@@ -336,7 +362,7 @@ describe('buildSessionModelPickerSections', () => {
                 provider: { identity: { pluginId: 'provider.anthropic', localId: 'anthropic' }, definitionRevision: 1 },
             },
         });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
@@ -359,7 +385,7 @@ describe('buildSessionModelPickerSections', () => {
         expect(JSON.stringify(sections)).not.toContain('brokerMachineId');
 
         const recover = vi.fn();
-        const staleSections = buildSessionModelPickerSections({
+        const staleSections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
@@ -399,7 +425,7 @@ describe('buildSessionModelPickerSections', () => {
         });
         const recover = vi.fn();
 
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
@@ -453,7 +479,7 @@ describe('buildSessionModelPickerSections', () => {
             },
         });
 
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
@@ -494,7 +520,7 @@ describe('buildSessionModelPickerSections', () => {
             },
         });
 
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,
@@ -526,7 +552,7 @@ describe('buildSessionModelPickerSections', () => {
     });
 
     it('keeps native and Provider refs with identical vendor model ids distinct', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [{ value: 'shared', label: 'Native shared', description: 'Native' }],
             providerGroups: [
@@ -542,7 +568,7 @@ describe('buildSessionModelPickerSections', () => {
     });
 
     it('blocks only verified unloaded models whose Provider requires preflight loading', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [
@@ -580,7 +606,7 @@ describe('buildSessionModelPickerSections', () => {
     });
 
     it('gives duplicate Provider connection/model names collision-safe accessible names', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [
@@ -614,7 +640,7 @@ describe('buildSessionModelPickerSections', () => {
             providerConnectionId: null,
             modelId: 'hidden-native',
         });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [
                 { value: 'hidden-native', label: 'Hidden', description: '' },
@@ -629,7 +655,7 @@ describe('buildSessionModelPickerSections', () => {
     });
 
     it('keeps the exact hidden current Provider selection as one labeled recovery row', () => {
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [providerGroup({
@@ -660,7 +686,7 @@ describe('buildSessionModelPickerSections', () => {
             scope: 'agent',
             ...selected,
         });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [{ value: 'hidden-native', label: 'Hidden native', description: 'Native' }],
             providerGroups: [],
@@ -684,7 +710,7 @@ describe('buildSessionModelPickerSections', () => {
             providerConnectionId: ProviderConnectionIdSchema.parse('pc_loading'),
             modelId: 'pending-model',
         };
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [],
@@ -702,7 +728,7 @@ describe('buildSessionModelPickerSections', () => {
             providerConnectionId: ProviderConnectionIdSchema.parse('pc_deleted'),
             modelId: 'missing-model',
         };
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [],
@@ -733,7 +759,7 @@ describe('buildSessionModelPickerSections', () => {
             connectionId: selected.providerConnectionId,
             machineId: 'machine-a',
         });
-        const sections = buildSessionModelPickerSections({
+        const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.codex/codex',
             nativeModels: [],
             providerGroups: [],
@@ -763,7 +789,7 @@ describe('buildSessionModelPickerSections', () => {
             { value: 'default', label: 'Automatic' },
             { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
         ];
-        const values = (allowAutomatic: boolean) => buildSessionModelPickerSections({
+        const values = (allowAutomatic: boolean) => buildSessionModelPickerSections({ declarationContext: { kind: 'account' },
             agentTargetKey: 'agent:happier.agent.claude/claude',
             nativeModels, providerGroups: [], hiddenNativeModelKeys: new Set(),
             providerProjectionAuthoritative: true,

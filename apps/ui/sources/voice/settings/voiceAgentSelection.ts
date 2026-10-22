@@ -34,6 +34,8 @@ export function applyVoiceAgentSelection(voice: VoiceSettings, choice: VoiceAgen
     // decision. Selecting an Agent cannot authorize an imported endpoint or
     // confirm experimental models; execution still reauthorizes at launch.
     const options = buildSessionModelPickerSections({
+        // Legacy Account migration has no selected Machine declaration authority.
+        declarationContext: { kind: 'account' },
         agentTargetKey: projection.agentTargetKey, nativeModels: [], providerGroups: projection.groups,
         hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true, allowAutomatic: false,
         canConfirmExperimental: false,

@@ -39,6 +39,7 @@ export const ProviderConnectionModelsScreen = React.memo(function ProviderConnec
     const query = useProviderConnections({ enabled, active: focused, machineId, serverId, connectionId: props.connectionId });
     const connection = query.data?.connections.find((item) => item.connectionId === props.connectionId) ?? null;
     const models = useProviderConnectionModelsSection({
+        declarationContext: query.declarationContext,
         connectionId: props.connectionId,
         connection,
         enabled,
@@ -106,7 +107,7 @@ export const ProviderConnectionModelsScreen = React.memo(function ProviderConnec
             description={t('settingsProvidersCollection.modelsDescription')}
             leading={(
                 <PageHeaderMarkSlot>
-                    <ProviderIcon contributionKey={connection.contributionKey} icon={resolveProviderConnectionIcon(connection)} size={24} color={theme.colors.text.secondary} />
+                    <ProviderIcon contributionKey={connection.contributionKey} icon={resolveProviderConnectionIcon(connection, query.declarationContext)} size={24} color={theme.colors.text.secondary} />
                 </PageHeaderMarkSlot>
             )}
             meta={[{ key: 'provider', text: presentProviderConnection(connection).title }]}

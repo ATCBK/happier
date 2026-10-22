@@ -95,6 +95,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'selectedTeamCredentialModel'
         | 'onSelectTeamCredentialModel'
         | 'providerModelGroups'
+        | 'declarationContext'
         | 'providerModelProjectionAuthoritative'
         | 'providerModelProjectionError'
         | 'providerModelProjectionFailures'

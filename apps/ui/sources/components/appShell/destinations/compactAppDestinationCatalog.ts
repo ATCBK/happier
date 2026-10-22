@@ -1215,7 +1215,8 @@ function resolveSettingsEntityInstanceTitle(ref: DestinationRef, state: ReturnTy
         const snapshot = getProviderCatalogSnapshot(scope);
         const connection = snapshot?.data?.connections.find(row => row.id === demand.id);
         if (connection && snapshot?.data) return presentProviderConnectionIdentity(describeAccountProviderConnectionV1(
-            composeProviderSettingsV1(snapshot.data, {}), connection, readAccountProviderDeclarations(),
+            // Destination titles are Account-only and never pick a Machine to resolve a name.
+            composeProviderSettingsV1(snapshot.data, {}), connection, readAccountProviderDeclarations({ kind: 'account' }),
         )).title;
         return snapshot && snapshot.status !== 'loading' ? t('common.unavailable') : null;
     }

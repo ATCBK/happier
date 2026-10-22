@@ -283,7 +283,7 @@ describe('New Session selected credential launch gate', () => {
             capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
         } } });
         const agentTargetKey = 'agent:happier.agent.claude/claude';
-        const agentRequirements = readAccountAgentProviderRequirements(agentTargetKey);
+        const agentRequirements = readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' });
         if (!agentRequirements) throw new Error('Expected real first-party Claude Provider requirements');
         const lmstudio = ProviderContributionV1Schema.parse(LMSTUDIO_PROVIDER_CONTRIBUTION);
         const modelDescriptor = { id: 'local-model', name: 'Local model' };

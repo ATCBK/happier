@@ -94,6 +94,8 @@ export function SessionAuthoringConnectedServicesField(props: Readonly<{
     const credentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', credentialResourcesFeatureScope);
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId,
+        // Workflow/default authoring has no execution Machine yet.
+        machineId: null,
         enabled: credentialResourcesEnabled,
     });
     const teamCredentialResources = teamCredentialCatalog.resources;

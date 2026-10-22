@@ -66,6 +66,8 @@ import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sess
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { BUNDLED_ACCOUNT_PROVIDER_DECLARATIONS, BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 
 // Platform, credentials, local persistence, HTTP and RPC are the boundaries. The composer,
 // capture/coordinator, draft repository, launcher options, role catalog, capability/feature
@@ -184,8 +186,19 @@ const secretRef = 'happier:shared-secret:v1:personal-secret';
 const reviewAgentProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
     agentsById: Object.fromEntries((['claude', 'codex'] as const).map(agentId => [agentId, { id: agentId, title: agentId,
         identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId],
+        providerRequirements: BUNDLED_CANONICAL_AGENT_DECLARATIONS[agentId]?.providerRequirements ?? undefined,
         capabilities: { surfaces: [], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
-    }])), actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
+    }])), actionsById: {},
+    // Match the Machine producer's declaration projection, using the canonical
+    // bundled definitions rather than a test-owned compatibility contract.
+    familiesById: { providers: { family: 'providers', entriesById: Object.fromEntries(
+        Object.values(BUNDLED_ACCOUNT_PROVIDER_DECLARATIONS).map(declaration => {
+            const identity = parseQualifiedPluginContributionKey(declaration.contributionKey);
+            if (!identity) throw new Error('Expected a qualified bundled Provider declaration');
+            return [declaration.contributionKey, { id: declaration.contributionKey, pluginId: identity.pluginId,
+                definition: declaration.definition, provenance: declaration.provenance, sourceKind: 'bundled' }];
+        }),
+    ) } }, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
 function reviewAgentReadiness() { return Object.fromEntries(['claude', 'codex'].map(agentId => [`cli.${agentId}`, {
     ok: true, checkedAt: Date.now(), data: MachineAgentInventoryItemSchema.parse({ agentId, title: agentId, installed: true,
         version: '1', latestVersion: null, update: { supported: false, command: null },

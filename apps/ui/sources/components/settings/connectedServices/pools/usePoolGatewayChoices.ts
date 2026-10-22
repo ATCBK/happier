@@ -35,9 +35,10 @@ export function usePoolGatewayChoices(input: Readonly<{
         : NO_CHOICES, [accountMatchesTarget, catalog?.data, input.target]);
     // No gateway yet (D19): the switch stays, and turning it on creates the first one with this pool.
     const firstGateway = React.useMemo(() => {
-        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations());
+        // Pool configuration is Account-only; it has no selected declaration Machine.
+        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }));
         if (!accountMatchesTarget || !contribution || !catalog?.data) return null;
-        const saved = { connections: catalog.data.connections };
+        const saved = { connections: catalog.data.connections, declarationContext: { kind: 'account' as const } };
         if (!areProviderGatewayDeclarationsKnown(saved) || buildProviderGatewayCollection(saved).length > 0) return null;
         const serviceKey = buildQualifiedPluginContributionKey(input.target.service);
         const slot = contribution.purposes.find(purpose => buildQualifiedPluginContributionKey(purpose.service) === serviceKey);
@@ -68,7 +69,7 @@ export function usePoolGatewayChoices(input: Readonly<{
         return result?.status === 'success';
     }, [accountMatchesTarget, catalog?.stale, catalog?.status, choices, input.enabled, input.target, mutation.run]);
     const createFirstGateway = React.useCallback(async (): Promise<boolean> => {
-        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations());
+        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }));
         if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !firstGateway || !contribution || !allocatedConnectionId) {
             throw createProviderErrorV1('provider_authorization_changed');
         }

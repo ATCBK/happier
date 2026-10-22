@@ -27,18 +27,18 @@ describe('gateway configuration Action request', () => {
             deployment: { kind: 'managedLocal', purposeBindingDefaults: { 'anthropic-upstream': pool } } });
     });
     it('creates new gateways from the one admitted contribution that draws on subscriptions', () => {
-        expect(readProviderGatewayContribution(readAccountProviderDeclarations())).toEqual({
+        expect(readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }))).toEqual({
             contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
             purposes: expect.arrayContaining([
                 { purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
                 { purpose: 'anthropic-upstream', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' } },
             ]),
         });
-        const [gateway] = readAccountProviderDeclarations().filter(declaration => declaration.definition.managedRuntime?.connectedAccounts?.length);
+        const [gateway] = readAccountProviderDeclarations({ kind: 'account' }).filter(declaration => declaration.definition.managedRuntime?.connectedAccounts?.length);
         expect(readProviderGatewayContribution([gateway!, { ...gateway!, contributionKey: 'example.other/gateway' }])).toBeNull();
     });
     it('qualifies declaration-local gateway services while preserving explicit vendor identities', () => {
-        const [declaration] = readAccountProviderDeclarations().filter(entry => entry.definition.managedRuntime?.connectedAccounts?.length);
+        const [declaration] = readAccountProviderDeclarations({ kind: 'account' }).filter(entry => entry.definition.managedRuntime?.connectedAccounts?.length);
         if (!declaration?.definition.managedRuntime) throw new Error('Expected the admitted gateway declaration');
         const qualified = { pluginId: 'vendor.accounts', localId: 'subscription' };
         const declarations = [{

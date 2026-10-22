@@ -66,7 +66,8 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
     const sources: ApprovalReferenceSources = {
         serverId: reference.kind === 'session' ? reference.serverId ?? account.serverId : account.serverId,
         viewer: scope, ownHome: true, sessionReading: { name: null, machineId: '', status: 'unavailable' },
-        declarations: readAccountProviderDeclarations(),
+        // Account references carry no execution Machine from which to admit installed declarations.
+        declarations: readAccountProviderDeclarations({ kind: 'account' }),
         machine: reference.kind === 'machine' ? resolveServerScopedMachine(state, account.serverId, reference.id) : null,
         registries: getPromptLibraryCatalogValue(scope, 'registry-sources'),
         projects: readCurrentProjectAccountRows(state),
@@ -120,9 +121,10 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
         : reference?.kind === 'providerModel' ? reference.connectionId : null;
     const providerCatalog = useProviderCatalogForServer(providerConnectionId ? approvalServerId : null);
     const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: approvalServerId,
+        machineId: null,
         agentTargetKey: reference?.kind === 'providerConnection' || reference?.kind === 'providerModel' ? reference.agentTargetKey : null,
         enabled: Boolean(providerConnectionId && !providerCatalog?.data?.connections.some(row => row.id === providerConnectionId)) });
-    const declarations = readAccountProviderDeclarations();
+    const declarations = readAccountProviderDeclarations({ kind: 'account' });
     const syncLink = useWorkspaceSyncRelationshipSummary(reference?.kind === 'workspaceSyncRelationship' ? reference.id : null, approvalServerId ?? undefined);
     const workspaceRefs = useWorkspaceRefs();
     const workspaceRefId = reference?.kind === 'workspace' ? reference.id : null;

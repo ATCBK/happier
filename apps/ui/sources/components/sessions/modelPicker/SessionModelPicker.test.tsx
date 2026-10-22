@@ -17,6 +17,8 @@ import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { t } from '@/text';
 import { router as expoRouter } from 'expo-router';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { readAccountAgentProviderRequirements, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 
 /**
  * Committing a freeform model id is a SUBMIT, not a keystroke: the overlay's custom
@@ -78,6 +80,41 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
+    it('keeps independent Account model rows inert until the addressed Machine answers, and after withdrawal', async () => {
+        const { selected, providerGroups } = experimentalProviderGroup('pc_independent_account');
+        const group = createProviderModelProjectionGroupFixture({ ...providerGroups[0]!,
+            rows: providerGroups[0]!.rows.map(row => ({ ...row, compatibility: { ...row.compatibility, confirmed: true } })),
+        });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
+            codex: { id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+                providerRequirements: readAccountAgentProviderRequirements(selected.agentTargetKey, { kind: 'account' }) },
+        } });
+        const onSelect = vi.fn();
+        const picker = (declarationContext: ProviderDeclarationContext) => <SessionModelPicker
+            agentTargetKey={selected.agentTargetKey}
+            declarationContext={declarationContext}
+            nativeModels={[]}
+            providerGroups={[group]}
+            providerProjectionAuthoritative
+            selected={selected}
+            effectiveLabel={selected.modelId}
+            onSelect={onSelect}
+        />;
+        const screen = await renderScreen(picker({ kind: 'machine', projection: null }));
+        const optionId = `model-picker-overlay-option:${JSON.stringify([selected.agentTargetKey, selected.providerConnectionId, selected.modelId])}`;
+        for (const context of [
+            { kind: 'machine', projection: null },
+            { kind: 'machine', projection },
+            { kind: 'machine', projection: null },
+            { kind: 'account' },
+        ] satisfies ProviderDeclarationContext[]) {
+            await screen.update(picker(context));
+            onSelect.mockClear();
+            await screen.pressByTestIdAsync(optionId);
+            if (context.kind === 'account' || context.projection) expect(onSelect).toHaveBeenCalledWith(selected);
+            else expect(onSelect).not.toHaveBeenCalled();
+        }
+    });
     it.each(['model', 'connection'] as const)('passes the exact source and worker scope to the existing experimental confirmation (%s)', scope => {
         const { selected, providerGroups } = experimentalProviderGroup('connected-source:catalog-a');
         const connectedAccountTarget = { kind: 'group' as const,

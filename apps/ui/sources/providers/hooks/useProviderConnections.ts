@@ -5,7 +5,8 @@ import { describeAccountProviderConnectionsV1 } from '@happier-dev/protocol/prov
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
-import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { providerDeclarationContext, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -54,6 +55,11 @@ export function useProviderConnections(input: Readonly<{
     // fallback to the active Home. Account reads may omit a Machine, not a Home.
     const { describeProviderConnections, ready, retryReadiness, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId ?? []);
     const active = input.active ?? true;
+    const declarations = useDaemonMergedProjectionInputs({ machineId: input.machineId, serverId: input.serverId,
+        enabled: input.enabled && active && Boolean(input.machineId) });
+    const declarationProjection = declarations.phase === 'ready' ? declarations.inputs?.pluginProjectionV2 ?? null : null;
+    const declarationContext = React.useMemo(() => providerDeclarationContext(input.machineId, declarationProjection),
+        [input.machineId, declarationProjection]);
     const activeRef = React.useRef(active);
     activeRef.current = active;
     const accountLifetime = captureActiveServerAccountScopeLifetime();
@@ -98,9 +104,9 @@ export function useProviderConnections(input: Readonly<{
             || !areServerAccountScopesEqual(binding.scope, accountLifetime.scope)
             || !catalogAdmission?.data || accountMatchesScope && state.accountData) return null;
         return { catalog: catalogAdmission.data, data: describeAccountProviderConnectionsV1(
-            catalogAdmission.data, readAccountProviderDeclarations(), input.connectionId,
+            catalogAdmission.data, readAccountProviderDeclarations(declarationContext), input.connectionId,
         ) };
-    }, [accountLifetime, accountMatchesScope, binding, catalogAdmission, input.connectionId, input.enabled, state.accountData]);
+    }, [accountLifetime, accountMatchesScope, binding, catalogAdmission, declarationContext, input.connectionId, input.enabled, state.accountData]);
     const catalog = answeredCatalog ?? retained?.catalog ?? null;
     const answeredData = state.catalog?.data && answeredCatalog === null ? null
         : stateMatchesScope ? state.data : accountMatchesScope ? state.accountData ?? null : null;
@@ -276,5 +282,5 @@ export function useProviderConnections(input: Readonly<{
         return await ownRead;
     }, [accountLifetime, binding, input.enabled, input.machineId, input.serverId, read, retryReadiness]);
 
-    return { data, catalog, error, machineError, loading, refresh, pendingApproval };
+    return { data, catalog, error, machineError, loading, refresh, pendingApproval, declarationProjection, declarationContext };
 }

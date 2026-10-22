@@ -57,6 +57,7 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
         : null;
     const catalog = useHomeTeamCredentialModelCatalog({
         serverId,
+        machineId: params.machineId,
         enabled: credentialResourcesEnabled && Boolean(serverId && selectedAgentTargetKey),
         agentTargetKey: selectedAgentTargetKey,
     });

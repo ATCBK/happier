@@ -37,6 +37,7 @@ import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Sc
   type SessionModelTransitionRequestV1, type SessionModelTransitionResultV1,
 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { TeamCredentialResourceCatalogEntryV1Schema, type TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -72,6 +73,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 
 // Static Sync-client imports reach Socket.IO before the Account harness loads.
 // Hoist the same external boundary for every persistent and scoped connection.
@@ -80,7 +82,9 @@ vi.mock('socket.io-client', async (importOriginal) =>
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture,
+  installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
@@ -90,6 +94,12 @@ import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/
 import { SessionAttachmentUploadInitRequestV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentUploadInitRequestV1';
 import { SessionAttachmentHandleV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentHandleV1';
 import { writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { projectAgentProviderBrokerApplications } from '@happier-dev/protocol/providers/catalog/brokerApplicationProjectionV1';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
@@ -102,6 +112,7 @@ const machineDirectSessionTakeoverPersistSpy = vi.hoisted(() => vi.fn<(input: un
 let agentTransitionResult: 'accepted' | 'outcome_unknown' = 'accepted';
 let inputPermissionCapability: 'supported' | 'unknown' = 'supported';
 let connectedAccountProjection: ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse> | null = null;
+let pendingProjectionReceipt: ReturnType<typeof createDeferred<ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse>>> | null = null;
 let modelTransitionReply: ((request: Extract<SessionModelTransitionRequestV1, { selection: unknown }>) =>
   SessionModelTransitionResultV1 | Promise<SessionModelTransitionResultV1>) | undefined;
 
@@ -127,6 +138,25 @@ const readyAgentInventory = createReadyMachineAgentInventoryFixture([
   { agentId: 'opencode', title: 'OpenCode' },
   { agentId: 'gemini', title: 'Gemini' },
 ]);
+// Match the admitted Machine producer, including c108's declaration facts.
+readyAgentInventory.projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+  protocolVersion: 1,
+  projection: { ...readyAgentInventory.projection,
+    agentsById: Object.fromEntries(Object.entries(readyAgentInventory.projection.agentsById).map(([id, agent]) => [id, {
+      ...agent,
+      identity: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.identity,
+      providerRequirements: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.providerRequirements ?? undefined,
+    }])),
+    familiesById: { providers: { family: 'providers', entriesById: Object.fromEntries(
+      readAccountProviderDeclarations({ kind: 'account' }).map(declaration => {
+        const identity = parseQualifiedPluginContributionKey(declaration.contributionKey);
+        if (!identity) throw new Error('Expected a qualified Provider declaration');
+        return [declaration.contributionKey, { id: declaration.contributionKey, pluginId: identity.pluginId,
+          definition: declaration.definition, provenance: declaration.provenance, sourceKind: 'bundled' }];
+      }),
+    ) } },
+  },
+}).projection;
 let goalRpcFailure: Readonly<{ ok: false; error: string; errorCode?: string }> | null = null;
 let pendingGoalReceipt: ReturnType<typeof createDeferred<unknown>> | null = null;
 let pendingRestartReceipt: ReturnType<typeof createDeferred<unknown>> | null = null;
@@ -531,13 +561,6 @@ vi.mock('@/utils/platform/responsive', () => ({
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
 }));
-vi.mock('@/components/sessions/model/resolveSessionMachineReachability', () => ({
-  resolveSessionMachineReachability: () => true,
-}));
-vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
-  useSessionReachableMachineTarget: () => ({ machineId: 'machine-1', basePath: '/tmp' }),
-  useSessionMachineReachability: () => ({ machineReachable: true, machineOnline: true, machineRpcTargetAvailable: true }),
-}));
 vi.mock('@/voice/session/voiceSession', () => ({
   useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
   voiceSessionManager: {},
@@ -766,7 +789,7 @@ installDisconnectedServerSocketBoundary((socket: Socket, serverUrl) => {
           ? await machineDirectSessionTakeoverPersistSpy(rpc.params)
           : await machineDirectSessionTakeoverSpy(rpc.params);
       } else if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
-        result = connectedAccountProjection ?? DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+        result = pendingProjectionReceipt ? await pendingProjectionReceipt.promise : connectedAccountProjection ?? DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
           protocolVersion: 1, projection: readyAgentInventory.projection,
         });
       } else if (method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) {
@@ -993,11 +1016,18 @@ describe('SessionView (direct sessions)', () => {
     homes.answer(canonicalDraftScope.serverId, '/v1/teams/list', { body: {
       items: [teamSummaryFixture({ id: selection.teamId, capabilities: teamCapabilitiesFixture({}) })], nextCursor: null,
     } });
+    const application = projectAgentProviderBrokerApplications({
+      agentTargetKey: selection.agentTargetKey, acceptedProtocols: ['openai-responses'],
+      providers: readAccountProviderDeclarations({ kind: 'account' }).map(declaration => {
+        const identity = parseQualifiedPluginContributionKey(declaration.contributionKey);
+        if (!identity) throw new Error('Expected a qualified Provider declaration');
+        return { identity, definition: declaration.definition };
+      }),
+    })[0];
+    if (!application) throw new Error('Expected an admitted managed Responses application');
     const model = {
       selection, descriptor: { id: selection.modelId, name: 'Team model' },
-      application: { agentTargetKey: selection.agentTargetKey,
-        implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
-        endpointTemplateId: 'responses', protocol: 'openai-responses' },
+      application,
       confirmationSource: { connectionId: 'connected-source:recipient', catalogSourceKey: 's'.repeat(43) },
       sourceRevision: 'source-1', availability: 'available',
     };
@@ -1007,11 +1037,20 @@ describe('SessionView (direct sessions)', () => {
       mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
       sessionUsePolicy: 'personal_allowed', providerModels: [model], connectedServiceSelections: [],
       sourcePresentation: { kind: 'provider', provider: {
-        identity: { pluginId: 'acme.gateway', localId: 'gateway' }, definitionRevision: 1,
+        identity: application.implementationIdentity, definitionRevision: 1,
       } },
     });
-    homes.answer(canonicalDraftScope.serverId, '/v1/teams/credential-resources/entitled/list', { body: {
-      resources: [resource], nextCursor: null,
+    const entitledPath = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: selection.teamId }).path;
+    homes.answer(canonicalDraftScope.serverId, entitledPath, { select: input => {
+      const request = TeamCredentialResourceReadInputV1Schema.parse(input);
+      const matches = request.application?.agentTargetKey === application.agentTargetKey
+        && request.application.implementationIdentity.pluginId === application.implementationIdentity.pluginId
+        && request.application.implementationIdentity.localId === application.implementationIdentity.localId
+        && request.application.endpointTemplateId === application.endpointTemplateId
+        && request.application.protocol === application.protocol;
+      return { body: { resources: [{ ...resource,
+        providerModels: matches ? [model] : [],
+      }], nextCursor: null } };
     } });
     providerModelProjectionState.value.data = createProviderModelProjectionFixture({
       agentTargetKey: selection.agentTargetKey,
@@ -1027,21 +1066,32 @@ describe('SessionView (direct sessions)', () => {
           endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible',
         }] })],
     });
+    // The worker supplies compatibility facts; the recipient Account owns consent.
+    installProviderConnectionsCatalogHttpBoundary({ home: homes, serverId: canonicalDraftScope.serverId,
+      catalog: ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        experimentalBindingConfirmations: [{ v: 1, ...model.confirmationSource,
+          agentTargetKey: selection.agentTargetKey, modelId: selection.modelId,
+          compatibilityFingerprint: 'compatibility:v1:worker', confirmedAt: 1 }],
+      }),
+    });
     const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
     await getServerFeaturesSnapshot({ serverId: canonicalDraftScope.serverId, force: true });
   }
 
   async function mountTeamModelPicker(screen: Awaited<ReturnType<typeof renderSessionView>>, selection: TeamCredentialProviderModelSelectionV1) {
-    let picker = await mountSessionModelPicker(screen);
+    const detail = await renderScreen(findAgentInput(screen).props.modelContentOverride);
     await waitForHomeGovernance(async () => {
       await settleDirectSessionView();
-      picker = await mountSessionModelPicker(screen);
-      expect(picker.props.teamCredentialResources).toEqual(expect.arrayContaining([
+      await detail.update(findAgentInput(screen).props.modelContentOverride);
+      expect(detail.root.findByType(SessionModelPicker).props.teamCredentialResources,
+        JSON.stringify(homes.requests.filter(request => request.path.includes('/teams'))
+          .map(({ path, input }) => ({ path, input }))),
+      ).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: selection.resourceId, teamId: selection.teamId,
           providerModels: expect.arrayContaining([expect.objectContaining({ selection })]) }),
       ]));
     });
-    return picker;
+    return detail.root.findByType(SessionModelPicker);
   }
 
   async function restorePresentUserComposerHome() {
@@ -1117,7 +1167,14 @@ describe('SessionView (direct sessions)', () => {
     }
 
     async function selectAgent(screen: Awaited<ReturnType<typeof renderSessionView>>, agentId: string) {
+      // The real picker snapshots its rail at open. Wait for the background
+      // Machine inspection while closed, just as a ready app surface does.
+      await waitForHomeGovernance(() => expect(readOptions(screen)
+        .some(row => row.id === targetKey(agentId))).toBe(true));
       await openPicker(screen);
+      // Account-purpose discovery is demanded by the open picker.
+      await waitForHomeGovernance(() => expect(readOptions(screen)
+        .find(row => row.id === targetKey(agentId))?.onSelectImmediate).toEqual(expect.any(Function)));
       const option = readOptions(screen).find((row) => row.id === targetKey(agentId));
       if (!option?.onSelectImmediate) throw new Error(`Agent option ${agentId} is unavailable`);
       const select = option.onSelectImmediate;
@@ -1193,6 +1250,52 @@ describe('SessionView (direct sessions)', () => {
       expect(readArm()).toBeNull();
       expect(readOptions(second).map((row) => row.id)).toContain(targetKey('codex'));
       await selectAgent(second, 'codex');
+    });
+
+    it('offers Agent and Team model choices when the Session Machine declaration arrives after mount', async () => {
+      const selection: TeamCredentialProviderModelSelectionV1 = {
+        kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',
+        expectedResourceRevision: 7, deliveryMode: 'brokered',
+        agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'team-model',
+      };
+      await installTeamModelSelectionHome(selection);
+      settingsState.current.featureToggles['sessions'] = true;
+      settingsState.current.featureToggles['sessions.agentSwitching'] = true;
+      const features = createRootLayoutFeaturesResponse();
+      for (const id of ['sessions', 'sessions.agentSwitching', 'providers', 'teams', 'teams.credentialResources'] as const) {
+        if (!tryWriteServerEnabledBitInPlace(features, id, true)) throw new Error(`Missing feature fixture ${id}`);
+      }
+      homes.answer(canonicalDraftScope.serverId, '/v1/features', { body: features });
+      homes.answer(canonicalDraftScope.serverId, '/v1/features/authenticated', { body: features });
+      const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+      await getServerFeaturesSnapshot({ serverId: canonicalDraftScope.serverId, force: true });
+      storageState.sessions.s1 = { ...storageState.sessions.s1,
+        metadata: { ...storageState.sessions.s1.metadata, machineId: 'late-declaration-machine' } };
+      pendingProjectionReceipt = createDeferred();
+      const screen = await renderSessionViewAndSettle();
+      const detail = await renderScreen(findAgentInput(screen).props.modelContentOverride);
+      const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
+      const { sessionModelSelectionKey } = await import('@/components/sessions/modelPicker/sessionModelSelectionKey');
+      const readTeamOption = () => detail.root.findByType(SelectionList).props.rootStep.sections
+        .flatMap((section: { options?: readonly { id: string; disabled?: boolean }[] }) => section.options ?? [])
+        .find((option: { id: string }) => option.id === sessionModelSelectionKey(selection));
+      expect(detail.root.findByType(SessionModelPicker).props.teamCredentialResources
+        .flatMap((resource: { providerModels: unknown[] }) => resource.providerModels)).toEqual([]);
+      expect(readTeamOption()).toBeUndefined();
+
+      await act(async () => { pendingProjectionReceipt!.resolve(
+        DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+          projection: readyAgentInventory.projection })); });
+      await waitForHomeGovernance(async () => {
+        expect(readOptions(screen).find(row => row.id === targetKey('claude'))?.onSelectImmediate).toEqual(expect.any(Function));
+        await detail.update(findAgentInput(screen).props.modelContentOverride);
+        expect(detail.root.findByType(SessionModelPicker).props.teamCredentialResources).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: selection.resourceId,
+            providerModels: expect.arrayContaining([expect.objectContaining({ selection })]) }),
+        ]));
+        expect(readTeamOption()).toEqual(expect.objectContaining({ id: sessionModelSelectionKey(selection) }));
+        expect(readTeamOption()?.disabled).not.toBe(true);
+      });
     });
 
     it.each([
@@ -1488,7 +1591,7 @@ describe('SessionView (direct sessions)', () => {
       const serverId = session.serverId ?? canonicalDraftScope.serverId;
       const machineId = session.metadata?.machineId ?? 'machine-1';
       homes.answer(serverId, `/v1/machines/${machineId}`, {
-        body: { machine: { id: machineId, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+        body: { machine: createPlainMachineRowFixture({ id: machineId, accountId: canonicalDraftScope.accountId }) },
       });
       const {
         ownerMetadataView: _ownerMetadataView,
@@ -1598,6 +1701,7 @@ describe('SessionView (direct sessions)', () => {
       const id = session.metadata?.machineId ?? 'machine-1';
       return [id, createMachineFixture({
         id,
+        activeAt: Date.now(),
         storageMode: 'plain',
         metadata: {
           ...createMachineFixture().metadata!,
@@ -1969,7 +2073,7 @@ describe('SessionView (direct sessions)', () => {
         sessionUsageLimitRecoveryV1: {
           v: 1,
           status: 'exhausted',
-          issueFingerprint: 'usage-limit:codex:unknown-turn:1:unknown-reset',
+          issueFingerprint: 'usage-limit:codex:unknown-turn:1:no-reset',
           armedAtMs: 1,
           resetAtMs: null,
           nextCheckAtMs: null,
@@ -2025,12 +2129,16 @@ describe('SessionView (direct sessions)', () => {
   }
 
   beforeEach(async () => {
+    // Home fixtures replace routing identities between cases. Retire their
+    // real derived project index together with the Session fixture state.
+    projectManager.clear();
     externalRpcRequests.length = 0;
     composerMediaCaptureIds.clear();
     legacyAttachmentUpload = undefined;
     agentTransitionResult = 'accepted';
     inputPermissionCapability = 'supported';
     connectedAccountProjection = null;
+    pendingProjectionReceipt = null;
     goalRpcFailure = null;
     pendingGoalReceipt = null;
     pendingRestartReceipt = null;
@@ -2049,6 +2157,7 @@ describe('SessionView (direct sessions)', () => {
       accountId: 'account-route-1',
       request: homes.request,
     });
+    canonicalDraftScope = { serverId: accountConnection.serverId, accountId: 'account-route-1' };
     // This suite has several real saved Homes. Keep readiness and captured
     // request authorities on the same endpoint-bound external HTTP answers,
     // rather than the single-Home adapter installed during Account restoration.
@@ -2331,7 +2440,7 @@ describe('SessionView (direct sessions)', () => {
     expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledWith(
       's1',
       {
-        issueFingerprint: 'usage-limit:opencode:1',
+        issueFingerprint: buildUsageLimitIssueFingerprint(storageState.sessions.s1.lastRuntimeIssue),
         remember: true,
         resumePromptMode: 'off',
       },
@@ -4099,7 +4208,7 @@ describe('SessionView (direct sessions)', () => {
         sessionUsageLimitRecoveryV1: {
           v: 1,
           status: 'exhausted',
-          issueFingerprint: 'usage-limit:codex:unknown-turn:1:unknown-reset',
+          issueFingerprint: 'usage-limit:codex:unknown-turn:1:no-reset',
           armedAtMs: 1,
           resetAtMs: null,
           nextCheckAtMs: null,
@@ -6854,7 +6963,7 @@ describe('SessionView (direct sessions)', () => {
       attachment: mediaHandle.owner, key: 'picture', value: { caption: 'The exact image' },
       presentation: { label: 'Picture', typeLabel: 'Issue' }, content: { kind: 'stagedMedia', handle: mediaHandle } });
     if (withMedia) {
-      const projection = connectedAccountProjection?.projection;
+      const projection = connectedAccountProjection?.projection ?? readyAgentInventory.projection;
       connectedAccountProjection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
         projection: { v: 2, generation: 7, agentsById: {}, ...projection, familiesById: { ...projection?.familiesById,
           composerAttachments: { family: 'composerAttachments', entriesById: { 'acme.issues/issue': {
@@ -7585,9 +7694,13 @@ describe('SessionView (direct sessions)', () => {
       isConnected: false,
     }));
     const latestHeaderProps = chatHeaderPropsSpy.mock.calls.at(-1)?.[0];
-    const externalStatus = React.Children.toArray(latestHeaderProps?.rightElement?.props?.children)
-      .find((child: any) => child?.props?.testID === 'session-header-external-agent-status-working') as any;
-    expect(externalStatus?.props?.accessibilityLabel).toBe('status.workingExternally');
+    // The header composes its action View inside a Fragment with shell controls.
+    // Render the supplied content rather than assuming one level of children.
+    const header = await renderScreen(<InjectedAuthProvider credentials={accountConnection!.credentials}>
+      <AppPaneProvider>{latestHeaderProps?.rightElement}</AppPaneProvider>
+    </InjectedAuthProvider>);
+    expect(header.findByTestId('session-header-external-agent-status-working')?.props.accessibilityLabel)
+      .toBe('status.workingExternally');
     expect(machineDirectSessionStatusGetSpy).not.toHaveBeenCalled();
     expect(homes.requests.filter(({ path }) => path.startsWith('/v1/sessions/s1/messages'))).toEqual([]);
     expect(externalRpcRequests.filter(({ method }) => method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_READ_AFTER)).toEqual([]);

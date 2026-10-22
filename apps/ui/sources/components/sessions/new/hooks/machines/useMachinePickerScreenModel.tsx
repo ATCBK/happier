@@ -215,6 +215,7 @@ export function useMachinePickerScreenModel() {
     });
     const pickerTeamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId: selectedServerId,
+        machineId: selectedMachineId,
         enabled: pickerCredentialResourcesEnabled,
         agentTargetKey: pickerBackendTargetKey,
     });

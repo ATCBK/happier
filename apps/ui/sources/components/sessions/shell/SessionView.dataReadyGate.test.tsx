@@ -56,7 +56,13 @@ vi.mock('@/agents/backendCatalog/getResolvedBackendCatalogEntries', () => ({
     getResolvedBackendCatalogEntries: () => [],
 }));
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => daemonMergedProjectionState.value,
+    // The fixtures below publish only the facts each test exercises; the projection shape's other maps are empty.
+    useDaemonMergedProjectionInputs: () => {
+        const state = daemonMergedProjectionState.value as { inputs: Record<string, unknown> | null; phase: string };
+        return state.inputs
+            ? { ...state, inputs: { mergedProviderProjectionById: {}, mergedBackendProjectionById: {}, connectedAccountProjection: null, ...state.inputs } }
+            : state;
+    },
 }));
 vi.mock('@/components/plugins/actions/pluginContributedActionComposerChips', () => ({
     createPluginContributedActionComposerChips: (input: unknown) => {

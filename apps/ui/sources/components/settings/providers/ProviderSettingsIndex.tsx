@@ -51,10 +51,10 @@ const ProviderCollectionLanding = React.memo(function ProviderCollectionLanding(
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
     const providerTarget = useProviderSettingsTarget();
     const { machineId, accountServerId: serverId, accountAddressAvailable } = providerTarget;
-    const { data, error, loading, refresh } = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId });
+    const { data, error, loading, refresh, declarationContext } = useProviderConnections({ enabled: enabled && accountAddressAvailable, active: focused, machineId, serverId });
     const collection = React.useMemo(() => buildProviderCollection({
-        data, query: '', localDiscoveryEnabled,
-    }), [data, localDiscoveryEnabled]);
+        data, query: '', localDiscoveryEnabled, declarationContext,
+    }), [data, localDiscoveryEnabled, declarationContext]);
     const navigate = React.useCallback((href: string) => {
         const result = runGuardedNavigation(() => router.replace(href as never));
         if (result !== true) fireAndForget(result, { tag: 'ProviderCollectionLanding.navigate' });

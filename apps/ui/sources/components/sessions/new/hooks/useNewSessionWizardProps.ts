@@ -115,6 +115,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     selectedTeamCredentialModel?: NewSessionWizardAgentProps['selectedTeamCredentialModel'];
     onSelectTeamCredentialModel?: NewSessionWizardAgentProps['onSelectTeamCredentialModel'];
     providerModelGroups?: NewSessionWizardAgentProps['providerModelGroups'];
+    declarationContext?: NewSessionWizardAgentProps['declarationContext'];
     providerModelProjectionAuthoritative?: NewSessionWizardAgentProps['providerModelProjectionAuthoritative'];
     providerModelProjectionError?: NewSessionWizardAgentProps['providerModelProjectionError'];
     providerModelProjectionFailures?: NewSessionWizardAgentProps['providerModelProjectionFailures'];
@@ -412,6 +413,7 @@ export function useNewSessionWizardProps(params: Readonly<{
             selectedTeamCredentialModel: params.selectedTeamCredentialModel,
             onSelectTeamCredentialModel: params.onSelectTeamCredentialModel,
             providerModelGroups: params.providerModelGroups,
+            declarationContext: params.declarationContext,
             providerModelProjectionAuthoritative: params.providerModelProjectionAuthoritative,
             providerModelProjectionError: params.providerModelProjectionError,
             providerModelProjectionFailures: params.providerModelProjectionFailures,
@@ -439,6 +441,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.modelMode,
         params.modelSelection,
         params.providerModelGroups,
+        params.declarationContext,
         params.providerModelProjectionAuthoritative,
         params.providerModelProjectionError,
         params.providerModelProjectionFailures,

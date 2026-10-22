@@ -12,6 +12,7 @@ import type { OptionPickerOverlayProps } from '@/components/sessions/pickers/Opt
 import type { ModelOption, PreflightModelList } from '@/sync/domains/models/modelOptions';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import {
+    buildBackendTargetKeyV2,
     DEFAULT_PROVIDER_SETTINGS_V1,
     serializeModelVisibilityRefV1,
     type BackendTargetRefV2,
@@ -20,6 +21,10 @@ import { FavoriteModelSelectionV1Schema } from '@/sync/domains/models/favoriteMo
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { createProviderSettingsHarness, createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
@@ -68,6 +73,21 @@ const rpc = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 afterEach(() => account.reset());
+
+async function prepareFavoriteMachine() {
+    rpc.reset();
+    const { serverId } = await account.restore({ machines: [createMachineFixture({ id: 'machine-1' })] });
+    rpc.setResponse(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+        DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+            v: 2, generation: 1, agentsById: { codex: { id: 'codex',
+                identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+                providerRequirements: readAccountAgentProviderRequirements('agent:happier.agent.codex/codex', { kind: 'account' }),
+            } },
+        } }));
+    const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+    const load = () => loadDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId });
+    return { serverId, load };
+}
 
 const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
 const { SelectionList } = await import('@/components/ui/selectionList');
@@ -393,14 +413,17 @@ describe('NewSessionFavoriteModelsDetail', () => {
     });
 
     it('keeps an eligible Provider favorite selectable by its exact connection-bound ref', async () => {
+        const machine = await prepareFavoriteMachine();
+        await machine.load();
+        const agentTargetKey = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' });
         const providerFavorite = FavoriteModelSelectionV1Schema.parse({
             selection: {
                 v: 1, updatedAt: 1,
-                ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_work', modelId: 'shared-model' },
+                ref: { agentTargetKey, providerConnectionId: 'pc_work', modelId: 'shared-model' },
             },
             modelLabel: 'Provider shared model', backendLabel: 'Codex', catalogAgentId: 'codex', builtInAgentId: 'codex',
         });
-        providerGroupsByTargetKey['agent:codex'] = [{
+        providerGroupsByTargetKey[agentTargetKey] = [{
             connectionId: providerFavorite.selection.ref.providerConnectionId,
             providerName: 'Gateway', connectionName: 'Work', connectionRole: 'named', connectionDisplayNameMode: 'custom',
             connectionRevision: 1, authorization: { authorized: true }, manualModelPolicy: 'allowed', supportsFreeformModelIds: true,
@@ -414,16 +437,16 @@ describe('NewSessionFavoriteModelsDetail', () => {
             }],
         }];
         const onSelectFavoriteModel = vi.fn();
-        const codexEntry = createBuiltInEntry('codex', 'Codex');
+        const codexEntry = { ...createBuiltInEntry('codex', 'Codex'), backendTargetKey: agentTargetKey };
         const { NewSessionFavoriteModelsDetail } = await import('./NewSessionFavoriteModelsDetail');
 
         await renderScreen(<NewSessionFavoriteModelsDetail
             favoriteModelSelections={[providerFavorite]}
             resolvedBackendEntries={[codexEntry]}
-            selectedBackendTargetKey="agent:codex"
+            selectedBackendTargetKey={agentTargetKey}
             selectedModelId="default"
             selectedMachineId="machine-1"
-            capabilityServerId="server-1"
+            capabilityServerId={machine.serverId}
             projectionCurrent
             settings={settings}
             onSelectFavoriteModel={onSelectFavoriteModel}
@@ -431,7 +454,7 @@ describe('NewSessionFavoriteModelsDetail', () => {
         />);
 
         const picker = optionPickerOverlayProps.at(-1);
-        const exactValue = favoriteOptionValue('agent:codex', 'shared-model', 'pc_work');
+        const exactValue = favoriteOptionValue(agentTargetKey, 'shared-model', 'pc_work');
         expect(picker?.options).toEqual(expect.arrayContaining([expect.objectContaining({
             value: exactValue,
             label: 'Provider shared model',
@@ -445,14 +468,17 @@ describe('NewSessionFavoriteModelsDetail', () => {
     });
 
     it('keeps the canonical disabled presentation for a favorite the projection refuses', async () => {
+        const machine = await prepareFavoriteMachine();
+        await machine.load();
+        const agentTargetKey = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' });
         const providerFavorite = FavoriteModelSelectionV1Schema.parse({
             selection: {
                 v: 1, updatedAt: 1,
-                ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_work', modelId: 'blocked-model' },
+                ref: { agentTargetKey, providerConnectionId: 'pc_work', modelId: 'blocked-model' },
             },
             modelLabel: 'Blocked model', backendLabel: 'Codex', catalogAgentId: 'codex', builtInAgentId: 'codex',
         });
-        providerGroupsByTargetKey['agent:codex'] = [{
+        providerGroupsByTargetKey[agentTargetKey] = [{
             connectionId: providerFavorite.selection.ref.providerConnectionId,
             providerName: 'Gateway', connectionName: 'Work', connectionRole: 'named', connectionDisplayNameMode: 'custom',
             connectionRevision: 1, authorization: { authorized: true }, manualModelPolicy: 'allowed', supportsFreeformModelIds: true,
@@ -474,11 +500,11 @@ describe('NewSessionFavoriteModelsDetail', () => {
 
         await renderScreen(<NewSessionFavoriteModelsDetail
             favoriteModelSelections={[providerFavorite]}
-            resolvedBackendEntries={[createBuiltInEntry('codex', 'Codex')]}
-            selectedBackendTargetKey="agent:codex"
+            resolvedBackendEntries={[{ ...createBuiltInEntry('codex', 'Codex'), backendTargetKey: agentTargetKey }]}
+            selectedBackendTargetKey={agentTargetKey}
             selectedModelId="default"
             selectedMachineId="machine-1"
-            capabilityServerId="server-1"
+            capabilityServerId={machine.serverId}
             projectionCurrent
             settings={settings}
             onSelectFavoriteModel={onSelectFavoriteModel}
@@ -486,7 +512,7 @@ describe('NewSessionFavoriteModelsDetail', () => {
         />);
 
         const picker = optionPickerOverlayProps.at(-1);
-        const exactValue = favoriteOptionValue('agent:codex', 'blocked-model', 'pc_work');
+        const exactValue = favoriteOptionValue(agentTargetKey, 'blocked-model', 'pc_work');
         const blocked = picker?.options.find((option) => option.value === exactValue);
         // The projection already decided this row is unselectable and why; the
         // favorites pane must show that decision rather than an enabled-looking
@@ -498,13 +524,16 @@ describe('NewSessionFavoriteModelsDetail', () => {
     });
 
     it('keeps duplicate Provider favorite names collision-safe for assistive technology', async () => {
+        const machine = await prepareFavoriteMachine();
+        await machine.load();
+        const agentTargetKey = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' });
         const favorites = ['pc_gateway_a', 'pc_gateway_b'].map((connectionId) => (
             FavoriteModelSelectionV1Schema.parse({
                 selection: {
                     v: 1,
                     updatedAt: 1,
                     ref: {
-                        agentTargetKey: 'agent:codex',
+                        agentTargetKey,
                         providerConnectionId: connectionId,
                         modelId: 'shared-model',
                     },
@@ -515,7 +544,7 @@ describe('NewSessionFavoriteModelsDetail', () => {
                 builtInAgentId: 'codex',
             })
         ));
-        providerGroupsByTargetKey['agent:codex'] = favorites.map((favorite, index) => ({
+        providerGroupsByTargetKey[agentTargetKey] = favorites.map((favorite, index) => ({
             connectionId: favorite.selection.ref.providerConnectionId,
             providerName: `Gateway ${index === 0 ? 'A' : 'B'}`,
             connectionName: 'Work',
@@ -547,11 +576,11 @@ describe('NewSessionFavoriteModelsDetail', () => {
 
         await renderScreen(<NewSessionFavoriteModelsDetail
             favoriteModelSelections={favorites}
-            resolvedBackendEntries={[createBuiltInEntry('codex', 'Codex')]}
-            selectedBackendTargetKey="agent:codex"
+            resolvedBackendEntries={[{ ...createBuiltInEntry('codex', 'Codex'), backendTargetKey: agentTargetKey }]}
+            selectedBackendTargetKey={agentTargetKey}
             selectedModelId="default"
             selectedMachineId="machine-1"
-            capabilityServerId="server-1"
+            capabilityServerId={machine.serverId}
             projectionCurrent
             settings={settings}
             onSelectFavoriteModel={vi.fn()}

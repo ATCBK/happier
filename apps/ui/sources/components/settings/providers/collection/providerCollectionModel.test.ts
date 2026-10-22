@@ -55,7 +55,7 @@ describe('buildProviderCollection', () => {
         }),
       ],
     });
-    const rows = buildProviderCollection({
+    const rows = buildProviderCollection({ declarationContext: { kind: 'account' },
       data,
       query: '',
       localDiscoveryEnabled: false,
@@ -111,7 +111,7 @@ describe('buildProviderCollection', () => {
         }),
       ],
     });
-    const rows = buildProviderCollection({
+    const rows = buildProviderCollection({ declarationContext: { kind: 'account' },
       data: data as never,
       query: '',
       localDiscoveryEnabled: false,
@@ -145,7 +145,7 @@ describe('buildProviderCollection', () => {
         },
       ],
     } as never);
-    const found = buildProviderCollection({
+    const found = buildProviderCollection({ declarationContext: { kind: 'account' },
       data: data as never,
       query: '',
       localDiscoveryEnabled: true,
@@ -185,10 +185,14 @@ describe('buildProviderCollection', () => {
         contributionKey: 'happier.provider.ollama/ollama',
       },
     });
-    const rows = buildProviderGatewayCollection({
+    const rows = buildProviderGatewayCollection({ declarationContext: { kind: 'account' },
       connections: [managed, external, ollama],
     });
-    expect(resolveProviderConnectionIcon(managed)).toBe(PROVIDER_GATEWAY_ICON);
+    expect(resolveProviderConnectionIcon(managed, { kind: 'account' })).toBe(PROVIDER_GATEWAY_ICON);
+    expect(resolveProviderConnectionIcon(managed, { kind: 'machine', projection: null })).toBeNull();
+    expect(buildProviderGatewayCollection({ declarationContext: { kind: 'machine', projection: null },
+      connections: [managed],
+    })).toEqual([]);
     expect(rows).toEqual([
       expect.objectContaining({
         connectionId: managed.id,
@@ -197,7 +201,7 @@ describe('buildProviderCollection', () => {
         revision: 4,
       }),
     ]);
-    const providers = buildProviderCollection({
+    const providers = buildProviderCollection({ declarationContext: { kind: 'account' },
       data: createProviderConnectionsDescribeFixture({
         connections: [
           createProviderConnectionViewFixture({
@@ -243,7 +247,7 @@ describe('buildProviderCollection', () => {
       purposeBindingDefaults: {},
     });
 
-    const rows = buildProviderGatewayCollection({
+    const rows = buildProviderGatewayCollection({ declarationContext: { kind: 'account' },
       connections: [gateway, unset],
     });
     expect(rows.map((row) => [row.connectionId, row.slotServices])).toEqual([
@@ -287,7 +291,7 @@ describe('buildProviderCollection', () => {
         },
       ] as never,
     });
-    const collection = buildProviderCollection({
+    const collection = buildProviderCollection({ declarationContext: { kind: 'account' },
       data,
       query: '',
       localDiscoveryEnabled: true,
@@ -303,7 +307,7 @@ describe('buildProviderCollection', () => {
     ]);
     expect(collection.total).toBe(3);
     expect(
-      buildProviderCollection({ data, query: '', localDiscoveryEnabled: false })
+      buildProviderCollection({ declarationContext: { kind: 'account' }, data, query: '', localDiscoveryEnabled: false })
         .found,
     ).toEqual([]);
   });
@@ -323,7 +327,7 @@ describe('buildProviderCollection', () => {
         }),
       ],
     });
-    const collection = buildProviderCollection({
+    const collection = buildProviderCollection({ declarationContext: { kind: 'account' },
       data,
       query: 'bet',
       localDiscoveryEnabled: true,

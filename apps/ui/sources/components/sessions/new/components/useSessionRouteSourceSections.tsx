@@ -65,8 +65,9 @@ export function useSessionRouteSourceSections(
     return React.useMemo(() => {
         if (!views || !agentTargetKey || !browse) return [];
         const rows = buildSessionRouteSourceRows({
+            declarationContext: connections.declarationContext,
             agentTargetKey, views, shownSources: shownSources ?? [], hiddenSources: hiddenSources ?? [],
-            isGateway: view => (readProviderGatewayViewDeclarations(view)?.length ?? 0) > 0,
+            isGateway: view => (readProviderGatewayViewDeclarations(view, connections.declarationContext)?.length ?? 0) > 0,
         });
         const section = (id: 'gateways' | 'providers', title: string, group: readonly SessionRouteSourceRow[]): SelectionListSectionDescriptor[] => (
             group.length === 0 ? [] : [{
@@ -93,5 +94,5 @@ export function useSessionRouteSourceSections(
             ...section('gateways', t('settingsProvidersCollection.gateway.railGroup'), rows.gateways),
             ...section('providers', t('settingsProviders.title'), rows.providers),
         ];
-    }, [agentTargetKey, browse, hiddenSources, selectedConnectionId, shownSources, views]);
+    }, [connections.declarationContext, agentTargetKey, browse, hiddenSources, selectedConnectionId, shownSources, views]);
 }

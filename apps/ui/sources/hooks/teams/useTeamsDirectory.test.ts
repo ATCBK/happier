@@ -25,6 +25,8 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
 // process.
 
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { readAccountAgentProviderRequirements, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 import { act } from 'react-test-renderer';
 
@@ -266,7 +268,7 @@ describe('useTeamsDirectory', () => {
         }
     });
 
-    it('loads and reloads the selected Agent application without sharing generic or other Agent catalog rows', async () => {
+    it.each(['bundled', 'installed'] as const)('loads and reloads the %s Agent application without sharing generic or other Agent catalog rows', async (source) => {
         const home = createHomeGovernanceHarness();
         const serverId = await home.addHome({ name: 'Catalog Home', serverUrl: 'https://team-models.example',
             serverIdentityId: 'srv_team_models', accountId: 'account', currentAccount: true,
@@ -275,7 +277,19 @@ describe('useTeamsDirectory', () => {
         const path = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' }).path;
         let revision = 1;
         let applicationUnavailable = false;
-        const multiProtocolAgent = 'agent:happier.agent.opencode/opencode';
+        const agentKey = (id: string) => source === 'installed' ? `agent:acme.agents/${id}` : `agent:happier.agent.${id}/${id}`;
+        const multiProtocolAgent = agentKey('opencode');
+        const definition = readAccountProviderDeclarations({ kind: 'account' }).find(row => row.definition.managedRuntime)!.definition;
+        const declarationProjection = source === 'installed' ? PluginProjectionV2Schema.parse({ v: 2, generation: 7,
+            agentsById: Object.fromEntries(['codex', 'claude', 'opencode'].map(id => [id, { id,
+                identity: { pluginId: 'acme.agents', localId: id },
+                providerRequirements: readAccountAgentProviderRequirements(`agent:happier.agent.${id}/${id}`, { kind: 'account' }),
+            }])),
+            familiesById: { providers: { family: 'providers', entriesById: {
+                'acme.gateway/managed': { id: 'acme.gateway/managed', pluginId: 'acme.gateway',
+                    provenance: 'external', sourceKind: 'path', definition: { ...definition, id: 'managed' } },
+            } } },
+        }) : null;
         home.answer(serverId, path, { select: (input) => {
             const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
             if (application && applicationUnavailable) return { status: 503, body: { error: 'unavailable' } };
@@ -308,10 +322,11 @@ describe('useTeamsDirectory', () => {
             return home.request(request.url, { ...request.init, headers });
         });
         setRuntimeFetch((input, init) => home.request(input, init));
-        const codex = 'agent:happier.agent.codex/codex';
-        const claude = 'agent:happier.agent.claude/claude';
+        const codex = agentKey('codex');
+        const claude = agentKey('claude');
         const rendered = await renderHook(({ agentTargetKey }: { agentTargetKey: string }) => ({
-            selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey }),
+            selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey, declarationProjection,
+                machineId: source === 'installed' ? 'installed-machine' : null }),
             generic: useHomeTeamCredentialModelCatalog({ serverId, enabled: true }),
         }), { initialProps: { agentTargetKey: codex } });
         const models = () => rendered.getCurrent().selected.resources.flatMap(row => row.providerModels.map(model => model.descriptor.id));
@@ -337,6 +352,7 @@ describe('useTeamsDirectory', () => {
             expect(models()).toEqual(['openai-responses-2']);
             const reads = home.requests.filter(request => request.path === path);
             expect(reads.some(request => JSON.stringify(request.input).includes('cliproxyapi-openai-responses'))).toBe(true);
+            if (source === 'installed') expect(reads.some(request => JSON.stringify(request.input).includes('acme.gateway'))).toBe(true);
             await rendered.rerender({ agentTargetKey: multiProtocolAgent });
             await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
             expect(models()).toEqual(['shared-model']);
@@ -348,6 +364,15 @@ describe('useTeamsDirectory', () => {
             expect(rendered.getCurrent().selected.current).toBe(false);
             expect(models()).toEqual(['shared-model']);
             expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(false);
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
+            await rendered.rerender({ agentTargetKey: 'agent:acme.unknown/agent' });
+            expect(models()).toEqual([]);
+            expect(rendered.getCurrent().selected.current).toBe(false);
+            // Generic Connected Account choices are independent of Agent model requirements.
+            expect(rendered.getCurrent().selected.resources.find(row => row.id === 'generic-only')
+                ?.connectedServiceSelections).toEqual([
+                { source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' },
+            ]);
             expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
         } finally {
             await rendered.unmount();

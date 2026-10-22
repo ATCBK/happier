@@ -259,6 +259,7 @@ const AgentConnectedAccountPurposeRows = React.memo(function AgentConnectedAccou
     });
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId: activeAccountScope?.serverId,
+        machineId: props.machineId ?? null,
         enabled: teamCredentialResourcesEnabled && declarations.length > 0,
     });
     // The one Agent default-authentication owner reads and writes these

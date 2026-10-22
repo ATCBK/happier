@@ -168,7 +168,7 @@ function ModelsSectionHost(props: Readonly<{ connectionId: string; startAdding?:
     const { machineId, resolveCurrentTarget, serverId } = useProviderSettingsTarget();
     const query = useProviderConnections({ enabled, active: true, machineId, serverId, connectionId: props.connectionId });
     const connection = query.data?.connections.find((item) => item.connectionId === props.connectionId) ?? null;
-    const models = useProviderConnectionModelsSection({
+    const models = useProviderConnectionModelsSection({ declarationContext: query.declarationContext,
         connectionId: props.connectionId, connection, enabled, machineId, serverId, resolveCurrentTarget,
         startAdding: props.startAdding,
     });

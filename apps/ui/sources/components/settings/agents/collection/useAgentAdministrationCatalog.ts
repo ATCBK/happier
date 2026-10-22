@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import { getResolvedAgentCatalogEntries } from '@/agents/backendCatalog/agentCatalogProjection';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
@@ -100,6 +101,7 @@ export type AgentAdministrationCatalog = Readonly<{
     machineOnline: boolean;
     machineLabel: ReturnType<typeof useAgentsMachineScope>['machineLabel'];
     projectionCurrent: boolean;
+    declarationProjection?: PluginProjectionV2 | null;
     agentEntries: ReturnType<typeof getResolvedAgentCatalogEntries>;
 }>;
 
@@ -143,6 +145,7 @@ export function useAgentAdministrationCatalog(options?: Readonly<{
         machineOnline: scope.executionTarget !== null,
         machineLabel: scope.machineLabel,
         projectionCurrent: daemonMergedProjection.phase === 'ready',
+        declarationProjection: daemonMergedProjection.phase === 'ready' ? daemonMergedProjectionInputs?.pluginProjectionV2 ?? null : null,
         agentEntries,
     } as const;
 }

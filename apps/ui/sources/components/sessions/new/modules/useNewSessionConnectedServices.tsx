@@ -63,7 +63,7 @@ import { projectMachineAgentForCredential } from '@/agents/machineAgents/machine
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import type { SessionInstrumentStripLineAction } from '@/components/sessions/agentInput/instrumentStrip';
 import { presentProviderModelRow } from '@/providers/models/presentProviderModelRow';
-import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
+import { providerDeclarationContext, readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/sessions/teamCredentials/teamCredentialProviderModelCurrentness';
 
 export type NewSessionConnectedServicesResult = Readonly<{
@@ -529,7 +529,8 @@ export function useNewSessionConnectedServices(params: Readonly<{
       // Selection is committed only after worker compatibility/confirmation. Recheck
       // the current entitled tuple; a Team model replaces the same native services
       // as any other Provider binding through this Agent's admitted requirements.
-      const requirements = readAccountAgentProviderRequirements(selection.agentTargetKey);
+      const requirements = readAccountAgentProviderRequirements(selection.agentTargetKey,
+        providerDeclarationContext(params.sourceMachineId, params.providerProjection));
       return {
         ready: Boolean(requirements && selection.agentTargetKey === params.nativeAgentTargetKey
           && params.teamCredentialResourceCurrentKeys?.has(`${selection.teamId}:${selection.resourceId}`)
@@ -548,7 +549,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
       suppressedConnectedServiceIds: selectedProviderSource?.suppressedConnectedServiceIds ?? [],
     };
   }, [routePresentation, selectedProviderSource, params.modelSelection, params.nativeAgentTargetKey,
-    params.teamCredentialResources, params.teamCredentialResourceCurrentKeys]);
+    params.teamCredentialResources, params.teamCredentialResourceCurrentKeys, params.providerProjection, params.sourceMachineId]);
 
   const requesterSignInPurposes = React.useMemo(() => {
     if (connectedAccountDefaultsStatus !== 'ready') return [];

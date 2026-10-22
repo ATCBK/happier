@@ -280,6 +280,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         if (connectionShown) recordProviderCollectionVisit(props.connectionId);
     }, [connectionShown, props.connectionId]);
     const models = useProviderConnectionModelsSection({
+        declarationContext: query.declarationContext,
         connectionId: props.connectionId,
         connection,
         enabled: enabled && accountAddressAvailable,
@@ -298,7 +299,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         [customTemplate],
     );
     // A connected contribution is no longer "available to add": its kind comes from its declaration.
-    const pickerSourceKind = readProviderConnectionPickerKind(storedConnection?.source);
+    const pickerSourceKind = readProviderConnectionPickerKind(storedConnection?.source, query.declarationContext);
     const pickerVisibility = useProviderModelPickerVisibility(connection ? props.connectionId : null,
         pickerSourceKind ? { kind: pickerSourceKind, serverId } : undefined);
     // The Connection section's Models row opens the connection's Models page (lab PD1).
@@ -759,13 +760,13 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     // A gateway is the managed connection whose contribution declares vendor slots: one classifier,
     // shared with both Settings collections. Bundled admitted declarations own its identity;
     // machine views supply runtime status only.
-    const gatewayDeclarations = storedConnection ? readProviderGatewayPurposeDeclarations(storedConnection) : null;
+    const gatewayDeclarations = storedConnection ? readProviderGatewayPurposeDeclarations(storedConnection, query.declarationContext) : null;
     const gateway = storedConnection && gatewayDeclarations && gatewayDeclarations.length > 0
         ? { saved: storedConnection, declarations: gatewayDeclarations } : null;
     // The machine already says "gateway" while the Account's saved row is still arriving: hold the
     // older managed-service controls back rather than show them for a moment.
     const gatewayArriving = !gateway && query.loading && query.catalog === null && connection !== null
-        && (readProviderGatewayViewDeclarations(connection)?.length ?? 0) > 0;
+        && (readProviderGatewayViewDeclarations(connection, query.declarationContext)?.length ?? 0) > 0;
     const accountSettingsScope = useAccountSettingsScope();
     const gatewaySaved = gateway?.saved ?? null;
     const gatewayConfiguration = useProviderGatewayConfiguration({ connection: gatewaySaved, machineId, mutation });
@@ -1200,7 +1201,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                 ) : undefined}
                 leading={(
                     <PageHeaderMarkSlot>
-                        <ProviderIcon contributionKey={connection.contributionKey} icon={resolveProviderConnectionIcon(connection)} size={24} color={theme.colors.text.secondary} />
+                        <ProviderIcon contributionKey={connection.contributionKey} icon={resolveProviderConnectionIcon(connection, query.declarationContext)} size={24} color={theme.colors.text.secondary} />
                     </PageHeaderMarkSlot>
                 )}
                 meta={[

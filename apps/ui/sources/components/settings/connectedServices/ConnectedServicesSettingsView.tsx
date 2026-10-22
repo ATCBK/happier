@@ -138,6 +138,7 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   });
   const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
     serverId: activeAccountScope?.serverId,
+    machineId: null,
     enabled: teamCredentialResourcesEnabled,
   });
 

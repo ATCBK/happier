@@ -28,7 +28,7 @@ export function buildPoolGatewayChoices(input: Readonly<{
     const serviceKey = buildQualifiedPluginContributionKey(input.target.service);
     const targetKey = connectedAccountPurposeTargetChoiceId(input.target);
     for (const saved of input.connections) {
-        const declarations = readProviderGatewayPurposeDeclarations(saved);
+        const declarations = readProviderGatewayPurposeDeclarations(saved, { kind: 'account' });
         if (!declarations) continue;
         for (const declaration of declarations) {
             if (buildQualifiedPluginContributionKey(declaration.service) !== serviceKey) continue;

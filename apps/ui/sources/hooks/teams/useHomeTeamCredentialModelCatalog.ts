@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectAgentProviderBrokerApplications } from '@happier-dev/protocol/providers/catalog/brokerApplicationProjectionV1';
 import { parseProviderContributionIdentityV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import { teamsUnavailableReason, type TeamsDirectoryUnavailableHome } from '@/components/settings/teams/teamsDirectoryViewState';
@@ -8,7 +9,8 @@ import { teamsUnavailableReason, type TeamsDirectoryUnavailableHome } from '@/co
 import { observeTeamCredentialResourceCatalog, refreshTeamCredentialResourceCatalog } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { getTeamCredentialResourceCatalogSnapshot, subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { readAccountAgentProviderRequirements, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { providerDeclarationContext, resolveAccountAgentProviderRequirements, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { useTeamsDirectory } from './useTeamsDirectory';
 
 export type HomeTeamCredentialModelCatalog = Readonly<{
@@ -24,10 +26,6 @@ export type HomeTeamCredentialModelCatalog = Readonly<{
 }>;
 
 const EMPTY_RESOURCES: readonly TeamCredentialResourceCatalogEntryV1[] = Object.freeze([]);
-const ADMITTED_PROVIDERS = readAccountProviderDeclarations().flatMap(declaration => {
-    const parsed = parseProviderContributionIdentityV1(declaration.contributionKey);
-    return parsed ? [{ identity: parsed.identity, definition: declaration.definition }] : [];
-});
 
 /**
  * Recipient-safe model catalog for the exact Home selected by Session authoring.
@@ -39,8 +37,20 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
     enabled: boolean;
     /** Omission requests generic resource discovery, without Agent model projection. */
     agentTargetKey?: string | null;
+    /** The exact Session/Agent execution target; declarations never borrow another Machine. */
+    machineId?: string | null;
+    /** A mounted caller's current projection for this exact Machine; null means not admitted. */
+    declarationProjection?: PluginProjectionV2 | null;
 }>): HomeTeamCredentialModelCatalog {
     const serverId = input.serverId?.trim() ?? '';
+    const declarationState = useDaemonMergedProjectionInputs({ machineId: input.machineId, serverId,
+        enabled: input.declarationProjection === undefined && input.enabled && Boolean(input.agentTargetKey && input.machineId) });
+    const projection = input.declarationProjection !== undefined ? input.declarationProjection
+        : declarationState.phase === 'ready' ? declarationState.inputs?.pluginProjectionV2 ?? null : null;
+    const declarationContext = React.useMemo(() => providerDeclarationContext(input.machineId, projection), [input.machineId, projection]);
+    const requirements = React.useMemo(() =>
+        resolveAccountAgentProviderRequirements(input.agentTargetKey ?? '', declarationContext),
+    [input.agentTargetKey, declarationContext]);
     const directory = useTeamsDirectory({ enabled: input.enabled && serverId !== '', serverIds: serverId ? [serverId] : [] });
     const scopeServerId = resolveServerProfileScopeIdForIdentifier(serverId);
     const scope = directory.scopes.find((candidate) => candidate.serverId === scopeServerId) ?? null;
@@ -51,12 +61,18 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
     const rowsKey = JSON.stringify(rows.map((row) => [row.address.serverId, row.address.teamId]));
     const applications = React.useMemo<readonly (ProviderBrokerApplicationBindingV1 | undefined)[]>(() => {
         if (!input.agentTargetKey) return [undefined];
-        const requirements = readAccountAgentProviderRequirements(input.agentTargetKey);
-        return [undefined, ...(requirements ? projectAgentProviderBrokerApplications({
-            providers: ADMITTED_PROVIDERS, agentTargetKey: input.agentTargetKey,
-            acceptedProtocols: requirements.acceptsProtocols,
-        }) : [])];
-    }, [input.agentTargetKey]);
+        // Generic Connected Account choices do not require model compatibility.
+        // Unknown requirements admit no model application and keep `current` false.
+        if (requirements.kind === 'unknown') return [undefined];
+        const providers = readAccountProviderDeclarations(declarationContext).flatMap(declaration => {
+            const parsed = parseProviderContributionIdentityV1(declaration.contributionKey);
+            return parsed ? [{ identity: parsed.identity, definition: declaration.definition }] : [];
+        });
+        return [undefined, ...projectAgentProviderBrokerApplications({
+            providers, agentTargetKey: input.agentTargetKey,
+            acceptedProtocols: requirements.requirements.acceptsProtocols,
+        })];
+    }, [input.agentTargetKey, declarationContext, requirements]);
     const demands = React.useMemo(() => rows.flatMap(row => applications.map(application => ({ row, application }))), [rows, applications]);
     const demandsKey = JSON.stringify([rowsKey, applications]);
 
@@ -105,7 +121,8 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
         const homeNameByTeamId: Record<string, string> = {};
         const currentResourceKeys = new Set<string>();
         const nonCurrentModelResourceKeys = new Set<string>();
-        let current = directory.kind !== 'loading' && !directory.partial;
+        let current = directory.kind !== 'loading' && !directory.partial
+            && (!input.agentTargetKey || requirements.kind === 'known');
         if (directory.kind === 'loading' && !condition) condition = { reason: 'loading', retryable: false };
         for (const { row, application } of demands) {
             teamNameById[row.address.teamId] = row.team.name;
@@ -161,5 +178,5 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
         });
         // snapshotVersion is the scoped store change signal.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [directory.kind, directory.partial, directory.unavailableHomes, input.enabled, reload, demandsKey, scope?.accountId, scope?.serverId, serverId, snapshotVersion]);
+    }, [directory.kind, directory.partial, directory.unavailableHomes, input.enabled, input.agentTargetKey, requirements, reload, demandsKey, scope?.accountId, scope?.serverId, serverId, snapshotVersion]);
 }

@@ -1,3 +1,4 @@
+import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -59,6 +60,8 @@ import { useProviderModelProjection } from '@/providers/hooks/useProviderModelPr
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import type { DaemonProviderModelProjectionRefreshFailureV1 } from '@happier-dev/protocol/rpc';
+import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 
 type FavoriteModelTogglePayload = Readonly<{
     modelId: string;
@@ -204,6 +207,7 @@ function renderFavoriteModelOptionIcon(params: Readonly<{
 }
 
 function FavoriteBackendModelsCollector(props: Readonly<{
+    declarationProjection: PluginProjectionV2 | null;
     entry: ResolvedBackendCatalogEntry;
     favoriteModelSelections: readonly FavoriteModelSelectionV1[];
     selectedBackendTargetKey: string;
@@ -265,6 +269,7 @@ function FavoriteBackendModelsCollector(props: Readonly<{
         const baseNativeModelIds = new Set(modelOptions.map((option) => option.value));
         const sections = buildSessionModelPickerSections({
             agentTargetKey: props.entry.backendTargetKey,
+            declarationContext: providerDeclarationContext(props.selectedMachineId, props.declarationProjection),
             nativeModels: Array.from(rawAvailabilityById.values())
                 .filter((model) => baseNativeModelIds.has(model.modelId))
                 .map((model) => ({
@@ -328,6 +333,8 @@ function FavoriteBackendModelsCollector(props: Readonly<{
     }, [
         hiddenNativeKeys,
         props.entry.backendTargetKey,
+        props.declarationProjection,
+        props.selectedMachineId,
         providerProjection.data?.groups,
         providerProjection.status,
         providersFeatureEnabled,
@@ -579,6 +586,11 @@ function FavoriteBackendModelsCollector(props: Readonly<{
 }
 
 export function NewSessionFavoriteModelsDetail(props: NewSessionFavoriteModelsDetailProps) {
+    // New Session already owns demand for this exact Machine's Agent catalog.
+    // Opening Favorites shares that current answer instead of loading once per Agent.
+    const declarations = useDaemonMergedProjectionInputs({ machineId: props.selectedMachineId,
+        serverId: props.capabilityServerId, enabled: Boolean(props.selectedMachineId), load: false });
+    const declarationProjection = declarations.phase === 'ready' ? declarations.inputs?.pluginProjectionV2 ?? null : null;
     const favoriteBackendEntries = React.useMemo(() => props.resolvedBackendEntries.filter((entry) => {
         const backendIdentity = buildFavoriteBackendIdentity(entry);
         return props.favoriteModelSelections.some((favorite) => favoriteModelSelectionMatchesBackend(favorite, backendIdentity));
@@ -671,6 +683,7 @@ export function NewSessionFavoriteModelsDetail(props: NewSessionFavoriteModelsDe
         <View style={styles.container}>
             {favoriteBackendEntries.map((entry) => (
                 <FavoriteBackendModelsCollector
+                    declarationProjection={declarationProjection}
                     key={formatBackendTargetKeyV2(entry.backendTarget)}
                     entry={entry}
                     favoriteModelSelections={props.favoriteModelSelections}

@@ -642,7 +642,7 @@ export function AgentCatalogEmpty(
     return (
       <EmptyState
         layout="centered"
-        size="pane"
+        size="page"
         scene="noPlugins"
         title={t('capabilities.agentAdd.pluginsEmpty.title')}
         subtitle={t('capabilities.agentAdd.pluginsEmpty.body')}

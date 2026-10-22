@@ -111,7 +111,7 @@ describe('Provider mutation deferred approval', () => {
         await harness.requireUiApproval(serverId, 'providers.models.manual.add');
         const resolveCurrentTarget = () => null;
         const connection = createProviderConnectionViewFixture({ connectionId: 'pc_a', probeCapability: 'none' });
-        const hook = await renderHook(() => useProviderConnectionModelsSection({ connectionId: 'pc_a', connection,
+        const hook = await renderHook(() => useProviderConnectionModelsSection({ declarationContext: { kind: 'account' }, connectionId: 'pc_a', connection,
             enabled: true, machineId: null, serverId, resolveCurrentTarget }));
         await waitForHomeGovernance(() => expect(hook.getCurrent().initialLoading).toBe(false));
         await act(async () => { hook.getCurrent().onManualModelTextChange('manual-review-model'); });

@@ -66,9 +66,9 @@ export type ProviderGatewayContribution = Readonly<{
     purposes: readonly Readonly<{ purpose: string; service: PluginContributionIdentityV1 }>[];
 }>;
 
-/** Bundled admitted declarations own saved identity; daemon views add runtime facts only. */
+/** The caller supplies its admitted declarations; Account-only callers use bundled identity. */
 export function readProviderGatewayContributionPurposes(contributionKey: string,
-    declarations: readonly AccountProviderDeclarationV1[] = readAccountProviderDeclarations(),
+    declarations: readonly AccountProviderDeclarationV1[] = readAccountProviderDeclarations({ kind: 'account' }),
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
     const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, contributionKey));
     const identity = parseQualifiedPluginContributionKey(contributionKey);

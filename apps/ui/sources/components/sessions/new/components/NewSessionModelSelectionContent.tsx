@@ -65,6 +65,7 @@ export type NewSessionModelSelectionContentProps = Readonly<{
     popoverBoundaryRef?: React.RefObject<any> | null;
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     providerGroups?: readonly SessionModelProjectionGroup[];
+    declarationContext?: React.ComponentProps<typeof SessionModelPicker>['declarationContext'];
     teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
     teamNameById?: Readonly<Record<string, string>>;
     homeNameByTeamId?: Readonly<Record<string, string>>;
@@ -170,6 +171,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
             })()
             : buildSessionModelSelectedTriggerPresentation({
             agentTargetKey: agentTargetKey ?? '',
+            declarationContext: props.declarationContext ?? { kind: 'account' },
             nativeModels: agentTargetKey ? props.modelOptions : [],
             providerGroups,
             hiddenNativeModelKeys: props.hiddenNativeModelKeys ?? EMPTY_HIDDEN_NATIVE_MODEL_KEYS,
@@ -182,6 +184,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
     ), [
         agentTargetKey,
         props.currentSelectionRecovery,
+        props.declarationContext,
         props.hiddenNativeModelKeys,
         props.modelOptions,
         props.providerProjectionAuthoritative,
@@ -248,6 +251,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
         <SessionModelPicker
             probe={props.modelDiscoveryFailed ? { phase: 'idle', failed: true } : undefined}
             agentTargetKey={agentTargetKey ?? ''}
+            declarationContext={props.declarationContext}
             nativeModels={agentTargetKey ? props.modelOptions : []}
             providerGroups={providerGroups}
             teamCredentialResources={props.teamCredentialResources}

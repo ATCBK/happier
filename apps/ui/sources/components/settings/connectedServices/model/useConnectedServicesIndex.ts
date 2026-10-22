@@ -70,11 +70,11 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
         if (!gatewayCatalog?.data) return null;
         const connections = gatewayCatalog.data.connections;
         if (!connections.some(connection => connection.deployment.kind === 'managedLocal')) return NO_GATEWAYS;
-        return buildProviderGatewayCollection({ connections });
+        return buildProviderGatewayCollection({ connections, declarationContext: { kind: 'account' } });
     }, [gatewayCatalog?.data]);
     const gatewayCatalogCurrent = gatewayCatalog?.status === 'ready' && !gatewayCatalog.stale;
     const gatewaysKnown = gatewayRows !== null && gatewayCatalogCurrent && areProviderGatewayDeclarationsKnown({
-        connections: gatewayCatalog?.data?.connections ?? [],
+        connections: gatewayCatalog?.data?.connections ?? [], declarationContext: { kind: 'account' },
     });
     // With no gateway yet the Gateways group offers one (D19): an Account write, no machine.
     const refreshGateways = React.useCallback(async () => {
@@ -88,7 +88,8 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
     const gatewaysLoading = options.gateways === true && (gatewayRows?.length ?? 0) === 0
         && (!gatewayCatalog || gatewayCatalog.status === 'loading');
     const addGateway = React.useMemo(() => {
-        const contribution = canAddGateway ? readProviderGatewayContribution(readAccountProviderDeclarations()) : null;
+        // Account gateway creation does not select an execution Machine.
+        const contribution = canAddGateway ? readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' })) : null;
         if (!contribution) return null;
         const allocatedConnectionId = `pc_${randomUUID()}`;
         return async (): Promise<string | null> => {

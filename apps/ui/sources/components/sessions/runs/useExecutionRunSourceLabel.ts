@@ -32,6 +32,8 @@ export function useExecutionRunSourceLabel(
     const teamModel = selection?.teamCredentialModel;
     const teamBindings = Object.values(connectedServices?.bindingsByServiceId ?? {}).filter(binding => binding.source === 'team_resource');
     const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: resolvedServerId,
+        // Recorded Run labels carry Account identity, not an execution Machine.
+        machineId: null,
         agentTargetKey: teamModel?.agentTargetKey,
         enabled: teamModel !== undefined || teamBindings.length > 0 });
     if (teamModel) {

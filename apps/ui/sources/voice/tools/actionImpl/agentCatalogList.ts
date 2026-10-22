@@ -1,3 +1,4 @@
+import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import { getAgentCore, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
 import { listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
 import { AgentsBackendsListOutputSchema, type AgentsBackendsListOutput } from '@happier-dev/protocol/actions/agentBackendInventory';
@@ -187,6 +188,9 @@ async function projectVoiceToolProviderModels(params: Readonly<{
       mode: 'picker',
     });
     context.assertCurrent();
+    const declarations = await loadDaemonMergedProjectionInputs({ machineId: params.machineId, serverId: params.serverId,
+      accountLifetime: context.accountLifetime });
+    context.assertCurrent();
     await refreshProviderCatalog(scope);
     context.assertCurrent();
     const catalog = getProviderCatalogSnapshot(scope);
@@ -199,6 +203,7 @@ async function projectVoiceToolProviderModels(params: Readonly<{
     }
     const sections = buildSessionModelPickerSections({
       agentTargetKey: params.agentTargetKey,
+      declarationContext: providerDeclarationContext(params.machineId, declarations?.pluginProjectionV2),
       nativeModels: params.base.items.map((item) => ({
         value: item.modelId,
         label: item.label,

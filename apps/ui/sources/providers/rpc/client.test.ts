@@ -394,7 +394,7 @@ describe('provider settings RPC client', () => {
             modelPickerVisibilityByConnectionId: { pc_a: false },
         });
         const currentSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey, providerConnectionId: 'pc_a', modelId: 'same-model' });
-        const agent = readAccountAgentProviderRequirements(agentTargetKey);
+        const agent = readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' });
         expect(agent).not.toBeNull();
         const projection = projectAccountProviderModelsV1({ catalog, definitions: [], agent,
             request: { agentTargetKey, currentSelection } });

@@ -9,7 +9,7 @@ const CLAUDE = 'agent:happier.agent.claude/claude';
 
 describe('buildSessionRouteSourceRows', () => {
     it('keeps a compatible source browseable before it has any projected model rows', () => {
-        const rows = buildSessionRouteSourceRows({ agentTargetKey: CODEX, isGateway: () => true,
+        const rows = buildSessionRouteSourceRows({ declarationContext: { kind: 'account' }, agentTargetKey: CODEX, isGateway: () => true,
             views: [createProviderConnectionViewFixture({ connectionId: 'pc_gateway',
                 compatibility: [{ agentTargetKey: CODEX, agentName: 'Codex', status: 'verified', reasons: [] }] })],
             shownSources: [], hiddenSources: [] });
@@ -17,14 +17,14 @@ describe('buildSessionRouteSourceRows', () => {
     });
     it('retains admitted Provider contribution identity for its packaged mark', () => {
         const contributionKey = 'happier.provider.deepseek/deepseek';
-        const rows = buildSessionRouteSourceRows({ agentTargetKey: CODEX, isGateway: () => false,
+        const rows = buildSessionRouteSourceRows({ declarationContext: { kind: 'account' }, agentTargetKey: CODEX, isGateway: () => false,
             views: [createProviderConnectionViewFixture({ contributionKey, icon: 'cube' })],
             shownSources: [{ connectionId: 'pc_a', rows: [{}] }], hiddenSources: [] });
         expect(rows.providers[0]).toMatchObject({ contributionKey, icon: 'cube' });
     });
     it('carries the declared gateway glyph and contribution identity without a machine icon', () => {
         const contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
-        const rows = buildSessionRouteSourceRows({
+        const rows = buildSessionRouteSourceRows({ declarationContext: { kind: 'account' },
             agentTargetKey: CODEX,
             isGateway: () => true,
             views: [createProviderConnectionViewFixture({ connectionId: 'pc_gateway', contributionKey,
@@ -34,7 +34,7 @@ describe('buildSessionRouteSourceRows', () => {
         expect(rows.gateways[0]).toMatchObject({ contributionKey, icon: 'path' });
     });
     it('lists shown and hidden sources to browse and keeps an incompatible one, naming the Agents it works with', () => {
-        const rows = buildSessionRouteSourceRows({
+        const rows = buildSessionRouteSourceRows({ declarationContext: { kind: 'account' },
             agentTargetKey: CODEX,
             isGateway: view => view.connectionId === 'pc_gateway',
             views: [

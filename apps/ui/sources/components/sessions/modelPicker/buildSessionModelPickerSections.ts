@@ -11,7 +11,7 @@ import { buildActionRowAccessibilityLabel } from '@/components/ui/lists/actionRo
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 import { presentProviderModelRow } from '@/providers/models/presentProviderModelRow';
 import { providerConnectionSourceLabel } from '@/providers/session/resolveSessionRoutePresentation';
-import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
+import { resolveAccountAgentProviderRequirements, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import { t } from '@/text';
 import {
     formatLimitResetUtc,
@@ -176,6 +176,7 @@ function nativeModelRef(agentTargetKey: string, modelId: string): ProviderBoundM
 
 export function buildSessionModelPickerSections(input: Readonly<{
     agentTargetKey: string;
+    declarationContext: ProviderDeclarationContext;
     nativeModels: readonly SessionNativeModelOption[];
     providerGroups: readonly SessionModelProjectionGroup[];
     hiddenNativeModelKeys: ReadonlySet<string>;
@@ -208,9 +209,9 @@ export function buildSessionModelPickerSections(input: Readonly<{
      */
     gatewaySlotTitle?: (slot: SessionModelGatewaySlot) => string | null;
 }>): readonly SessionModelPickerSection[] {
-    const requirements = readAccountAgentProviderRequirements(input.agentTargetKey);
-    const modelEligible = (model: ProviderModelDescriptorV1) => !requirements
-        || !resolveProviderModelCapabilityCompatibilityV1({ required: requirements.required, model }).incompatible;
+    const requirements = resolveAccountAgentProviderRequirements(input.agentTargetKey, input.declarationContext);
+    const modelEligible = (model: ProviderModelDescriptorV1) => requirements.kind === 'known'
+        && !resolveProviderModelCapabilityCompatibilityV1({ required: requirements.requirements.required, model }).incompatible;
     const nativeSource = { label: input.nativeSourceLabel || t('settingsProviders.models.builtIn'), native: true };
     const shouldShowDescriptions = input.nativeModels.some((model) => (
         model.value !== 'default'
@@ -396,7 +397,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             row.selection.agentTargetKey === selectedValue.agentTargetKey
             && row.selection.modelId === selectedValue.modelId
         )) ?? null;
-        const teamModelEligible = !teamModel || modelEligible(teamModel.descriptor);
+        const teamModelEligible = requirements.kind === 'known' && (!teamModel || modelEligible(teamModel.descriptor));
         const label = recovery?.displaySnapshot?.modelName
             ?? teamModel?.descriptor.name
             ?? selectedValue.modelId;
@@ -461,6 +462,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
  */
 export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
     agentTargetKey: string;
+    declarationContext: ProviderDeclarationContext;
     nativeModels: readonly SessionNativeModelOption[];
     providerGroups: readonly SessionModelProjectionGroup[];
     hiddenNativeModelKeys: ReadonlySet<string>;
@@ -496,6 +498,7 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
         }) : [];
     const sections = buildSessionModelPickerSections({
         agentTargetKey: input.agentTargetKey,
+        declarationContext: input.declarationContext,
         nativeModels,
         providerGroups,
         hiddenNativeModelKeys: input.hiddenNativeModelKeys,

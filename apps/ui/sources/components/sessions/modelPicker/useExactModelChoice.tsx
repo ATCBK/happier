@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type { DaemonProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/rpc';
 import { BackendTargetKeyV2Schema, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -19,6 +20,7 @@ import { Modal } from '@/modal';
 import { useConfirmExperimentalProviderModel } from '@/providers/hooks/useConfirmExperimentalProviderModel';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 
 type ProjectionGroups = NonNullable<
   ReturnType<typeof useProviderModelProjection>['data']
@@ -32,6 +34,8 @@ type TeamModelChoiceProps = Pick<SessionModelPickerProps, 'teamCredentialResourc
 function ExactModelChoiceModal(
   props: Readonly<{
     agentTargetKey: string;
+    declarationContext: NonNullable<SessionModelPickerProps['declarationContext']>;
+    sourceBrowse?: SessionModelPickerProps['sourceBrowse'];
     nativeModels: readonly {
       value: string;
       label: string;
@@ -55,6 +59,8 @@ function ExactModelChoiceModal(
   return (
     <SessionModelPicker
       agentTargetKey={props.agentTargetKey}
+      declarationContext={props.declarationContext}
+      sourceBrowse={props.sourceBrowse}
       nativeModels={props.nativeModels}
       providerGroups={props.providerGroups}
       providerProjectionAuthoritative={props.providerProjectionAuthoritative}
@@ -109,6 +115,12 @@ export function useExactModelChoice(
     serverId: params.serverId,
   });
   const enabled = params.enabled !== false;
+  // Closed rows observe the exact Machine's admitted cache without initiating discovery.
+  const declarations = useDaemonMergedProjectionInputs({ machineId: params.machineId, serverId: params.serverId,
+    enabled: enabled && Boolean(params.machineId), load: false });
+  const declarationProjection = declarations.phase === 'ready' ? declarations.inputs?.pluginProjectionV2 : undefined;
+  const declarationContext = React.useMemo(() => providerDeclarationContext(params.machineId, declarationProjection),
+    [params.machineId, declarationProjection]);
   const backendTarget = React.useMemo(() => {
     const key = BackendTargetKeyV2Schema.safeParse(params.agentTargetKey);
     return key.success ? resolveOperationalBackendTargetForAgentSelection({
@@ -177,6 +189,7 @@ export function useExactModelChoice(
     () =>
       buildSessionModelSelectedTriggerPresentation({
         agentTargetKey: params.agentTargetKey ?? '',
+        declarationContext,
         nativeModels,
         providerGroups,
         hiddenNativeModelKeys,
@@ -189,6 +202,7 @@ export function useExactModelChoice(
       }),
     [
       currentSelectionRecovery,
+      declarationContext,
       hiddenNativeModelKeys,
       nativeModels,
       params.agentTargetKey,
@@ -205,6 +219,8 @@ export function useExactModelChoice(
   // failing) through the modal's own update, so it never shows what was true when it opened.
   const live = React.useMemo(
     () => ({
+      declarationContext,
+      sourceBrowse: { machineId: params.machineId, serverId: params.serverId },
       nativeModels,
       providerGroups,
       providerProjectionAuthoritative,
@@ -222,11 +238,14 @@ export function useExactModelChoice(
     }),
     [
       confirmExperimentalModel,
+      declarationContext,
       currentSelectionRecovery,
       hiddenNativeModelKeys,
       nativeModels,
       probe,
       params.fallbackLabel,
+      params.machineId,
+      params.serverId,
       params.selected,
       params.teamModelChoice,
       providerGroups,

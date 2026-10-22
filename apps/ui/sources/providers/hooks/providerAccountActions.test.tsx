@@ -546,7 +546,7 @@ describe('Account Provider UI actions without a machine', () => {
         });
         const { serverId } = await account.restore({ catalog, machines: [] });
         const { useProviderConnectionModelsSection } = await import('@/components/settings/providers/models/useProviderConnectionModelsSection');
-        const hook = await renderHook(() => useProviderConnectionModelsSection({
+        const hook = await renderHook(() => useProviderConnectionModelsSection({ declarationContext: { kind: 'account' },
             enabled: true, connectionId: 'pc_account', machineId: null, serverId,
             connection: { providerName: 'Account source', displayName: 'Account source', role: 'named',
                 displayNameMode: 'custom', probeCapability: 'catalog' },
@@ -591,7 +591,7 @@ describe('Account Provider UI actions without a machine', () => {
             },
         });
         const { useProviderConnectionModelsSection } = await import('@/components/settings/providers/models/useProviderConnectionModelsSection');
-        const hook = await renderHook(() => useProviderConnectionModelsSection({
+        const hook = await renderHook(() => useProviderConnectionModelsSection({ declarationContext: { kind: 'account' },
             enabled: true, connectionId: 'pc_account', machineId: null, serverId,
             connection: { providerName: 'Account source', displayName: 'Account source', role: 'named',
                 displayNameMode: 'custom', probeCapability: 'catalog' }, resolveCurrentTarget: () => null,

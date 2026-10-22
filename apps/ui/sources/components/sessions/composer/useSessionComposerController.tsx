@@ -1,3 +1,4 @@
+import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import { readRuntimeDescriptorV1FromMetadata } from "@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat";
 import type { CliAuthStatusData } from "@/sync/api/capabilities/capabilitiesProtocol";
 import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
@@ -920,8 +921,22 @@ export function useSessionComposerController({
         scopeKind: 'spawn',
         serverId: sessionRouteServerId,
     });
+    const providerAgentTargetKey = resolveSessionActionDefaultTargetKey(sessionActionDefaultBackend);
+    const daemonMergedProjection = useDaemonMergedProjectionInputs({
+        machineId,
+        serverId: sessionRouteServerId,
+        enabled: Boolean(machineId),
+        staleMs: 60_000,
+    });
+    const declarationProjection = daemonMergedProjection.phase === 'ready'
+        ? daemonMergedProjection.inputs?.pluginProjectionV2 ?? null : null;
+    const declarationContext = React.useMemo(() => providerDeclarationContext(machineId, declarationProjection),
+        [machineId, declarationProjection]);
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId: sessionRouteServerId,
+        machineId,
+        agentTargetKey: providerAgentTargetKey,
+        declarationProjection,
         enabled: teamCredentialResourcesEnabled,
     });
     const coordinateTeamCredentialSelection = useTeamCredentialSelectionCoordinator(sessionRouteServerId);
@@ -947,7 +962,6 @@ export function useSessionComposerController({
         launchBinding: providerLaunchBinding,
         completedTurnObservedAt: session.latestTurnStatus === 'completed' ? session.latestTurnStatusObservedAt : null,
     });
-    const providerAgentTargetKey = resolveSessionActionDefaultTargetKey(sessionActionDefaultBackend);
     const [providerModelPickerDemanded, setProviderModelPickerDemanded] = React.useState(false);
     const providerModelProjection = useProviderModelProjection({
         enabled: providersFeatureEnabled && providerAgentTargetKey !== null,
@@ -1161,12 +1175,6 @@ export function useSessionComposerController({
             ? scmSessionAutoRefreshIntervalMsSetting
             : 5 * 60 * 1000;
     const settings = useSettingsSelector(selectSessionViewSettings);
-    const daemonMergedProjection = useDaemonMergedProjectionInputs({
-        machineId,
-        serverId: sessionRouteServerId,
-        enabled: Boolean(machineId),
-        staleMs: 60_000,
-    });
     const currentLifecycleAgentCapabilities = React.useMemo(() => (
         daemonMergedProjection.phase === 'ready'
             ? readCurrentProjectedAgentCapabilities({
@@ -4338,6 +4346,7 @@ export function useSessionComposerController({
         providersFeatureEnabled && providerAgentTargetKey && existingSessionSelectedModelRef?.providerConnectionId
             ? {
                 agentTargetKey: providerAgentTargetKey,
+                declarationContext,
                 nativeModels: existingSessionNativeModels,
                 providerGroups: providerModelProjection.data?.groups ?? EMPTY_SESSION_MODEL_PROJECTION_GROUPS,
                 hiddenNativeModelKeys: existingSessionHiddenNativeModelKeys,
@@ -4348,7 +4357,7 @@ export function useSessionComposerController({
                 fieldLabel: t('newSession.selectModelTitle'),
             }
             : undefined
-    ), [existingSessionHiddenNativeModelKeys, existingSessionNativeModels, existingSessionSelectedModelRef,
+    ), [declarationContext, existingSessionHiddenNativeModelKeys, existingSessionNativeModels, existingSessionSelectedModelRef,
         providerAgentTargetKey, providerModelProjection.data, providerModelProjection.status, providersFeatureEnabled]);
     const resolveSessionModelDiscoveryContext = React.useCallback((settings: Settings): SessionModelDiscoveryContext => {
         const target = resolveSessionActionDefaultTarget(sessionActionDefaultBackend);
@@ -4425,6 +4434,7 @@ export function useSessionComposerController({
                     <SessionModelPicker
                         multiColumn
                         agentTargetKey={providerAgentTargetKey}
+                        declarationContext={declarationContext}
                         nativeModels={existingSessionNativeModels}
                         providerGroups={providerGroups}
                         teamCredentialResources={embeddedModelNarrowing ? EMPTY_TEAM_CREDENTIAL_RESOURCES : teamCredentialCatalog.resources}
@@ -4491,6 +4501,7 @@ export function useSessionComposerController({
         />;
     }, [
         agentId,
+        declarationContext,
         resolveSessionModelDiscoveryContext,
         confirmExperimentalProviderModel,
         existingSessionHiddenNativeModelKeys,
@@ -6183,7 +6194,7 @@ export function useSessionComposerController({
             <SessionComposerAgentInput
                 composerRef={activeComposerRef}
                 composerReferenceHost={composerDropReferenceHost}
-                composerFileScope={companionAddress ? resolveWorkspaceTargetForSession(companionAddress) : null}
+                composerFileScope={companionAddress ? reviewScope : null}
                 textStore={composerTextStore}
                 structuredInputPersistence={inputComposerPersistence.structuredInputPersistence}
                 pendingText={pendingComposerDocument?.text ?? null}

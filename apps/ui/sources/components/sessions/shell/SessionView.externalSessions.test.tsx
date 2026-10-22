@@ -93,7 +93,13 @@ const daemonMergedProjectionState = vi.hoisted(() => ({
   current: { phase: 'idle', inputs: null as any },
 }));
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-  useDaemonMergedProjectionInputs: () => daemonMergedProjectionState.current,
+  // The fixtures publish only the facts each test exercises; the projection shape's other maps are empty.
+  useDaemonMergedProjectionInputs: () => {
+    const state = daemonMergedProjectionState.current;
+    return state.inputs
+      ? { ...state, inputs: { mergedProviderProjectionById: {}, mergedBackendProjectionById: {}, connectedAccountProjection: null, ...state.inputs } }
+      : state;
+  },
 }));
 
 const machineExternalSessionStatusGetSpy = vi.hoisted(() => vi.fn());

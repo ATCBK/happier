@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { providerDeclarationContext, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { providerCatalogPermitsUnlistedModelIdV1 } from '@happier-dev/protocol/providers/catalog/merge';
 import type { ProviderBoundModelRef, ProviderErrorV1 } from '@happier-dev/protocol';
 import type {
@@ -149,6 +151,7 @@ const EMPTY_PROJECTION_GROUPS: readonly SessionModelProjectionGroup[] = [];
 
 export type SessionModelPickerProps = Readonly<{
     agentTargetKey: string;
+    declarationContext?: ProviderDeclarationContext;
     nativeModels: readonly SessionNativeModelOption[];
     providerGroups: readonly SessionModelProjectionGroup[];
     teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
@@ -280,6 +283,8 @@ function SessionModelSourceBrowse(props: Readonly<{
     return (
         <SessionModelPickerPane
             agentTargetKey={picker.agentTargetKey}
+            declarationContext={picker.declarationContext}
+            sourceBrowse={picker.sourceBrowse}
             nativeModels={EMPTY_NATIVE_MODELS}
             providerGroups={projection.data?.groups ?? EMPTY_PROJECTION_GROUPS}
             providerProjectionAuthoritative={projection.status === 'success'}
@@ -324,6 +329,12 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
     scope?: Readonly<{ scope: SessionModelBrowseScope; onExit: () => void }>;
 }>) {
     const canConfirmExperimental = Boolean(props.experimentalConfirmation);
+    const declarations = useDaemonMergedProjectionInputs({ machineId: props.sourceBrowse?.machineId,
+        serverId: props.sourceBrowse?.serverId, enabled: props.declarationContext === undefined && Boolean(props.sourceBrowse?.machineId) });
+    const projection = declarations.phase === 'ready' ? declarations.inputs?.pluginProjectionV2 : null;
+    const declarationContext = React.useMemo(() => props.declarationContext
+        ?? providerDeclarationContext(props.sourceBrowse?.machineId, projection),
+        [props.declarationContext, props.sourceBrowse?.machineId, projection]);
     const router = useRouter();
     const selectedOptionControls = React.useMemo(() => {
         const selected = props.selectedTeamCredentialModel ?? props.selected;
@@ -361,6 +372,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
     const nativeSourceLabel = props.nativeSourceLabel ?? hostNativeSourceLabel;
     const baseSections = React.useMemo(() => buildSessionModelPickerSections({
         agentTargetKey: props.agentTargetKey,
+        declarationContext,
         nativeModels: props.nativeModels,
         providerGroups: props.providerGroups,
         hiddenNativeModelKeys: props.hiddenNativeModelKeys ?? new Set<string>(),
@@ -380,6 +392,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         gatewaySlotTitle: props.gatewaySlotTitle,
     }), [
         props.agentTargetKey,
+        declarationContext,
         props.allowAutomatic,
         nativeSourceLabel,
         props.scope,

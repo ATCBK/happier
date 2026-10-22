@@ -175,7 +175,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       }
       const consumed = AgentModelsProbeObservationSchema.parse((result.result as Record<string, unknown>).probeObservation);
       const { buildSessionModelPickerSections } = await import('@/components/sessions/modelPicker/buildSessionModelPickerSections');
-      const sections = buildSessionModelPickerSections({ agentTargetKey: 'agent:acme.voice/agent',
+      const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' }, agentTargetKey: 'agent:acme.voice/agent',
         nativeModels: consumed.availableModels.map(model => ({ value: model.id, label: model.name })),
         providerGroups: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true });
       expect(sections.flatMap(section => section.options).map(option => option.value)).toContainEqual({
@@ -338,7 +338,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
     try {
       await flushHookEffects();
       expect(models.getCurrent().modelOptions.map(model => model.value)).toContain('native/gpt-6.1-sol');
-      const sections = buildSessionModelPickerSections({ agentTargetKey: key, nativeModels: models.getCurrent().modelOptions,
+      const sections = buildSessionModelPickerSections({ declarationContext: { kind: 'account' }, agentTargetKey: key, nativeModels: models.getCurrent().modelOptions,
         providerGroups: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true });
       const searchable = sections.map(section => ({ kind: 'static' as const, id: section.id,
         options: section.options.map(option => ({ id: sessionModelSelectionKey(option.value), label: option.label,

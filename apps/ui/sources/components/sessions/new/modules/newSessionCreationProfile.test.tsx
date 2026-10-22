@@ -80,7 +80,7 @@ describe('new-session creation-profile choices', () => {
             return { panel, selected };
         });
         const picker = hook.getCurrent().panel.modelPickerProps!;
-        const choices = buildSessionModelPickerSections({ ...picker, hiddenNativeModelKeys: picker.hiddenNativeModelKeys ?? new Set() })
+        const choices = buildSessionModelPickerSections({ declarationContext: { kind: 'account' }, ...picker, hiddenNativeModelKeys: picker.hiddenNativeModelKeys ?? new Set() })
             .flatMap((section) => section.options).filter((option) => !option.disabled);
         expect(choices.map((choice) => choice.value)).toEqual(allowed);
         expect(hook.getCurrent().selected).toEqual({ agentTargetKey, providerConnectionId: null, modelId: 'same-model' });

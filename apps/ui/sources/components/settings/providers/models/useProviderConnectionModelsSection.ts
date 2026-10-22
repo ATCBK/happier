@@ -1,3 +1,4 @@
+import type { ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import * as React from 'react';
 import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { parseProviderManualModelInput } from '@happier-dev/protocol/providers/manualModelInput';
@@ -39,6 +40,7 @@ type OperationError = Readonly<{
  * `manualDraft`.
  */
 export function useProviderConnectionModelsSection(input: Readonly<{
+    declarationContext: ProviderDeclarationContext;
     connectionId: string;
     connection: Pick<DaemonProviderConnectionViewV1, 'providerName' | 'displayName' | 'role' | 'displayNameMode' | 'probeCapability'> | null;
     enabled: boolean;
@@ -53,7 +55,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     const { mutateProviderModelSettings, probeProviderConnection, pendingApproval, accountScope: { resolution } } = useProviderActionClient(serverId, input.initiatingLifetime);
     const addressedScope = input.initiatingLifetime !== null && resolution.kind === 'bound' ? resolution.scope : null;
     const catalog = useProviderConnectionModels({ enabled, active: input.active, machineId, serverId, connectionId });
-    const catalogCount = useProviderCatalogCounts(serverId)?.[connectionId] ?? null;
+    const catalogCount = useProviderCatalogCounts(serverId, input.declarationContext)?.[connectionId] ?? null;
     const [showHidden, setShowHidden] = React.useState(false);
     const [editorOpen, setEditorOpen] = React.useState(input.startAdding === true);
     const [manualModelText, setManualModelText] = React.useState('');

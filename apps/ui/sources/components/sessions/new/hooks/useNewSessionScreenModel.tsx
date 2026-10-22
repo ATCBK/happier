@@ -1,3 +1,4 @@
+import { providerDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { sanitizeNewSessionConfigOverridesForModelSelection } from '@/components/sessions/new/modules/newSessionConfigOptionOverrideSanitization';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
@@ -1311,6 +1312,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
     }, [selectedBackendTargetKey, setSelectedTeamCredentialModel, storedTeamCredentialModel]);
     const teamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId: targetServerId,
+        machineId: selectedMachineId,
+        declarationProjection: selectedMachineId === agentCatalogMachineId ? currentProjectionInputs?.pluginProjectionV2 ?? null : null,
         enabled: credentialResourcesEnabled,
         agentTargetKey: selectedBackendTargetKey,
     });
@@ -2099,6 +2102,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         const projection = hostCatalog ? hostCatalog.providerProjection : providerModelProjection.data;
         return {
             agentTargetKey: selectedBackendTargetKey,
+            declarationContext: providerDeclarationContext(selectedMachineId, selectedMachineId === agentCatalogMachineId ? currentProjectionInputs?.pluginProjectionV2 : null),
             nativeModels: hostCatalog?.nativeModels ?? modelOptions,
             providerGroups: projection?.groups ?? [],
             hiddenNativeModelKeys,
@@ -2116,7 +2120,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             canEnterCustomNativeValue: supportsFreeformModelSelectionForSession(selectedUiAgentType, null),
             onSelect: selectCreationModel,
         };
-    }, [creationProfile, confirmExperimentalProviderModel, hiddenNativeModelKeys, hostBoundMachineId, modelMode, modelOptions,
+    }, [agentCatalogMachineId, currentProjectionInputs?.pluginProjectionV2, selectedMachineId, creationProfile, confirmExperimentalProviderModel, hiddenNativeModelKeys, hostBoundMachineId, modelMode, modelOptions,
         modelOptionsProbeState, modelSelection, providerModelProjection.data, providerModelProjection.error,
         providerModelProjection.refresh, providerModelProjection.refreshFailures, providerModelProjection.status,
         selectCreationModel, selectedBackendTargetKey, selectedUiAgentType]);
@@ -2126,6 +2130,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         const picker = creationModelPickerProps;
         return {
             agentTargetKey: selectedBackendTargetKey,
+            declarationContext: providerDeclarationContext(selectedMachineId, selectedMachineId === agentCatalogMachineId ? currentProjectionInputs?.pluginProjectionV2 : null),
             nativeModels: picker?.nativeModels ?? modelOptions,
             providerGroups: picker?.providerGroups ?? providerModelProjection.data?.groups ?? [],
             hiddenNativeModelKeys,
@@ -2135,7 +2140,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             fallbackLabel: t('agentInput.model.unavailable'),
             fieldLabel: t('newSession.selectModelTitle'),
         };
-    }, [creationModelPickerProps, hiddenNativeModelKeys, modelOptions, modelSelection, providerModelProjection.data,
+    }, [agentCatalogMachineId, currentProjectionInputs?.pluginProjectionV2, selectedMachineId, creationModelPickerProps, hiddenNativeModelKeys, modelOptions, modelSelection, providerModelProjection.data,
         providerModelProjection.status, selectedBackendTargetKey]);
 
     const allProfilesRequirementNames = React.useMemo(() => {
@@ -4278,6 +4283,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             providerModelGroups: providersFeatureEnabled
                 ? (providerModelProjection.data?.groups ?? [])
                 : [],
+            declarationContext: providerDeclarationContext(selectedMachineId, selectedMachineId === agentCatalogMachineId ? currentProjectionInputs?.pluginProjectionV2 : null),
             providerModelProjectionAuthoritative: providerModelProjection.status === 'success',
             providerModelProjectionError: providersFeatureEnabled ? providerModelProjection.error : null,
             providerModelProjectionFailures: providersFeatureEnabled ? providerModelProjection.refreshFailures : [],

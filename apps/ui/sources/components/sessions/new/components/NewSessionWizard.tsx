@@ -167,6 +167,7 @@ export interface NewSessionWizardAgentProps {
     setModelMode: (mode: ModelMode) => void;
     setModelSelection?: (selection: SessionModelSelectionV1 | null) => void;
     providerModelGroups?: readonly SessionModelProjectionGroup[];
+    declarationContext?: React.ComponentProps<typeof NewSessionModelSelectionContent>['declarationContext'];
     teamCredentialResources?: React.ComponentProps<typeof NewSessionModelSelectionContent>['teamCredentialResources'];
     teamNameById?: React.ComponentProps<typeof NewSessionModelSelectionContent>['teamNameById'];
     homeNameByTeamId?: React.ComponentProps<typeof NewSessionModelSelectionContent>['homeNameByTeamId'];
@@ -1073,6 +1074,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                     favoriteModelSelections={favoriteModelSelections}
                                                     onFavoriteModelSelectionsChange={setFavoriteModelSelections}
                                                     providerGroups={providerModelGroups}
+                                                    declarationContext={props.agent.declarationContext}
                                                     teamCredentialResources={teamCredentialResources}
                                                     teamNameById={teamNameById}
                                                     homeNameByTeamId={homeNameByTeamId}
