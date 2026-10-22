@@ -8,7 +8,7 @@ import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessio
 import { ServerReachabilityWaitTimeoutError } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -90,10 +90,21 @@ vi.mock('@/sync/ops/machineExternalSessions', async (importOriginal) => ({
     machineExternalSessionTranscriptReadAfter: machineExternalSessionTranscriptReadAfterMock,
     machineExternalSessionTranscriptRefreshReadAfter: machineExternalSessionTranscriptRefreshReadAfterMock,
 }));
-vi.mock('@/sync/api/session/apiSocket', () => ({
-    apiSocket: {
-        request: requestMock,
-        createRequestForPreparedTarget: () => requestMock,
+// The socket transport is the boundary: these overrides shadow only its transport methods, while
+// the real disconnected socket answers every other reader (for example no Account observation).
+vi.mock('@/sync/api/session/apiSocket', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/api/session/apiSocket')>();
+    const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
+    // Session reads travel the batch wire; requestMock keeps answering the per-Session facts beneath it.
+    const readBatch = createSessionReadBatchFetchBoundary(async (input, init) => {
+        const url = new URL(String(input));
+        return await requestMock(`${url.pathname}${url.search}`, init, undefined);
+    });
+    const request = (path: string, init?: RequestInit, ...rest: unknown[]) => path === '/v2/sessions/read-batch'
+        ? readBatch(`https://session-read.test${path}`, init) : requestMock(path, init, ...rest);
+    Object.assign(actual.apiSocket, {
+        request,
+        createRequestForPreparedTarget: () => request,
         getMachineRequestScope: () => getActiveServerAccountScope(),
         emitWithAck: vi.fn(),
         send: vi.fn(),
@@ -103,10 +114,20 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         disconnect: vi.fn(),
         initialize: vi.fn(),
         invalidateRequests: vi.fn(),
-    },
-}));
+    });
+    return actual;
+});
+// Session reads travel the batch wire; runtimeFetchMock keeps answering the per-Session facts beneath it.
+const sessionReadRuntimeFetch = vi.hoisted(() => ({ fetch: null as null | ((input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>) }));
+async function runtimeFetchThroughSessionReadBatch(input: RequestInfo | URL, init?: RequestInit) {
+    if (!sessionReadRuntimeFetch.fetch) {
+        const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
+        sessionReadRuntimeFetch.fetch = createSessionReadBatchFetchBoundary(async (url, requestInit) => await runtimeFetchMock(url, requestInit));
+    }
+    return await sessionReadRuntimeFetch.fetch(input, init);
+}
 vi.mock('@/utils/system/runtimeFetch', () => ({
-    runtimeFetch: runtimeFetchMock,
+    runtimeFetch: runtimeFetchThroughSessionReadBatch,
 }));
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: (params: Readonly<{
@@ -115,7 +136,7 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
         onIssued?: () => void;
     }>) => {
         params.onIssued?.();
-        return runtimeFetchMock(params.url, params.init);
+        return runtimeFetchThroughSessionReadBatch(params.url, params.init);
     },
 }));
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
@@ -268,6 +289,11 @@ function installAppliedAccountScope(sync: object, accountId = 'scope-test-accoun
     publishAppliedActiveServerSnapshot(snapshot);
     Reflect.set(sync, 'appliedServerTarget', snapshot);
     Reflect.set(sync, 'serverID', accountId);
+}
+
+/** Session batch reads include the turns projection; these Homes have no turns yet. */
+function emptySessionTurnsResponse(sessionId: string): Response {
+    return Response.json({ v: 1, sessionId, updatedAt: 1, turns: [] });
 }
 
 function pendingActionAcknowledgement(init?: RequestInit): Response {
@@ -3361,6 +3387,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                         authorAccountId: null,
                     }] });
                 }
+                if (url.pathname === `/v1/sessions/${sessionId}/turns`) return emptySessionTurnsResponse(sessionId);
                 return pendingActionAcknowledgement(_init);
             });
             // Without a local echo, the Run-scoped row the composer acts on is the
@@ -3443,6 +3470,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                     share: null,
                 } });
             }
+            if (url.pathname === `/v1/sessions/${sessionId}/turns`) return emptySessionTurnsResponse(sessionId);
             return new Response(null, { status: 404 });
         });
 
@@ -3466,7 +3494,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(requestMock).not.toHaveBeenCalled();
         expect(storage.getState()).toBe(stateBeforeRefresh);
         expect(storage.getState().sessions[sessionId]).toBe(activeProjectionBeforeRefresh);
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+        // One batch read: its detail and turns parts are the only external facts consulted.
+        expect(runtimeFetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname))
+            .toEqual([`/v2/sessions/${sessionId}`, `/v1/sessions/${sessionId}/turns`]);
         const [requestUrl, requestInit] = runtimeFetchMock.mock.calls[0]!;
         expect(new URL(String(requestUrl)).origin).toBe('https://home-b-refresh.example');
         expectHeaderValue(requestInit?.headers, 'Authorization', `Bearer ${mountedToken}`);
@@ -3690,6 +3720,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                 } });
             }
             if (url.endsWith(`/pending/home-b-send-now/action`)) return pendingActionAcknowledgement(init);
+            if (url.endsWith(`/v1/sessions/${sessionId}/turns`)) return emptySessionTurnsResponse(sessionId);
             return new Response(null, { status: 404 });
         });
 
@@ -4613,7 +4644,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(requestMock).toHaveBeenCalledWith(
             '/v1/account/encryption/currentness',
             expect.objectContaining({ method: 'GET' }),
-            undefined,
+            { includeAuth: false, retry: 'none' },
         );
         expect(
             emitSessionMetadataUpdateWithServerScopeMock,
@@ -7071,14 +7102,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             if (path === '/v1/account/encryption/currentness') return currentPlainAccountEncryptionCurrentnessResponse();
             throw new Error(`Unexpected applied Home request: ${path}`);
         });
-        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return currentPlainAccountEncryptionCurrentnessResponse();
-            if (url.pathname === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({
-                id: 'machine-1',
-                accountId: url.origin === appliedServer.serverUrl ? 'account-a' : 'account-b',
-            }) });
+            const machine = createPlainMachineReadHttpResponseFixture(url.pathname, init,
+                url.origin === appliedServer.serverUrl ? 'account-a' : 'account-b');
+            if (machine) return machine;
             return new Response(null, { status: 404 });
         });
         const snapshot = (accountId: string, operationId: string) => ActionOperationSnapshotV1Schema.parse({

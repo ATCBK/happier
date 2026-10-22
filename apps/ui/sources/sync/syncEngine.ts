@@ -3331,7 +3331,7 @@ class Sync {
         }
         if (scope && generation === this.serverScopeGeneration
             && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) {
-            storage.setState({ isSessionDraftsReady: true });
+            storage.setState(state => state.isSessionDraftsReady ? state : { isSessionDraftsReady: true });
         }
     }
 
@@ -3360,7 +3360,12 @@ class Sync {
         this.pluginAvailabilityProjectionHydrator.reset();
         clearPluginAccountAvailabilityProjection();
         retireActiveServerAccountScopeLifetime();
-        invalidateAccountEncryptionModeCache({ reason: 'scope-reset' });
+        // Retire only the Home being reset: a finite operation captured for another
+        // explicit Home must not be torn down by a focus switch.
+        invalidateAccountEncryptionModeCache({
+            reason: 'scope-reset',
+            serverId: targetToReset?.serverId ?? this.getAppliedTransportTarget()?.serverId ?? null,
+        });
         machineProcessesStore.reset();
         machineResourceStore.reset();
         // Session System Record repositories are qualified by their captured
@@ -5388,7 +5393,6 @@ class Sync {
         // operation, including retries and post-read encryption/publication.
         let accountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource> | undefined;
         const assertCurrent = (): void => {
-            accountCurrentnessSource?.assertCurrent();
             if (options?.shouldContinue?.() === false) {
                 throw Object.assign(new Error('Session metadata publication was superseded'), {
                     code: 'session_metadata_publication_superseded',
@@ -5409,6 +5413,8 @@ class Sync {
                     code: 'session_account_scope_retired',
                 });
             }
+            // A retired Account scope is the more specific cause, so it is checked first.
+            accountCurrentnessSource?.assertCurrent();
         };
         const isCurrent = (): boolean => {
             try {

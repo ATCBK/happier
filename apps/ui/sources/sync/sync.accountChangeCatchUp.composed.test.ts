@@ -455,7 +455,7 @@ describe('sync AccountChange catch-up projection', () => {
         const responseGate = createDeferred<void>();
         let requestedChanges = false;
         const count = () => buildSkillsReach(hook.getCurrent().items, [{ machineId: 'online', name: 'Online',
-            platform: 'posix', agentIds: ['codex'], offline: false, lastSeenAt: null }]).reachingCount;
+            platform: 'posix', agentIds: ['codex'], online: true, offline: false, lastSeenAt: null }]).reachingCount;
         try {
             await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(true));
             expect(count()).toBe(1);

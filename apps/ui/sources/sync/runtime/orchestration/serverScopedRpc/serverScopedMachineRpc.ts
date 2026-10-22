@@ -16,6 +16,7 @@ import { createEphemeralServerSocketClient } from '@/sync/runtime/orchestration/
 import { createScopedSocketConnectParams } from '@/sync/runtime/orchestration/serverScopedRpc/createScopedSocketConnectParams';
 import { resolveServerScopedContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedContext';
 import { resolveScopedMachineTransport } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
+import { ScopedRpcSocketConnectionTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { createServerRequestForExplicitServerScope } from './createServerRequestWithServerScope';
 import { delay } from '@/utils/timing/time';
@@ -52,6 +53,7 @@ import { parseToken } from '@/utils/auth/parseToken';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { runAdmittedMachineRpcRead } from './machineRpcReadAdmission';
+import { prepareMachineRows, type PreparedMachineRows } from '@/sync/api/machines/machineRowsApi';
 
 const SCOPED_MACHINE_RPC_SESSION_WRITE_METHODS = new Set<string>([
     RPC_METHODS.SPAWN_HAPPY_SESSION,
@@ -226,8 +228,10 @@ function createMachineRpcTimeoutBudget(params: Readonly<{
                 );
             } catch (error) {
                 // A subordinate read uses this same deadline and can settle its
-                // timeout first. The containing RPC still owns its public budget.
-                if (isMachineRpcTimeoutError(error) && resolveRemainingTimeoutMs() <= 0) {
+                // timeout first. The containing RPC still owns its public budget,
+                // except that the pool's own timeout keeps its connection phase.
+                if (isMachineRpcTimeoutError(error) && !(error instanceof ScopedRpcSocketConnectionTimeoutError)
+                    && resolveRemainingTimeoutMs() <= 0) {
                     throw createMachineRpcTimeoutError({
                         scope,
                         method: params.method,
@@ -369,7 +373,12 @@ async function machineRpcWithServerTransport<R, A>(
                 finally { releaseRequestLease(); }
             }
         };
+        let machineRowsPreparation: PreparedMachineRows | undefined;
         try {
+            // The exact captured transport is known now; register before the
+            // independent runner-trust preparation can yield to ready peers.
+            machineRowsPreparation = context.readTransport
+                ? prepareMachineRows({ readTransport: context.readTransport, signal: params.signal }) : undefined;
             // Authentication/socket readiness does not depend on opening Machine content.
             // Both preparations consume the same caller deadline; no RPC is emitted until
             // the fresh key/access checks below have admitted its exact content context.
@@ -408,6 +417,7 @@ async function machineRpcWithServerTransport<R, A>(
                     machineId: context.machineId,
                     accountId: context.targetAccountId,
                     readTransport: context.readTransport,
+                    preparedMachineRows: machineRowsPreparation,
                     readAccountMode: async () => (await fetchAccountEncryptionMode(credentials ?? { token: context.token }, {
                         request: createServerRequestForExplicitServerScope({
                             serverUrl: context.targetServerUrl, token: context.token,
@@ -572,6 +582,7 @@ async function machineRpcWithServerTransport<R, A>(
                 ),
             });
         } finally {
+            machineRowsPreparation?.release();
             if (!physicalReadOwnsCustody) await releaseCustody();
         }
     };

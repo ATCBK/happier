@@ -238,7 +238,6 @@ function withMetadataTupleWriterContext<T extends Awaited<
     result: T;
     includeMetadataTupleMutationSnapshot?: boolean;
     credentials: AuthCredentials;
-    accountCurrentness?: AccountEncryptionCurrentnessResponse;
     accountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource>;
     encryption: SessionByIdEncryption;
     sessionId: string;
@@ -288,12 +287,13 @@ function withMetadataTupleWriterContext<T extends Awaited<
             },
         };
     }
-    if (!params.accountCurrentness) {
+    // Only a tuple writer needs the witness; a retired caller has no result to publish.
+    const accountCurrentness = params.accountCurrentnessSource.peek();
+    if (!accountCurrentness) {
         throw new Error(
             `Account currentness is required to mutate metadata for ${params.sessionId}`,
         );
     }
-    const accountCurrentness = params.accountCurrentness;
     return {
         ...params.result,
         metadataTupleWriterContext: {
@@ -448,7 +448,6 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             includeMetadataTupleMutationSnapshot:
                 params.includeMetadataTupleMutationSnapshot,
             credentials: params.activeCredentials,
-            accountCurrentness: accountCurrentnessSource.peek(),
             accountCurrentnessSource,
             encryption: activeEncryption,
             sessionId: params.sessionId,
@@ -519,7 +518,6 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         includeMetadataTupleMutationSnapshot:
             params.includeMetadataTupleMutationSnapshot,
         credentials: context.credentials,
-        accountCurrentness: accountCurrentnessSource.peek(),
         accountCurrentnessSource,
         encryption: scopedEncryption,
         sessionId: params.sessionId,

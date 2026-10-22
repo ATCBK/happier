@@ -428,6 +428,17 @@ describe('Sync workspace readiness', () => {
                 await vi.waitFor(() => expect(inactiveEditor!.root.findAllByType('InactiveEditableDraftProbe')).toHaveLength(1));
                 expect(network.httpRequests.some(row => row.url === `${inactiveHome.serverUrl}/v2/account/session-drafts/list`)).toBe(false);
                 expect(storage.getState().sessionPending['retained-outbox']?.messages.map(row => row.localId)).toContain('retained-input');
+                let emptyPublications = 0;
+                const stopObserving = storage.subscribe((next, previous) => {
+                    if (Object.keys(next).every(key => Object.is(next[key as keyof typeof next], previous[key as keyof typeof previous]))) {
+                        emptyPublications += 1;
+                    }
+                });
+                try {
+                    await (sync as unknown as { refreshSessionDraftRepositoryForSync(): Promise<void> }).refreshSessionDraftRepositoryForSync();
+                    expect(storage.getState().isSessionDraftsReady).toBe(true);
+                    expect(emptyPublications).toBe(0);
+                } finally { stopObserving(); }
             }
             expect((await loadPendingOutboxForSession('retained-outbox', scope)).map(row => row.localId)).toContain('retained-input');
         } finally {

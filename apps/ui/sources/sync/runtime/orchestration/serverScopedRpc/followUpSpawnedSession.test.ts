@@ -865,7 +865,8 @@ describe('follow-up first-turn continuity (real scoped transport)', () => {
         features.capabilities.session.pendingInput = { protocolVersion: 1 };
         const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
         resetServerFeaturesClientForTests();
-        boundary.setHttpResponder(async (input, init) => {
+        const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
+        boundary.setHttpResponder(createSessionReadBatchFetchBoundary(async (input, init) => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/features') return Response.json(features);
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json({
@@ -884,6 +885,9 @@ describe('follow-up first-turn continuity (real scoped transport)', () => {
                     access: fixtures.createSessionAccessFixture(),
                 } });
             }
+            if (url.pathname === '/v1/sessions/sess_target/turns') {
+                return Response.json({ v: 1, sessionId: 'sess_target', updatedAt: 1, turns: [] });
+            }
             if (url.pathname === '/v2/sessions/sess_target/pending' && init?.method === 'POST') {
                 const body: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : null;
                 pendingWrites.push({ url: url.href, token: new Headers(init.headers).get('Authorization'), body });
@@ -895,7 +899,7 @@ describe('follow-up first-turn continuity (real scoped transport)', () => {
                         createdAt: 10, updatedAt: 10, discardedAt: null, discardedReason: null, authorAccountId: home.accountId } });
             }
             return null;
-        });
+        }));
     });
 
     afterEach(() => vi.unstubAllGlobals());
