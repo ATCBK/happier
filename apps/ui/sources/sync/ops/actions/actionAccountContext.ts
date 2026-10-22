@@ -3,7 +3,8 @@ import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions
 import { TokenStorage, subscribeHomeCredentialMutations, areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
-import { ArtifactAccessRecipientCensusResponseV1Schema, type ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessRecipientCensusResponseV1Schema, type ArtifactAccessGrantMutationResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { completeArtifactAccessMutationPreparationV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
 import { artifactKindHasSharedWidgetInputsV1, readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { loadAiLaunchProfileArtifacts, readAiLaunchProfileCollection } from '@happier-dev/protocol/profiles/read';
 import type { ArtifactAccessActionTransportV1 } from '@happier-dev/protocol/actions/executor/artifactAccessActions';
@@ -360,11 +361,17 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             return artifact;
         };
         const accessApi = createArtifactAccessApi(credentials, { request, readTransport, serverId });
-        const withArtifactPreparation = async <T extends Readonly<{ access: ArtifactCallerAccessV1 | null }>>(artifactId: string, operation: () => Promise<T>, operationSignal?: AbortSignal): Promise<T> => {
+        const prepareArtifact = async (artifactId: string, operationSignal?: AbortSignal) => {
+            // A held pre-operation census cannot witness the resulting audience.
+            const artifact = await fetchArtifact(artifactId, { signal: operationSignal, fresh: true });
+            if (!artifact) throw Object.assign(new Error('artifact_not_found'), { code: 'artifact_not_found' });
+            readableArtifactHeader(artifact);
+            assertCurrent();
+        };
+        const withArtifactPreparation = async (artifactId: string, operation: () => Promise<ArtifactAccessGrantMutationResponseV1>, operationSignal?: AbortSignal) => {
             assertCurrent();
             throwIfAborted(operationSignal);
             const result = await operation();
-            assertCurrent();
             // A committed self-revocation has no readable audience for this caller.
             // Preserve the mutation result rather than reopening the inaccessible Artifact.
             if (result.access === null) {
@@ -372,19 +379,16 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 if (canPublish()) storage.getState().deleteArtifact(artifactId);
                 return result;
             }
-            // Opening through the sync owner reuses its exact envelope/key cache
-            // and runs the shared preparation pass for the resulting audience.
-            // A held pre-operation census cannot witness this roster/result.
-            const artifact = await fetchArtifact(artifactId, { signal: operationSignal, fresh: true });
-            if (!artifact) {
-                throw Object.assign(new Error('artifact_not_found'), { code: 'artifact_not_found' });
-            }
-            readableArtifactHeader(artifact);
-            assertCurrent();
-            return result;
+            return completeArtifactAccessMutationPreparationV1({ result, prepare: () => prepareArtifact(artifactId, operationSignal) });
         };
         const artifactAccessGrants: ArtifactAccessActionTransportV1 = {
-            list: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.list(input, operationSignal), operationSignal),
+            list: async (input, operationSignal) => {
+                assertCurrent();
+                throwIfAborted(operationSignal);
+                const result = await accessApi.list(input, operationSignal);
+                await prepareArtifact(input.artifactId, operationSignal);
+                return result;
+            },
             set: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.set(input, operationSignal), operationSignal),
             remove: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.remove(input, operationSignal), operationSignal),
         };

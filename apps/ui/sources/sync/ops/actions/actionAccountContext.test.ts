@@ -13,7 +13,7 @@ import { createDeferred } from '@/dev/testkit';
 import { encodeBase64, decodeBase64 } from '@/encryption/base64';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
 import { computeContentPublicKeyFingerprint, openEncryptedDataKeyEnvelopeV1, signAccountContentKeyBindingV1 } from '@happier-dev/protocol';
-import { ArtifactRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessActionOutputSchemasV1, ArtifactRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createWidgetDefinitionArtifactPortV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
@@ -272,7 +272,7 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
         }
     });
 
-    it('reads a fresh recipient audience after a committed grant while an earlier read is still pending', async () => {
+    it.each([false, true])('preserves the committed grant and fresh-read recovery when recipient preparation fails: %s', async preparationFails => {
         const encryption = await Encryption.create(new Uint8Array(32).fill(7));
         const dataKey = new Uint8Array(32).fill(52);
         const codec = new ArtifactEncryption(dataKey);
@@ -297,6 +297,7 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
         let granted = false;
         let reads = 0;
         let prepared = 0;
+        let failPreparation = preparationFails;
         network.mockImplementation(async (url, init) => {
             const path = url.pathname;
             if (path === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -318,6 +319,7 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
                 return Response.json({ items: [{ artifactId, ok: true, artifact, recipientCensus: census }] });
             }
             if (path === `/v1/artifacts/${artifactId}/access/key-envelopes`) {
+                if (failPreparation) return Response.json({ error: 'artifact_access_unavailable' }, { status: 503 });
                 const commit = ArtifactRecipientKeyEnvelopeCommitInputV1Schema.parse(JSON.parse(String(init?.body)));
                 expect(commit.recipientKeyEnvelopes.map(item => item.recipientAccountId)).toEqual(['recipient']);
                 expect(openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(commit.recipientKeyEnvelopes[0]!.encryptedDataKey),
@@ -336,9 +338,18 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
             oldRead = reader.readArtifact(artifactId);
             await oldReadStarted.promise;
             grant = writer.artifactAccessGrants.set({ artifactId, principal: { kind: 'account', accountId: 'recipient' }, accessLevel: 'view' });
-            await vi.waitFor(() => expect(reads).toBe(2));
-            await expect(grant).resolves.toMatchObject({ changed: true });
+            await expect(grant).resolves.toMatchObject({ changed: true,
+                ...(preparationFails ? { preparation: { status: 'pending' } } : {}) });
+            expect(reads).toBe(2);
+            const receipt = ArtifactAccessActionOutputSchemasV1['artifact.access.grants.set'].parse(await grant);
+            expect(receipt.changed).toBe(true);
             expect(granted).toBe(true);
+            if (preparationFails) {
+                // A committed grant does not make a failed content read authoritative.
+                await expect(writer.readArtifact(artifactId, { fresh: true })).rejects.toBeDefined();
+                failPreparation = false;
+                await expect(writer.readArtifact(artifactId, { fresh: true })).resolves.toMatchObject({ isDecrypted: true });
+            }
             expect(prepared).toBe(1);
         } finally {
             releaseOldRead.resolve();
