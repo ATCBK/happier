@@ -8,6 +8,7 @@ import {
     setVoiceConversationRuntimeSnapshot,
 } from './voiceConversationRuntimeStore';
 import { classifyVoiceMachineError } from './voiceMachineError';
+import { deriveLocalVoiceRuntimeProjection } from './deriveLocalVoiceSessionSnapshot';
 import type {
     VoiceConversationRuntimeSnapshot,
     VoiceConversationRuntimeState,
@@ -283,6 +284,11 @@ export function createVoiceConversationRuntimeMachine(): VoiceConversationRuntim
                     ? false
                     : current.micMuted,
                 inUseVoice: terminalState || (isEntryTransition && !sameOwner) ? undefined : current.inUseVoice,
+                endingBeforeConnect: transition.toState === 'ending'
+                    // Stop preserves an existing connected edge; teardown from
+                    // startup or failure must never manufacture one.
+                    ? (deriveLocalVoiceRuntimeProjection(current).sessionStatus !== 'connected') || undefined
+                    : undefined,
                 error: nextError,
             }, nextReconnecting && current.reconnectRetryAvailable === true);
         });

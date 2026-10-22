@@ -113,8 +113,9 @@ export function deriveLocalVoiceRuntimeProjection(
             return {
                 compatStatus: 'idle',
                 // Teardown still owns Stop until input is released. It is not
-                // a new connection attempt.
-                sessionStatus: 'connected',
+                // a new connection attempt, and an attempt that never connected
+                // must not appear connected while it retires.
+                sessionStatus: snapshot.endingBeforeConnect ? 'connecting' : 'connected',
                 sessionMode: 'idle',
                 canStop: true,
             };

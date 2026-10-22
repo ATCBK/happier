@@ -90,6 +90,8 @@ export type VoiceConversationRuntimeSnapshot = Readonly<{
     /** True only while that controller has a scheduled reconnect slot to advance. */
     reconnectRetryAvailable?: boolean;
     micMuted: boolean;
+    /** Teardown began without a connected runtime projection (startup, failure or disconnect). */
+    endingBeforeConnect?: boolean;
     /** Speech application accepted by this attempt; pending preferences never write it. */
     inUseVoice?: VoiceConversationInUseVoice;
     error: VoiceMachineError | null;
