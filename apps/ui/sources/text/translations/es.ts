@@ -9982,6 +9982,7 @@ settingsSession: {
       checking: "Comprobando…",
       failedGeneric: "La actualización no terminó. Inténtalo de nuevo.",
       remoteUnsupported: "Esta máquina no puede actualizar su línea de comandos a distancia. Actualízala en la propia máquina.",
+      archiveExpandedByteLimit: "El entorno descargado supera el límite de tamaño de extracción. Actualiza Happier antes de volver a intentarlo.",
       updateNotVerified: "La actualización se ejecutó, pero la versión no cambió.",
       rolledBackLocal: "La actualización no arrancó, así que este ordenador volvió a la versión anterior.",
       smokeFailed: "La nueva versión no funcionó en este ordenador, así que no cambió nada.",

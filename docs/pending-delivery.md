@@ -23,6 +23,12 @@ acceptance remain owned by the existing terminal readiness and custody paths.
 Once a provider effect may have occurred, steering failures do not automatically
 replay the prompt through ordinary delivery.
 
+In development source, Claude's main-chain `[Request interrupted by user]` and
+`[Request interrupted by user for tool use]` transcript markers both abort the
+foreground turn through the shared transcript lifecycle classifier. This releases
+a waiting **Send now** prompt through the existing arbiter; the interruption
+itself does not establish provider acceptance of that follow-up.
+
 ## Composer busy-steer policy (development)
 
 `decideSessionMessageDelivery` owns the requested action for ordinary composer

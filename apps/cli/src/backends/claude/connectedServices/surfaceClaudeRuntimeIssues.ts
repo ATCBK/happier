@@ -163,6 +163,8 @@ function buildRuntimeAuthRecoveryProjectionDeduperKey(input: Readonly<{
         profileId: input.classification?.profileId ?? null,
         groupId: input.classification?.groupId ?? null,
         kind: input.classification?.kind ?? null,
+        sourceProviderAccountId: input.classification?.sourceProviderAccountId ?? null,
+        sourceProviderOrganizationId: input.classification?.sourceProviderOrganizationId ?? null,
         limitCategory: input.classification?.limitCategory ?? null,
         resetsAtMs: input.classification?.resetsAtMs ?? null,
         transcriptStatus: typeof transcriptEvent?.status === 'string' ? transcriptEvent.status : null,
@@ -241,12 +243,12 @@ function projectClaudeRuntimeAuthRecoveryReport(input: Readonly<{
  * never fires (the flagship Claude soft-swap). An already-supplied identity is respected; a
  * genuinely-unknown identity (no `oauthAccount`, e.g. api-key sessions) stays unset = fail closed.
  */
-async function enrichClaudeUsageDetailsWithRuntimeAccountIdentity(
-    details: NormalizedProviderUsageLimitDetailsV1,
-): Promise<NormalizedProviderUsageLimitDetailsV1> {
-    if (typeof details.sourceProviderAccountId === 'string' && details.sourceProviderAccountId.trim().length > 0) {
-        return details;
-    }
+async function enrichClaudeRuntimeEvidenceWithAccountIdentity<T extends Readonly<{
+    sourceProviderAccountId?: string | null;
+    sourceProviderOrganizationId?: string | null;
+}>>(details: T): Promise<T> {
+    const suppliedAccountId = details.sourceProviderAccountId?.trim() || null;
+    if (suppliedAccountId && details.sourceProviderOrganizationId?.trim()) return details;
     // Only connected-service (pool) sessions carry a source identity: the soft-switch is a pool
     // feature, and source links are attributed to a connected-service account. Native sessions
     // have no pool to switch within, so they stay unstamped (and must not read the ambient home).
@@ -257,8 +259,12 @@ async function enrichClaudeUsageDetailsWithRuntimeAccountIdentity(
     if (!hasConnectedServiceSelection) return details;
     const identity = await resolveClaudeRuntimeProviderAccountIdentity({ env: process.env }).catch(() => null);
     const providerAccountId = identity?.providerAccountId ?? null;
-    if (!providerAccountId) return details;
-    return { ...details, sourceProviderAccountId: providerAccountId };
+    if (!providerAccountId || (suppliedAccountId && suppliedAccountId !== providerAccountId)) return details;
+    return {
+        ...details,
+        sourceProviderAccountId: suppliedAccountId ?? providerAccountId,
+        ...(identity?.providerOrganizationId ? { sourceProviderOrganizationId: identity.providerOrganizationId } : {}),
+    };
 }
 
 function buildNativeClaudeQuotaProfileId(): string {
@@ -330,6 +336,8 @@ function buildClaudeRuntimeQuotaSnapshot(params: Readonly<{
         serviceId: params.serviceId,
         profileId: params.profileId,
         providerId: 'claude',
+        ...(primaryWindow.sourceProviderAccountId ? { activeAccountId: primaryWindow.sourceProviderAccountId } : {}),
+        ...(primaryWindow.sourceProviderOrganizationId ? { providerOrganizationId: primaryWindow.sourceProviderOrganizationId } : {}),
         fetchedAt: params.fetchedAt,
         fetchedAtMs: params.fetchedAt,
         staleAfterMs: 300_000,
@@ -384,7 +392,7 @@ export async function recordClaudeRateLimitQuotaEvidence(
     const target = resolveClaudeQuotaSnapshotTarget(session, {});
     if (!target.profileId) return;
     // All windows come from one provider response, so one account identity covers them.
-    const enrichedPrimaryWindow = await enrichClaudeUsageDetailsWithRuntimeAccountIdentity(primaryWindow);
+    const enrichedPrimaryWindow = await enrichClaudeRuntimeEvidenceWithAccountIdentity(primaryWindow);
     const observedAt = Date.now();
     await claudeQuotaSnapshotDeliveryOutbox.enqueueAndFlush({
         sessionId: session.client.sessionId,
@@ -414,8 +422,9 @@ function buildClaudeRuntimeIssueUsageLimit(params: Readonly<{
     const remainingPct = params.details.utilization === null
         ? null
         : Math.max(0, 100 - params.details.utilization);
+    const { sourceProviderOrganizationId: _internalOrganizationId, ...publicDetails } = params.details;
     return {
-        ...params.details,
+        ...publicDetails,
         limitCategory: normalizeClaudePublicLimitCategory(params.details.limitCategory),
         connectedService: params.connectedService,
         ...(remainingPct === null
@@ -486,7 +495,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     }>,
 ): Promise<void> {
     const selection = resolveClaudeRuntimeIssueSelection(session);
-    const enrichedDetailsPromise = enrichClaudeUsageDetailsWithRuntimeAccountIdentity(details);
+    const enrichedDetailsPromise = enrichClaudeRuntimeEvidenceWithAccountIdentity(details);
     const initialClassification = classifyClaudeConnectedServiceRuntimeAuthFailure({
         details,
         selection,
@@ -644,11 +653,11 @@ export async function surfaceClaudeRuntimeAuthFailure(
         ?? findConnectedServiceChildSelection(process.env, 'anthropic')
         ?? null;
 
-    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
+    const initialClassification = classifyClaudeConnectedServiceRuntimeAuthFailure({
         error,
         selection: selection ?? undefined,
     });
-    if (!classification) return false;
+    if (!initialClassification) return false;
 
     const retryDecision = resolveClaudeRuntimeAuthRetryDecision(error);
     if (!definitiveSubagentOAuthRevocation && retryDecision.action === 'await_provider_retry') {
@@ -676,6 +685,7 @@ export async function surfaceClaudeRuntimeAuthFailure(
     if (!subagentScoped) {
         beginConnectedClaudeTurnFailure(session, issue, logPrefix);
     }
+    const classification = await enrichClaudeRuntimeEvidenceWithAccountIdentity(initialClassification);
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
         switchesThisTurn: 0,

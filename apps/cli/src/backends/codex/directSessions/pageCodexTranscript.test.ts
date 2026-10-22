@@ -11,6 +11,7 @@ import {
   writeFakeCodexAppServerThreadListScript,
 } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import { pageCodexTranscript } from './pageCodexTranscript';
+import { DirectSessionsProviderUnavailableError } from '@/backends/directSessions/providerOps';
 
 function sessionMetaLine(payload: Record<string, unknown>): string {
   return `${JSON.stringify({ type: 'session_meta', payload })}\n`;
@@ -159,7 +160,7 @@ describe('pageCodexTranscript', () => {
     });
   });
 
-  it('falls back to app-server preview metadata when rollout files are missing', async () => {
+  it('rejects metadata-only history when rollout files and the native history API are unavailable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-app-server-'));
     const codexHome = join(root, 'codex-home');
     await mkdir(codexHome, { recursive: true });
@@ -176,7 +177,7 @@ describe('pageCodexTranscript', () => {
       }],
     });
 
-    const result = await pageCodexTranscript({
+    await expect(pageCodexTranscript({
       source: { kind: 'codexHome', home: 'user' },
       env: createCodexAppServerProcessEnv(fakeAppServer, { CODEX_HOME: codexHome }),
       activeServerDir: join(root, 'servers', 'cloud'),
@@ -184,23 +185,8 @@ describe('pageCodexTranscript', () => {
       direction: 'older',
       maxBytes: 1024 * 1024,
       maxItems: 10,
-    });
+    })).rejects.toBeInstanceOf(DirectSessionsProviderUnavailableError);
 
-    expect(result.items).toEqual([
-      expect.objectContaining({
-        raw: expect.objectContaining({
-          role: 'agent',
-          content: expect.objectContaining({
-            data: expect.objectContaining({
-              type: 'message',
-              message: 'App server preview',
-            }),
-          }),
-        }),
-      }),
-    ]);
-    expect(result.tailCursor).toBeTruthy();
-    expect(result.hasMore).toBe(false);
   });
 
   it('does not start the Codex app-server metadata fallback when rollout files exist', async () => {

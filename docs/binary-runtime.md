@@ -47,6 +47,16 @@ empty `PATH` prevents executable resolution. Only POSIX recipes prepend user
 install directories. Windows recipes declare `powershell.exe` in the shared
 provider catalog, which also supplies the copyable installation guidance.
 
+In current development source, managed Codex archives retain the shared extractor's
+path, link, entry-count, checksum, and decompression protections. The provider
+catalog allows 384 MiB per file and 512 MiB across all archive files, including
+members that are not published into the managed runtime. The digest-verified
+Windows x64 `rust-v0.163.0` archive expands to 465,689,987 bytes and therefore
+exceeds the previous 384 MiB total. Extraction failures preserve the previous
+managed runtime. The shared extractor's `archive-expanded-byte-limit` failure is
+carried through install/update responses so the Updates UI can show localized
+upgrade guidance while keeping raw diagnostics behind View log.
+
 In current development source, Pi's vendor-managed launcher is a system-install candidate
 in the shared provider resolver: `PI_CODING_AGENT_DIR/bin/pi`, then `~/.pi/agent/bin/pi`,
 when `PATH` has no matching executable. Explicit `HAPPIER_PI_PATH` remains exclusive and

@@ -10204,6 +10204,7 @@ settingsSession: {
       checking: "確認中…",
       failedGeneric: "アップデートが完了しませんでした。もう一度お試しください。",
       remoteUnsupported: "このマシンはコマンドラインをリモートでアップデートできません。マシン上で直接アップデートしてください。",
+      archiveExpandedByteLimit: "ダウンロードしたランタイムは展開サイズの上限を超えています。Happierを更新してから再試行してください。",
       updateNotVerified: "アップデートは実行されましたが、バージョンが変わりませんでした。",
       rolledBackLocal: "アップデートを開始できなかったため、このコンピュータは以前のバージョンに戻りました。",
       smokeFailed: "新しいバージョンがこのコンピュータで動作しなかったため、変更はありません。",

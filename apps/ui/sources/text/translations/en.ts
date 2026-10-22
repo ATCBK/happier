@@ -9448,6 +9448,7 @@ settingsSession: {
             checking: 'Checking…',
             failedGeneric: 'The update didn’t finish. Try again.',
             remoteUnsupported: 'This machine can’t update its command line remotely. Update it on the machine.',
+            archiveExpandedByteLimit: "The downloaded runtime exceeds the extraction size limit. Update Happier before retrying.",
             updateNotVerified: 'The update ran, but the version didn’t change.',
             rolledBackLocal: 'The update didn’t start, so this computer went back to the previous version.',
             smokeFailed: 'The new version didn’t run on this computer, so nothing changed.',

@@ -9352,6 +9352,7 @@ settingsSession: {
             checking: 'Comprovant…',
             failedGeneric: 'L’actualització no ha acabat. Torna-ho a provar.',
             remoteUnsupported: 'Aquesta màquina no pot actualitzar la línia d’ordres a distància. Actualitza-la a la mateixa màquina.',
+            archiveExpandedByteLimit: "El runtime baixat supera el límit de mida d’extracció. Actualitza Happier abans de tornar-ho a provar.",
             updateNotVerified: 'L’actualització s’ha executat, però la versió no ha canviat.',
             rolledBackLocal: 'L’actualització no s’ha iniciat, així que aquest ordinador ha tornat a la versió anterior.',
             smokeFailed: 'La nova versió no ha funcionat en aquest ordinador, així que no ha canviat res.',

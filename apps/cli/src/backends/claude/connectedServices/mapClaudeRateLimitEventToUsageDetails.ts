@@ -22,6 +22,7 @@ export type NormalizedProviderUsageLimitDetailsV1 = Readonly<{
   action: null;
   connectedService: null;
   sourceProviderAccountId?: string | null;
+  sourceProviderOrganizationId?: string | null;
   /**
    * Set when the evidence row was imported from a subagent transcript (`isSidechain: true`).
    * Sidechain limits are real account-level evidence (quota snapshots may consume them) but
