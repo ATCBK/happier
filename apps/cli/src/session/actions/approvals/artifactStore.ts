@@ -150,6 +150,10 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     read: (...args: Parameters<typeof rawAccountArtifactStore.read>) => timeWebLatencyPhase('approval.artifact.read', () => rawAccountArtifactStore.read(...args)),
     update: (...args: Parameters<typeof rawAccountArtifactStore.update>) => timeWebLatencyPhase('approval.artifact.update', () => rawAccountArtifactStore.update(...args)),
   };
+  // Decisions read current content under the Artifact's normal access/mode
+  // checks. Recipient repair is a separate write, owned by creation/rejoin and
+  // the explicit requester-recipient preparation below, not decision authority.
+  const readApprovalArtifact = (artifactId: string) => accountArtifactStore.read(artifactId, { prepareRecipients: false });
   const prepareRequesterRecipient = async (artifactId: string,
     subject: import('@happier-dev/protocol/approvals/approvalRequestV1').ApprovalRequesterConfirmationV1 | undefined): Promise<void> => {
     if (subject) await accountArtifactStore.prepareApprovalRequesterRecipient({ artifactId,
@@ -254,7 +258,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return { artifactId: res.artifactId };
     },
     executionRunHostActionApprovalsGet: async ({ artifactId }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return null;
       const header = artifact.header;
       const parsed = readExecutionRunHostActionApprovalArtifact(header, artifact.body);
@@ -262,7 +266,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return parsed;
     },
     executionRunHostActionApprovalsUpdate: async ({ artifactId, request }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
       const existingHeader = artifact.header;
       const existing = readExecutionRunHostActionApprovalArtifact(existingHeader, artifact.body);
@@ -287,7 +291,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return { artifactId: res.artifactId };
     },
     targetActionApprovalsGet: async ({ artifactId }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return null;
       const header = artifact.header;
       const parsed = readTargetActionApprovalArtifact(header, artifact.body);
@@ -295,7 +299,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return parsed;
     },
     targetActionApprovalsUpdate: async ({ artifactId, request }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
       const existingHeader = artifact.header;
       const existingRequest = readTargetActionApprovalArtifact(existingHeader, artifact.body);
@@ -402,7 +406,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     },
 
     approvalsGet: async ({ artifactId, serverId }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return null;
       const header = artifact.header;
       if (!header) return null;
@@ -418,7 +422,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     },
 
     approvalsUpdate: async ({ artifactId, request, serverId }) => {
-      const artifact = await accountArtifactStore.read(artifactId);
+      const artifact = await readApprovalArtifact(artifactId);
       if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
       const existingHeader = artifact.header;
       if (!existingHeader) {
