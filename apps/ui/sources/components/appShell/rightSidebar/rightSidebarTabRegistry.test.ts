@@ -125,20 +125,20 @@ const appSidebarPlacement = {
 
 describe('rightSidebarTabRegistry', () => {
   it('orders session built-in tabs deterministically and gates terminal availability', () => {
-    // Browser is mobile-only after D1; the default presentation is desktop, so it is absent.
+    // The Session viewer docks its retained Browser source into this desktop destination.
     expect(
       resolveRightSidebarTabs({
         scope: 'session',
         terminalTabAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'terminal', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'terminal', 'browser', 'services']);
 
     expect(
       resolveRightSidebarTabs({
         scope: 'session',
         terminalTabAvailable: false,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'browser', 'services']);
 
     // Mobile keeps the full-screen Browser surface tab.
     expect(
@@ -166,7 +166,7 @@ describe('rightSidebarTabRegistry', () => {
         terminalTabAvailable: false,
         sessionProjectCheckoutAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'scripts', 'agents', 'collaboration', 'navigation', 'services']);
+    ).toEqual(['git', 'files', 'scripts', 'agents', 'collaboration', 'navigation', 'browser', 'services']);
     expect(
       resolveRightSidebarTabs({
         scope: 'session',
@@ -190,7 +190,7 @@ describe('rightSidebarTabRegistry', () => {
         terminalTabAvailable: false,
         boardFeatureEnabled: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'board', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'board', 'browser', 'services']);
   });
 
   it('orders project built-in tabs without session-only entries', () => {
@@ -267,8 +267,7 @@ describe('rightSidebarTabRegistry', () => {
     });
 
     expect(resolveRightSidebarActiveTab('terminal', tabs)).toBe('git');
-    // Browser is absent on desktop after D1, so a stale 'browser' selection falls back.
-    expect(resolveRightSidebarActiveTab('browser', tabs)).toBe('git');
+    expect(resolveRightSidebarActiveTab('browser', tabs)).toBe('browser');
     expect(resolveRightSidebarActiveTab(null, tabs)).toBe('git');
 
     // On mobile the Browser surface tab is still selectable.
@@ -349,7 +348,7 @@ describe('rightSidebarTabRegistry', () => {
     });
   });
 
-  it('admits Project Browser alongside Services on desktop while retaining Session mobile availability', () => {
+  it('admits Browser alongside Services for Session and Project on both presentations', () => {
     const desktopSession = resolveRightSidebarTabs({
       scope: 'session',
       terminalTabAvailable: true,
@@ -359,7 +358,7 @@ describe('rightSidebarTabRegistry', () => {
       scope: 'project',
       presentation: 'desktop',
     }).map((tab) => tab.id);
-    expect(desktopSession).not.toContain('browser');
+    expect(desktopSession).toContain('browser');
     expect(desktopProject).toContain('browser');
     // Both scopes retain Services; Project also exposes its workspace Browser.
     expect(desktopSession).toContain('services');
@@ -497,6 +496,7 @@ describe('rightSidebarTabRegistry', () => {
       'agents',
       'collaboration',
       'navigation',
+      'browser',
       'services',
       `plugin:${REVIEW_PLUGIN_ID}:review-panel`,
     ]);
@@ -624,7 +624,7 @@ describe('rightSidebarTabRegistry', () => {
     const tabs = resolveRightSidebarTabs({
       scope: 'session',
       terminalTabAvailable: false,
-      // Mobile presentation is the one that publishes the built-in `browser` tab (D1),
+      // Plugin and built-in Browser destinations retain distinct qualified identities.
       // so both ids are live at once here.
       presentation: 'mobile',
       pluginPlacements: [builtInNamedPlacement],

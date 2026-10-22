@@ -371,14 +371,13 @@ describe('SessionRightPanel right-sidebar registry tabs', () => {
         expect(screen.findByTestId('session-rightpanel-header.title')?.props.children).toBe(t('localServices.inventory.title'));
     });
 
-    it('drops the Browser tab on desktop but keeps Services (D1)', async () => {
+    it('offers the retained Browser dock destination beside Services on desktop', async () => {
         scopeState = { right: { isOpen: true, activeTabId: 'services', tabState: {} } };
         const screen = await renderScreen(<SessionRightPanel sessionId="s1" scopeId="session:s1" />);
 
-        // D1: the desktop right sidebar no longer shows a Browser tab; Services is the single
-        // desktop services/launch surface.
-        expect(screen.findByTestId('session-rightpanel-tab:browser')).toBeNull();
-        expect(screen.findByTestId('session-rightpanel-surface-browser')).toBeNull();
+        expect(screen.findByTestId('session-rightpanel-tab:browser')).toBeTruthy();
+        // The shared pane owner retains inactive built-in surfaces for a later selection.
+        expect(screen.findByTestId('session-rightpanel-surface-browser')).toBeTruthy();
         expect(screen.findByTestId('session-rightpanel-tab:services')).toBeTruthy();
     });
 

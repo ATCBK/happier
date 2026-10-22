@@ -11081,7 +11081,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
   browserSurface: {
     title: 'Navegador',
     openA11y: 'Abrir navegador',
-    openHint: 'Abre el panel de inicio del navegador en los detalles.',
+    openHint: 'Abre el navegador.',
     openDisabledA11y: 'Navegador no disponible',
   },
 
@@ -11118,6 +11118,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     },
     error: {
       title: 'Los destinos del navegador necesitan atención',
+      previewRefreshFailed: 'No se pudieron actualizar las vistas previas de esta máquina. Inténtalo de nuevo para comprobar los destinos disponibles.',
     },
   },
 

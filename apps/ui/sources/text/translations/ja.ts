@@ -11378,7 +11378,7 @@ localTailscale: {
   browserSurface: {
     title: 'ブラウザー',
     openA11y: 'ブラウザーを開く',
-    openHint: '詳細でブラウザーのランチパッドを開きます。',
+    openHint: 'ブラウザーを開きます。',
     openDisabledA11y: 'ブラウザーは利用できません',
   },
 
@@ -11415,6 +11415,7 @@ localTailscale: {
     },
     error: {
       title: 'ブラウザーターゲットに注意が必要です',
+      previewRefreshFailed: 'このマシンのプレビューを更新できませんでした。再試行して利用可能なターゲットを確認してください。',
     },
   },
 

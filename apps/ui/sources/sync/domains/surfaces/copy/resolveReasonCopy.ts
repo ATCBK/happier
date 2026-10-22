@@ -744,6 +744,9 @@ function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string |
             return key ? t(key) : null;
         }
         case 'browserLaunchpad': {
+            if (reasonCode === 'local_service_preview_refresh_failed') {
+                return t('browserLaunchpad.error.previewRefreshFailed');
+            }
             // Launchpad disabledReason/detail are free-form strings; a known browser
             // adapter code still maps cleanly, anything else uses the generic fallback.
             const key = BROWSER_REASON_KEYS[reasonCode as keyof typeof BROWSER_REASON_KEYS];

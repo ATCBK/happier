@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { getRightSidebarBuiltinTab } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { computerScreenDetailsTabKey, createComputerScreenDetailsTab } from '@/components/computer/computerScreenDetailsTab';
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
@@ -75,8 +76,7 @@ export function SessionViewerScope(
       const right = paneRef.current.scopeState?.right;
       if (!(right?.isOpen && right.activeTabId === 'browser'))
         rightBeforeDockRef.current = { isOpen: right?.isOpen === true, tabId: right?.activeTabId ?? null };
-      paneRef.current.openRight({ tabId: 'browser' });
-      paneRef.current.setRightTab('browser');
+      paneRef.current.openRight({ tabId: getRightSidebarBuiltinTab('browser').id, present: false });
     },
     [computerMachineId, machineId, phone],
   );
@@ -91,7 +91,7 @@ export function SessionViewerScope(
       }
       const before = rightBeforeDockRef.current;
       rightBeforeDockRef.current = null;
-      if (before?.isOpen && before.tabId) paneRef.current.setRightTab(before.tabId);
+      if (before?.isOpen && before.tabId) paneRef.current.openRight({ tabId: before.tabId, present: false });
       else paneRef.current.closeRight();
     },
     [computerMachineId],

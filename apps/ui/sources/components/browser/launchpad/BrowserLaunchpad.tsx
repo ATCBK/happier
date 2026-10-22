@@ -7,6 +7,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import type { BrowserLaunchpadRow, BrowserLaunchpadSection } from '@/sync/domains/browser/targets';
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
 import { selectBrowserTargetAdapter } from '@/sync/domains/browser/adapters/selection';
@@ -223,6 +224,7 @@ export function BrowserLaunchpad(props: Readonly<{
     allowExternalUrlBrowsing?: boolean;
     refreshStatus: 'idle' | 'refreshing' | 'error';
     refreshError?: string | null;
+    onRefresh?: () => void;
     localServicePreviewServerId?: string | null;
     /**
      * The agent's own browser cannot open yet because its machine lacks the managed Chromium. The
@@ -324,6 +326,9 @@ export function BrowserLaunchpad(props: Readonly<{
     }, [props.onNavigateInPlace, props.platform]);
 
     const hasRows = resolvedRows.length > 0;
+    const refreshReason = props.refreshStatus === 'error'
+        ? resolveReasonCopy({ reasonCode: props.refreshError, kind: 'browserLaunchpad' })
+        : null;
 
     return (
         <ItemList presentation="grouped"
@@ -377,6 +382,8 @@ export function BrowserLaunchpad(props: Readonly<{
                                 testID={`${testID}-error`}
                                 kind="error"
                                 title={t('browserLaunchpad.error.title')}
+                                reason={refreshReason?.body}
+                                action={props.onRefresh ? { label: t('common.retry'), onPress: props.onRefresh } : undefined}
                                 // The refresh code is a diagnostic, never product copy: it stays behind Details.
                                 {...(props.refreshError ? { diagnosticCode: props.refreshError } : {})}
                                 accessibilitySemantics="alert"
@@ -399,6 +406,8 @@ export function BrowserLaunchpad(props: Readonly<{
                                     <BrowserLaunchpadRefreshBanner
                                         testID={testID}
                                         status={props.refreshStatus}
+                                        reason={refreshReason?.body}
+                                        onRefresh={props.onRefresh}
                                     />
                                 </ItemGroup>
                             </View>
@@ -549,6 +558,8 @@ function BrowserSandboxPrerequisite(props: Readonly<{
 function BrowserLaunchpadRefreshBanner(props: Readonly<{
     testID: string;
     status: 'refreshing' | 'error';
+    reason?: string;
+    onRefresh?: () => void;
 }>): React.ReactElement {
     if (props.status === 'refreshing') {
         return (
@@ -564,6 +575,14 @@ function BrowserLaunchpadRefreshBanner(props: Readonly<{
         <Item
             testID={`${props.testID}-error`}
             title={t('browserLaunchpad.error.title')}
+            subtitle={props.reason}
+            rightElement={props.onRefresh ? <RoundButton
+                testID={`${props.testID}-error-action`}
+                title={t('common.retry')}
+                onPress={props.onRefresh}
+                size="small"
+                display="secondary"
+            /> : undefined}
             mode="info"
             showChevron={false}
         />

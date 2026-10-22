@@ -188,7 +188,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         pluginBrowserProjection,
         pluginUiProjection,
         nowMs: props.nowMs,
-    }).feed;
+    });
     // Resolve through the canonical preview-platform owner so the desktop host resolves to `desktop`
     // (finding #13 / Phase 5.5) instead of collapsing to `web`, and so this panel cannot drift from
     // the session-details panel's resolution.
@@ -370,9 +370,10 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         openDetailsTab: pane.openDetailsTab,
         openFileTab,
         renderWorkspaceInfo,
-        launchpadRows: browserLaunchpad.rows,
-        launchpadRefreshStatus: browserLaunchpad.refreshStatus,
-        launchpadRefreshError: browserLaunchpad.refreshError,
+        launchpadRows: browserLaunchpad.launchpadRows,
+        launchpadRefreshStatus: browserLaunchpad.launchpadRefreshStatus,
+        launchpadRefreshError: browserLaunchpad.launchpadRefreshError,
+        onRefreshLaunchpad: browserLaunchpad.onRefreshLaunchpad,
         pluginUiProjection,
         pluginUiProjectionPhase: scopedPluginProjection.phase,
         pluginAccountLifetime: scopedPluginProjection.accountLifetime,

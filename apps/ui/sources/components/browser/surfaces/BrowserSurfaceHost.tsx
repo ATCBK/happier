@@ -244,6 +244,7 @@ export function BrowserSurfaceHost(props: Readonly<{
     launchpadRows?: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
+    onRefreshLaunchpad?: () => void;
     onOpenTarget?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
     browserFeatureDecision?: FeatureDecision | null;
     desktopWebViewAvailability?: DesktopWebViewNativeAvailability | null;
@@ -871,6 +872,7 @@ export function BrowserSurfaceHost(props: Readonly<{
                 launchpadRows={props.launchpadRows}
                 launchpadRefreshStatus={props.launchpadRefreshStatus}
                 launchpadRefreshError={props.launchpadRefreshError}
+                onRefreshLaunchpad={props.onRefreshLaunchpad}
                 onOpenTarget={onOpenTarget}
                 onNavigateInPlace={navigateCurrentTabInPlace}
                 onNavigateActiveViewInPlace={navigateActiveViewInPlace}

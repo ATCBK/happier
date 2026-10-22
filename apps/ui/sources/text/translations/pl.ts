@@ -10910,7 +10910,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
   browserSurface: {
     title: 'Przeglądarka',
     openA11y: 'Otwórz przeglądarkę',
-    openHint: 'Otwiera launchpad przeglądarki w szczegółach.',
+    openHint: 'Otwiera przeglądarkę.',
     openDisabledA11y: 'Przeglądarka niedostępna',
   },
 
@@ -10947,6 +10947,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     },
     error: {
       title: 'Cele przeglądarki wymagają uwagi',
+      previewRefreshFailed: 'Nie udało się odświeżyć podglądów z tej maszyny. Spróbuj ponownie, aby sprawdzić dostępne cele.',
     },
   },
 

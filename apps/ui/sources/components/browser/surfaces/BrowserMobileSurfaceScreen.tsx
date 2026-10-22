@@ -105,6 +105,7 @@ export function BrowserMobileSurfaceScreen(props: Readonly<{
                 launchpadRows={hostProps.launchpadRows}
                 launchpadRefreshStatus={hostProps.launchpadRefreshStatus}
                 launchpadRefreshError={hostProps.launchpadRefreshError}
+                onRefreshLaunchpad={hostProps.onRefreshLaunchpad}
                 productModels={productModels}
                 pluginProjection={pluginProjection}
                 pluginBrowserActionSessionId={props.sessionId}

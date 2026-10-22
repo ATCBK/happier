@@ -153,6 +153,7 @@ export function createWorkspaceDetailsSurfaceRenderers(
             launchpadRows: options.launchpadRows,
             launchpadRefreshStatus: options.launchpadRefreshStatus,
             launchpadRefreshError: options.launchpadRefreshError,
+            onRefreshLaunchpad: options.onRefreshLaunchpad,
             productModels: options.productModels,
             supplementalDiagnostics: options.supplementalDiagnostics,
             onOpenTarget: openBrowserViewTarget,

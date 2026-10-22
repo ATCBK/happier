@@ -5,6 +5,7 @@ import type { PeerMediationObservabilityScopeV1 } from '@happier-dev/protocol';
 
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { getRightSidebarBuiltinTab } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import type { PaneSurfaceScope } from '@/components/appShell/panes/types';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { DetailsSplitWorkspace } from '@/components/appShell/panes/details/workspace/DetailsSplitWorkspace';
@@ -45,7 +46,6 @@ import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/
 import type { BrowserShellRecordingState } from '@/components/browser/BrowserShell';
 import {
     BrowserSurfaceOpenButton,
-    createBrowserLaunchpadDetailsTab,
     mergeBrowserSurfaceProductModels,
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
@@ -224,7 +224,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         pluginBrowserProjection: pluginRuntime.pluginBrowserProjection,
         pluginUiProjection: pluginRuntime.pluginUiProjection,
         nowMs: props.nowMs,
-    }).feed;
+    });
     const browserContextProductModel = useSessionBrowserContextProductModel({
         machineId: pluginRuntime.machineId,
         serverId: pluginRuntime.serverId,
@@ -279,8 +279,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     }, [openWorkspaceFile, pluginRuntime.serverId, props.paneSurfaceScope?.serverId, props.routeServerId, props.sessionId]);
 
     const openBrowserLaunchpadTab = React.useCallback(() => {
-        openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
-    }, [openDetailsTab]);
+        pane.openRight({ tabId: getRightSidebarBuiltinTab('browser').id, present: false });
+    }, [pane.openRight]);
 
     const openBoardTab = React.useCallback(() => {
         openDetailsTab(createSessionBoardDetailsTab(), { intent: 'pinned' });
@@ -362,9 +362,10 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             formFactor: pluginRuntimeFormFactor,
             productModels: browserProductModels,
             browserRecording,
-            launchpadRows: browserLaunchpad.rows,
-            launchpadRefreshStatus: browserLaunchpad.refreshStatus,
-            launchpadRefreshError: browserLaunchpad.refreshError,
+            launchpadRows: browserLaunchpad.launchpadRows,
+            launchpadRefreshStatus: browserLaunchpad.launchpadRefreshStatus,
+            launchpadRefreshError: browserLaunchpad.launchpadRefreshError,
+            onRefreshLaunchpad: browserLaunchpad.onRefreshLaunchpad,
             nowMs: props.nowMs,
             requestClose,
             openFileTab,

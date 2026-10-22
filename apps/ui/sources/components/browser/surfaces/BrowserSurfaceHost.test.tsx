@@ -613,6 +613,47 @@ afterEach(async () => {
 });
 
 describe('BrowserSurfaceHost', () => {
+    it.each([false, true])('retries the failing launchpad catalog through its shared preview owner (caller snapshot=%s)', async (callerSnapshot) => {
+        const { useBrowserSurfaceHostProps } = await import('./useBrowserSurfaceHostProps');
+        const { useLocalServicePreviewState } = await import('@/sync/domains/local/services/preview/useLocalServicePreviewState');
+        const { createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
+        const { resetLocalServicePreviewStoreForTests } = await import('@/sync/domains/local/services/preview/sharedStore');
+        const launcherState = createLocalServiceLauncherState();
+        let recovered = false;
+        const requests: Array<Readonly<{ machineId: string; serverId?: string | null }>> = [];
+        const snapshotClient: import('@/sync/domains/local/services/preview/useLocalServicePreviewState').LocalServicePreviewSnapshotClient = async (input) => {
+            requests.push(input);
+            return recovered
+                ? { ok: true, snapshot: { generatedAt: 1_000, refreshState: 'idle', previews: [], diagnostics: [] } }
+                : { ok: false, reason: 'request_failed' };
+        };
+        function LaunchpadHost() {
+            const callerPreviewState = useLocalServicePreviewState({ machineId: 'machine_catalog_retry',
+                serverId: 'home_catalog_retry', snapshotClient, enabled: callerSnapshot });
+            const props = useBrowserSurfaceHostProps({ scope: 'sessionDetails', sessionId: 'catalog_retry',
+                machineId: 'machine_catalog_retry', serverId: 'home_catalog_retry', launcherState,
+                localServicePreviewState: callerSnapshot ? callerPreviewState : undefined,
+                localServicePreviewSnapshotClient: snapshotClient });
+            return <BrowserSurfaceHost {...props} keepAliveAboveRouter={false} testID="catalog-retry"
+                policy={{ browserEnabled: true, viewTargetsEnabled: true, diagnosticsEnabled: false, contextEnabled: false, automationEnabled: false }} />;
+        }
+        resetLocalServicePreviewStoreForTests();
+        const screen = await renderScreen(<LaunchpadHost />);
+        try {
+            await flushHookEffects();
+            expect(screen.findByTestId('catalog-retry-launchpad-error')).toBeTruthy();
+            recovered = true;
+            await screen.pressByTestIdAsync('catalog-retry-launchpad-error-action');
+            await flushHookEffects();
+            expect(requests).toHaveLength(2);
+            expect(requests.every((request) => request.machineId === 'machine_catalog_retry' && request.serverId === 'home_catalog_retry')).toBe(true);
+            expect(screen.findByTestId('catalog-retry-launchpad-error')).toBeNull();
+            expect(screen.findByTestId('catalog-retry-launchpad-guidance')).toBeTruthy();
+        } finally {
+            await screen.unmount();
+            resetLocalServicePreviewStoreForTests();
+        }
+    });
     it('settles Browser navigation facts through the real retained binder and keeps reload current', async () => {
         const { RetainedPresentationSlotBinder, RetainedPresentationSlotsProvider } = await import('@/components/ui/presentation/retainedPresentationSlots');
         const { SessionViewerControllerProvider } = await import('@/components/sessions/viewer/SessionViewerControllerProvider');

@@ -103,6 +103,7 @@ type SessionDetailsSurfaceRendererOptions = Readonly<{
     launchpadRows?: BrowserDetailsSurfaceRendererOptions['launchpadRows'];
     launchpadRefreshStatus?: BrowserDetailsSurfaceRendererOptions['launchpadRefreshStatus'];
     launchpadRefreshError?: BrowserDetailsSurfaceRendererOptions['launchpadRefreshError'];
+    onRefreshLaunchpad?: BrowserDetailsSurfaceRendererOptions['onRefreshLaunchpad'];
     onOpenTarget?: BrowserDetailsSurfaceRendererOptions['onOpenTarget'];
     nowMs?: () => number;
     requestClose: () => void;
@@ -325,6 +326,7 @@ export function createSessionDetailsSurfaceRenderers(
             launchpadRows: options.launchpadRows,
             launchpadRefreshStatus: options.launchpadRefreshStatus,
             launchpadRefreshError: options.launchpadRefreshError,
+            onRefreshLaunchpad: options.onRefreshLaunchpad,
             onOpenTarget: openBrowserViewTarget,
             nowMs: options.nowMs,
         }),

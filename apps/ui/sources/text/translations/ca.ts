@@ -10219,7 +10219,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
     browserSurface: {
         title: 'Navegador',
         openA11y: 'Obre el navegador',
-        openHint: 'Obre el panell d’inici del navegador als detalls.',
+        openHint: 'Obre el navegador.',
         openDisabledA11y: 'Navegador no disponible',
     },
 
@@ -10256,6 +10256,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         },
         error: {
             title: 'Les destinacions del navegador requereixen atenció',
+            previewRefreshFailed: 'No s’han pogut actualitzar les previsualitzacions d’aquesta màquina. Torna-ho a provar per comprovar les destinacions disponibles.',
         },
     },
 

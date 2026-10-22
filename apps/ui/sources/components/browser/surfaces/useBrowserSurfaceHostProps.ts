@@ -19,6 +19,7 @@ import {
 } from '@/sync/domains/local/services/launch';
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
 import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
+import { invalidateLocalServicePreviewStore } from '@/sync/domains/local/services/preview/sharedStore';
 import type { LocalServicePreviewSnapshotClient } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import type { PluginBrowserProjectionModel } from '@/sync/domains/plugins/browser/targets';
@@ -93,6 +94,7 @@ export type BrowserSurfaceHostPropsBundle = Readonly<{
     launchpadRows: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError: string | null;
+    onRefreshLaunchpad: (() => void) | undefined;
     localServicePreviewState: LocalServicePreviewState | null;
     localServicePreviewServerId: string | null;
     feed: BrowserSurfaceHostFeedAssembly;
@@ -213,6 +215,13 @@ export function useBrowserSurfaceHostProps(
     const localServicePreviewState = input.localServicePreviewState !== undefined
         ? input.localServicePreviewState
             : liveLocalServicePreviewState;
+    const onRefreshLaunchpad = React.useMemo(() => (
+        // Details panels can supply the same shared snapshot from their existing subscription.
+        // Refresh its key rather than starting a second catalog controller or reloading a page.
+        machineId
+            ? () => invalidateLocalServicePreviewStore({ machineId, serverId })
+            : undefined
+    ), [machineId, serverId]);
     const pluginLocale = getPreferredLanguage();
     const localizePluginText = React.useMemo(
         () => createPluginLocalizedTextResolver({
@@ -308,6 +317,7 @@ export function useBrowserSurfaceHostProps(
         launchpadRows: feed.rows,
         launchpadRefreshStatus: feed.refreshStatus,
         launchpadRefreshError: feed.refreshError,
+        onRefreshLaunchpad,
         localServicePreviewState,
         localServicePreviewServerId: serverId,
         feed,
@@ -320,6 +330,7 @@ export function useBrowserSurfaceHostProps(
         isLogicalViewRetained,
         localServicePreviewState,
         onLifecycleChange,
+        onRefreshLaunchpad,
         platform,
         presentationSlotId,
         serverId,

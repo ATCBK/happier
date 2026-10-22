@@ -188,6 +188,21 @@ const rows: readonly BrowserLaunchpadRow[] = [...serviceLaunchpadRows, {
 }];
 
 describe('BrowserLaunchpad', () => {
+    it.each([false, true])('explains a failed catalog refresh and offers retry while retained rows=%s', async (retainRows) => {
+        const onRefresh = vi.fn();
+        const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+        const screen = await renderScreen(<BrowserLaunchpad
+            rows={retainRows ? rows.filter((row) => row.section === 'recent') : []}
+            platform="web"
+            refreshStatus="error"
+            refreshError="local_service_preview_refresh_failed"
+            onRefresh={onRefresh}
+        />);
+        expect(screen.getTextContent()).toContain('browserLaunchpad.error.previewRefreshFailed');
+        await screen.pressByTestIdAsync('browser-launchpad-error-action');
+        expect(onRefresh).toHaveBeenCalledOnce();
+        if (retainRows) expect(screen.findByTestId('browser-launchpad-card:recent:external_docs')).toBeTruthy();
+    });
     it('keeps rows visible while refreshing', async () => {
         const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
 

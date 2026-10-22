@@ -12933,7 +12933,7 @@ const enBrowserTool = browserToolTranslations.en;
 const enBrowserSurface = {
   title: 'Browser',
   openA11y: 'Open browser',
-  openHint: 'Opens the browser launchpad in details.',
+  openHint: 'Opens the browser.',
   openDisabledA11y: 'Browser unavailable',
 };
 
@@ -12971,6 +12971,7 @@ const enBrowserLaunchpad = {
   },
   error: {
     title: 'Browser targets need attention',
+    previewRefreshFailed: 'Couldn’t refresh previews from this machine. Try again to check for available targets.',
   },
 };
 

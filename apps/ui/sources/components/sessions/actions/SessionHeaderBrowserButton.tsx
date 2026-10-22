@@ -2,10 +2,8 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import {
-    BrowserSurfaceOpenButton,
-    createBrowserLaunchpadDetailsTab,
-} from '@/components/browser/surfaces';
+import { BrowserSurfaceOpenButton } from '@/components/browser/surfaces/BrowserSurfaceOpenButton';
+import { getRightSidebarBuiltinTab } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { SESSION_HEADER_ACTION_SIZE_PX } from './sessionHeaderIconMetrics';
@@ -16,16 +14,9 @@ function decisionEnabled(decision: ReturnType<typeof useFeatureDecision>): boole
 }
 
 /**
- * Desktop/web session-header affordance for opening the browser. On mobile the right-sidebar
- * Browser surface already hosts the browser (D1: the sidebar browser tab is mobile-only), so this
- * button is intentionally desktop/web-only — it gives desktop/web users the otherwise-missing entry
- * point.
- *
- * Pressing it opens the browser launcher empty-state (a workspace-ranked launchpad) INTO THE
- * DETAILS PANES via the canonical pane action: `openDetailsTab` opens the details pane when it is
- * closed (so the new tab is visible) and, when it is already open, keeps it open and just adds +
- * focuses the launchpad tab. It never toggles or closes an already-open pane, and never touches the
- * right sidebar — the canonical details open-state owner (`useAppPaneScope`) is the only mechanism.
+ * Desktop/web entry to the Session's retained Browser source. The header and viewer Dock select
+ * the same catalog destination, preserving the selected browser target and existing Details work.
+ * A phone reaches that source through its cockpit Browser surface.
  *
  * Gating mirrors {@link BrowserSurfaceOpenButton}: the `browser` and `browser.viewTargets`
  * client-represented feature decisions must both be enabled.
@@ -42,11 +33,8 @@ export const SessionHeaderBrowserButton = React.memo((props: Readonly<{
     const testId = useOptionalSessionScreenTestId('session-header-browser-button');
 
     const onPress = React.useCallback(() => {
-        // The canonical opener for the launcher empty-state: `openDetailsTab` opens-if-closed,
-        // keeps-open + focuses if already open. The launchpad is a `browser-view` tab, so it lands
-        // in the one details-workspace tab engine just like any opened target.
-        pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
-    }, [pane]);
+        pane.openRight({ tabId: getRightSidebarBuiltinTab('browser').id, present: false });
+    }, [pane.openRight]);
 
     // Mobile already exposes the browser via the right-sidebar surface; only desktop/web needs this
     // header entry point. `phone` is the canonical "mobile presentation" device type.

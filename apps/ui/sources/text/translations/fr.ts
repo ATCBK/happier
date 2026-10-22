@@ -10919,7 +10919,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
   browserSurface: {
     title: 'Navigateur',
     openA11y: 'Ouvrir le navigateur',
-    openHint: 'Ouvre le launchpad du navigateur dans le panneau de détails.',
+    openHint: 'Ouvre le navigateur.',
     openDisabledA11y: 'Navigateur indisponible',
   },
 
@@ -10956,6 +10956,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     },
     error: {
       title: 'Les cibles de navigateur demandent ton attention',
+      previewRefreshFailed: 'Impossible d’actualiser les aperçus de cette machine. Réessaie pour vérifier les cibles disponibles.',
     },
   },
 

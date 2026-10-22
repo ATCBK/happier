@@ -8951,7 +8951,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     browserSurface: {
         title: '瀏覽器',
         openA11y: '開啟瀏覽器',
-        openHint: '在詳細資料中開啟瀏覽器啟動面板。',
+        openHint: '開啟瀏覽器。',
         openDisabledA11y: '瀏覽器不可用',
     },
 
@@ -8988,6 +8988,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         },
         error: {
             title: '瀏覽器目標需要處理',
+            previewRefreshFailed: '無法重新整理此機器的預覽。請重試以檢查可用目標。',
         },
     },
 

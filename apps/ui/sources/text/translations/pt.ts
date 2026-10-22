@@ -11199,7 +11199,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
   browserSurface: {
     title: 'Navegador',
     openA11y: 'Abrir navegador',
-    openHint: 'Abre o painel de inicialização do navegador nos detalhes.',
+    openHint: 'Abre o navegador.',
     openDisabledA11y: 'Navegador indisponível',
   },
 
@@ -11236,6 +11236,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     },
     error: {
       title: 'Destinos do navegador precisam de atenção',
+      previewRefreshFailed: 'Não foi possível atualizar as prévias desta máquina. Tente novamente para verificar os destinos disponíveis.',
     },
   },
 

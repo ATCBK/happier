@@ -10,6 +10,8 @@ import { SessionViewerScope } from './SessionViewerScope';
 import { SessionCockpitSurfaceNavigationProvider } from '@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation';
 import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
+import { resolveRightSidebarTabs } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
+import { PanePresentationProvider } from '@/components/appShell/panes/panePresentation';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,6 +37,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
 
 let controller: SessionViewerController | null = null;
 let pane: AppPaneScopeApi | null = null;
+const presentPane = vi.fn();
 function Probe() {
     controller = useOptionalSessionViewerController();
     pane = useAppPaneScope(createSessionPaneScopeId('session_online', 'server_1'));
@@ -44,13 +47,15 @@ function Probe() {
 async function mount(sessionId: string) {
     await renderScreen(
         <AppPaneProvider>
-            <SessionViewerScope sessionId={sessionId} serverId="server_1"><Probe /></SessionViewerScope>
+            <PanePresentationProvider value={presentPane}>
+                <SessionViewerScope sessionId={sessionId} serverId="server_1"><Probe /></SessionViewerScope>
+            </PanePresentationProvider>
         </AppPaneProvider>,
     );
 }
 
 describe('SessionViewerScope presentable sources', () => {
-    beforeEach(() => { controller = null; deviceType = 'desktop'; });
+    beforeEach(() => { controller = null; deviceType = 'desktop'; presentPane.mockClear(); });
 
     it('presents the Computer while the Session\'s Machine is unreachable, but not the Browser', async () => {
         await mount('session_offline');
@@ -111,14 +116,21 @@ describe('SessionViewerScope presentable sources', () => {
             expect(pane?.scopeState?.details.tabs.map(tab => tab.key)).toEqual(['file:a']);
         });
 
-        it('closes the Browser right pane the dock opened', async () => {
+        it.each([false, true])('returns the Browser dock to its previous right pane without navigating (previously open: %s)', async (previouslyOpen) => {
             await mount('session_online');
+            if (previouslyOpen) await act(async () => { pane?.openRight({ tabId: 'git', present: false }); });
             await act(async () => { controller?.setFloatFits(true); });
             await open('browser');
             await apply({ kind: 'viewer.dock' });
             expect(pane?.scopeState?.right.isOpen).toBe(true);
+            expect(pane?.scopeState?.right.activeTabId).toBe('browser');
+            expect(presentPane).not.toHaveBeenCalled();
+            expect(resolveRightSidebarTabs({ scope: 'session', presentation: 'desktop' })
+                .map(tab => tab.id)).toContain(pane?.scopeState?.right.activeTabId);
             await apply({ kind: 'viewer.float' });
-            expect(pane?.scopeState?.right.isOpen).toBe(false);
+            expect(pane?.scopeState?.right.isOpen).toBe(previouslyOpen);
+            if (previouslyOpen) expect(pane?.scopeState?.right.activeTabId).toBe('git');
+            expect(presentPane).not.toHaveBeenCalled();
         });
     });
 });

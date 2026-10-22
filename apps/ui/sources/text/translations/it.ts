@@ -11300,7 +11300,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
   browserSurface: {
     title: 'Navigatore',
     openA11y: 'Apri browser',
-    openHint: 'Apre il launchpad del browser nei dettagli.',
+    openHint: 'Apre il browser.',
     openDisabledA11y: 'Browser non disponibile',
   },
 
@@ -11337,6 +11337,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },
     error: {
       title: 'Le destinazioni browser richiedono attenzione',
+      previewRefreshFailed: 'Impossibile aggiornare le anteprime di questa macchina. Riprova per verificare le destinazioni disponibili.',
     },
   },
 

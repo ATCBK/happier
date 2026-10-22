@@ -266,8 +266,8 @@ export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefiniti
             session: 'browser',
             project: 'browser',
         },
-        // Project Browser has a workspace-scoped producer on both presentations.
-        available: (input) => input.scope === 'project' || input.presentation === 'mobile',
+        // Session's retained Browser source docks here on desktop and opens here on phones.
+        // Project Browser supplies its workspace-scoped producer on both presentations.
     },
     {
         id: 'services',

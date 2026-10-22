@@ -87,6 +87,7 @@ export type BrowserDetailsSurfaceRendererOptions = Readonly<{
     launchpadRows?: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
+    onRefreshLaunchpad?: () => void;
     onOpenTarget?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
     productModels?: BrowserSurfaceProductModels;
     browserFeatureDecision?: FeatureDecision | null;
@@ -173,6 +174,7 @@ export function BrowserDetailsSurface(props: Readonly<{
     launchpadRows?: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
+    onRefreshLaunchpad?: () => void;
     onOpenTarget?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
     productModels?: BrowserSurfaceProductModels;
     browserFeatureDecision?: FeatureDecision | null;
@@ -296,6 +298,7 @@ export function BrowserDetailsSurface(props: Readonly<{
             launchpadRows={props.launchpadRows}
             launchpadRefreshStatus={props.launchpadRefreshStatus}
             launchpadRefreshError={props.launchpadRefreshError}
+            onRefreshLaunchpad={props.onRefreshLaunchpad}
             onOpenTarget={props.onOpenTarget}
             browserFeatureDecision={browserFeatureDecision}
             desktopWebViewAvailability={desktopWebViewAvailability}
@@ -397,6 +400,7 @@ export function createBrowserViewDetailsSurfaceRenderer(
                     launchpadRows={options.launchpadRows}
                     launchpadRefreshStatus={options.launchpadRefreshStatus}
                     launchpadRefreshError={options.launchpadRefreshError}
+                    onRefreshLaunchpad={options.onRefreshLaunchpad}
                     onOpenTarget={options.onOpenTarget}
                     onViewTargetChange={handleViewTargetChange}
                     nowMs={options.nowMs}

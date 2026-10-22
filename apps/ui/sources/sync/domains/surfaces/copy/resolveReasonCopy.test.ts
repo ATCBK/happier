@@ -77,6 +77,12 @@ const LOCAL_SERVICE_LAUNCHER_CODES = [
 ] as const;
 
 describe('resolveReasonCopy', () => {
+  it('explains a launchpad catalog refresh failure with its specific recovery copy', () => {
+    const copy = resolveReasonCopy({ reasonCode: 'local_service_preview_refresh_failed', kind: 'browserLaunchpad' });
+    expect(copy.body).not.toBe(t('browserLaunchpad.status.unavailableGeneric'));
+    expect(copy.body).not.toContain('local_service_preview_refresh_failed');
+    expect(copy.diagnosticCode).toBe('local_service_preview_refresh_failed');
+  });
   it('gives withdrawn plugin views a configuration recovery instead of a startup diagnosis', () => {
     for (const reasonCode of ['artifact_not_current', 'artifact_lease_revoked'] as const) {
       const presentation = resolvePluginSurfaceStatePresentation({ state: 'unavailable', reasonCode });

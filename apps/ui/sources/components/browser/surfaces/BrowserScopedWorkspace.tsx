@@ -56,6 +56,7 @@ export function BrowserScopedWorkspace(props: Readonly<{
     launchpadRows?: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
+    onRefreshLaunchpad?: () => void;
     productModels?: BrowserSurfaceProductModels | null;
     /**
      * The exact already-admitted plugin projection for this Browser surface.
@@ -104,12 +105,14 @@ export function BrowserScopedWorkspace(props: Readonly<{
             launchpadRows: props.launchpadRows,
             launchpadRefreshStatus: props.launchpadRefreshStatus,
             launchpadRefreshError: props.launchpadRefreshError,
+            onRefreshLaunchpad: props.onRefreshLaunchpad,
             productModels: props.productModels ?? undefined,
             onOpenTarget: openBrowserViewTarget,
         }),
     ], [
         openBrowserViewTarget,
         props.launchpadRefreshError,
+        props.onRefreshLaunchpad,
         props.launchpadRefreshStatus,
         props.launchpadRows,
         props.localServicePreviewServerId,

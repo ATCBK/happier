@@ -265,6 +265,7 @@ export function BrowserShell(props: Readonly<{
     launchpadRows?: readonly BrowserLaunchpadRow[];
     launchpadRefreshStatus?: 'idle' | 'refreshing' | 'error';
     launchpadRefreshError?: string | null;
+    onRefreshLaunchpad?: () => void;
     onOpenTarget?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
     /**
      * OWNER-NAV (DV-NAV): navigate the CURRENT tab in place (the launchpad/new-tab URL entry uses
@@ -724,6 +725,7 @@ export function BrowserShell(props: Readonly<{
                         allowExternalUrlBrowsing={props.allowExternalUrlBrowsing}
                         refreshStatus={props.launchpadRefreshStatus ?? 'idle'}
                         refreshError={props.launchpadRefreshError}
+                        onRefresh={props.onRefreshLaunchpad}
                         localServicePreviewServerId={props.localServicePreviewServerId}
                         agentBrowser={resolveAgentBrowserPrerequisite(streamedChrome, props.agent ?? null,
                             props.onAllowBrowserSandbox)}

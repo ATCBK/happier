@@ -10919,7 +10919,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
     browserSurface: {
         title: 'Browser',
         openA11y: 'Browser öffnen',
-        openHint: 'Öffnet das Browser-Launchpad in den Details.',
+        openHint: 'Öffnet den Browser.',
         openDisabledA11y: 'Browser nicht verfügbar',
     },
 
@@ -10956,6 +10956,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         },
         error: {
             title: 'Die Browser-Ziele brauchen Aufmerksamkeit',
+            previewRefreshFailed: 'Die Vorschauen dieses Rechners konnten nicht aktualisiert werden. Versuche es erneut, um verfügbare Ziele zu prüfen.',
         },
     },
 

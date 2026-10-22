@@ -71,6 +71,7 @@ export function ProjectRightPanelBrowserView(props: Readonly<{
             launchpadRows={hostProps.launchpadRows}
             launchpadRefreshStatus={hostProps.launchpadRefreshStatus}
             launchpadRefreshError={hostProps.launchpadRefreshError}
+            onRefreshLaunchpad={hostProps.onRefreshLaunchpad}
             pluginProjection={pluginProjection}
             pluginBrowserActionSessionId={null}
             testID="project-rightpanel-browser"

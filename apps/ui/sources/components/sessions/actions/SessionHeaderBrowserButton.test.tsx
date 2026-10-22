@@ -6,7 +6,6 @@ import {
     installSessionActionsCommonModuleMocks,
     resetSessionActionsCommonModuleMockState,
 } from './sessionActionsTestHelpers';
-import { BROWSER_LAUNCHPAD_DETAILS_TAB_KEY } from '@/components/browser/surfaces';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -90,6 +89,7 @@ describe('SessionHeaderBrowserButton', () => {
         openDetailsTabSpy.mockClear();
         closeRightSpy.mockClear();
         openRightSpy.mockClear();
+        vi.mocked(pane.selectRightDestination).mockClear();
         deviceTypeMock = 'desktop';
         browserDecisionMock = enabledDecision;
         viewTargetsDecisionMock = enabledDecision;
@@ -127,28 +127,19 @@ describe('SessionHeaderBrowserButton', () => {
         expect(screen.findByTestId('session-header-browser-button')).toBeNull();
     });
 
-    it('opens a browser-view launchpad tab into the details pane when pressed (details closed -> opens it)', async () => {
+    it('opens the Browser dock destination without creating a competing Details launchpad', async () => {
         const { SessionHeaderBrowserButton } = await import('./SessionHeaderBrowserButton');
         const screen = await renderScreen(<SessionHeaderBrowserButton sessionId="s1" scopeId="session:s1" />);
 
         await screen.pressByTestIdAsync('session-header-browser-button');
 
-        // The canonical pane action opens the details pane (it sets details.isOpen) and focuses the
-        // launchpad tab. The browser opens INTO the details panes, never the right sidebar.
-        expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);
-        const [tab, options] = openDetailsTabSpy.mock.calls[0] as [
-            { key: string; kind: string; resource: { kind: string; mode?: string } },
-            { intent?: string } | undefined,
-        ];
-        expect(tab.key).toBe(BROWSER_LAUNCHPAD_DETAILS_TAB_KEY);
-        expect(tab.kind).toBe('browser-view');
-        expect(tab.resource).toMatchObject({ kind: 'browser-view', mode: 'launchpad' });
-        expect(options?.intent).toBe('pinned');
+        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'browser', present: false });
+        expect(openDetailsTabSpy).not.toHaveBeenCalled();
         // It must never toggle/close an existing pane.
         expect(closeRightSpy).not.toHaveBeenCalled();
     });
 
-    it('keeps an already-open details pane open and just adds/focuses the browser tab', async () => {
+    it('keeps existing Details work when opening the Browser dock destination', async () => {
         const scopeState = pane.scopeState;
         if (!scopeState) throw new Error('Expected pane scope state');
         scopeState.details.isOpen = true;
@@ -167,8 +158,8 @@ describe('SessionHeaderBrowserButton', () => {
 
         await screen.pressByTestIdAsync('session-header-browser-button');
 
-        // Only opens/focuses the browser launchpad tab; never closes the already-open pane.
-        expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);
+        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'browser', present: false });
+        expect(openDetailsTabSpy).not.toHaveBeenCalled();
         expect(pane.closeDetails).not.toHaveBeenCalled();
         expect(closeRightSpy).not.toHaveBeenCalled();
     });

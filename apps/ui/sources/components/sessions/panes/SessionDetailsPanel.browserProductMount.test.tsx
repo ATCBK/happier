@@ -88,31 +88,25 @@ async function renderers(overrides: Partial<Parameters<typeof import('./surfaces
 }
 
 describe('SessionDetailsPanel browser product mount', () => {
-    it('opens a pinned browser launchpad and retains its recording model when another destination is active', async () => {
+    it('opens the same Browser pane as the viewer dock without adding a competing Details launchpad', async () => {
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now() })]);
         const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
-        const { BrowserDetailsSurface, createBrowserLaunchpadDetailsTab } = await import('@/components/browser/surfaces');
-        const { DetailsSurfaceHost } = await import('@/components/appShell/panes/details/surfaces');
+        const { SessionHeaderBrowserButton } = await import('@/components/sessions/actions/SessionHeaderBrowserButton');
         const screen = await renderScreen(<runtime.Wrapper>
+            <SessionHeaderBrowserButton sessionId="s1" scopeId="session:s1" />
             <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" />
         </runtime.Wrapper>);
         await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         await screen.pressByTestIdAsync('session-details-open-browser');
-        const browserTabKey = createBrowserLaunchpadDetailsTab().key;
-        const browserTab = runtime.pane.scopeState?.details.tabs.find(tab => tab.key === browserTabKey);
-        expect(browserTab).toMatchObject({
-            kind: 'browser-view', isPinned: true, isPreview: false,
-            resource: { kind: 'browser-view', mode: 'launchpad' },
+        expect(runtime.pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
+        expect(runtime.pane.scopeState?.details.tabs.map(tab => tab.key)).toEqual(['file:a.txt']);
+        await act(async () => {
+            runtime.pane.closeRight();
+            runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' });
         });
-        const initial = screen.tree.findByType(BrowserDetailsSurface);
-        const recording = initial.props.productModels?.browserRecording;
-        expect(recording?.state).toBeTruthy();
-        expect(recording?.recordingCapabilities.enabled).toBe(false);
-        await act(async () => runtime.pane.setActiveDetailsTab('file:a.txt'));
-        const retained = screen.tree.findByType(BrowserDetailsSurface);
-        expect(retained.props.productModels.browserRecording.state).toBe(recording.state);
-        const host = screen.tree.findAllByType(DetailsSurfaceHost).find(node => node.props.tab.key === browserTabKey);
-        expect(host?.props.active).toBe(false);
+        await screen.pressByTestIdAsync('session-header-browser-button');
+        expect(runtime.pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
+        expect(runtime.pane.scopeState?.details.tabs.map(tab => tab.key)).toEqual(['file:a.txt']);
     });
 
     it('commit Back closes only the commit destination and preserves the other tab', async () => {

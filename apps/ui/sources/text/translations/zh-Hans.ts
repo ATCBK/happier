@@ -10714,7 +10714,7 @@ export const zhHans: TranslationStructure = {
   browserSurface: {
     title: '浏览器',
     openA11y: '打开浏览器',
-    openHint: '在详情中打开浏览器启动面板。',
+    openHint: '打开浏览器。',
     openDisabledA11y: '浏览器不可用',
   },
 
@@ -10751,6 +10751,7 @@ export const zhHans: TranslationStructure = {
     },
     error: {
       title: '浏览器目标需要处理',
+      previewRefreshFailed: '无法刷新此机器的预览。请重试以检查可用目标。',
     },
   },
 
