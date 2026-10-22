@@ -109,7 +109,7 @@ export const CLOSED_DETAIL: Detail = {
 export function useSessionCapabilitiesDetail(
   serverId: string | null,
   machineOnline: boolean | null,
-  onFactsChanged: () => void,
+  onFactsChanged: (factsKey: string) => void,
   target: SheetTarget,
   modelInput: ModelInput,
   machineName: string,
@@ -147,7 +147,7 @@ export function useSessionCapabilitiesDetail(
   React.useEffect(() => {
     if (observedFacts.current === factsKey) return;
     observedFacts.current = factsKey;
-    factsChanged.current();
+    factsChanged.current(factsKey);
   }, [factsKey]);
   const { names, workspaceRefs } = useSkillPlaces(scope?.serverId ?? serverId);
   const context = React.useMemo(() => {
@@ -290,7 +290,7 @@ function SessionCapabilitiesSheet(
     modelInput: ModelInput;
     onAttention: (attention: boolean) => void;
     onChange: SessionCapabilitiesChange;
-    onRetry: () => void;
+    onRetry: (factsKey?: string) => void;
     machineName: string;
     maxHeight: number;
     target: SheetTarget;
@@ -371,7 +371,7 @@ function useCapabilitiesChip(
     serverId: string | null;
     machineName: string;
     onChange: SessionCapabilitiesChange;
-    onRetry: () => void;
+    onRetry: (factsKey?: string) => void;
     demandPreview: () => void;
     openRequest?: Readonly<{ consume: () => void }> | null;
     target: SheetTarget;
@@ -487,8 +487,8 @@ export function useNewSessionCapabilitiesChip(
     async (change) => setItem(change.kind, change.id, change.state),
     [setItem],
   );
-  const onRetry = React.useCallback(() => {
-    void refresh();
+  const onRetry = React.useCallback((factsKey?: string) => {
+    void refresh(factsKey);
   }, [refresh]);
   const draft = params.draft;
   const target = React.useMemo<SheetTarget>(() => ({ draft: { machineId: draft.machineId, directory: draft.directory,
@@ -564,8 +564,8 @@ export function useExistingSessionCapabilitiesChip(
     },
     [setItem, sessionId],
   );
-  const onRetry = React.useCallback(() => {
-    void refresh();
+  const onRetry = React.useCallback((factsKey?: string) => {
+    void refresh(factsKey);
   }, [refresh]);
   const { undoReceipt, undoLast } = popover;
   const undo = React.useMemo<SessionCapabilitiesUndo | null>(

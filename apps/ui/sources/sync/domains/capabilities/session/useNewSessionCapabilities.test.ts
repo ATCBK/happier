@@ -131,6 +131,57 @@ describe('useNewSessionCapabilities', () => {
         expect(transport.mock.calls.some(([input]) => isPreviewRequest(input))).toBe(false);
     });
 
+    it.each(['draft', 'session'] as const)('shares pending %s preview intent without suppressing refresh or reopen', async kind => {
+        await seedPortableCatalogs();
+        const sessionId = 'c123456789012345678901234';
+        const metadata = { machineId: 'machine-1', path: '/repo', host: 'host', flavor: 'codex' };
+        const owner = createSessionOwnerMetadataV1({ metadata });
+        if (!owner.ok) throw new Error('Invalid owner metadata fixture');
+        const row = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+            encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), metadataVersion: 1,
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata), agentState: null, agentStateVersion: 1,
+            dataEncryptionKey: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
+        for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET /v2/sessions/${sessionId}${suffix}`, { body: { session: row } });
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        let previews = 0;
+        transport.mockImplementation(async input => {
+            if (isPreviewRequest(input) && ++previews === 1) await pending;
+            return previewResponse;
+        });
+        const { useNewSessionCapabilities } = await import('./useNewSessionCapabilities');
+        const { useSessionCapabilities } = await import('./useSessionCapabilities');
+        const hook = await renderHook(() => {
+            const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+            return kind === 'draft'
+                ? useNewSessionCapabilities({ machineId: 'machine-1', directory: '/repo', agentId: 'codex', targetServerId: serverId, selection, setSelection })
+                : useSessionCapabilities(sessionId, metadata, { serverId });
+        });
+        const ready = () => { const value = hook.getCurrent(); return 'previewStatus' in value ? value.previewStatus : value.status; };
+        try {
+            await act(async () => { hook.getCurrent().demandPreview(); });
+            await vi.waitFor(() => expect(previews).toBe(1));
+            // One interaction can produce hover, press-in and focus before its RPC settles.
+            await act(async () => { hook.getCurrent().demandPreview(); hook.getCurrent().demandPreview(); hook.getCurrent().demandPreview(); });
+            await flushHookEffects();
+            expect(previews).toBe(1);
+            // Multiple detail leaves can publish the same real input change.
+            await act(async () => { await hook.getCurrent().refresh('facts-a'); await hook.getCurrent().refresh('facts-a'); });
+            expect(previews).toBe(2);
+            await act(async () => { await hook.getCurrent().refresh('facts-b'); });
+            expect(previews).toBe(3);
+            // Explicit Retry still refreshes even with the same current facts.
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(previews).toBe(4);
+            release();
+            await vi.waitFor(() => expect(ready()).toBe('ready'));
+            await act(async () => { hook.getCurrent().demandPreview(); });
+            await vi.waitFor(() => expect(previews).toBe(5));
+            await vi.waitFor(() => expect(ready()).toBe('ready'));
+        } finally { release(); await hook.unmount(); }
+    });
+
     it('observes a host acknowledgment from metadata even while a demanded preview still says pending', async () => {
         const sessionId = 'c123456789012345678901234';
         const metadata = { machineId: 'machine-1', path: '/repo', host: 'host', flavor: 'codex',

@@ -39,6 +39,8 @@ export function useNewSessionCapabilities(draft: Readonly<{
     const [error, setError] = React.useState<string | null>(null);
     const [unsupported, setUnsupported] = React.useState(false);
     const requestRef = React.useRef(0);
+    const pendingRequest = React.useRef<number | null>(null);
+    const requestedFacts = React.useRef<Readonly<{ contextKey: string; factsKey: string }> | null>(null);
     const selection = React.useMemo(() => SessionCapabilitySelectionAuthoringV1Schema.parse(draft.selection), [draft.selection]);
     const setItem = React.useCallback((kind: 'skill' | 'mcp_server' | 'native_skill', id: string, state: 'on' | 'off' | 'inherit') => {
         draft.setSelection(current => {
@@ -46,12 +48,15 @@ export function useNewSessionCapabilities(draft: Readonly<{
             return areSessionCapabilitySelectionsEquivalentV1(current, next) ? current : next;
         });
     }, [draft.setSelection]);
-    const refresh = React.useCallback(async () => {
+    const refresh = React.useCallback(async (factsKey?: string) => {
+        if (typeof factsKey === 'string' && requestedFacts.current?.contextKey === contextKey && requestedFacts.current.factsKey === factsKey) return;
+        requestedFacts.current = typeof factsKey === 'string' ? { contextKey, factsKey } : null;
         const request = ++requestRef.current;
         if (!enabled || (!draft.portableOnly && !draft.machineId)) {
             setPreviewStatus('idle'); setError(null); setUnsupported(false);
             return;
         }
+        pendingRequest.current = request;
         setPreviewStatus('loading'); setError(null); setUnsupported(false);
         try {
             const receipt = await execution.execute('sessions.spawn.capabilities.preview', {
@@ -80,6 +85,8 @@ export function useNewSessionCapabilities(draft: Readonly<{
             setUnsupported(isRpcMethodNotAvailableError(failure) || isRpcMethodNotFoundError(failure));
             setError(failure instanceof Error ? failure.message : String(failure));
             setPreviewStatus(isMachineRequestReachabilityFailure(failure) ? 'unreachable' : 'error');
+        } finally {
+            if (pendingRequest.current === request) pendingRequest.current = null;
         }
     }, [enabled, draft.portableOnly, draft.machineId, draft.directory, draft.agentId, draft.projectKey, draft.profileId, execution.execute, selection, contextKey]);
     React.useEffect(() => {
@@ -87,12 +94,14 @@ export function useNewSessionCapabilities(draft: Readonly<{
         return () => { requestRef.current += 1; };
     }, [demanded, refresh, execution.ready]);
     const demandPreview = React.useCallback(() => {
+        // Intent events share pending work; changed inputs and Retry remain fresh.
+        if (pendingRequest.current !== null) return;
         if (demanded && execution.ready) void refresh();
         else setDemanded(true);
     }, [demanded, execution.ready, refresh]);
-    const retry = React.useCallback(async () => {
+    const retry = React.useCallback(async (factsKey?: string) => {
         if (!demanded) { setDemanded(true); return; }
-        await refresh();
+        await refresh(factsKey);
     }, [demanded, refresh]);
     const mcpPreviewError = preview?.mcp.items.some(item => item.preview === undefined) ? 'invalid_action_output' : null;
     return { selection, setItem, preview, mcpPreview, mcpPreviewError, previewStatus, lastKnownPreview: preview,

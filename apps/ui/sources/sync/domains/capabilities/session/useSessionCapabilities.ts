@@ -57,6 +57,8 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
     const [status, setStatus] = React.useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
     const [error, setError] = React.useState<string | null>(null);
     const request = React.useRef(0);
+    const pendingRequest = React.useRef<number | null>(null);
+    const requestedFacts = React.useRef<Readonly<{ scopeKey: string; factsKey: string }> | null>(null);
     const publish = React.useCallback((current: State) => {
         const selection = current.pending.reduce((value, op) => setSessionCapabilitySelectionItemV1(value, op.kind, op.id, op.state), current.written);
         if (JSON.stringify(selection) === JSON.stringify(current.selection)) return;
@@ -70,8 +72,13 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
         state.written = readSessionCapabilitySelectionFromMetadataV1(sessionMetadata);
         publish(state);
     }, [state, sessionMetadata, publish]);
-    const refresh = React.useCallback(async () => {
+    const refresh = React.useCallback(async (factsKey?: string) => {
+        if (typeof factsKey === 'string' && requestedFacts.current?.scopeKey === key && requestedFacts.current.factsKey === factsKey) return;
+        // One current input observation, not a retained preview cache. Retry/reopen
+        // clear it; a different real input always starts its own fresh request.
+        requestedFacts.current = typeof factsKey === 'string' ? { scopeKey: key, factsKey } : null;
         const turn = ++request.current;
+        pendingRequest.current = turn;
         setStatus('loading'); setError(null);
         try {
             const result = await execution.execute('session.capabilities.get', { sessionId }, { defaultSessionId: sessionId });
@@ -82,6 +89,8 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
         } catch (failure) {
             if (turn !== request.current || owner.current !== state || !state.mounted) return;
             setStatus('unavailable'); setError(failure instanceof Error ? failure.message : String(failure));
+        } finally {
+            if (pendingRequest.current === turn) pendingRequest.current = null;
         }
     }, [execution.execute, key, sessionId, state]);
     React.useEffect(() => { if (demanded && execution.ready) void refresh(); }, [demanded, execution.ready, refresh]);
@@ -137,6 +146,9 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
             skills: resolveCapabilityApplyTimingV1({ ...input, kind: 'skill' }) };
     }, [sessionMetadata, sessionRunning, preview?.applyTiming]);
     const demandPreview = React.useCallback(() => {
+        // Hover, press-in and focus can express one intent before its preview settles.
+        // Actual input invalidation and Retry still call refresh directly.
+        if (pendingRequest.current !== null) return;
         if (demanded && execution.ready) void refresh();
         else setDemanded(true);
     }, [demanded, execution.ready, refresh]);
