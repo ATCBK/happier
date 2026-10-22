@@ -420,6 +420,8 @@ export type AgentConnectedAccountStateSharingDescriptorV1 = Readonly<{
     supported: boolean;
     modes: readonly ('isolated' | 'shared')[];
     entries: readonly AgentConnectedAccountStateSharingDescriptorEntryV1[];
+    /** Shared mode uses this source environment root or the native source home; isolated mode always uses the materialized home. */
+    rootEnvironmentKey?: string;
     sharedStatePrivacyRiskAcknowledgementRequired?: boolean;
     symlinkUnavailableDegradePolicy: 'block_continuity' | 'degrade_to_isolated';
     unavailableReason?: 'not_implemented' | 'dynamic_diagnostics_required';

@@ -127,7 +127,7 @@ export const codexHandoffSurface = {
       const env = params.environmentVariables === undefined ? process.env : params.environmentVariables;
       const codexHome = resolveConfiguredCodexHomePath(env);
       const homeDir = resolveHomeDirFromEnvironment(env);
-      const environmentVariables = resolveCodexRuntimeHomeEnvironment({
+      const environmentVariables = await resolveCodexRuntimeHomeEnvironment({
         env,
         codexHome,
         cwd: params.targetDirectory,

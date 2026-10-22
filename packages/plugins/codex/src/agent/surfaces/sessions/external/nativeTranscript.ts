@@ -125,7 +125,9 @@ export async function pageCodexNativeTranscript(params: Readonly<{
       truncated: params.direction === 'newer' && page.nextCursor !== null,
       ...(params.direction === 'newer' && page.nextCursor ? { truncationReason: 'page_limit' as const } : {}) };
   } catch (error) {
-    throw new Error(error instanceof Error
-      ? `Codex history could not be read completely: ${error.message}` : 'Codex history could not be read completely');
+    // Keep the exec owner's typed failure for safe diagnostics. Wrapping it
+    // discarded EXITED/TIMEOUT identity from thread/items/list failures.
+    if (error instanceof Error) throw error;
+    throw new Error('Codex history could not be read completely');
   }
 }

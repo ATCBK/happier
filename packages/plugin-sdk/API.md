@@ -1470,6 +1470,8 @@
 | `./first-party/connected-accounts` | `ProviderLimitEvidenceContext` | type | any |
 | `./first-party/connected-accounts` | `ProviderLimitEvidenceProvenance` | type | any |
 | `./first-party/connected-accounts` | `classifyProviderLimitEvidence` | value | any |
+| `./fs` | `CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES` | value | daemon |
+| `./fs` | `ConnectedAccountNativeHomeState` | type | daemon |
 | `./fs` | `ConnectedServiceNativeHome` | type | daemon |
 | `./fs` | `FileSystemService` | type | daemon |
 | `./fs` | `FsAtomicWriteInput` | type | daemon |
@@ -1490,6 +1492,8 @@
 | `./fs` | `linkDirectoryChildren` | value | daemon |
 | `./fs` | `listConnectedServiceNativeHomes` | value | daemon |
 | `./fs` | `openSqliteDatabaseSync` | value | daemon |
+| `./fs` | `parseConnectedAccountNativeHomeState` | value | daemon |
+| `./fs` | `readConnectedAccountNativeHomeState` | value | daemon |
 | `./fs` | `resolveConfiguredNativeHomePath` | value | daemon |
 | `./fs` | `resolveConfiguredPath` | value | daemon |
 | `./fs` | `resolveHomeDirFromEnvironment` | value | daemon |

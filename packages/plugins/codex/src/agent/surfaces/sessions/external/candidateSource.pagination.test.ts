@@ -97,66 +97,27 @@ import { pageCodexExternalSessionTranscript } from './transcriptSource.js';
 import { createCodexExternalSessionsContribution } from './contribution.js';
 
 describe('Codex candidate conversation search', () => {
-  it.each([
-    { callerBudgetMs: 30_000, returnsNativePages: true },
-    { callerBudgetMs: 2_000, returnsNativePages: false },
-    { callerBudgetMs: undefined, returnsNativePages: false },
-  ])('respects the owning budget for a slow proxy-to-stdio listing (caller budget=$callerBudgetMs)', async ({ callerBudgetMs, returnsNativePages }) => {
+  it('reports native history unavailable without starting a vendor server when its proxy is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-content-native-caller-budget-'));
     const controller = new AbortController();
     try {
-      vi.useFakeTimers();
       const startedAtMs = Date.now();
-      let markStdioStarted!: () => void;
-      const stdioStarted = new Promise<void>((resolve) => { markStdioStarted = resolve; });
       appServerProbe.threads = [{ id: 'native-only', updatedAt: 2_000_000_000 }];
-      appServerProbe.onCreate = async ({ transport, signal }) => {
-        if (transport) throw new Error('App-server proxy socket is absent');
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 4_000);
-          signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-          markStdioStarted();
-        });
-      };
+      appServerProbe.onCreate = async () => { throw new Error('App-server proxy socket is absent'); };
       const source = { kind: 'codexHome' as const, home: 'user' as const, homePath: root };
       const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
-      const pending = contribution.listCandidates({
+      const result = await contribution.listCandidates({
         source, searchMode: 'full', searchTerm: 'native', maxItems: 10,
-        ...(callerBudgetMs === undefined ? {} : {
-          searchTarget: 'content', searchTerm: 'native budget needle', deadlineAtMs: startedAtMs + callerBudgetMs,
-        }),
+        searchTarget: 'content', deadlineAtMs: startedAtMs + 30_000,
         maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
         ripgrep: { run: async () => { throw new Error('An empty rollout corpus needs no ripgrep process'); } },
         signal: controller.signal,
       });
-      await stdioStarted;
-      await vi.advanceTimersByTimeAsync(returnsNativePages ? 4_000 : callerBudgetMs ?? 3_000);
-      const result = await pending;
-      expect(appServerProbe.transports).toEqual([{ kind: 'daemonProxy' }, undefined]);
-      if (callerBudgetMs === undefined) {
-        expect(result).toMatchObject({ ok: true, value: { candidates: [], searchIncomplete: true } });
-        expect(Date.now() - startedAtMs).toBe(3_000);
-        expect(appServerProbe.calls).toEqual([]);
-      } else if (returnsNativePages) {
-        expect(result).toMatchObject({ ok: true });
-        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
-        const candidates = result.value.candidates.map((candidate) => ExternalSessionCandidateV1Schema.parse({
-          ...candidate, agentId: 'codex', source,
-        }));
-        expect(candidates.map((candidate) => candidate.remoteSessionId)).toEqual(['native-only']);
-        expect(result.value).toMatchObject({ nextCursor: null, contentCoverage: 'partial' });
-        expect(appServerProbe.calls).toEqual([{ archived: false, cursor: null }, { archived: true, cursor: null }]);
-        expect(Date.now() - startedAtMs).toBe(4_000);
-        expect(Date.now()).toBeLessThan(startedAtMs + callerBudgetMs);
-      } else {
-        expect(result).toMatchObject({ ok: false, code: 'timeout', retryable: true });
-        expect(Date.now() - startedAtMs).toBe(callerBudgetMs);
-        expect(appServerProbe.calls).toEqual([]);
-      }
+      expect(appServerProbe.transports).toEqual([{ kind: 'daemonProxy' }]);
+      expect(result).toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
+      expect(appServerProbe.calls).toEqual([]);
     } finally {
       controller.abort();
-      await vi.runAllTimersAsync();
-      vi.useRealTimers();
       appServerProbe.onCreate = null;
       await rm(root, { recursive: true, force: true });
     }

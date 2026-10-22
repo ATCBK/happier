@@ -478,7 +478,7 @@ export async function importCodexSessionBundle(params: Readonly<{
     runtimeDescriptorV1: runtimeDescriptor,
     resume: {
       directory: params.targetPath,
-      environmentVariables: resolveCodexHomeEnvironment(params.env, codexHome),
+      environmentVariables: await resolveCodexHomeEnvironment(params.env, codexHome),
     },
   };
 }

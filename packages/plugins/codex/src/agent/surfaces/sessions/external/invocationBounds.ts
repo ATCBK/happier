@@ -14,6 +14,7 @@ export type CodexExternalSessionInvocationBounds = Readonly<{
   preparation?: CodexRolloutPreparation;
   sessionMetaCache?: CodexSessionMetaCache;
   observation?: AgentExternalSessionsPageTranscriptRequest['observation'];
+  logger?: AgentExternalSessionsPageTranscriptRequest['logger'];
 }>;
 
 export function throwIfCodexExternalSessionInvocationStopped(

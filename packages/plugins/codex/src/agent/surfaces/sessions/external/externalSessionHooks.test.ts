@@ -148,10 +148,10 @@ function createInvocationContext(
       throw new Error('UI is unavailable in this process-boundary fixture');
     },
   });
-  // The app-server transport is the only system service this leaf is allowed to use.
-  const services = new Proxy({ exec }, {
+  // Only the app-server transport and file diagnostics are substituted system boundaries.
+  const services = new Proxy({ exec, logger: { debug: () => undefined } }, {
     get(target, property, receiver) {
-      if (property === 'exec') return Reflect.get(target, property, receiver);
+      if (property === 'exec' || property === 'logger') return Reflect.get(target, property, receiver);
       throw new Error(`Unexpected plugin service access: ${String(property)}`);
     },
   }) as PluginServices;
@@ -373,6 +373,7 @@ describe('Codex External Session hooks contribution', () => {
     });
     expect(appServerMocks.createCodexNativeAppServerClient).toHaveBeenCalledWith({
       exec,
+      logger: { debug: expect.any(Function) },
       processEnv: {
         CODEX_HOME: '/tmp/codex-hooks-list',
         CODEX_SQLITE_HOME: '/tmp/codex-state',

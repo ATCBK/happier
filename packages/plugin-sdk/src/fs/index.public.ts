@@ -21,5 +21,7 @@ export type { FsAtomicWriteInput } from '../fs.js';
 export { writeSecureTempTextFileSync } from '../runtime/tempTextFile.js';
 export { resolveConfiguredNativeHomePath, resolveVerifiedNativeHomePath, listConnectedServiceNativeHomes } from './nativeHome.js';
 export type { ConnectedServiceNativeHome } from './nativeHome.js';
+export { CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES, parseConnectedAccountNativeHomeState, readConnectedAccountNativeHomeState } from '../connected-accounts/nativeHomeState.js';
+export type { ConnectedAccountNativeHomeState } from '../connected-accounts/nativeHomeState.js';
 export { openSqliteDatabaseSync } from './sqlite.js';
 export type { SqliteDatabaseSync, SqliteStatementSync } from './sqlite.js';

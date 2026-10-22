@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { reconcileCodexResumeRolloutPath } from './reconcileResumeRolloutPath.js';
+import { reconcileCodexResumeRolloutPath, resolveExistingCodexIndexedRolloutPath } from './reconcileResumeRolloutPath.js';
 
 const temporaryRoots: string[] = [];
 
@@ -55,6 +55,21 @@ afterEach(async () => {
 });
 
 describe('reconcileCodexResumeRolloutPath', () => {
+  it('reads the host-selected shared index without launch environment affinity or index mutation', async () => {
+    const fixture = await createFixture();
+    const database = new DatabaseSync(fixture.databasePath);
+    database.prepare('INSERT INTO threads (id, rollout_path) VALUES (?, ?)').run(fixture.vendorResumeId, fixture.rolloutPath);
+    database.close();
+    await writeFile(join(fixture.codexHome, '.happier-state-sharing.json'), JSON.stringify({
+      v: 1, effectiveStateMode: 'shared', stateRootEnvironment: { CODEX_SQLITE_HOME: fixture.sqliteHome },
+    }));
+    expect(await resolveExistingCodexIndexedRolloutPath({
+      processEnv: { CODEX_HOME: fixture.codexHome }, cwd: fixture.codexHome,
+      vendorResumeId: fixture.vendorResumeId, signal: new AbortController().signal,
+    })).toBe(fixture.rolloutPath);
+    expect(readIndexedPath(fixture.databasePath, fixture.vendorResumeId)).toBe(fixture.rolloutPath);
+  });
+
   it('repoints an exact stale shared SQLite row to the surviving rollout', async () => {
     const fixture = await createFixture();
     const stalePath = join(fixture.codexHome, '..', 'removed-generation', 'sessions', 'rollout.jsonl');

@@ -8,6 +8,8 @@ import { resolveCodexExternalTranscriptFiles, searchCodexExternalTranscript, par
 import { raceWithTimeout } from '@happier-dev/plugin-sdk/async';
 import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/sessions/external';
 import { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield } from '@happier-dev/plugin-sdk/sessions/file-stores';
+import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
+import { resolveCodexRuntimeHomeEnvironment } from '../../../auth/services/state/sharing/files.js';
 
 import {
   createCodexNativeAppServerClient,
@@ -318,11 +320,14 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
     : params.deadlineAtMs - Date.now();
   let incomplete = homeEntries.length > 1;
   const searchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim().toLowerCase() : '';
-  const processEnv = {
+  const sourceEnvironment = {
     ...process.env,
     ...params.env,
-    CODEX_HOME: homeEntry.codexHome,
   } as NodeJS.ProcessEnv;
+  const processEnv = { ...sourceEnvironment, ...await resolveCodexRuntimeHomeEnvironment({
+    env: sourceEnvironment, codexHome: homeEntry.codexHome, home: homeEntry.source.home, cwd: process.cwd(),
+    expandHomePath: value => expandHomePath(value, resolveHomeDirFromEnvironment(sourceEnvironment)),
+  }) };
   const abortController = new AbortController();
   const signal = params.signal
     ? AbortSignal.any([params.signal, abortController.signal])
@@ -331,47 +336,27 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
 
   const listPromise = (async (): Promise<CodexAppServerCandidatePages | null> => {
     try {
-      try {
-        client = await createCodexNativeAppServerClient({
-          exec: params.exec,
-          processEnv,
-          signal,
-          transport: { kind: 'daemonProxy' },
-        });
-        const loadedThreadIds = readLoadedThreadIds(
-          await client.request('thread/loaded/list'),
-        );
-        return await listCodexExternalSessionCandidatePagesWithClient({
-          client,
-          processEnv,
-          active: params.active,
-          archived: params.archived,
-          loadedThreadIds,
-          signal,
-          deadlineAtMs: params.deadlineAtMs,
-          onProgress: params.onProgress,
-          preparation: params.preparation,
-        });
-      } catch {
-        throwIfCodexExternalSessionInvocationStopped(params);
-        await disposeCodexAppServerClientBestEffort(client);
-        client = await createCodexNativeAppServerClient({
-          exec: params.exec,
-          processEnv,
-          signal,
-        });
-        return await listCodexExternalSessionCandidatePagesWithClient({
-          client,
-          processEnv,
-          active: params.active,
-          archived: params.archived,
-          loadedThreadIds: new Set(),
-          signal,
-          deadlineAtMs: params.deadlineAtMs,
-          onProgress: params.onProgress,
-          preparation: params.preparation,
-        });
-      }
+      // Discovery reads only an already-running server. A missing proxy is
+      // unavailable native history, never authority to start/backfill a store.
+      client = await createCodexNativeAppServerClient({
+        exec: params.exec,
+        logger: params.logger,
+        processEnv,
+        signal,
+        transport: { kind: 'daemonProxy' },
+      });
+      const loadedThreadIds = readLoadedThreadIds(await client.request('thread/loaded/list'));
+      return await listCodexExternalSessionCandidatePagesWithClient({
+        client,
+        processEnv,
+        active: params.active,
+        archived: params.archived,
+        loadedThreadIds,
+        signal,
+        deadlineAtMs: params.deadlineAtMs,
+        onProgress: params.onProgress,
+        preparation: params.preparation,
+      });
     } catch (error) {
       throwIfCodexExternalSessionInvocationStopped(params);
       return null;
@@ -1185,6 +1170,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       }
       : await listCodexSessionCandidatesViaAppServerWithBudget({
         source: params.source,
+        logger: params.logger,
         activeServerDir: params.activeServerDir,
         env: params.env,
         exec: params.exec,

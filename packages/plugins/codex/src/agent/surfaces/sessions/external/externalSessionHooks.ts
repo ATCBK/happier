@@ -535,7 +535,8 @@ export function createCodexExternalSessionHooksContribution(
       try {
         client = await createCodexNativeAppServerClient({
           exec: context.services.exec,
-          processEnv: resolveCodexHooksProcessEnv(options),
+          logger: context.services.logger,
+          processEnv: await resolveCodexHooksProcessEnv(options),
           signal: context.signal,
         });
         const response = await client.request('hooks/list', { cwds: [] });

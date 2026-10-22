@@ -1,5 +1,6 @@
 import { lstat, readFile, readdir, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES, parseConnectedAccountNativeHomeState, type ConnectedAccountNativeHomeState } from '@happier-dev/plugin-sdk/fs';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 
@@ -17,6 +18,7 @@ export type ConnectedServiceStateSharingManifestV1 = Readonly<{
   v: 1;
   requestedStateMode: ConnectedServiceStateSharingMode;
   effectiveStateMode: ConnectedServiceStateSharingMode;
+  stateRootEnvironment?: ConnectedAccountNativeHomeState['stateRootEnvironment'];
   lastSyncAtMs: number;
   configEntries: readonly string[];
   stateEntries: readonly string[];
@@ -37,8 +39,8 @@ const EMPTY_MANIFEST: ConnectedServiceStateSharingManifestV1 = Object.freeze({
   diagnostics: [],
 });
 
-const DEFAULT_MANIFEST_NAME = '.happier-state-sharing.json';
-const LEGACY_CODEX_MANIFEST_NAME = '.happier-codex-home-sharing.json';
+const DEFAULT_MANIFEST_NAME = CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES.primary;
+const LEGACY_CODEX_MANIFEST_NAME = CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES.legacy;
 
 export function isSafeConnectedServiceStateSharingEntry(entry: unknown): entry is string {
   if (typeof entry !== 'string' || entry.trim().length === 0 || isAbsolute(entry)) return false;
@@ -47,11 +49,8 @@ export function isSafeConnectedServiceStateSharingEntry(entry: unknown): entry i
 }
 
 function parseManifest(value: unknown): ConnectedServiceStateSharingManifestV1 {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('connected_service_state_sharing_manifest_invalid');
-  }
+  const nativeHomeState = parseConnectedAccountNativeHomeState(value);
   const record = value as Record<string, unknown>;
-  if (record.v !== 1) throw new Error('connected_service_state_sharing_manifest_invalid');
   for (const key of ['stateEntries', 'resumeStateEntries']) {
     const entries = record[key];
     if (entries !== undefined && (
@@ -61,7 +60,7 @@ function parseManifest(value: unknown): ConnectedServiceStateSharingManifestV1 {
   return {
     v: 1,
     requestedStateMode: parseStateMode(record.requestedStateMode),
-    effectiveStateMode: parseStateMode(record.effectiveStateMode),
+    ...nativeHomeState,
     lastSyncAtMs: parseNonNegativeInteger(record.lastSyncAtMs, 0),
     configEntries: Array.isArray(record.configEntries)
       ? record.configEntries.filter(isSafeConnectedServiceStateSharingEntry)

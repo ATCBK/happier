@@ -4,6 +4,8 @@ import type {
   AgentExternalSessionTakeoverLaunchPlan,
   AgentExternalSessionTakeoverResolveLaunchRequest,
 } from '@happier-dev/plugin-sdk/sessions/external';
+import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
+import { resolveCodexRuntimeHomeEnvironment } from '../../../auth/services/state/sharing/files.js';
 
 import {
   buildCodexAgentRuntimeDescriptorV1,
@@ -142,7 +144,7 @@ export function resolveCodexExternalSessionTakeoverPlan(
 
 export const codexExternalSessionTakeoverContribution:
   AgentExternalSessionTakeoverContribution = Object.freeze({
-    resolveLaunch(request) {
+    async resolveLaunch(request) {
       if (request.signal.aborted) {
         return { ok: false, code: 'cancelled' };
       }
@@ -160,8 +162,14 @@ export const codexExternalSessionTakeoverContribution:
         });
         if (persistedPlan) return { ok: false, code: 'unsupported' };
       }
-      return plan
-        ? { ok: true, value: plan }
-        : { ok: false, code: 'source_invalid' };
+      const source = readCodexSource(request.source);
+      if (!plan || !source) return { ok: false, code: 'source_invalid' };
+      const environmentVariables = await resolveCodexRuntimeHomeEnvironment({
+        env: process.env, codexHome: source.homePath, home: source.home, cwd: request.targetDirectory,
+        expandHomePath: value => expandHomePath(value, resolveHomeDirFromEnvironment(process.env)),
+      });
+      if (request.signal.aborted) return { ok: false, code: 'cancelled' };
+      if (Date.now() >= request.deadlineAtMs) return { ok: false, code: 'timeout', retryable: true };
+      return { ok: true, value: { ...plan, environmentVariables: { ...plan.environmentVariables, ...environmentVariables } } };
     },
   });

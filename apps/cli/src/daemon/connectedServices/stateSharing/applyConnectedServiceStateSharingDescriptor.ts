@@ -7,6 +7,7 @@ import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/p
 import type { ConnectedServiceStateSharingDescriptor, ConnectedServiceStateSharingDescriptorEntry } from '@/agent/catalog/types';
 import type { ConnectedServiceMaterializedStateObservationBinding, ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialization/materializer';
 import { logger } from '@/ui/logger';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import type {
   ConnectedServiceStateSharingManifestV1,
   ConnectedServiceStateSharingSessionFileMappingV1,
@@ -772,10 +773,24 @@ export async function applyConnectedServiceStateSharingDescriptor(
     stateEntries = [];
   }
 
+  const stateRootEnvironmentKey = input.descriptor.state.rootEnvironmentKey;
+  let stateRootEnvironment: Record<string, string> | undefined;
+  if (stateRootEnvironmentKey) {
+    const configuredSourceRoot = input.nativeSourceContext.sourceEnv[stateRootEnvironmentKey]?.trim();
+    const selectedRoot = effectiveStateMode === 'shared'
+      ? configuredSourceRoot
+        ? resolve(input.cwd, expandHomeDirPath(configuredSourceRoot, input.nativeSourceContext.sourceEnv))
+        : sourceRoot
+      : targetRoot;
+    envOverrides[stateRootEnvironmentKey] = selectedRoot;
+    stateRootEnvironment = { [stateRootEnvironmentKey]: effectiveStateMode === 'shared' ? selectedRoot : '.' };
+  }
+
   const manifest: ConnectedServiceStateSharingManifestV1 = {
     v: 1,
     requestedStateMode: input.requestedStateMode,
     effectiveStateMode,
+    ...(stateRootEnvironment ? { stateRootEnvironment } : {}),
     lastSyncAtMs: Date.now(),
     configEntries: dedupeManifestEntries(configEntries),
     stateEntries: dedupeManifestEntries(stateEntries),

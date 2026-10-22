@@ -1245,14 +1245,13 @@ async function readCodexNativeTranscriptIfNeeded(
       throwIfCodexExternalSessionInvocationStopped(params);
       const requestOptions = () => ({ signal: params.signal,
         ...(params.deadlineAtMs === undefined ? {} : { timeoutMs: Math.max(1, params.deadlineAtMs - Date.now()) }) });
-      // Connected-account custody admits this home, never the ambient user's SQL store.
-      // The current state-sharing declaration shares rollout entries, not SQLite state.
-      const env = { ...process.env, ...params.env,
-        ...(home.source.home === 'connectedService' ? { CODEX_SQLITE_HOME: undefined } : {}) };
-      const processEnv = { ...env, ...resolveCodexRuntimeHomeEnvironment({ env, codexHome: home.codexHome,
+      const env = { ...process.env, ...params.env };
+      const processEnv = { ...env, ...await resolveCodexRuntimeHomeEnvironment({ env, codexHome: home.codexHome, home: home.source.home,
         cwd: process.cwd(), expandHomePath: value => expandHomePath(value, resolveHomeDirFromEnvironment(env)) }) };
-      client = await createCodexNativeAppServerClient({ exec: params.exec, processEnv, signal: params.signal,
-        initializeRequestOptions: requestOptions() });
+      client = await createCodexNativeAppServerClient({ exec: params.exec, logger: params.logger, processEnv, signal: params.signal,
+        // History reads may connect to an existing server, but must not start
+        // one (which can backfill or migrate native storage before initialize).
+        transport: { kind: 'daemonProxy' }, initializeRequestOptions: requestOptions() });
       const activeClient = client;
       const page = await pageCodexNativeTranscript({ ...params, hasPaginatedRollout, home: home.codexHome,
         client: { request: (method, value) => {

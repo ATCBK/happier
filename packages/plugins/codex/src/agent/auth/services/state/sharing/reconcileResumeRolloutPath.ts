@@ -60,7 +60,7 @@ export async function resolveExistingCodexIndexedRolloutPath(params: Readonly<{
   if (!vendorResumeId) return null;
   const codexHome = resolve(resolveConfiguredCodexHomePath(params.processEnv));
   const homeDir = resolveHomeDirFromEnvironment(params.processEnv);
-  const runtimeHome = resolveCodexRuntimeHomeEnvironment({
+  const runtimeHome = await resolveCodexRuntimeHomeEnvironment({
     env: params.processEnv,
     codexHome,
     cwd: params.cwd,
@@ -106,12 +106,11 @@ export async function reconcileCodexResumeRolloutPath(params: Readonly<{
   if (!vendorResumeId) return false;
 
   const rawCodexHome = params.processEnv.CODEX_HOME?.trim() ?? '';
-  const rawSqliteHome = params.processEnv.CODEX_SQLITE_HOME?.trim() ?? '';
-  if (!rawCodexHome || !rawSqliteHome) return true;
+  if (!rawCodexHome) return true;
 
   const codexHome = resolve(resolveConfiguredCodexHomePath(params.processEnv));
   const homeDir = resolveHomeDirFromEnvironment(params.processEnv);
-  const runtimeHome = resolveCodexRuntimeHomeEnvironment({
+  const runtimeHome = await resolveCodexRuntimeHomeEnvironment({
     env: params.processEnv,
     codexHome,
     cwd: params.cwd,

@@ -95,13 +95,14 @@ function createThreadListingExec(
     updatedAt: 1_768_000_100,
     cwd: '/repo/native',
   }],
-  nativeHistory?: { items: Record<string, unknown>[]; onLaunch?: (spec: unknown) => void },
+  nativeHistory?: { items: Record<string, unknown>[]; onLaunch?: (spec: unknown) => void; readFailure?: Error },
 ): ExecService {
   const never = new Promise<PluginProcessResult>(() => undefined);
   const client: PluginJsonRpcClient = {
     async request(method, value) {
       requests.push(method);
       if (method === 'thread/items/list' && nativeHistory) {
+        if (nativeHistory.readFailure) throw nativeHistory.readFailure;
         const args = value as { sortDirection: string; limit: number; cursor?: string };
         const anchor = args.cursor ? JSON.parse(args.cursor) as { index: number; inclusive: boolean } : null;
         const desc = args.sortDirection === 'desc';
@@ -201,7 +202,8 @@ describe('Codex public Agent External Sessions contribution', () => {
       const entry = (index: number) => ({ turnId: `turn-${index}`, startedAtMs: index * 1000, completedAtMs: index * 1000 + 1,
         item: { id: `item-${index}`, type: index % 2 ? 'userMessage' : 'agentMessage',
           ...(index % 2 ? { content: [{ type: 'text', text: `message-${index}` }] } : { text: `message-${index}` }) } });
-      const history = { items: [1, 2, 3, 4].map(entry) };
+      const launches: unknown[] = [];
+      const history = { items: [1, 2, 3, 4].map(entry), onLaunch: (spec: unknown) => launches.push(spec) };
       const methods: string[] = [];
       const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
       const request = { ...invocation({ exec: createThreadListingExec(methods, [], history) }),
@@ -221,6 +223,10 @@ describe('Codex public Agent External Sessions contribution', () => {
       expect(JSON.stringify(items)).toContain('message-1');
       expect(methods).toContain('thread/items/list');
       expect(methods.some(method => ['thread/resume', 'turn/start', 'thread/unarchive'].includes(method))).toBe(false);
+      // Native history is a read of an already-running vendor server. Starting
+      // a fresh server can backfill/migrate its store and contend with live work.
+      expect(launches.map(spec => (spec as { launch: { args: string[] } }).launch.args))
+        .toEqual([['app-server', 'proxy'], ['app-server', 'proxy']]);
       history.items.push(entry(5));
       const appended = await contribution.readAfterTranscript({ ...request, cursor: tail! });
       expect(appended.ok, JSON.stringify(appended)).toBe(true);
@@ -258,6 +264,22 @@ describe('Codex public Agent External Sessions contribution', () => {
         if (!page.value.hasMore) break;
       }
       expect(found).toBe(true);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it.each(['PLUGIN_EXEC_CLIENT_EXITED', 'PLUGIN_EXEC_CLIENT_REQUEST_TIMEOUT'])('retains safe %s identity when the native history request fails', async code => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-native-read-failure-'));
+    try {
+      const debug = vi.fn();
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const result = await contribution.pageTranscript({ ...invocation({ exec: createThreadListingExec([], [], {
+        items: [], readFailure: Object.assign(new Error('private native error must not enter diagnostics'), { code }),
+      }) }), logger: { debug }, source: { kind: 'codexHome', home: 'user' }, remoteSessionId: 'native-thread', direction: 'older', maxItems: 2 });
+      expect(result).toMatchObject({ ok: false, code: 'agent_error', message: 'external_sessions_transcript_read_failed' });
+      expect(debug).toHaveBeenCalledWith('[codex] Native transcript read failed', {
+        exceptionClass: 'Error', code, phase: 'pageTranscript', sourceItemId: 'native-thread', byteOffset: null,
+      });
+      expect(JSON.stringify(debug.mock.calls)).not.toContain('private native error');
     } finally { await rm(home, { recursive: true, force: true }); }
   });
 

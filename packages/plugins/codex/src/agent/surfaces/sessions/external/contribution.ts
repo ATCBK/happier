@@ -379,6 +379,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       if (!validation.ok) return validation;
       try {
         const listed = await listCodexSessionCandidates({
+          logger: request.logger,
           source: validation.value.codexSource,
           env,
           cursor: request.cursor,
@@ -459,6 +460,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       }
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => pageCodexExternalSessionTranscript({
+          logger: request.logger,
           observation: request.observation,
           exec: request.exec,
           source: validation.value.codexSource,
@@ -496,6 +498,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       if (!validation.ok) return validation;
       try {
         return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => readAfterCodexExternalSessionTranscript({
+          logger: request.logger,
           observation: request.observation,
           exec: request.exec,
           source: validation.value.codexSource,

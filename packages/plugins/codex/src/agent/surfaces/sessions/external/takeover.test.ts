@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   codexExternalSessionTakeoverContribution,
@@ -9,6 +12,26 @@ import {
 const EXACT_PROVIDER_SESSION_ID = '  provider\nses/AB+cd==  ';
 
 describe('Codex External Sessions takeover launch derivation', () => {
+  it('carries host-selected shared SQLite affinity into the public takeover launch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-takeover-affinity-'));
+    try {
+      const home = join(root, 'pool');
+      const sqliteHome = join(root, 'native-state');
+      await mkdir(home);
+      await writeFile(join(home, '.happier-state-sharing.json'), JSON.stringify({
+        v: 1, effectiveStateMode: 'shared', stateRootEnvironment: { CODEX_SQLITE_HOME: sqliteHome },
+      }));
+      const source = { kind: 'codexHome', home: 'connectedService', homePath: home,
+        connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' } as const;
+      expect(await codexExternalSessionTakeoverContribution.resolveLaunch({
+        source, remoteSessionId: 'native-thread', linkedDirectory: root, targetDirectory: root,
+        linkData: { source, codexBackendMode: 'appServer' }, transcriptStorage: 'persisted',
+        signal: new AbortController().signal, deadlineAtMs: Date.now() + 15_000,
+        maxSerializedBytes: 262_144, linkedSessionId: 'happier-session',
+      })).toMatchObject({ ok: true, value: { environmentVariables: { CODEX_HOME: home, CODEX_SQLITE_HOME: sqliteHome } } });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('carries the taken-over provider session id byte-exact and rejects blank', () => {
     const codexSource = {
       kind: 'codexHome',

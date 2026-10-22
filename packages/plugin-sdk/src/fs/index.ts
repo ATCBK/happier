@@ -1,3 +1,5 @@
+export { CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES } from '../connected-accounts/nativeHomeState.js';
+export type { ConnectedAccountNativeHomeState } from '../connected-accounts/nativeHomeState.js';
 export type { ConnectedServiceNativeHome } from './nativeHome.js';
 export type { FileSystemService } from '../fs.js';
 export type { FsAtomicWriteInput } from '../fs.js';
@@ -18,6 +20,8 @@ export { isCanonicalAbsolutePathInsideRoot } from '../sessions/fileStores/paths.
 export { linkDirectoryChildren } from '../runtime/linkDirectoryChildren.js';
 export { listConnectedServiceNativeHomes } from './nativeHome.js';
 export { openSqliteDatabaseSync } from './sqlite.js';
+export { parseConnectedAccountNativeHomeState } from '../connected-accounts/nativeHomeState.js';
+export { readConnectedAccountNativeHomeState } from '../connected-accounts/nativeHomeState.js';
 export { resolveConfiguredNativeHomePath } from './nativeHome.js';
 export { resolveConfiguredPath } from '../sessions/fileStores/paths.js';
 export { resolveHomeDirFromEnvironment } from '../sessions/fileStores/paths.js';
