@@ -3478,6 +3478,13 @@ Artifact at its current revision, and returns canonical `happier.workflow` JSON;
 credentials, staged media, and runtime state are not document fields. File picking
 and delivery stay platform-local. Unsaved mounted draft editing/export remains local.
 
+Workflow Action failures preserve `cancelled` for native cancellation during
+family preparation or a catalog-declared read. An aborted signal alone does not
+prove that an issued write was cancelled: an unavailable write receipt retains
+its failure or unresolved outcome. Typed `currentness_conflict` keeps its revision;
+uncoded or unknown storage failures remain `storage_unavailable`. This is a 0.3
+development contract at the shared Workflow-family and strict Action boundary.
+
 `workflow.trigger.remove` takes `{ automationId, triggerId? }` in 0.3 development.
 With `triggerId`, it removes only that trigger; removing the last one keeps the set
 as Manual. Omitting `triggerId` deletes the whole Account trigger set, including a
