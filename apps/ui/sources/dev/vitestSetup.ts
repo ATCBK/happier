@@ -3,13 +3,20 @@ import './vitestDomTextEncoding';
 import * as React from 'react';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 
-import { installVitestRnShim, loadVitestModuleForNodeRequire } from './vitestRnShim';
+import { loadVitestModuleForNodeRequire } from './vitestRnShim';
 import { getVitestNodeBuiltin } from './vitestNodeBuiltins';
 import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { standardCleanup } from './testkit/cleanup/standardCleanup';
 import { createReanimatedModuleMock } from './testkit/mocks/reanimated';
 import { createReactNavigationNativeMock } from './testkit/mocks/reactNavigation';
 import { installShippedNativeFrameScheduler } from './testkit/legend/shippedNativeLegendRuntime';
+
+// Install the existing Node bridge before static cleanup/render helpers import
+// external renderers, whose private React peer must share this run's dispatcher.
+await vi.hoisted(async () => {
+    const { installVitestRnShim } = await import('./vitestRnShim');
+    installVitestRnShim({ traceFile: process.env.VITEST_TRACE_LOAD ?? null });
+});
 
 // Native lists and frame-deferred controls need the same timer-backed platform
 // boundary in every Node suite, before their modules or effects can schedule work.
@@ -303,8 +310,6 @@ if (process.env.HAPPIER_VITEST_ENABLE_SIGNAL_DUMP === '1') {
         void dumpWhyIsNodeRunning('SIGUSR2');
     });
 }
-
-installVitestRnShim({ traceFile: process.env.VITEST_TRACE_LOAD ?? null });
 
 // `react-native` includes Flow syntax. Even with Vite aliases, some dependencies still
 // resolve it via Node's CJS loader, so we mock it explicitly here as well.

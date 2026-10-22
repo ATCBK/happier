@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import * as React from 'react';
 import { describe, expect, it } from 'vitest';
 import * as typedModule from './vitestRnShim.fixture';
 import { loadVitestModuleForNodeRequire } from './vitestRnShim';
@@ -10,6 +11,27 @@ const { URL: NodeURL } = getVitestNodeBuiltin<typeof import('node:url')>('node:u
 const nodeRuntime = globalThis as typeof globalThis & { require: (id: string) => unknown };
 
 describe('vitestRnShim', () => {
+    it('shares the external renderer React peer while preserving real hook updates', async () => {
+        const { createRequire } = getVitestNodeBuiltin<typeof import('node:module')>('node:module');
+        const nodeRequire = createRequire(new NodeURL(import.meta.url));
+        const rendererRequire = createRequire(nodeRequire.resolve('react-test-renderer'));
+        const rendererReact: typeof React = rendererRequire('react');
+        const { renderScreen } = await import('./testkit/render/renderScreen');
+        function Counter() {
+            const [count, setCount] = React.useState(0);
+            return React.createElement('Text', { testID: 'shared-react-counter', onPress: () => setCount(value => value + 1) }, count);
+        }
+        const screen = await renderScreen(React.createElement(Counter));
+        try {
+            expect(screen.findByTestId('shared-react-counter')?.props.children).toBe(0);
+            await screen.pressByTestIdAsync('shared-react-counter');
+            expect(screen.findByTestId('shared-react-counter')?.props.children).toBe(1);
+            expect(rendererReact.useState).toBe(React.useState);
+        } finally {
+            await screen.unmount();
+        }
+    });
+
     it('resolves aliased asset requires in Node test runtime', () => {
         const asset = nodeRuntime.require('@/assets/images/logo-black.png');
         expect(typeof asset).toBe('string');
