@@ -148,6 +148,19 @@ describe('SessionViewerHost', () => {
       expect(frame().props.accessibilityLabel).not.toContain('secondary');
     } finally { await result.unmount(); }
   });
+  it('keeps the transcript from showing behind an expanded viewer\'s controls, and leaves a floating viewer see-through', async () => {
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 390, height: 520 });
+    const backing = () => result.tree.root.findAll((node) => node.props?.testID === 'session-viewer-expanded-backing');
+    try {
+      expect(backing()).toHaveLength(0);
+      await act(async () => { harness.controller!.port.apply({ kind: 'viewer.expand' }); });
+      expect(harness.controller!.state.mode).toBe('expanded');
+      expect(backing().length).toBeGreaterThan(0);
+      await act(async () => { harness.controller!.port.apply({ kind: 'viewer.restore' }); });
+      expect(backing()).toHaveLength(0);
+    } finally { await result.unmount(); }
+  });
+
   it('moves by the watched picture, keeps the source’s shape and draws who acts below the picture', async () => {
     const { result, frame } = await mountOpen(AGENT_PRESENCE, {
       width: 1200,

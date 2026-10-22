@@ -368,6 +368,14 @@ function MountedSessionViewerHost(
       }}
       testID="session-viewer-host"
     >
+      {/* An expanded viewer takes over the transcript's pane: its controls band floats on the page's own paper,
+          so the conversation never reads through the gaps and glass of the capsules above the picture. */}
+      {expanded && composerStart !== null ? (
+        <View
+          testID="session-viewer-expanded-backing"
+          style={{ position: 'absolute', left: 0, top: 0, right: 0, height: composerStart, backgroundColor: theme.colors.surface.base }}
+        />
+      ) : null}
       {docked ? null : availableRect && frameRect ? (
         <FloatingFrame
           testID="session-viewer-frame"
