@@ -1756,7 +1756,7 @@ describe('workflow Session step executor', () => {
     await expect(create({ selection: resolveWorkflowAcceptedStepSelectionV1(leaf).selection,
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
       creationKey: 'workflow:run-1:connected-leaf' })).resolves.toMatchObject({ sessionId: 'new-session' });
-    expect(launches).toMatchObject([{ connectedServices, originSessionId, modelSelection,
+    expect(launches).toMatchObject([{ connectedServices, originSessionId, manager: { sessionId: originSessionId }, modelSelection,
       sessionConfigOptionOverrides: { overrides: { reasoning_effort: { value: 'low' } } } }]);
   });
 

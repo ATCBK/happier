@@ -1,6 +1,6 @@
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { readCommittedDiscussionMessage } from '@happier-dev/protocol/actions/executor/docCollaborationActions';
-import { DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { readWorkflowDiscussionContextV1 } from '@happier-dev/protocol/workflows';
 import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
@@ -49,46 +49,11 @@ export function createProductionWorkflowDiscussionContextReader(params: Readonly
       if (!origin || !areServerProfileIdentifiersEquivalent(params.serverId, origin.discussion.serverId)) {
         throw new WorkflowInputResolutionError('invalid_reference_scope');
       }
-      const messages: ReturnType<typeof DiscussionReadResultV1Schema.parse>['messages'] = [];
-      let throughSeq = scope === 'addressing_message' ? origin.throughSeq : undefined;
-      let beforeSeq: number | undefined;
-      for (;;) {
-        params.signal?.throwIfAborted();
-        const page = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
-          input: { discussionId: origin.discussion.discussionId, ...(throughSeq === undefined ? {} : { throughSeq }),
-            ...(beforeSeq === undefined ? {} : { beforeSeq }) },
-          context: { surface: 'api', authority: 'account_automation', serverId: params.serverId,
-            ...(params.signal ? { signal: params.signal } : {}) },
-          ...(params.signal ? { signal: params.signal } : {}),
-        }));
-        if (!page.success || page.data.incomplete || page.data.discussionId !== origin.discussion.discussionId
-          || !areServerProfileIdentifiersEquivalent(page.data.serverId, params.serverId)) {
-          throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
-        }
-        throughSeq ??= page.data.messageSeq;
-        const pageThroughSeq = throughSeq;
-        if (page.data.messageSeq !== pageThroughSeq || page.data.messages.some(message => !message.content
-          || message.seq > pageThroughSeq || beforeSeq !== undefined && message.seq >= beforeSeq
-          || message.discussionId !== origin.discussion.discussionId
-          || message.messageRef.messageId !== message.id
-          || message.messageRef.discussion.discussionId !== origin.discussion.discussionId
-          || !areServerProfileIdentifiersEquivalent(message.messageRef.discussion.serverId, params.serverId))) {
-          throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
-        }
-        messages.push(...page.data.messages);
-        if (!page.data.hasMoreOlder) break;
-        const next = Math.min(...page.data.messages.map(message => message.seq));
-        if (!Number.isFinite(next) || beforeSeq !== undefined && next >= beforeSeq) {
-          throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
-        }
-        beforeSeq = next;
-      }
-      if (!messages.some(message => message.id === origin.messageId && message.seq === origin.throughSeq)) {
-        throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
-      }
-      params.signal?.throwIfAborted();
-      return StrictJsonValueSchema.parse({ discussion: origin.discussion, messageId: origin.messageId,
-        throughSeq, messages: messages.sort((left, right) => left.seq - right.seq) });
+      const read = await readWorkflowDiscussionContextV1({ origin, scope, discussionAction,
+        context: { surface: 'api', authority: 'account_automation', serverId: params.serverId,
+          ...(params.signal ? { signal: params.signal } : {}) } });
+      if (!read.ok) throw new WorkflowInputResolutionError(read.code);
+      return StrictJsonValueSchema.parse(read.context);
     } catch (error) {
       if (params.signal?.aborted || error instanceof WorkflowInputResolutionError) throw error;
       throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');

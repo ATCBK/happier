@@ -13,6 +13,8 @@ import { ActionApprovalRequestCreatedResultSchema } from '../actionExecutionResu
 import type { ActionId } from '../actionIds.js';
 import { SessionTranscriptGetResultSchema } from '../actionSpecs.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
+import { deriveWorkflowReplacementId } from '../../workflows/workflowInvocationIdentityV1.js';
+import { WorkflowRunStartResultV1Schema } from '../../workflows/actionsV1.js';
 
 type ExecuteChild = (actionId: ActionId, input: unknown, context: ActionExecutorContext) => Promise<ActionExecuteResult>;
 function failure(errorCode: string): ActionExecuteResult { return { ok: false, errorCode, error: errorCode }; }
@@ -126,16 +128,18 @@ export async function executeDiscussionSecondOpinionV1(input: unknown, deps: Act
     : context.surface === 'agent' ? context.defaultSessionId : undefined;
   if (authored.publisherSessionId !== undefined && authored.publisherSessionId !== actualPublisher) return failure('discussion_post_denied');
   const request = { ...authored, ...(actualPublisher ? { publisherSessionId: actualPublisher } : {}) };
-  if (request.reviewers.length > 1) return { ok: true, result: {
-    status: 'unavailable', reason: 'fresh_opinions_unavailable', mode: 'fresh_opinions',
-  } satisfies DiscussionSecondOpinionStartResultV1 };
+  const multiple = request.reviewers.length > 1;
+  const workflowContext = request.project ? { ...context, externalActionTarget: { kind: 'machine' as const,
+    machineId: request.project.machineId, project: request.project } } : context;
+  if (multiple && request.intent === 'ask' && (workflowContext.externalActionTarget?.kind !== 'machine'
+    || !workflowContext.externalActionTarget.project)) return failure('target_unavailable');
   const sourceServerId = request.source.kind === 'session' ? request.source.message.session.serverId : request.source.passage.ref.serverId;
   if (!sourceServerId || !isSameHome(sourceServerId) || request.reviewers.some(({ selection }) => !isSameHome(
     selection.kind === 'session' ? selection.session.serverId : selection.launch.executionTarget.serverId))) return failure('server_target_mismatch');
   if (!deps.discussionAction) return failure('unsupported_action');
   const grantedAccountIds: string[] = [];
   let discussion: DiscussionAddressV1 | undefined;
-  let stage: 'grant' | 'create' | 'invite' | 'ask' = 'grant';
+  let stage: 'grant' | 'create' | 'invite' | 'ask' | 'workflow' = 'grant';
   const pending = (errorCode: string): ActionExecuteResult => ({ ok: true, result: {
     status: 'pending', stage, errorCode, grantedAccountIds, ...(discussion ? { discussion } : {}),
   } satisfies DiscussionSecondOpinionStartResultV1 });
@@ -173,12 +177,11 @@ export async function executeDiscussionSecondOpinionV1(input: unknown, deps: Act
     if (!request.confirmedPreview || !matchesConfirmedPreview(current, request.confirmedPreview)) {
       return { ok: true, result: { status: 'preview_changed', preview: current, grantedAccountIds } };
     }
-    const reviewer = current.reviewers[0]!;
     if (!current.discussionDisclosure.ok || current.missingDiscussionSourceAccountIds.length) return failure('discussion_access_forbidden');
-    if (reviewer.missingSourceAccountIds.length && (reviewer.sourceAccess !== 'read' || !reviewer.canGrantSource)) {
+    if (current.reviewers.some(reviewer => reviewer.missingSourceAccountIds.length && (reviewer.sourceAccess !== 'read' || !reviewer.canGrantSource))) {
       return failure('discussion_access_forbidden');
     }
-    for (const accountId of reviewer.missingSourceAccountIds) {
+    for (const accountId of new Set(current.reviewers.flatMap(reviewer => reviewer.missingSourceAccountIds))) {
       const grant = request.source.kind === 'session'
         ? await execute('session.access.grant.set', { sessionId: request.source.message.session.sessionId,
           subject: { kind: 'account', accountId }, accessLevel: 'view', canApprovePermissions: false }, context)
@@ -193,7 +196,7 @@ export async function executeDiscussionSecondOpinionV1(input: unknown, deps: Act
       status: 'preview_changed', preview: current, grantedAccountIds,
     } };
     if (!current.sourceContentReady) return pending('encryption_material_unavailable');
-    if (!current.reviewers[0]?.disclosure.ok || current.reviewers[0].missingSourceAccountIds.length) return pending('discussion_access_forbidden');
+    if (current.reviewers.some(reviewer => !reviewer.disclosure.ok || reviewer.missingSourceAccountIds.length)) return pending('discussion_access_forbidden');
     stage = 'create';
     const created = await execute('discussion.create', prepareAnchoredDiscussionCreateV1({ source: request.source,
       title: request.title, quote, creationLocalId: request.retry.creationLocalId, quoteLocalId: request.retry.quoteLocalId,
@@ -203,13 +206,14 @@ export async function executeDiscussionSecondOpinionV1(input: unknown, deps: Act
     if (!resource.success || !isSameHome(resource.data.serverId)) return pending('invalid_action_output');
     discussion = { serverId: resource.data.serverId, discussionId: resource.data.discussion.id };
     stage = 'invite';
-    const selected = request.reviewers[0]!;
-    if (actualPublisher && (selected.selection.kind !== 'session' || selected.selection.session.sessionId !== actualPublisher)) {
+    if (actualPublisher && !request.reviewers.some(selected => selected.selection.kind === 'session' && selected.selection.session.sessionId === actualPublisher)) {
       const publisher = await execute('discussion.invite', { discussionId: discussion.discussionId,
         participant: { kind: 'session', sessionId: actualPublisher }, answerPolicy: 'when_addressed' }, context);
       if (!publisher.ok) return pending(publisher.errorCode);
       if (ActionApprovalRequestCreatedResultSchema.safeParse(publisher.result).success) return pending('approval_required');
     }
+    const sessionIds: string[] = [];
+    for (const selected of request.reviewers) {
     const invited = await execute('discussion.invite', { discussionId: discussion.discussionId,
       participant: selected.selection.kind === 'session'
         ? { kind: 'session', sessionId: selected.selection.session.sessionId }
@@ -227,12 +231,31 @@ export async function executeDiscussionSecondOpinionV1(input: unknown, deps: Act
       }
       sessionId = reservation.data.modelParticipant.sessionId;
     }
+    sessionIds.push(sessionId);
+    }
     stage = 'ask';
-    const asked = await execute('discussion.post', prepareSecondOpinionQuestionV1({ discussionId: discussion.discussionId,
-      sessionId, question: request.question, questionLocalId: request.retry.questionLocalId, quoteMessageId: resource.data.firstMessage.id }), context);
+    const question = multiple ? DiscussionPostInputV1Schema.parse({ discussionId: discussion.discussionId, localId: request.retry.questionLocalId,
+      content: { v: 1, parts: [{ t: 'text', text: request.question }] }, replyTarget: { kind: 'message', messageId: resource.data.firstMessage.id } })
+      : prepareSecondOpinionQuestionV1({ discussionId: discussion.discussionId,
+        sessionId: sessionIds[0]!, question: request.question, questionLocalId: request.retry.questionLocalId, quoteMessageId: resource.data.firstMessage.id });
+    const asked = await execute('discussion.post', question, context);
     if (!asked.ok) return pending(asked.errorCode);
     const message = DiscussionPostResultV1Schema.safeParse(asked.result);
     if (!message.success || !sameStrictJsonValue(message.data.message.messageRef.discussion, discussion)) return pending('invalid_action_output');
+    if (multiple) {
+      stage = 'workflow';
+      const runId = deriveWorkflowReplacementId(['discussion.second_opinion', discussion, request.retry.questionLocalId]);
+      const started = await execute('workflow.run.start', { runId, source: { kind: 'catalog', workflow: 'builtin:fresh-opinions' },
+        inputs: { question: request.question, participants: sessionIds.map(sessionId => ({ kind: 'session', session: { serverId: discussion!.serverId, sessionId } })) },
+        origin: { kind: 'discussion', discussion, addressingMessageId: message.data.message.id },
+        onComplete: { kind: 'originating_discussion' } }, workflowContext);
+      if (!started.ok) return pending(started.errorCode);
+      if (ActionApprovalRequestCreatedResultSchema.safeParse(started.result).success) return pending('approval_required');
+      const result = WorkflowRunStartResultV1Schema.safeParse(started.result);
+      if (!result.success || result.data.run.id !== runId) return pending('invalid_action_output');
+      return { ok: true, result: { status: 'asked', mode: 'fresh_opinions', discussion,
+        messageRef: message.data.message.messageRef, grantedAccountIds, runId } satisfies DiscussionSecondOpinionStartResultV1 };
+    }
     return { ok: true, result: { status: 'asked', mode: 'ask', discussion, messageRef: message.data.message.messageRef, grantedAccountIds } };
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'outcome_unknown';

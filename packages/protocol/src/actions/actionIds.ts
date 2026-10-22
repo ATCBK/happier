@@ -60,7 +60,7 @@ import { CLIPBOARD_ACTION_IDS } from './clipboardActionFamily.js';
 import { WIDGET_INSTANCE_ACTION_IDS_V1 } from '../widgets/actionIdsV1.js';
 import { WIDGET_DEFINITION_ACTION_IDS_V1 } from '../widgets/definitionActionIdsV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1 } from '../widgets/fragmentActionIdsV1.js';
-import { WORKFLOW_EFFECT_ACTION_IDS_V1 } from '../workflows/stepActionsV1.js';
+import { WORKFLOW_EFFECT_ACTION_IDS_V1 } from '../workflows/workflowEffectActionIdsV1.js';
 import { FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { PROFILE_ACTION_IDS_V1 } from '../profiles/profileActionIdsV1.js';
 import { MCP_SERVER_ACTION_IDS_V1 } from '../mcp/servers/serverActionIdsV1.js';

@@ -351,7 +351,8 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       ...(observationOnly ? { resumeOnly: true } : {}),
       ...(discussionParticipant ? { originKind: 'discussion', discussionParticipant, discussionParticipantLaunch: launch }
         : { originKind: 'run_step', originRunId: deps.originRunId,
-          ...(deps.originSessionId ? { originSessionId: deps.originSessionId } : {}) }),
+          ...(deps.originSessionId ? { originSessionId: deps.originSessionId,
+            manager: { sessionId: deps.originSessionId } } : {}) }),
       ...(team ? {
         initialAccess,
         // Ordinary Team visibility is view-only, not a primary-Team choice.

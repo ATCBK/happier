@@ -8,6 +8,7 @@ import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { RPC_METHODS } from '../rpc/methods.js';
 import { SessionCreationTargetPreparationRequestV1Schema } from '../sessions/creation/sessionCreationTargetPreparationV1.js';
 import { DiscussionSessionParticipantRefV1Schema } from './references.js';
+import { WorkflowProjectTargetV1Schema } from '../workflows/workflowWorkspaceV1.js';
 import {
   DiscussionSecondOpinionSourceV1Schema,
   DiscussionSecondOpinionReviewerV1Schema,
@@ -33,9 +34,11 @@ export const DiscussionSecondOpinionStartInputV1Schema = lazyZodSchema(() => z.s
   publisherSessionId: z.optional(DiscussionSessionParticipantRefV1Schema.shape.sessionId),
   retry: DiscussionSecondOpinionRetryV1Schema,
   confirmedPreview: z.optional(DiscussionSecondOpinionPreviewV1Schema),
+  /** Ordinary Workflow execution placement for a multi-reviewer ask. */
+  project: z.optional(WorkflowProjectTargetV1Schema),
 }).check(z.refine(value => value.intent === 'preview' && value.reviewers.length === 0 || value.question.trim().length > 0,
   'A reviewer question must contain text'), z.refine(value => value.intent !== 'ask' || value.reviewers.length > 0,
-  'Ask requires at least one reviewer'), z.refine(value => value.intent !== 'ask' || value.reviewers.length > 1 || value.confirmedPreview !== undefined,
+  'Ask requires at least one reviewer'), z.refine(value => value.intent !== 'ask' || value.confirmedPreview !== undefined,
   'Ask requires the explicit source-access preview')));
 export type DiscussionSecondOpinionStartInputV1 = z.infer<typeof DiscussionSecondOpinionStartInputV1Schema>;
 
@@ -47,20 +50,21 @@ export function isDiscussionSecondOpinionModelRpcMethodV1(method: string): boole
 export function readDiscussionSecondOpinionModelChildV1(rootInput: unknown, machineId: string, childInput: unknown,
   method: string = RPC_METHODS.SESSION_SPAWN_NEW) {
   const root = DiscussionSecondOpinionStartInputV1Schema.safeParse(rootInput);
-  if (!root.success || root.data.intent !== 'ask' || root.data.reviewers.length !== 1) return null;
-  const reviewer = root.data.reviewers[0]!;
+  if (!root.success || root.data.intent !== 'ask') return null;
+  for (const reviewer of root.data.reviewers) {
   if (reviewer.selection.kind !== 'model' || !reviewer.participantSlotId
-    || reviewer.selection.launch.executionTarget.machineId !== machineId) return null;
+    || reviewer.selection.launch.executionTarget.machineId !== machineId) continue;
   const launch = reviewer.selection.launch;
   if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
     const child = SessionCreationTargetPreparationRequestV1Schema.safeParse(childInput);
-    return launch.directory.kind === 'path' && !launch.checkoutCreationDraft && child.success
+    if (launch.directory.kind === 'path' && !launch.checkoutCreationDraft && child.success
       && sameStrictJsonValue(child.data, { directory: launch.directory })
-      ? { root: root.data, reviewer, launch, spawn: null } : null;
+      ) return { root: root.data, reviewer, launch, spawn: null };
+    continue;
   }
   const child = SessionSpawnNewInputV2Schema.safeParse(childInput);
   if (method !== RPC_METHODS.SESSION_SPAWN_NEW || !child.success
-    || child.data.executionTarget.machineId !== machineId || !child.data.discussionParticipant) return null;
+    || child.data.executionTarget.machineId !== machineId || !child.data.discussionParticipant) continue;
   const expected = SessionSpawnNewInputV2Schema.safeParse({ ...launch,
     // Connection labels are local routing, not Home identity. The receiver
     // proves both labels against its captured Home before spending the child.
@@ -69,8 +73,9 @@ export function readDiscussionSecondOpinionModelChildV1(rootInput: unknown, mach
     discussionParticipant: { discussionId: child.data.discussionParticipant.discussionId,
       participantSlotId: reviewer.participantSlotId },
   });
-  return expected.success && sameStrictJsonValue(expected.data, child.data)
-    ? { root: root.data, reviewer, launch, spawn: child.data } : null;
+  if (expected.success && sameStrictJsonValue(expected.data, child.data)) return { root: root.data, reviewer, launch, spawn: child.data };
+  }
+  return null;
 }
 
 const PartialProgressShape = {
@@ -80,10 +85,9 @@ const PartialProgressShape = {
 export const DiscussionSecondOpinionStartResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('preview'), preview: DiscussionSecondOpinionPreviewV1Schema, sourceText: z.string() }),
   z.strictObject({ status: z.literal('preview_changed'), preview: DiscussionSecondOpinionPreviewV1Schema, ...PartialProgressShape }),
-  z.strictObject({ status: z.literal('asked'), mode: z.literal('ask'), discussion: DiscussionAddressV1Schema,
-    messageRef: DiscussionMessageRefV1Schema, grantedAccountIds: z.array(DiscussionLocalIdSchema) }),
-  z.strictObject({ status: z.literal('pending'), stage: z.enum(['grant', 'create', 'invite', 'ask']),
+  z.strictObject({ status: z.literal('asked'), mode: z.enum(['ask', 'fresh_opinions']), discussion: DiscussionAddressV1Schema,
+    messageRef: DiscussionMessageRefV1Schema, grantedAccountIds: z.array(DiscussionLocalIdSchema), runId: z.optional(z.string()) }),
+  z.strictObject({ status: z.literal('pending'), stage: z.enum(['grant', 'create', 'invite', 'ask', 'workflow']),
     errorCode: z.string().check(z.minLength(1)), ...PartialProgressShape }),
-  z.strictObject({ status: z.literal('unavailable'), reason: z.literal('fresh_opinions_unavailable'), mode: z.literal('fresh_opinions') }),
 ]));
 export type DiscussionSecondOpinionStartResultV1 = z.infer<typeof DiscussionSecondOpinionStartResultV1Schema>;

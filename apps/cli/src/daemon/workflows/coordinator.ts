@@ -2,7 +2,7 @@ import { classifyWorkflowHoldV1, classifyWorkflowReviewEntryV1, projectWorkflowL
 import { freezeWorkflowLoopLimitsV1, projectWorkflowFiniteActionInputV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { resolveWorkflowAcceptedStepSelectionV1, WorkflowStepSelectionErrorV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
 import { deriveWorkflowReplacementId } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
-import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { sameStrictJsonValue, StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveWorkflowInvocationStructureV1, resolveWorkflowRetainedConversationAttemptV1 } from '@happier-dev/protocol/workflows/workflowInvocationStructureV1';
 import type { WorkflowAuthoredInputV1, WorkflowAuthoredProducerRef, WorkflowBlock, WorkflowAcceptedAuthorizationV1, WorkflowCheckpointEnvelopeV1, WorkflowDefinitionV1, WorkflowMaterializedLeafV1, WorkflowFinalResultV1, WorkflowInvocationLifecycleV1, WorkflowRunInvocationIndexV1, WorkflowContainerProgressV1, WorkflowContainerResultSelectorV1, WorkflowInvocationFrameV1, WorkflowLoopSourceSelectionV1, WorkflowLoopOutcomeV1, WorkflowRunExecutionTargetV1, WorkflowProgressEnvelopeV1, WorkflowUsageV1, WorkflowStep, WorkflowWaitLeafV1, WorkflowActionLeafV1, WorkflowNestedLeafV1, WorkflowStepExecutionSelection, WorkflowValueReference, WorkflowWorkspaceDescriptorV1, WorkflowWorkspaceProgressV1, WorkflowWorkspaceResolutionV1 } from '@happier-dev/protocol/workflows';
 import { workflowBlockOrdinalV1 } from '@happier-dev/protocol/workflows/workflowStepLabel';
@@ -538,6 +538,37 @@ function createResolutionRuntime(
     ...(frame.item ? { item: frame.item } : {}),
     ...(frame.iteration ? { iteration: frame.iteration } : {}),
     resolveResult: async (producer) => await resultOf(await binding.resolve(producer)),
+    resolveResultSource: async producer => {
+      const record = await binding.resolve(producer);
+      if (!record) throw new WorkflowInputResolutionError('missing_reference');
+      const sourceOf = (row: WorkflowCoordinatorInvocation) => ({
+        author: { kind: 'agent_session' as const,
+          ...(row.execution?.kind === 'session' ? { sessionId: row.execution.sessionId } : {}), displayName: row.blockId },
+        source: { runId, invocation: { recordId: row.recordId }, readAction: 'workflow.run.invocations.get', status: row.lifecycle,
+          ...(row.reason ? { reason: row.reason } : {}), ...(row.replyOutcome ? { reply: StrictJsonValueSchema.parse(row.replyOutcome) } : {}) },
+      });
+      const entries: { author: ReturnType<typeof sourceOf>['author']; source: WorkflowJsonValue; value: WorkflowJsonValue }[] = [];
+      if (record.container || record.frame) {
+        const pending = [record];
+        while (pending.length) {
+          const row = pending.pop()!;
+          if (row.blockKind === 'step' || row.blockKind === 'action' || row.blockKind === 'wait') {
+            entries.push({ ...sourceOf(row), value: row.result ?? null });
+          } else {
+            const children = await store.listCurrentMembers(row.key);
+            const members = await Promise.all(children.map(child => store.readByLogicalInvocation(child.id)));
+            if (members.some(member => !member)) throw new WorkflowInputResolutionError('missing_reference');
+            pending.push(...members.filter((member): member is WorkflowCoordinatorInvocation => member !== undefined).reverse());
+          }
+        }
+      }
+      return { author: { kind: 'agent_session',
+        ...(record.execution?.kind === 'session' ? { sessionId: record.execution.sessionId } : {}),
+        displayName: `Workflow result: ${producer.blockId}` },
+        source: { runId, invocation: { recordId: record.recordId }, readAction: 'workflow.run.invocations.get',
+          ...(record.replyOutcome ? { reply: StrictJsonValueSchema.parse(record.replyOutcome) } : {}) },
+        ...(entries.length ? { entries } : {}) };
+    },
     resolveResultPath: async (producer, path) => await readInvocationResultPath(await binding.resolve(producer), path, store, frame, sessionContext),
     resolveWorkspace: async (producer) => {
       const record = await binding.resolve(producer);

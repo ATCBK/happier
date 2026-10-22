@@ -5,13 +5,21 @@ import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { areServerProfileIdentifiersEquivalent } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import type { ActionId } from '../actionIds.js';
+import type { WorkflowMaterializedLeafV1 } from '../../workflows/workflowDefinitionV1.js';
+
+type WorkflowActionInvocationContextV1 = Readonly<{
+  opened: ReturnType<typeof WorkflowRunGetResultV1Schema.parse>;
+  rows: ReadonlyMap<string, WorkflowInvocationBindingRowV1>;
+  invocation: WorkflowInvocationBindingRowV1;
+  structure: NonNullable<Awaited<ReturnType<typeof resolveWorkflowInvocationStructureV1>>>;
+  leaf: WorkflowMaterializedLeafV1;
+}>;
 
 /** Opens the exact accepted frame; neither Action operands nor sibling targets supply authority. */
-export async function resolveActionWorkflowSessionScopeV1(
+export async function readActionWorkflowInvocationContextV1(
   actionId: ActionId, context: ActionExecutorContext,
   deps: Pick<ActionExecutorDeps, 'workflowAction' | 'resolveSessionReference' | 'resolveServerProfileScopeId'>,
-): Promise<WorkflowSessionScopeV1 | null> {
-  if (actionId !== 'review.start' && !actionId.startsWith('reviews.comments.')) return null;
+): Promise<WorkflowActionInvocationContextV1 | null> {
   const caller = context.actionCaller;
   if (caller?.kind !== 'workflowRun' || !deps.workflowAction) return null;
   const identity = readWorkflowActionInvocationV1(caller.runId, context.actionRequestId ?? undefined);
@@ -70,6 +78,22 @@ export async function resolveActionWorkflowSessionScopeV1(
     const leaf = opened.acceptedContext.materializedLeaves.find(leaf => leaf.sourceKey === structure.sourceKey
       && leaf.blockId === structure.leaf.id && leaf.kind === 'action' && leaf.actionId === actionId);
     if (!leaf) return null;
+    return { opened, rows, invocation, structure, leaf };
+  } catch {
+    context.signal?.throwIfAborted();
+    return null;
+  }
+}
+
+export async function resolveActionWorkflowSessionScopeV1(
+  actionId: ActionId, context: ActionExecutorContext,
+  deps: Pick<ActionExecutorDeps, 'workflowAction' | 'resolveSessionReference' | 'resolveServerProfileScopeId'>,
+): Promise<WorkflowSessionScopeV1 | null> {
+  if (actionId !== 'review.start' && !actionId.startsWith('reviews.comments.')) return null;
+  const binding = await readActionWorkflowInvocationContextV1(actionId, context, deps);
+  if (!binding) return null;
+  const { opened, invocation, structure, leaf } = binding;
+  try {
     const sessions: WorkflowSessionScopeV1['sessions'] = [];
     const sameHome = (left: string, right: string | null | undefined) => areServerProfileIdentifiersEquivalent(left, right,
       identifier => identifier === context.serverId && context.serverIdentityId ? context.serverIdentityId

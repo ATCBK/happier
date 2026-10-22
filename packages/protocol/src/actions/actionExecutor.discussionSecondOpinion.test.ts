@@ -11,6 +11,10 @@ import { readDiscussionSecondOpinionModelChildV1 } from '../discussions/secondOp
 import { ArtifactDocumentV1Schema } from '../artifacts/artifactActionsV1.js';
 import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 import { decideApprovalRequestTransition } from '../approvals/approvalRequestTransition.js';
+import { createWorkflowAccountRunActionOwner } from './executor/workflowRunActions.js';
+import { WorkflowRunSummaryV1Schema } from '../workflows/workflowProgressV1.js';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from './actionCatalog.js';
+import { readCommittedDiscussionMessage } from './executor/docCollaborationActions.js';
 
 const request = {
   intent: 'preview', title: 'Review this answer', question: 'What would you change?',
@@ -21,13 +25,16 @@ const request = {
 
 function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceReady?: boolean; lostCreate?: boolean; lostPost?: boolean;
   reviewer?: DiscussionSecondOpinionReviewerV1; sourcePages?: 'paged' | 'truncated'; lostGrant?: boolean;
-  publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean } = {}) {
+  publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean;
+  reviewers?: readonly DiscussionSecondOpinionReviewerV1[] } = {}) {
   const events: string[] = [];
   const creates: unknown[] = [], posts: unknown[] = [], invites: unknown[] = [];
   const approvals: ApprovalRequestV2[] = [];
   const speakers = new Map<string, 'when_addressed' | 'reads_only' | 'drafts_for_approval' | 'watches_and_speaks_up'>();
   const births: Parameters<NonNullable<ActionExecutorDeps['sessionSpawnNew']>>[0][] = [];
   const reviewer = options.reviewer ?? request.reviewers[0];
+  const reviewers = options.reviewers ?? [reviewer];
+  const workflowAdmissions: unknown[] = [];
   let grantReady = !options.needsGrant, createLost = false, postLost = false, grantLost = false;
   const preview = () => DiscussionSecondOpinionPreviewV1Schema.parse({
     source: request.source, sourceContentReady: options.sourceReady ?? true, sourceAudienceAccountIds: grantReady ? ['alice', 'bob'] : ['alice'],
@@ -35,9 +42,9 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     ...(options.publisherSessionId ? { publisher: { sessionId: options.publisherSessionId, answerPolicy: 'when_addressed',
       audienceAccountIds: ['alice'], disclosure: options.publisherDisclosure === false
         ? { ok: false, reason: 'destination_audience_broader' } : { ok: true } } } : {}),
-    reviewers: options.noReviewers ? [] : [{ ...reviewer, sourceAccess: options.quoteOnly ? 'quote_only' : 'read',
+    reviewers: options.noReviewers ? [] : reviewers.map(reviewer => ({ ...reviewer, sourceAccess: options.quoteOnly ? 'quote_only' : 'read',
       runtimeAccountId: 'alice', audienceAccountIds: ['alice', 'bob'], missingSourceAccountIds: grantReady ? [] : ['bob'],
-      canGrantSource: true, disclosure: grantReady ? { ok: true } : { ok: false, reason: 'destination_audience_broader' } }],
+      canGrantSource: true, disclosure: grantReady ? { ok: true } : { ok: false, reason: 'destination_audience_broader' } })),
   });
   const message = (id: string, seq: number) => DiscussionOpenedMessageV1Schema.parse({
     id, discussionId: 'opinion', localId: id === 'quote' ? request.retry.quoteLocalId : request.retry.questionLocalId, seq,
@@ -54,7 +61,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   } });
   // These are the host's HTTP/transcript transport ports. The real Action
   // executor, schemas, composition and semantic child builders remain intact.
-  const executor = createActionExecutor({
+  const deps: ActionExecutorDeps = {
     approvalsCreate: async ({ request: approval }) => {
       approvals.push(ApprovalRequestV2Schema.parse(approval));
       return { artifactId: `opinion-approval-${approvals.length}` };
@@ -103,13 +110,46 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
         nextCursor: firstPage ? 'next-source-page' : null, hasMore: firstPage,
         diagnostics: { rawRowsScanned: 1, pagesFetched: 1, scanLimitReached: false, payloadTruncations: 0 } };
     },
-  } as ActionExecutorDeps);
+  } as ActionExecutorDeps;
+  const workflow = createWorkflowAccountRunActionOwner({
+    resolveAccountId: async () => 'alice', resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+    resolveRunReportPolicy: async () => ({ preset: 'important' }), normalizeAbsolutePath: path => path.startsWith('/') ? path : null,
+    definitions: { get: async () => { throw new Error('unexpected_definition'); } },
+    randomBytes: () => { throw new Error('plain_needs_no_key'); },
+    prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine', directory: '/repo', checkoutRootPath: '/repo' } } }),
+    resolveDiscussionOrigin: async ({ origin, context }) => {
+      const result = await readCommittedDiscussionMessage({ kind: 'discussion', discussion: origin.discussion, messageId: origin.addressingMessageId }, context,
+        async () => ({ v: 1, serverId: 'home', discussionId: 'opinion', messageSeq: 2,
+          messages: [message('question', 2)], hasMoreOlder: false, incomplete: false }));
+      if (!result.ok) throw new Error('invalid_origin');
+      return { discussion: origin.discussion, messageId: result.message.id, throughSeq: result.message.seq };
+    },
+    resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true,
+      resolveSessionTarget: async value => typeof value === 'object' && value !== null && !Array.isArray(value)
+        && typeof value.serverId === 'string' && typeof value.sessionId === 'string'
+        ? { address: { serverId: value.serverId, sessionId: value.sessionId }, machineId: 'machine' } : null,
+      readActionContract: async id => freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(getActionSpec(ActionIdSchema.parse(id)))) } }),
+    storage: { execute: async operation => {
+      if (operation.operation === 'get') throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+      if (operation.operation !== 'admit') throw new Error(`Unexpected storage ${operation.operation}`);
+      workflowAdmissions.push(operation);
+      return { kind: 'created', run: WorkflowRunSummaryV1Schema.parse({ id: operation.runId, sourceArtifactId: null, ownerAccountId: 'alice', visibleTeamId: null,
+        origin: { kind: 'direct' }, state: 'queued', revision: 0, machineId: 'machine', workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+        availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }) };
+    } },
+  });
+  deps.workflowAction = async args => {
+    try { return await workflow.execute(args); }
+    catch (error) { events.push(`workflow-error:${error instanceof Error ? error.message : String(error)}`); throw error; }
+  };
+  const executor = createActionExecutor(deps);
   const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', bypassApprovals: true,
     actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
       'discussion.second_opinion.start': ['ui'], 'discussion.create': ['ui'], 'discussion.invite': ['ui'],
       'discussion.post': ['ui'], 'session.access.grant.set': ['ui'], 'session.transcript.get': ['ui'], 'session.spawn_new': ['ui'],
     } }) };
-  return { executor, context, events, creates, posts, preview, births, invites, approvals };
+  return { executor, context, events, creates, posts, preview, births, invites, approvals, workflowAdmissions };
 }
 
 describe('Second opinion canonical Action composition', () => {
@@ -376,16 +416,24 @@ describe('Second opinion canonical Action composition', () => {
     expect(spec.inputSchema.safeParse(request).success).toBe(true);
   });
 
-  it('reports Fresh opinions unavailable before any effects when its real workflow producer is absent', async () => {
-    let effects = 0;
-    const executor = createActionExecutor({ discussionAction: async () => { effects++; throw new Error('No effects before Fresh opinions admission'); } });
-    const id = ActionIdSchema.safeParse('discussion.second_opinion.start');
-    expect(id.success).toBe(true);
-    if (!id.success) return;
-    const result = await executor.execute(id.data, { ...request, intent: 'ask', reviewers: [request.reviewers[0],
-      { selection: { kind: 'session', session: { serverId: 'home', sessionId: 'other-reviewer' } } }] },
-    { surface: 'ui', authority: 'present_user', serverId: 'home', bypassApprovals: true });
-    expect(result).toMatchObject({ ok: true, result: { status: 'unavailable', reason: 'fresh_opinions_unavailable', mode: 'fresh_opinions' } });
-    expect(effects).toBe(0);
+  it('previews two reviewers and starts Fresh opinions through the real Workflow admission owner', async () => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const, session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const f = fixture({ reviewers });
+    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, reviewers }, f.context))
+      .toMatchObject({ ok: true, result: { status: 'preview', preview: { reviewers: expect.any(Array) } } });
+    const result = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask', reviewers, confirmedPreview: f.preview(),
+      project: { machineId: 'machine', directory: '/repo' } }, f.context);
+    expect(result, JSON.stringify({ result, events: f.events })).toMatchObject({ ok: true, result: { status: 'asked', mode: 'fresh_opinions', runId: expect.any(String) } });
+    expect(f.workflowAdmissions).toHaveLength(1);
+    expect(f.posts).toEqual([expect.objectContaining({ content: { v: 1, parts: [{ t: 'text', text: request.question }] } })]);
+  });
+  it('requires multi-reviewer Workflow placement before source grants or Discussion mutations', async () => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const, session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const f = fixture({ reviewers });
+    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask', reviewers, confirmedPreview: f.preview() }, f.context))
+      .toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    expect(f.events).toEqual([]);
+    expect(f.creates).toHaveLength(0);
+    expect(f.workflowAdmissions).toHaveLength(0);
   });
 });

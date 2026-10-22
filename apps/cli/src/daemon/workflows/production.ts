@@ -1851,13 +1851,13 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         machineId: params.machineId,
         originSessionId: accepted.origin?.originSessionId,
         ...(claim.signal ? { signal: claim.signal } : {}),
-      }), ...createProductionWorkflowDiscussionContextReader({
+      }), ...(accepted.origin?.discussion ? createProductionWorkflowDiscussionContextReader({
         credentials: params.execution.credentials,
         serverId: params.execution.serverId,
         serverHttpBaseUrl: resolveServerHttpBaseUrl(),
         origin: accepted.origin?.discussion,
         ...(claim.signal ? { signal: claim.signal } : {}),
-      }) },
+      }) : {}) },
       rootInvocationRecordId: rootInvocation.recordId,
       isAcceptedAuthorizationCurrent: async (currentness) =>
         await isOpenedAuthorizationCurrent(currentness.signal),

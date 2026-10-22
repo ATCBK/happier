@@ -36,6 +36,8 @@ import { createWorkflowAccountRunActionOwner } from '@happier-dev/protocol/actio
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
 
 const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const engine = buildBackendTargetKeyV2(agentTarget);
@@ -55,11 +57,12 @@ function builtin(id: string): WorkflowDefinitionV1 {
   return resolved.definition;
 }
 
-async function accepted(definition: WorkflowDefinitionV1, evidence: Record<string, WorkflowJsonValue> = {}, origin = true) {
+async function accepted(definition: WorkflowDefinitionV1, evidence: Record<string, WorkflowJsonValue> = {}, origin = true, discussion = false) {
   const inputs = bindAutomationWorkflowInputs({ definition, evidence });
   const result = await materializeWorkflowAcceptedSnapshotV1({ definition, context: {
     source: { kind: 'inline' }, inputs, machineId: workspace.machineId, executionTarget: { kind: 'session' },
-    workspaceTarget: { project: workspace }, origin: { kind: 'direct', ...(origin ? { originSessionId: 'origin' } : {}) },
+    workspaceTarget: { project: workspace }, origin: { kind: 'direct', ...(origin && !discussion ? { originSessionId: 'origin' } : {}),
+      ...(discussion ? { discussion: { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 2 } } : {}) },
     authorization: { principal: { kind: 'host' } },
   }, roleSelection: { defaultEngine: { agentTargetKey: engine }, availableAgentTargetKeys: [engine, otherEngine] },
   admission: { kind: 'user' }, effects: {
@@ -90,6 +93,8 @@ type Fixtures = {
   opinion?: 'agree' | 'disagree' | 'uncertain';
   usage?: number; budget?: number;
   session?: (id: string, input: Parameters<WorkflowStepExecutor>[0]['input']) => JsonValue;
+  reply?: (sessionId: string, stepId: string) => SessionMessageReplyOutcomeV1;
+  discussionRead?: NonNullable<ActionExecutorDeps['discussionAction']>;
   reviewFailed?: boolean;
   reviewLaunchFailure?: boolean;
   comments?: () => readonly ReviewCommentV1[];
@@ -179,10 +184,13 @@ function harness(fixtures: Fixtures = {}) {
   const scmRequests: unknown[] = [];
   let checkIndex = 0;
   let sessionStep: Parameters<WorkflowStepExecutor>[0] | undefined;
+  const sessionSteps = new Map<string, Parameters<WorkflowStepExecutor>[0]>();
+  const sessionInputs: { sessionId: string; stepId: string; text: string }[] = [];
   let enqueueIndex = 0;
   let reviewLaunchRejected = false;
   let sessionAccessObservations = 0;
   const nativeDeps: Partial<ActionExecutorDeps> = {
+    ...(fixtures.discussionRead ? { discussionAction: fixtures.discussionRead } : {}),
     resolveSessionReference: async ({ sessionId }) => sessionId && (fixtures.reviewSessionAccess?.(++sessionAccessObservations) ?? true)
       ? { kind: 'unique', address: { serverId: 'home', sessionId } } : { kind: 'none' },
     isActionApprovalRequired: (id, ctx) => isApprovalRequiredByActionsSettings(id,
@@ -307,6 +315,7 @@ function harness(fixtures: Fixtures = {}) {
       sessionStep = params;
       const sessionId = params.execution.conversation?.kind === 'existing_session' ? params.execution.conversation.sessionId : 'origin';
       sessionTargets.push(sessionId);
+      sessionSteps.set(sessionId, params);
       return { kind: 'workflow_session_conversation', existing: { sessionId, ...workspace },
         ...(params.execution.conversation?.kind === 'origin_session' ? { inputPath: 'origin_session' as const } : {}) };
     },
@@ -314,13 +323,18 @@ function harness(fixtures: Fixtures = {}) {
     materializeConversation: async (params) => ({ sessionId: params.existing?.sessionId ?? 'origin', machineAdmissionTransport: async () => ({ status: 'accepted', localId: 'native-input' }) }),
     sessionInput: { enqueue: async () => ({ status: 'accepted', localId: `pending-${enqueueIndex++}` }),
       observe: async (request) => {
-        if (!sessionStep) throw new Error('Missing native session input');
+        const currentStep = sessionSteps.get(request.sessionId) ?? sessionStep;
+        if (!currentStep) throw new Error('Missing native session input');
         await request.onInputMaterialized?.(1);
-        const step = sessionStep;
+        const step = currentStep;
+        sessionInputs.push({ sessionId: request.sessionId, stepId: step.step.id, text: step.input.text });
         events.push(step.step.id);
         const value = fixtures.session?.(step.step.id, step.input) ?? 'session finished';
+        const replyOutcome = fixtures.reply?.(request.sessionId, step.step.id);
         return { ok: true, sessionId: request.sessionId, localId: request.localId,
-          result: { kind: 'final_text', text: typeof value === 'string' ? value : JSON.stringify(value) } };
+          ...(replyOutcome ? { replyOutcome } : {}),
+          result: replyOutcome && replyOutcome.kind !== 'answer' ? { kind: 'fulfilled', outcome: replyOutcome }
+            : { kind: 'final_text', text: typeof value === 'string' ? value : JSON.stringify(value) } };
       },
     },
   });
@@ -352,7 +366,7 @@ function harness(fixtures: Fixtures = {}) {
     },
   });
   let goalInitialized = false;
-  return { get store() { return store; }, events, launches, notifications, goals, removedTriggers, scmRequests, reviewReads, sessionTargets, readGoal: () => goalControl('get'),
+  return { get store() { return store; }, events, launches, notifications, goals, removedTriggers, scmRequests, reviewReads, sessionTargets, sessionInputs, readGoal: () => goalControl('get'),
     runAccepted: async (snapshot: Awaited<ReturnType<typeof accepted>>, origin = true, runId = 'builtin-run') => {
       retainSnapshot(runId, snapshot);
       return coordinator().run({ ...snapshot, runId, ...(origin ? { originSessionId: 'origin' } : {}) });
@@ -363,7 +377,7 @@ function harness(fixtures: Fixtures = {}) {
         await goalControl('set', { objective: 'Finish the objective' });
         goalInitialized = true;
       }
-      const snapshot = await accepted(definition, evidence, origin);
+      const snapshot = await accepted(definition, evidence, origin, fixtures.discussionRead !== undefined);
       retainSnapshot(runId, snapshot);
       const outcome = await coordinator().run({ ...snapshot, runId, ...(origin ? { originSessionId: 'origin' } : {}) });
       if (outcome.state === 'failed') throw new Error(JSON.stringify({ outcome,
@@ -375,6 +389,104 @@ function harness(fixtures: Fixtures = {}) {
 }
 
 describe('built-ins through accepted materialization and native leaf adapters', () => {
+  const participants = ['one', 'two'].map(sessionId => ({ kind: 'session' as const, session: { serverId: 'home', sessionId } }));
+  it('runs Fresh opinions independently and skips synthesis when every participant passes', async () => {
+    const h = harness({ reply: () => ({ kind: 'pass' }) });
+    expect(await h.run(builtin('fresh-opinions'), { question: 'Compare', participants, synthesis: true })).toMatchObject({ state: 'succeeded' });
+    expect(h.sessionInputs.map(input => input.stepId)).toEqual(['answer', 'answer']);
+    expect(h.sessionInputs.every(input => !input.text.includes('session finished'))).toBe(true);
+  });
+  it('synthesizes successful and failed Fresh opinions without retrying the failed participant', async () => {
+    const h = harness({ session: id => id === 'answer' ? 'FAST-ANSWER' : 'SYNTHESIS',
+      reply: (sessionId, stepId) => sessionId === 'two' && stepId === 'answer' ? { kind: 'failed' }
+        : { kind: 'answer', result: { sessionId, messageId: 'answer' } } });
+    expect(await h.run(builtin('fresh-opinions'), { question: 'Compare', participants, synthesis: true }))
+      .toMatchObject({ state: 'succeeded', completedWithFailures: true, finalOutput: { allPassed: false,
+        outcomeReferences: expect.arrayContaining([expect.objectContaining({ kind: 'failed' }), expect.objectContaining({ kind: 'answer', result: 'FAST-ANSWER' })]) } });
+    expect(h.sessionInputs.filter(input => input.stepId === 'answer')).toHaveLength(2);
+    expect(h.sessionInputs.filter(input => input.stepId === 'answer').every(input => !input.text.includes('FAST-ANSWER'))).toBe(true);
+    expect(h.sessionInputs.find(input => input.stepId === 'synthesis')?.text).toContain('FAST-ANSWER');
+    expect(h.sessionInputs.find(input => input.stepId === 'synthesis')?.text).toContain('failed');
+  });
+  it('reviews the exact first answer through a typed reviewer and does not review a pass', async () => {
+    const h = harness({ session: id => id === 'answer' ? 'EXACT-FIRST-ANSWER' : 'reviewed' });
+    expect(await h.run(builtin('answer-and-review'), { question: 'Compare', answerer: participants[0]!, reviewer: participants[1]! }))
+      .toMatchObject({ state: 'succeeded' });
+    expect(h.sessionInputs.find(input => input.stepId === 'review')?.text).toContain('EXACT-FIRST-ANSWER');
+    expect(h.sessionInputs.find(input => input.stepId === 'review')?.text).toContain('<happier_discussion_context>');
+    const pass = harness({ reply: () => ({ kind: 'pass' }) });
+    await pass.run(builtin('answer-and-review'), { question: 'Compare', answerer: participants[0]!, reviewer: participants[1]! });
+    expect(pass.sessionInputs.map(input => input.stepId)).toEqual(['answer']);
+  });
+  it('ends Debate on typed all-pass before another round or digest call', async () => {
+    const h = harness({ reply: () => ({ kind: 'pass' }) });
+    expect(await h.run(builtin('debate'), { question: 'Compare', participants, rounds: 4 })).toMatchObject({ state: 'succeeded' });
+    expect(h.sessionInputs).toHaveLength(2);
+    expect(h.sessionInputs.every(input => input.stepId === 'reply')).toBe(true);
+  });
+  it('ends a Debate with no eligible speakers without treating a failure as pass or retrying it', async () => {
+    const h = harness({ reply: sessionId => sessionId === 'two' ? { kind: 'failed' } : { kind: 'pass' } });
+    expect(await h.run(builtin('debate'), { question: 'Compare', participants, rounds: 3 }))
+      .toMatchObject({ state: 'succeeded', completedWithFailures: true });
+    expect(h.sessionInputs).toHaveLength(2);
+    expect(h.store.list().find(row => row.blockId === 'outcomes')?.result).toMatchObject({ allPassed: false, hasNext: false });
+  });
+  it('uses the explicitly selected Debate digest author through the ordinary participant owner', async () => {
+    const h = harness({ reply: sessionId => ({ kind: 'answer', result: { sessionId, messageId: 'answer' } }) });
+    const digestAuthor = { kind: 'session', session: { serverId: 'home', sessionId: 'scribe' } };
+    expect(await h.run(builtin('debate'), { question: 'Compare', participants, rounds: 1, digestAuthor })).toMatchObject({ state: 'succeeded' });
+    expect(h.sessionInputs.find(input => input.stepId.includes('digest'))?.sessionId).toBe('scribe');
+  });
+  it('gives Debate round two the previous digest and removes an unaddressed passer', async () => {
+    const h = harness({ reply: sessionId => sessionId === 'two' ? { kind: 'pass' }
+      : { kind: 'answer', result: { sessionId, messageId: 'answer' } },
+      session: id => id.endsWith('digest') ? 'PREVIOUS-ROUND-DIGEST' : 'answer' });
+    expect(await h.run(builtin('debate'), { question: 'Compare', participants, rounds: 2 })).toMatchObject({ state: 'succeeded' });
+    const later = h.sessionInputs.filter(input => input.stepId === 'reply').slice(2);
+    expect(later).toHaveLength(1);
+    expect(later[0]).toMatchObject({ sessionId: 'one' });
+    expect(later[0]?.text).toContain('PREVIOUS-ROUND-DIGEST');
+  });
+  it('runs Panel planners as typed participants and refuses contradictory engine choices', async () => {
+    const h = harness();
+    expect(await h.run(builtin('plan-with-a-panel'), { request: 'Plan it', participants })).toMatchObject({ state: 'waiting_for_review' });
+    expect(h.sessionInputs.filter(input => input.stepId === 'participant-plan')).toHaveLength(2);
+    expect(h.launches.find(launch => String(launch.request.instructions).includes('Produce the requested plan'))?.request.instructions)
+      .toContain('"sessionId":"one"');
+    expect(h.events).not.toContain('plan');
+    await expect(h.run(builtin('plan-with-a-panel'), { request: 'Plan it', participants, engines: [otherEngine] })).rejects.toThrow('invalid_input');
+  });
+  it.each([false, true])('captures human context once per Debate round; only explicit addressing restores a passer (watcher: %s)', async watcher => {
+    let reads = 0;
+    const h = harness({ reply: sessionId => sessionId === 'two' ? { kind: 'pass' }
+      : { kind: 'answer', result: { sessionId, messageId: 'answer' } }, session: id => id.endsWith('digest') ? 'DIGEST' : 'PEER-ANSWER',
+      discussionRead: async args => {
+        if (args.actionId !== 'discussion.read') throw new Error('unexpected_discussion_action');
+        const before = args.input.beforeSeq;
+        const initial = reads++ === 0;
+        const seq = before === undefined ? 4 : 3;
+        return DiscussionReadResultV1Schema.parse({ v: 1, serverId: 'home', discussionId: 'discussion', messageSeq: initial ? 2 : 4,
+          hasMoreOlder: !initial && before === undefined, incomplete: false, messages: initial ? [] : [{
+            id: `human-${seq}`, discussionId: 'discussion', localId: null, seq, authorAccountId: null, accountActor: null, producerV1: null,
+            createdAt: seq, mentionedAccountIds: [], content: { v: 1, parts: [{ t: 'text', text: seq === 4 ? 'NEW-HUMAN-CONTEXT' : 'READDRESS-TWO' }] },
+            addressingV1: { throughSeq: seq, participantSessionIds: seq === 3 ? ['two'] : [], ...(watcher && seq === 3 ? { watcherSessionIds: ['two'] } : {}) },
+            messageRef: { kind: 'discussion', discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: `human-${seq}` },
+          }] });
+      } });
+    expect(await h.run(builtin('debate'), { question: 'Compare', participants, rounds: 2 })).toMatchObject({ state: 'succeeded' });
+    const turns = h.sessionInputs.filter(input => input.stepId === 'reply');
+    expect(turns).toHaveLength(watcher ? 3 : 4);
+    expect(turns.slice(0, 2).every(input => !input.text.includes('NEW-HUMAN-CONTEXT') && !input.text.includes('PEER-ANSWER'))).toBe(true);
+    expect(turns.slice(2).every(input => input.text.includes('NEW-HUMAN-CONTEXT') && input.text.includes('READDRESS-TWO'))).toBe(true);
+    expect(reads).toBe(3);
+  });
+  it('refuses a foreign-Home Debate context page before any participant turn', async () => {
+    const h = harness({ discussionRead: async () => DiscussionReadResultV1Schema.parse({
+      v: 1, serverId: 'foreign-home', discussionId: 'discussion', messageSeq: 2, hasMoreOlder: false, incomplete: false, messages: [],
+    }) });
+    await expect(h.run(builtin('debate'), { question: 'Compare', participants, rounds: 2 })).rejects.toThrow('content_unavailable');
+    expect(h.sessionInputs).toHaveLength(0);
+  });
   it('dispatches input-bound scalar engines and replays the accepted selections after authored defaults change', async () => {
     const alternateTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
     const choices = {
