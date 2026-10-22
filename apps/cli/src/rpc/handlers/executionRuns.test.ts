@@ -3593,14 +3593,22 @@ describe('executionRuns session RPC handlers', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'streaming',
+      runClass: 'bounded',
+      ioMode: 'request_response',
     });
 
     expect(started).toMatchObject({
       ok: false,
       errorCode: 'execution_run_not_allowed',
       error: 'Unsupported retentionPolicy',
+      details: {
+        executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+        issues: [
+          { code: 'invalid_value', path: ['retentionPolicy'], acceptedValues: ['resumable'] },
+          { code: 'invalid_value', path: ['runClass'], acceptedValues: ['long_lived'] },
+          { code: 'invalid_value', path: ['ioMode'], acceptedValues: ['streaming'] },
+        ],
+      },
     });
     expect(createBackend).not.toHaveBeenCalled();
   });

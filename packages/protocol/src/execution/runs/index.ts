@@ -4,6 +4,7 @@ import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { ExecutionRunResultContractV1Schema } from './resultContractV1.js';
 import { HappierStructuredInputV1Schema } from '../../runtime/input/structuredInputV1.js';
+export { EXECUTION_RUN_INTENT_POLICY_MATRIX, EXECUTION_RUN_INTENT_OPTIONS, type ExecutionRunIntentPolicyConstraint } from './intentPolicyMatrix.js';
 export {
   ExecutionRunResolvedSelectionSchema,
   projectExecutionRunResolvedSelection,

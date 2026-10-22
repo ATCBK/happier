@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { ExecutionRunIntentSchema } from '@happier-dev/protocol';
-import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from './executionRunIntentPolicyMatrix';
+import { ExecutionRunIntentSchema, ExecutionRunStartRequestSchema } from '@happier-dev/protocol';
+import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@happier-dev/protocol/execution/runs/index';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { defaultExecutionRunClass, defaultExecutionRunIoMode, defaultExecutionRunRetention } from '@happier-dev/protocol/actions/specs/executionRunCli';
 
 import {
   EXECUTION_RUN_INTENT_POLICY_REGISTRY,
@@ -12,6 +14,18 @@ import {
 } from './intentPolicyRegistry';
 
 describe('executionRun intent policy registry', () => {
+  it('admits the discoverable examples and friendly defaults for every intent', () => {
+    for (const intent of ExecutionRunIntentSchema.options) {
+      expect(validateExecutionRunStartIntentPolicy({ intent, permissionMode: 'read_only',
+        retentionPolicy: defaultExecutionRunRetention(intent), runClass: defaultExecutionRunClass(intent),
+        ioMode: defaultExecutionRunIoMode(intent) }), intent).toEqual({ ok: true });
+    }
+    const spec = getActionSpec('execution.run.start');
+    for (const example of [spec.examples?.mcp, spec.examples?.voice]) {
+      const input = ExecutionRunStartRequestSchema.parse(spec.inputSchema.parse(JSON.parse(example?.argsExample ?? '{}')));
+      expect(validateExecutionRunStartIntentPolicy(input)).toEqual({ ok: true });
+    }
+  });
   it('admits native Voice streaming with resumable retention and rejects ephemeral run retention', () => {
     const voiceStart = { intent: 'voice_agent' as const, permissionMode: 'read_only',
       runClass: 'long_lived' as const, ioMode: 'streaming' as const };
@@ -90,6 +104,7 @@ describe('executionRun intent policy registry', () => {
       ok: false,
       error: 'Unsupported retentionPolicy',
       errorCode: 'execution_run_not_allowed',
+      details: { issues: [{ code: 'invalid_value', path: ['retentionPolicy'], acceptedValues: ['ephemeral'] }] },
     });
 
     expect(validateExecutionRunStartIntentPolicy({
@@ -102,6 +117,7 @@ describe('executionRun intent policy registry', () => {
       ok: false,
       error: 'Unsupported runClass',
       errorCode: 'execution_run_not_allowed',
+      details: { issues: [{ code: 'invalid_value', path: ['runClass'], acceptedValues: ['bounded'] }] },
     });
 
     expect(validateExecutionRunStartIntentPolicy({
@@ -114,6 +130,7 @@ describe('executionRun intent policy registry', () => {
       ok: false,
       error: 'Unsupported runClass',
       errorCode: 'execution_run_not_allowed',
+      details: { issues: [{ code: 'invalid_value', path: ['runClass'], acceptedValues: ['bounded'] }] },
     });
 
     expect(validateExecutionRunStartIntentPolicy({
@@ -126,6 +143,7 @@ describe('executionRun intent policy registry', () => {
       ok: false,
       error: 'Unsupported ioMode',
       errorCode: 'execution_run_not_allowed',
+      details: { issues: [{ code: 'invalid_value', path: ['ioMode'], acceptedValues: ['streaming'] }] },
     });
   });
 

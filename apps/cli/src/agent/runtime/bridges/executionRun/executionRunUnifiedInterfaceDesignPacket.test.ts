@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionRunIntentSchema } from '@happier-dev/protocol';
 
-import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@/agent/executionRuns/policy/executionRunIntentPolicyMatrix';
+import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@happier-dev/protocol/execution/runs/index';
 import {
   EXECUTION_RUN_BRIDGE_OPERATION_SET,
   EXECUTION_RUN_UNIFIED_INTERFACE_DESIGN_PACKET,

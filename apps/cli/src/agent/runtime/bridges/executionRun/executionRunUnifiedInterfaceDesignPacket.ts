@@ -1,4 +1,4 @@
-import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@/agent/executionRuns/policy/executionRunIntentPolicyMatrix';
+import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@happier-dev/protocol/execution/runs/index';
 import {
   RUNTIME_TURN_OPERATION_SET,
   type RuntimeTurnOperation,

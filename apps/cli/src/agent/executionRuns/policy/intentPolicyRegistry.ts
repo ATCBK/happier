@@ -6,13 +6,14 @@ import type {
   FeatureId,
 } from '@happier-dev/protocol';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
+import { actionInputIssueFailure } from '@happier-dev/protocol/actions/executor/actionInputValidation';
 
 import {
   executionRunStartNotAllowed,
   type ExecutionRunIntentStartPreflightParams,
   type ExecutionRunStartIntentPolicyResult,
 } from './executionRunStartPreflight';
-import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from './executionRunIntentPolicyMatrix';
+import { EXECUTION_RUN_INTENT_POLICY_MATRIX } from '@happier-dev/protocol/execution/runs/index';
 
 export type ExecutionRunIntentPermissionModePolicy = 'safe_only' | 'permissive';
 
@@ -38,10 +39,6 @@ const PERMISSION_MODE_POLICY_BY_INTENT: Readonly<Record<ExecutionRunIntent, Exec
   scm_commit_message: 'safe_only',
   scm_diff_summary: 'safe_only',
 };
-
-function notAllowed(error: string): ExecutionRunStartIntentPolicyResult {
-  return executionRunStartNotAllowed(error);
-}
 
 export const EXECUTION_RUN_INTENT_POLICY_REGISTRY: Readonly<Record<ExecutionRunIntent, ExecutionRunIntentPolicy>> = Object.freeze(
   Object.fromEntries(
@@ -100,14 +97,16 @@ export function validateExecutionRunStartIntentPolicy(args: Readonly<{
 }>): ExecutionRunStartIntentPolicyResult {
   const policy = resolveExecutionRunIntentPolicy(args.intent);
 
-  if (!policy.allowedRetentionPolicies.includes(args.retentionPolicy)) {
-    return notAllowed('Unsupported retentionPolicy');
-  }
-  if (!policy.allowedRunClasses.includes(args.runClass)) {
-    return notAllowed('Unsupported runClass');
-  }
-  if (!policy.allowedIoModes.includes(args.ioMode)) {
-    return notAllowed('Unsupported ioMode');
+  const constraints = [
+    { field: 'retentionPolicy', value: args.retentionPolicy, acceptedValues: policy.allowedRetentionPolicies },
+    { field: 'runClass', value: args.runClass, acceptedValues: policy.allowedRunClasses },
+    { field: 'ioMode', value: args.ioMode, acceptedValues: policy.allowedIoModes },
+  ];
+  const issues = constraints.filter(constraint => !constraint.acceptedValues.some(value => value === constraint.value))
+    .map(constraint => ({ code: 'invalid_value', path: [constraint.field], acceptedValues: constraint.acceptedValues }));
+  if (issues.length > 0) {
+    return { ...executionRunStartNotAllowed(`Unsupported ${issues[0]!.path[0]}`),
+      details: actionInputIssueFailure(...issues).details };
   }
   if (!isSafePermissionModeForIntent(args.intent, args.permissionMode)) {
     return { ok: false, error: 'Permission denied', errorCode: 'permission_denied' };

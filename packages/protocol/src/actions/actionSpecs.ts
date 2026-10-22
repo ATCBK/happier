@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { EXECUTION_RUN_INTENT_OPTIONS } from '../execution/runs/intentPolicyMatrix.js';
 import { CODE_INTELLIGENCE_ACTION_SPECS } from './codeIntelligenceActionFamily.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
 import { PetChooseInputV1Schema, PetChooseResultV1Schema } from '../pets/selection.js';
@@ -6751,10 +6752,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
     sideEffectClass: 'write',
     examples: {
       mcp: {
-        argsExample: '{"intent":"voice_agent","backendTarget":{"kind":"backend","backendId":"codex","sourceKind":"built_in"},"instructions":"Summarize recent changes.","permissionMode":"read_only","retentionPolicy":"ephemeral","runClass":"bounded","ioMode":"request_response","waitForCompletion":true,"waitTimeoutSeconds":60}',
+        argsExample: '{"intent":"delegate","backendTarget":{"kind":"backend","backendId":"codex","sourceKind":"built_in"},"instructions":"Summarize recent changes.","permissionMode":"read_only","retentionPolicy":"ephemeral","runClass":"bounded","ioMode":"request_response","waitForCompletion":true,"waitTimeoutSeconds":60}',
       },
       voice: {
-        argsExample: '{"intent":"voice_agent","backendTarget":{"kind":"backend","backendId":"codex","sourceKind":"built_in"},"instructions":"Summarize recent changes.","permissionMode":"read_only","retentionPolicy":"ephemeral","runClass":"bounded","ioMode":"request_response"}',
+        argsExample: '{"intent":"delegate","backendTarget":{"kind":"backend","backendId":"codex","sourceKind":"built_in"},"instructions":"Summarize recent changes.","permissionMode":"read_only","retentionPolicy":"ephemeral","runClass":"bounded","ioMode":"request_response"}',
       },
     },
     surfaces: {
@@ -6775,7 +6776,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
       title: 'Start a run',
       fields: [
         EXECUTION_RUN_SESSION_SCOPE_HINT,
-        { path: 'intent', title: 'Intent', widget: 'text', required: true },
+        { path: 'intent', title: 'Intent', description: 'Choose the purpose and its accepted retentionPolicy, runClass and ioMode together. Delegate covers ordinary bounded child work; Voice serves ongoing conversations.', widget: 'select', required: true, options: EXECUTION_RUN_INTENT_OPTIONS },
         { path: 'backendTarget', title: 'Backend target (json)', widget: 'textarea', required: true },
         { path: 'instructions', title: 'Instructions', widget: 'textarea' },
         {

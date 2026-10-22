@@ -25,6 +25,7 @@ import {
 } from '../../execution/runs/runPrimitives.js';
 import { ExecutionRunStatusSchema } from '../../execution/runs/listRequest.js';
 import { executionRunKindForIntent } from '../../execution/runs/startRequest.js';
+import { EXECUTION_RUN_INTENT_OPTIONS, EXECUTION_RUN_INTENT_POLICY_MATRIX } from '../../execution/runs/intentPolicyMatrix.js';
 import {
   EXECUTION_RUN_ACTION_PERMISSION_INPUTS,
   ExecutionRunActionPermissionModeSchema,
@@ -43,19 +44,19 @@ export function defaultExecutionRunPermissionMode(
 }
 
 export function defaultExecutionRunClass(intent: ExecutionRunIntent): 'bounded' | 'long_lived' {
-  return intent === 'voice_agent' || intent === 'scm_diff_summary' ? 'long_lived' : 'bounded';
+  return EXECUTION_RUN_INTENT_POLICY_MATRIX[intent].allowedRunClasses[0];
 }
 
 export function defaultExecutionRunIoMode(
   intent: ExecutionRunIntent,
 ): 'request_response' | 'streaming' {
-  return intent === 'voice_agent' ? 'streaming' : 'request_response';
+  return EXECUTION_RUN_INTENT_POLICY_MATRIX[intent].allowedIoModes[0];
 }
 
 export function defaultExecutionRunRetention(
   intent: ExecutionRunIntent,
 ): 'ephemeral' | 'resumable' {
-  return intent === 'voice_agent' || intent === 'scm_diff_summary' ? 'resumable' : 'ephemeral';
+  return EXECUTION_RUN_INTENT_POLICY_MATRIX[intent].allowedRetentionPolicies[0];
 }
 
 /**
@@ -164,7 +165,7 @@ export const EXECUTION_RUN_START_CLI_PROJECTION: ActionCliProjection = {
         title: 'Run intent',
         widget: 'select',
         required: true,
-        options: ExecutionRunIntentSchema.options.map((value) => ({ value, label: value })),
+        options: EXECUTION_RUN_INTENT_OPTIONS,
       },
       {
         path: 'agent',
