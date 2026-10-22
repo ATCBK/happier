@@ -15,6 +15,7 @@ import { useManagedMachineInventory } from './useManagedMachineInventory';
 import { ManagedMachineReadApprovalNotice } from './ManagedMachineReadApprovalNotice';
 import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
+import { projectManagedMachineDetailRead } from './managedMachineDetailPresentation';
 
 const execute = createFrontDoorActionExecute();
 type ManagedMachineDetailProps = Readonly<{ managedId: string; serverId: string;
@@ -41,11 +42,16 @@ function ManagedMachineDetailBody(props: ManagedMachineDetailProps) {
     const serverIds = React.useMemo(() => serverId && props.managedId ? [serverId] : [], [serverId, props.managedId]);
     const executeAction = props.executeAction ?? execute;
     const inventory = useManagedMachineInventory(serverIds, props.managedId || undefined, executeAction);
+    const collectionInventory = useManagedMachineInventory(serverIds, undefined, executeAction);
     const entry = inventory.entries[serverId];
+    const collectionEntry = collectionInventory.entries[serverId];
     const accountState = inventory.accountScopes.get(serverId);
     const [actionError, setActionError] = React.useState<string | null>(null);
     const machine = entry?.machines[0];
-    const identity = useManagedMachineHeaderIdentity(entry?.status === 'denied' ? undefined : machine, serverId);
+    const detailRead = projectManagedMachineDetailRead({ managedId: props.managedId, detailMachine: machine,
+        detailStatus: entry?.status, inventoryMachines: collectionEntry?.machines ?? [], inventoryStatus: collectionEntry?.status });
+    const headerMachine = entry?.status === 'denied' ? undefined : detailRead.headerMachine;
+    const identity = useManagedMachineHeaderIdentity(headerMachine, serverId);
     const profile = getServerProfileById(serverId);
     const homeName = resolveHomeDisplayLabel(profile, serverId);
     const forbidden = entry?.status === 'denied' || actionError === 'permission_denied'
@@ -54,18 +60,19 @@ function ManagedMachineDetailBody(props: ManagedMachineDetailProps) {
     if (enrolledMachineId) return <Redirect href={machinePageHref({ door,
         target: { machineId: enrolledMachineId, serverId: props.serverId } }) as never} />;
 
-    const mark = (machine && !forbidden ? identity?.mark : undefined) ?? <Icon name="desktop" color={theme.colors.text.secondary} />;
+    const mark = (headerMachine && !forbidden ? identity?.mark : undefined) ?? <Icon name="desktop" color={theme.colors.text.secondary} />;
 
     const showMachine = Boolean(machine && !forbidden);
+    const showHeaderIdentity = Boolean(headerMachine && !forbidden);
     const loading = inventory.loading && !machine;
     const reason = forbidden || accountState?.resolution.kind === 'signed_out'
-        ? t('managedMachines.detail.readRefused') : entry?.status === 'missing'
+        ? t('managedMachines.detail.readRefused') : detailRead.missing
             ? t('managedMachines.detail.missing') : t('managedMachines.detail.loadFailed');
     return <ManagedReceiptPageLayout testID="managed-machine.detail" compact={layout?.mode !== 'split'}
         // Retry belongs to the state that needs it (the read card, or the freshness of a stale read on the state), never the header.
-        header={{ title: showMachine ? machine!.launch.name : t('managedMachines.detail.unreadTitle'), leading: mark,
-            description: (showMachine ? identity?.description : null) ?? t('managedMachines.detail.creationDescription'),
-            meta: [{ key: 'home', text: homeName }, ...(showMachine ? identity?.meta ?? [] : [])] }}
+        header={{ title: showHeaderIdentity ? headerMachine!.launch.name : t('managedMachines.detail.unreadTitle'), leading: mark,
+            description: (showHeaderIdentity ? identity?.description : null) ?? t('managedMachines.detail.creationDescription'),
+            meta: [{ key: 'home', text: homeName }, ...(showHeaderIdentity ? identity?.meta ?? [] : [])] }}
         /* The sections own the receipt beside them, with Stop and Delete at its foot. */
         receipt={null}>
         <ManagedMachineReadApprovalNotice serverId={serverId} entry={entry} />

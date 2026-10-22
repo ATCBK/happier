@@ -73,6 +73,7 @@ import { buildReviewedManagedMachineDeleteInput, qualifyManagedMachineDeleteRevi
 import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { projectManagedMachineApproval, shouldReleaseManagedMachinePendingOnApproval } from './managedMachineDetailPresentation';
 
 const execute = createFrontDoorActionExecute();
 type Execute = ReturnType<typeof createDefaultActionExecutor>['execute'];
@@ -123,6 +124,7 @@ export function ManagedMachineSections(props: SectionProps) {
     const machineMark = <Icon name="desktop" />;
     const [pending, setPending] = React.useState<ManagedMachineActionIdV1 | null>(null);
     const pendingRef = React.useRef(false);
+    const submittedDeleteApprovalIdRef = React.useRef<string | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [proposedPolicy, setProposedPolicy] = React.useState<MachineRetentionPolicyV1 | null>(null);
     // The exact submitted review remains cancelable while its durable native Ask is pending.
@@ -150,6 +152,7 @@ export function ManagedMachineSections(props: SectionProps) {
         const interest = new AbortController();
         interestRef.current = interest;
         pendingRef.current = false;
+        submittedDeleteApprovalIdRef.current = null;
         setPending(null);
         setError(null);
         setProposedPolicy(null);
@@ -195,7 +198,10 @@ export function ManagedMachineSections(props: SectionProps) {
             return id;
         };
     }, [machine.homeId, machine.id]);
-    const pendingDeleteApprovalId = storage(selectPendingDelete);
+    const storedDeleteApprovalId = storage(selectPendingDelete);
+    const approvalPresentation = projectManagedMachineApproval({ approvalId: approval.approvalId,
+        submittedDeleteApprovalId: submittedDeleteApprovalIdRef.current, storedDeleteApprovalId });
+    const pendingDeleteApprovalId = approvalPresentation?.kind === 'delete' ? approvalPresentation.artifactId : null;
     const openApproval = (artifactId: string) => router.push(
         `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(props.serverId)}` as never);
     const approvalRequestRef = React.useRef(approval.requestApproval);
@@ -333,6 +339,7 @@ export function ManagedMachineSections(props: SectionProps) {
             }
             if (outcome.kind === 'approval_pending') {
                 awaitingApproval = true;
+                if (actionId === 'machines.managed.delete') submittedDeleteApprovalIdRef.current = outcome.artifactId;
                 if (actionId === 'machines.managed.retention.update') {
                     // Keep's existing result seam waits for this exact native Artifact, not Ask admission.
                     const saved = await awaitActionApprovalResult<boolean, Readonly<{ saved: boolean }>>({
@@ -354,6 +361,7 @@ export function ManagedMachineSections(props: SectionProps) {
                     artifactId: outcome.artifactId, actionId, scope: binding.scope, expectedInput: input,
                     signal: interest.signal, onSucceeded: value => { complete(value); }, onFailed: fail,
                 }));
+                if (shouldReleaseManagedMachinePendingOnApproval(actionId)) release();
                 return false;
             }
             const succeeded = complete(outcome.result);
@@ -591,22 +599,22 @@ export function ManagedMachineSections(props: SectionProps) {
         { retention: policy.retention, wakeOnAcceptedMessage: policy.wakeOnAcceptedMessage })
         ? t('managedRetention.changedFor', { name: machineName }) : t('managedRetention.policyDescription');
     return <ManagedReceiptColumns receipt={receipt} compact={compact} testID="managed-machine.detail">
-        {approval.approvalId ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
-            title={t('approvals.title')} description={t('approvals.status.open')}
-            action={{ label: t('approvals.details'), onPress: () => openApproval(approval.approvalId!) }} />
-            // A cleanup state already offers Review on its own row; say it once.
-            : pendingDeleteApprovalId && !describeManagedCreation(machine, creationContext).actions.includes('review') ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
+        {pendingDeleteApprovalId
+            ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
                 title={resolveActionTitle('machines.managed.delete', null)} description={t('approvals.waitingForYou')}
-                action={{ label: t('approvals.review'), onPress: () => openApproval(pendingDeleteApprovalId) }} /> : null}
+                action={{ label: t('approvals.review'), onPress: () => openApproval(pendingDeleteApprovalId) }} />
+            : approvalPresentation?.kind === 'generic' ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
+                title={t('approvals.title')} description={t('approvals.status.open')}
+                action={{ label: t('approvals.details'), onPress: () => openApproval(approvalPresentation.artifactId) }} />
+            : null}
         <ManagedCreationProgress machine={machine} operation={operation} setupRecovery={setupRecovery} provider={providerName}
             enrolledMachine={creationContext.enrolledMachine} title={machineName}
             {...(props.staleRead ? { staleRead: props.staleRead } : {})}
-            reviewApproval={artifactId => router.push(
-                `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(props.serverId)}` as never)}
+            {...(!pendingDeleteApprovalId ? { reviewApproval: (artifactId: string) => router.push(
+                `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(props.serverId)}` as never) } : {})}
             answerPrompt={answerPrompt}
             providerAvailable={creationContext.providerAvailable}
             mark={provisionerPresentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.row)} controller={creationContext.controller} handlers={{ ...(props.current ? { checkNow: inspect } : {}),
-            ...(pendingDeleteApprovalId ? { review: () => openApproval(pendingDeleteApprovalId) } : {}),
             ...(canCancelCreation && canMutate ? { cancel: cancelCreation } : {}),
             ...(recoveryConsoleUrl ? { openProvider: () => {
                 if (!props.binding?.isCurrent()) return;
