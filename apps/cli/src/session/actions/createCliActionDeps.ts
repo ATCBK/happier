@@ -1,3 +1,4 @@
+import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
@@ -3113,7 +3114,7 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     const metadata = readTransportSessionOwnerMetadata(transport);
-    const daemonOwnedCheck = operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata) !== null;
+    const daemonOwnedCheck = operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata, readLatestUsageLimitFailureIssue(transport.rawSession)) !== null;
     if (transport.rawSession.active === true && !daemonOwnedCheck) {
       return normalizeUsageLimitRecoveryOperationResult(await callSessionRpcForTransport(
         transport,
