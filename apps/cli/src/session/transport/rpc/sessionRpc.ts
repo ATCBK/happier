@@ -15,6 +15,7 @@ import { resolveSessionControlSocketConnectTimeoutMs } from '@/session/transport
 import { readRpcObservation, withUserScopedRpcSocket, type RpcObservationOptions } from './withUserScopedRpcSocket';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { createExternalActionMachineRpcExecution, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
+import { timeWebLatencyPhase, withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 
 export type SessionRpcRequestDisposition = RpcRequestDisposition;
 export const readSessionRpcRequestDisposition = readRpcRequestDisposition;
@@ -66,7 +67,7 @@ export async function callSessionRpc(params: CallSessionRpcParams): Promise<unkn
       disconnectMessage: 'RPC socket disconnected before acknowledgement',
       ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
     }, async (socket, connect, signal) => {
-      await connect();
+      await timeWebLatencyPhase('session.rpc.connect', connect);
       const prefix = `${params.sessionId}:`;
       const externalAction = params.externalAction;
       const method = params.method.startsWith(prefix) ? params.method.slice(prefix.length) : params.method;
@@ -91,17 +92,19 @@ export async function callSessionRpc(params: CallSessionRpcParams): Promise<unkn
             if (!execution) throw new Error('External Action Session RPC authorization is unavailable');
             return execution;
           } : undefined;
-        const result = await callSocketRpc({
+        const requestId = randomUUID();
+        const result = await withWebLatencyTrace(requestId, () => timeWebLatencyPhase('session.rpc.ack', () => callSocketRpc({
           socket,
           target: { kind: 'session', id: params.sessionId },
           method,
           params: request,
           content,
-          requestId: randomUUID(),
+          requestId,
           timeoutMs,
           signal,
+          onIssued: () => { void timeWebLatencyPhase('session.rpc.issued', () => undefined); },
           ...(createExternalActionExecution ? { createExternalActionExecution } : {}),
-        });
+        })), params.sessionId);
         return params.mode === 'plain' ? result ?? null : result;
       } });
     });

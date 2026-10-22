@@ -53,6 +53,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
 import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 
 type OwnedHandlerRegistrationContext = {
     ownerId: string;
@@ -275,7 +276,9 @@ export class RpcHandlerManager {
         request: RpcRequest,
     ): Promise<any> {
         const requestStartedAtMs = Date.now();
-        return this.observeRequest(request.method, request.requestId, diagnostic => this.dispatchRequest(request, diagnostic, requestStartedAtMs));
+        const traceRequestId = typeof request.requestId === 'string' ? request.requestId.replace(/^rpc_/u, '') : request.requestId;
+        return withWebLatencyTrace(traceRequestId, () => this.observeRequest(request.method, request.requestId,
+            diagnostic => this.dispatchRequest(request, diagnostic, requestStartedAtMs)));
     }
 
     private async observeRequest(

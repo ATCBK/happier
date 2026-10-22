@@ -3,6 +3,7 @@ import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1, SessionTranscriptObservationAckV1Schema, SessionTranscriptObservationProvenanceV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { MessageAckResponseSchema } from '@happier-dev/protocol/updates';
 import type { SessionClientConnectionContractResult } from '../sessionClientConnectionContract';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 import type {
     PersistedTranscriptMessageAppendMutationV1,
@@ -45,7 +46,7 @@ async function trySocketTranscriptMutation(params: Readonly<{
     try {
         const socket = params.socket;
         if (typeof socket.emitWithAck !== 'function') return { status: 'unavailable' };
-        const raw = await emitSocketWithAck({
+        const raw = await timeWebLatencyPhase('session.transcript.socket_ack', () => emitSocketWithAck({
             socket,
             event: SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
             timeoutMs: null,
@@ -64,7 +65,7 @@ async function trySocketTranscriptMutation(params: Readonly<{
                     ? { surfaceItemReference: params.mutation.surfaceItemReference } : {}),
                 ...(params.mutation.sessionEventType ? { sessionEventType: params.mutation.sessionEventType } : {}),
             },
-        });
+        }));
         const parsed = SessionTranscriptObservationAckV1Schema.safeParse(raw);
         if (!parsed.success) return { status: 'failed' };
         if (parsed.data.ok !== true) {
@@ -104,7 +105,7 @@ async function tryReleasedServerV021TranscriptMutation(params: Readonly<{
     try {
         const socket = params.socket;
         if (typeof socket.emitWithAck !== 'function') return { status: 'unavailable' };
-        const raw = await emitSocketWithAck({
+        const raw = await timeWebLatencyPhase('session.transcript.socket_ack', () => emitSocketWithAck({
             socket,
             event: 'message',
             timeoutMs: null,
@@ -117,7 +118,7 @@ async function tryReleasedServerV021TranscriptMutation(params: Readonly<{
                 sidechainId: params.mutation.sidechainId ?? null,
                 ...(params.mutation.messageRole ? { messageRole: params.mutation.messageRole } : {}),
             },
-        });
+        }));
         const parsed = MessageAckResponseSchema.safeParse(raw);
         if (!parsed.success || parsed.data.ok !== true) return { status: 'failed' };
         if (parsed.data.localId !== params.mutation.localId) return { status: 'failed' };

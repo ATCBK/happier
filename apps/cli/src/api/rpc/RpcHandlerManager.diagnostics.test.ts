@@ -15,8 +15,25 @@ import tweetnacl from 'tweetnacl';
 import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import type { Socket } from 'socket.io-client';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 describe('RPC completion diagnostics', () => {
+    it('retains the admitted transport request root through asynchronous handler phases', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(fileLogger, 'warnLocalFile').mockImplementation(() => undefined);
+        const requestId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+        const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger() {} });
+        rpc.registerHandler('demo', async () => {
+            await Promise.resolve();
+            return await timeWebLatencyPhase('session.outbox.deliver', async () => 42);
+        });
+        try {
+            expect(await rpc.handleRequest({ method: 'session:demo', requestId: `rpc_${requestId}`, params: {} })).toEqual(42);
+            expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+                phase: 'session.outbox.deliver', status: 'completed', requestId,
+            }));
+        } finally { sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
     it.each([
         { phase: 'host_publication_rejected' },
         { phase: 'never-log-native-detail' },

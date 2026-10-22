@@ -8,6 +8,8 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { prepareSessionEventMessageViaPort } from '../../transcript/sendMessages';
 import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { logger } from '@/ui/logger';
+import { withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
@@ -56,6 +58,39 @@ function createDeferred<T = void>() {
 }
 
 describe('runtime session client durable mutation outbox', () => {
+    it('separates durable admission and socket ACK phases without releasing the exact receipt early', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        const started = createDeferred();
+        const ack = createDeferred<unknown>();
+        const sessionId = 'traced-transcript';
+        const requestId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+            getSocket: () => ({ connected: true, emit() {}, emitWithAck: async () => {
+                started.resolve(); return await ack.promise;
+            } }), requestReconnect() {} });
+        await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        let settled = false;
+        const pending = withWebLatencyTrace(requestId, () => outbox.enqueueTranscriptMessage(
+            createTranscriptMessageAppendMutation({ sessionId, localId: 'original', content: 'private-sealed-content', createdAt: 100,
+                provenance: { kind: 'non_dependent', source: 'background' } }))).then(result => { settled = true; return result; });
+        try {
+            await started.promise;
+            expect(settled).toBe(false);
+            for (const [phase, status] of [['session.outbox.persist', 'completed'], ['session.transcript.socket_ack', 'started']]) {
+                expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({ phase, status, requestId }));
+            }
+            expect(sink.mock.calls.some(([, value]) => typeof value === 'object' && value !== null
+                && 'phase' in value && value.phase === 'session.transcript.socket_ack'
+                && 'status' in value && value.status === 'completed')).toBe(false);
+            ack.resolve({ ok: true, status: 'observed', id: 'row', seq: 7, localId: 'original', didWrite: true, ingestedAt: 200 });
+            expect(await pending).toMatchObject({ persisted: true, delivered: true, committedSequence: 7 });
+            expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+                phase: 'session.transcript.socket_ack', status: 'completed', requestId,
+            }));
+            expect(JSON.stringify(sink.mock.calls)).not.toContain('private-sealed-content');
+        } finally { ack.resolve(null); await pending; await outbox.close(); sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
     it('releases optional diagnostics after durable admission while retaining their exact delivery', async () => {
         const started = createDeferred();
         const ack = createDeferred<unknown>();

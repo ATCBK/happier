@@ -17,6 +17,7 @@ import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protoc
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import * as persistence from '@/persistence';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { logger as fileLogger } from '@/ui/logger';
 
 let nextRpcAck: any = null;
 let nextSocket: FakeSocket | null = null;
@@ -146,6 +147,40 @@ import { callSessionRpc, readSessionRpcRequestDisposition } from './sessionRpc';
 import { startExecutionRunStream, waitForExecutionRun, watchExecutionRun } from '@/session/services/executionRuns';
 
 describe('execution-run caller authority at the Socket.IO boundary', () => {
+  it('separates connection from a pending RPC acknowledgement in opt-in phase observations', async () => {
+    vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+    const sink = vi.spyOn(fileLogger, 'warnLocalFile').mockImplementation(() => undefined);
+    configureNextSocket = socket => { socket.ackMode = 'never'; };
+    const pending = callSessionRpc({ token: 'token', sessionId: 'session', mode: 'plain',
+      method: 'session.update.post', request: { summary: 'private payload' } });
+    try {
+      await vi.waitFor(() => expect(nextSocket?.delayedAck).toBeTypeOf('function'));
+      expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+        phase: 'session.rpc.connect', status: 'completed',
+      }));
+      expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+        phase: 'session.rpc.ack', status: 'started', sessionId: 'session',
+        requestId: nextSocket?.emitted.find(entry => entry.event === 'rpc-call')?.data.requestId,
+      }));
+      expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+        phase: 'session.rpc.issued', status: 'started', sessionId: 'session',
+      }));
+      expect(sink.mock.calls.some(([, value]) => typeof value === 'object' && value !== null
+        && 'phase' in value && value.phase === 'session.rpc.ack' && 'status' in value && value.status === 'completed')).toBe(false);
+      nextSocket?.delayedAck?.({ ok: true, result: { persisted: true } });
+      expect(await pending).toEqual({ persisted: true });
+      expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+        phase: 'session.rpc.ack', status: 'completed',
+      }));
+      expect(JSON.stringify(sink.mock.calls)).not.toContain('private payload');
+    } finally {
+      nextSocket?.delayedAck?.({ ok: true, result: null });
+      await pending;
+      configureNextSocket = null;
+      sink.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();

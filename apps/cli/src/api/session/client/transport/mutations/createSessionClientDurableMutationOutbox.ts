@@ -1,5 +1,6 @@
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/ui/logger';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import {
     assertCommittedTranscriptAdmission,
     CommittedTranscriptAdmissionExpiredError,
@@ -2292,10 +2293,11 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 let attemptFailureReason: SessionClientDurableMutationAttemptReason = 'delivery_not_confirmed';
                 let attemptedAt = 0;
                 try {
-                    outcome = await withSessionClientDurableMutationDeliverySlot(() => {
-                        attemptedAt = Date.now();
-                        return deliver(mutation);
-                    });
+                    outcome = await timeWebLatencyPhase('session.outbox.delivery', () =>
+                        withSessionClientDurableMutationDeliverySlot(() => {
+                            attemptedAt = Date.now();
+                            return timeWebLatencyPhase('session.outbox.deliver', () => deliver(mutation));
+                        }));
                     if (outcome.delivered) {
                         if (awaitedDeliveryMutationCounts.has(mutation.mutationId)) {
                             acknowledgedAwaitedDeliveryMutations.set(mutation.mutationId, outcome.committedSequence);
@@ -2659,7 +2661,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             }));
         persistInFlight = nextPersist;
         try {
-            await nextPersist;
+            await timeWebLatencyPhase('session.outbox.persist', () => nextPersist);
         } catch (error) {
             if (error instanceof CommittedTranscriptAdmissionExpiredError) {
                 throw error;
