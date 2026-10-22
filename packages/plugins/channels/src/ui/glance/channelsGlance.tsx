@@ -13,6 +13,7 @@ import {
   usePluginBrandDisplayNameResolver,
   usePluginHostApi,
   usePluginTranslation,
+  useSurfaceContext,
 } from '@happier-dev/plugin-ui';
 
 import {
@@ -21,7 +22,9 @@ import {
 } from '../../sessionSurfaceIds.js';
 import {
   buildChannelsConversationIndex,
+  channelsConversationActivity,
   connectionLabel,
+  formatConversationTime,
   connectionStatus,
   readChannelsPageLocation,
   useAccountConversationSnapshot,
@@ -97,13 +100,16 @@ function ChannelsColumn(props: Readonly<{
   const providerName = useProviderName(t);
   const navigation = useOpenChannels();
   const [query, setQuery] = React.useState('');
-  const { bindings, connections } = props.snapshot;
+  const { bindings, connections, sessionStates } = props.snapshot;
+  const { locale } = useSurfaceContext();
   const groups = React.useMemo(
-    () => buildChannelsConversationIndex({ bindings, connections, providerName, t }),
-    [bindings, connections, providerName, t],
+    () => buildChannelsConversationIndex({ bindings, connections, providerName, t, ...(sessionStates === undefined ? {} : { sessionStates }) }),
+    [bindings, connections, providerName, sessionStates, t],
   );
   const selectedBindingId = readChannelsPageLocation(props.subPath).bindingId;
-  const searchable = bindings.length > CHANNELS_COLUMN_SEARCH_THRESHOLD;
+  // A router's threads are listed on its own page, so only the rows the column shows count.
+  const rowCount = groups.reduce((count, group) => count + group.rows.length, 0);
+  const searchable = rowCount > CHANNELS_COLUMN_SEARCH_THRESHOLD;
   const needle = searchable ? query.trim().toLocaleLowerCase() : '';
   const visibleGroups = React.useMemo(() => (needle === ''
     ? groups
@@ -175,13 +181,21 @@ function ChannelsColumn(props: Readonly<{
           })}
         >
           {group.rows.map((row) => {
-            const statusLabel = rowStatusLabel(row, t);
+            const activity = channelsConversationActivity(row.session);
+            // Work that needs the reader is the row's state; otherwise its end says when the Session last replied.
+            const workNeedsYou = activity?.work !== undefined && activity.work.tone !== 'neutral' ? activity.work : undefined;
+            const statusLabel = rowStatusLabel(row, t) ?? workNeedsYou?.word;
+            const time = activity?.preview?.kind === 'ready' ? formatConversationTime(activity.preview.createdAt, locale) : undefined;
             return (
               <NavigationList.Row
                 key={row.binding.bindingId}
                 testID={`channels-column-row-${row.binding.bindingId}`}
                 title={row.title}
                 selected={row.binding.bindingId === selectedBindingId}
+                {...(time === undefined || statusLabel !== undefined ? {} : { detail: time })}
+                {...(activity?.unread === true ? {
+                  accessibilityLabel: `${row.title}, ${t('plugins.channels.page.activityUnread', 'Unread')}`,
+                } : {})}
                 {...(statusLabel === undefined ? {} : {
                   status: { kind: row.status?.kind === 'paused' ? 'paused' as const : 'attention' as const, label: statusLabel },
                 })}
@@ -200,6 +214,8 @@ type WidgetRow = Readonly<{
   bindingId: string;
   title: string;
   subtitle: string;
+  /** The latest reply's own time, when there is one. */
+  detail?: string;
   attention: boolean;
 }>;
 
@@ -212,6 +228,7 @@ function buildWidgetRows(
   groups: readonly ChannelsConversationIndexGroup[],
   providerName: (id: string) => string,
   t: Translate,
+  locale: string,
 ): readonly WidgetRow[] {
   const causes: WidgetRow[] = [];
   const paused: WidgetRow[] = [];
@@ -241,11 +258,14 @@ function buildWidgetRows(
           attention: false,
         });
       } else if (row.status === undefined) {
+        // The latest shareable reply says more than the provider name once the host has read one.
+        const preview = channelsConversationActivity(row.session)?.preview;
         rest.push({
           key: row.binding.bindingId,
           bindingId: row.binding.bindingId,
           title: row.title,
-          subtitle: provider,
+          subtitle: preview?.kind === 'ready' ? preview.text : provider,
+          ...(preview?.kind === 'ready' ? { detail: formatConversationTime(preview.createdAt, locale) } : {}),
           attention: false,
         });
       }
@@ -258,10 +278,16 @@ function ChannelsHomeWidget(props: Readonly<{ snapshot: ChannelsConversationSnap
   const t = usePluginTranslation();
   const providerName = useProviderName(t);
   const navigation = useOpenChannels();
-  const { bindings, connections } = props.snapshot;
+  const { bindings, connections, sessionStates } = props.snapshot;
+  const { locale } = useSurfaceContext();
   const rows = React.useMemo(
-    () => buildWidgetRows(buildChannelsConversationIndex({ bindings, connections, providerName, t }), providerName, t),
-    [bindings, connections, providerName, t],
+    () => buildWidgetRows(
+      buildChannelsConversationIndex({ bindings, connections, providerName, t, ...(sessionStates === undefined ? {} : { sessionStates }) }),
+      providerName,
+      t,
+      locale,
+    ),
+    [bindings, connections, locale, providerName, sessionStates, t],
   );
 
   if (props.snapshot.state === 'loading' && bindings.length === 0) {
@@ -297,6 +323,7 @@ function ChannelsHomeWidget(props: Readonly<{ snapshot: ChannelsConversationSnap
           titleNumberOfLines={1}
           subtitle={row.subtitle}
           subtitleNumberOfLines={1}
+          {...(row.detail === undefined ? {} : { detail: row.detail })}
           {...(row.attention ? { icon: <Icon name="warning" size="small" tone="attention" />, tone: 'attention' as const } : {})}
           density="compact"
           onPress={() => navigation.openConversation(row.bindingId)}

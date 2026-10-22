@@ -199,8 +199,12 @@ import {
   useAccountLocalConnectionRows,
   useReplacedAccountCollectionScope,
   buildChannelsConversationIndex,
+  channelsConversationActivity,
+  formatConversationTime,
+  useConversationSessionStates,
   readChannelsPageLocation,
   resolveChannelsConversationReadState,
+  type ChannelsConversationIndexRow,
 } from './conversationRows.js';
 import {
   bindingPermissionIntentLabel,
@@ -2083,7 +2087,10 @@ function ConversationTargetSection(props: Readonly<{
 
 type BindingDetailState =
   | Readonly<{ kind: 'loading' }>
+  /** This host cannot run the read at all, so only a reachable machine can answer it. */
   | Readonly<{ kind: 'unavailable' }>
+  /** The read ran and failed (or found nothing); `message` is the host's sentence when it wrote one. */
+  | Readonly<{ kind: 'error'; message?: string; retry: () => void }>
   | Readonly<{ kind: 'ready'; binding: ConversationBindingReadReady['binding'] }>;
 
 type ConversationBindingReadReady = Extract<ConversationBindingReadResultV1, { kind: 'ready' }>;
@@ -2091,36 +2098,47 @@ type ConversationBindingReadReady = Extract<ConversationBindingReadResultV1, { k
 /**
  * A binding's exact private detail (routes, allowed senders), read once per
  * revision through the incumbent read Action. `bindingId: null` reads nothing.
+ * Each settlement keeps its own meaning: in flight is loading, a refusal or a
+ * missing binding is an error the reader can retry, and only a host that cannot
+ * run the read is unavailable.
  */
 function useBindingDetail(bindingId: string | null, revision: number): BindingDetailState {
   const hostApi = usePluginHostApi();
   const readAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead);
   const canRead = hostApi.version().methods.includes('executeAction');
+  const [attempt, setAttempt] = React.useState(0);
+  const retry = React.useCallback(() => setAttempt((current) => current + 1), []);
   const [state, setState] = React.useState<BindingDetailState>(canRead ? { kind: 'loading' } : { kind: 'unavailable' });
   const execute = readAction.execute;
   React.useEffect(() => {
     if (!canRead || bindingId === null) return;
     let cancelled = false;
+    setState((current) => current.kind === 'error' ? { kind: 'loading' } : current);
     void execute({ bindingId }).then((settled) => {
       if (cancelled) return;
-      const detail = settled.status === 'success'
-        ? ConversationBindingReadResultV1Schema.safeParse(settled.result)
-        : undefined;
-      setState(detail?.success && detail.data.kind === 'ready'
+      // A withdrawn mount or an overlapping read is still in flight.
+      if (settled.status === 'pending' || settled.status === 'idle') return;
+      if (settled.status !== 'success') {
+        setState({ kind: 'error', message: settled.message, retry });
+        return;
+      }
+      const detail = ConversationBindingReadResultV1Schema.safeParse(settled.result);
+      setState(detail.success && detail.data.kind === 'ready'
         ? { kind: 'ready', binding: detail.data.binding }
-        : { kind: 'unavailable' });
+        : { kind: 'error', retry });
     }).catch(() => {
-      if (!cancelled) setState({ kind: 'unavailable' });
+      if (!cancelled) setState({ kind: 'error', retry });
     });
     return () => { cancelled = true; };
     // The summary revision is the reread trigger after an edit elsewhere.
-  }, [bindingId, canRead, execute, revision]);
+  }, [attempt, bindingId, canRead, execute, retry, revision]);
   return state;
 }
 
 type RouterDetailState =
   | Readonly<{ kind: 'loading' }>
   | Readonly<{ kind: 'unavailable' }>
+  | Extract<BindingDetailState, { kind: 'error' }>
   | Readonly<{ kind: 'ready'; target: ConversationThreadRouterBindingTargetV1 }>;
 
 /** The router's exact private detail, projected from the page's one binding read. */
@@ -2182,6 +2200,20 @@ function RouterThreadsSection(props: Readonly<{
               subtitle={summarizeRecipe(route.recipe)}
             />
           ))
+        ) : detail.kind === 'error' ? (
+          <Item
+            testID="channels-page-router-routes-error"
+            title={t('plugins.channels.page.routerRoutesFailed', 'Couldn\u2019t read the routes')}
+            subtitle={detail.message ?? t('plugins.channels.page.routerRoutesFailedDescription', 'Your threads below are unaffected. Try again in a moment.')}
+            accessoryOutsidePressable
+            accessory={(
+              <Action.Refresh
+                testID="channels-page-router-routes-retry"
+                title={t('plugins.channels.surface.retry', 'Retry')}
+                onRefresh={detail.retry}
+              />
+            )}
+          />
         ) : (
           <Item
             title={detail.kind === 'loading'
@@ -3271,12 +3303,19 @@ function ConversationsIndexPage(props: Readonly<{
       ?? t('plugins.channels.surface.providerFallback', 'Integration provider'),
     [resolveProviderName, t],
   );
+  const bindings = React.useMemo(
+    () => props.presentations.map((presentation) => presentation.binding),
+    [props.presentations],
+  );
+  const sessionStates = useConversationSessionStates(bindings);
+  const { locale } = useSurfaceContext();
   const groups = React.useMemo(() => buildChannelsConversationIndex({
-    bindings: props.presentations.map((presentation) => presentation.binding),
+    bindings,
     connections: props.connections,
     providerName,
     t,
-  }), [props.connections, props.presentations, providerName, t]);
+    sessionStates,
+  }), [bindings, props.connections, providerName, sessionStates, t]);
   return (
     <Stack gap="large" testID="channels-page-index">
       <PageHeader
@@ -3303,27 +3342,74 @@ function ConversationsIndexPage(props: Readonly<{
               : t('plugins.channels.column.otherGroup', 'Other conversations')}
           {...(group.botAttention === undefined ? {} : { description: group.botAttention.label })}
         >
-          {group.rows.map((row) => (
-            <Item
-              key={row.binding.bindingId}
-              testID={`channels-page-row-${row.binding.bindingId}`}
-              title={row.title}
-              titleNumberOfLines={1}
-              subtitle={bindingTargetKindLabel(row.binding.target.kind, t)}
-              {...(row.status?.kind === 'paused' ? { detail: t('plugins.channels.column.paused', 'Paused') } : {})}
-              {...(row.status?.kind === 'deleting' ? {
-                detail: t('plugins.channels.surface.deleteFinalizing', 'Deletion cleanup in progress'),
-              } : {})}
-              {...(row.connection === undefined ? {} : {
-                icon: <BrandMark pluginId={row.connection.providerPluginId} size="small" externallyLabelled />,
-              })}
-              onPress={() => props.onOpen(row.binding.bindingId)}
-            />
-          ))}
+          {group.rows.map((row) => {
+            const line = conversationIndexRowLine(row, locale, t);
+            return (
+              <Item
+                key={row.binding.bindingId}
+                testID={`channels-page-row-${row.binding.bindingId}`}
+                title={row.title}
+                titleNumberOfLines={1}
+                subtitle={line.subtitle}
+                subtitleNumberOfLines={1}
+                {...(line.detail === undefined ? {} : { detail: line.detail })}
+                {...(line.detailTone === undefined ? {} : { detailTone: line.detailTone })}
+                accessibilityLabel={line.accessibilityLabel}
+                {...(row.connection === undefined ? {} : {
+                  icon: <BrandMark pluginId={row.connection.providerPluginId} size="small" externallyLabelled />,
+                })}
+                onPress={() => props.onOpen(row.binding.bindingId)}
+              />
+            );
+          })}
         </ItemGroup>
       ))}
     </Stack>
   );
+}
+
+/**
+ * A conversation row's second line and trailing column. The second line is the
+ * Session's latest shareable reply when the host read one (or its explicit empty
+ * and hidden answers), otherwise what the conversation talks to. The trailing
+ * column speaks one fact: a paused or deleting binding, else Work that needs the
+ * reader, else the reply's own time, in the accent tone while it is unread.
+ * Opening the page never marks anything read.
+ */
+function conversationIndexRowLine(
+  row: ChannelsConversationIndexRow,
+  locale: string,
+  t: Translate,
+): Readonly<{ subtitle: string; detail?: string; detailTone?: 'attention' | 'danger' | 'accent'; accessibilityLabel: string }> {
+  const activity = channelsConversationActivity(row.session);
+  const preview = activity?.preview;
+  const subtitle = preview?.kind === 'ready'
+    ? preview.text
+    : preview?.kind === 'empty'
+      ? t('plugins.channels.page.activityEmpty', 'No replies yet')
+      : preview?.kind === 'hidden'
+        ? t('plugins.channels.page.activityHidden', 'Preview hidden')
+        : bindingTargetKindLabel(row.binding.target.kind, t);
+  const time = preview?.kind === 'ready' ? formatConversationTime(preview.createdAt, locale) : undefined;
+  const status: Readonly<{ detail?: string; detailTone?: 'attention' | 'danger' | 'accent' }> = row.status?.kind === 'paused'
+    ? { detail: t('plugins.channels.column.paused', 'Paused') }
+    : row.status?.kind === 'deleting'
+      ? { detail: t('plugins.channels.surface.deleteFinalizing', 'Deletion cleanup in progress') }
+      : activity?.work !== undefined
+        ? {
+          detail: activity.work.word,
+          ...(activity.work.tone === 'neutral' ? {} : { detailTone: activity.work.tone }),
+        }
+        : time !== undefined
+          ? { detail: time, ...(activity?.unread === true ? { detailTone: 'accent' as const } : {}) }
+          : {};
+  const accessibilityLabel = [
+    row.title,
+    subtitle,
+    ...(activity?.unread === true ? [t('plugins.channels.page.activityUnread', 'Unread')] : []),
+    ...(status.detail === undefined ? [] : [status.detail]),
+  ].join(', ');
+  return { subtitle, ...status, accessibilityLabel };
 }
 
 function bindingPresentationKey(presentation: BindingPresentation): string {
@@ -9789,6 +9875,82 @@ function ConnectionRow(props: Readonly<{
     updateUnavailable,
   ]);
 
+  const recommendedControl = connectionRecoveryControlOf(props.connection.recommendedRecovery);
+  const controlElements: ReadonlyArray<readonly [ConnectionRecoveryControl, React.ReactNode]> = [
+    ['reconnect', recommendedControl === 'reconnect' && props.connection.recommendedRecovery ? (
+      <ConnectionReconnectControl
+        key="reconnect"
+        recommendation={props.connection.recommendedRecovery}
+        onRefresh={requestRefresh}
+        t={props.t}
+      />
+    ) : null],
+    ['transfer', providerDependentOperationsAvailable
+      && props.targetPluginId !== undefined
+      && isConversationConnectionSelectableTransportV1(props.connection.selectedTransport) ? (
+        <ConnectionTransferControls
+          key="transfer"
+          connection={props.connection}
+          signal={props.signal}
+          targetPluginId={props.targetPluginId}
+          resource={props.resource}
+          onRefresh={requestRefresh}
+          t={props.t}
+        />
+      ) : null],
+    ['lifecycle', providerDependentOperationsAvailable ? (
+      <ConnectionLifecycleControls
+        key="lifecycle"
+        connection={props.connection}
+        resource={props.resource}
+        onSettled={props.onLifecycleSettled}
+        onRefresh={requestRefresh}
+        t={props.t}
+      />
+    ) : null],
+    ['pollRetry', providerDependentOperationsAvailable ? (
+      <ConnectionPollRetryControls
+        key="pollRetry"
+        connection={props.connection}
+        resource={props.resource}
+        onRefresh={requestRefresh}
+        primary={recommendedControl === 'pollRetry'}
+        t={props.t}
+      />
+    ) : null],
+    // Re-probing needs the selected machine's provider, so it lives inside the
+    // same provider-dependent gate every other provider effect uses.
+    ['retest', providerDependentOperationsAvailable ? (
+      <ConnectionRetestControls
+        key="retest"
+        connection={props.connection}
+        resource={props.resource}
+        onRefresh={requestRefresh}
+        primary={recommendedControl === 'retest'}
+        t={props.t}
+      />
+    ) : null],
+    // Delivery resolution is deliberately outside the provider-dependent gate:
+    // the resolution owner performs no provider call, so a cold offline Account
+    // must still be able to clear ambiguity that would otherwise never expire.
+    ['delivery', props.connection.attention.outwardDelivery.partial
+      || props.connection.attention.outwardDelivery.outcomeUnknown
+      || props.connection.attention.outwardDelivery.archiveRecovery ? (
+        <ConnectionDeliveryResolutionControls
+          key="delivery"
+          connection={props.connection}
+          signal={props.signal}
+          resolveOperation={props.resolveOperation}
+          onRefresh={requestRefresh}
+          t={props.t}
+        />
+      ) : null],
+  ];
+  const recoveryControls = {
+    recommended: controlElements.find(([control]) => control === recommendedControl)?.[1] ?? null,
+    others: controlElements.filter(([control]) => control !== recommendedControl).map(([, element]) => element),
+  };
+
   return (
     <>
       <List.Item
@@ -9832,6 +9994,11 @@ function ConnectionRow(props: Readonly<{
       />
       {props.expanded ? (
         <List.Item>
+          {/*
+            The connection's one recommended recovery leads its detail, drawn by the
+            existing control that owns that Action; the other repairs stay quiet below.
+          */}
+          {recoveryControls.recommended}
           <ConnectionPolicyEditor
             connection={props.connection}
             provider={provider}
@@ -9847,68 +10014,67 @@ function ConnectionRow(props: Readonly<{
             onSave={save}
             t={props.t}
           />
-          {providerDependentOperationsAvailable
-            && props.targetPluginId !== undefined
-            && isConversationConnectionSelectableTransportV1(props.connection.selectedTransport) ? (
-            <ConnectionTransferControls
-              connection={props.connection}
-              signal={props.signal}
-              targetPluginId={props.targetPluginId}
-              resource={props.resource}
-              onRefresh={requestRefresh}
-              t={props.t}
-            />
-          ) : null}
-          {providerDependentOperationsAvailable ? (
-            <ConnectionLifecycleControls
-              connection={props.connection}
-              resource={props.resource}
-              onSettled={props.onLifecycleSettled}
-              onRefresh={requestRefresh}
-              t={props.t}
-            />
-          ) : null}
-          {providerDependentOperationsAvailable ? (
-            <ConnectionPollRetryControls
-              connection={props.connection}
-              resource={props.resource}
-              onRefresh={requestRefresh}
-              t={props.t}
-            />
-          ) : null}
-          {/*
-            Re-probing needs the selected machine's provider, so it lives
-            inside the same provider-dependent gate every other provider
-            effect uses rather than inventing its own availability rule.
-          */}
-          {providerDependentOperationsAvailable ? (
-            <ConnectionRetestControls
-              connection={props.connection}
-              resource={props.resource}
-              onRefresh={requestRefresh}
-              t={props.t}
-            />
-          ) : null}
-          {/*
-            Delivery resolution is deliberately outside the provider-dependent
-            gate: the resolution owner performs no provider call, so a cold
-            offline Account must still be able to clear ambiguity that would
-            otherwise never expire.
-          */}
-          {props.connection.attention.outwardDelivery.partial
-            || props.connection.attention.outwardDelivery.outcomeUnknown
-            || props.connection.attention.outwardDelivery.archiveRecovery ? (
-              <ConnectionDeliveryResolutionControls
-                connection={props.connection}
-                signal={props.signal}
-                resolveOperation={props.resolveOperation}
-                onRefresh={requestRefresh}
-                t={props.t}
-              />
-            ) : null}
+          {recoveryControls.others}
         </List.Item>
       ) : null}
     </>
+  );
+}
+
+type ConnectionRecoveryControl = 'reconnect' | 'transfer' | 'lifecycle' | 'pollRetry' | 'retest' | 'delivery';
+
+/**
+ * Which existing control carries a recommended recovery. The recommendation only
+ * names an Action; the control that already owns that Action runs it, with its
+ * own confirmation, outcome and reread. A recommendation without a control here
+ * (resume, baseline, scheduled retry) is carried by the policy editor's own rows.
+ */
+function connectionRecoveryControlOf(
+  recommendation: ChannelsConnection['recommendedRecovery'],
+): ConnectionRecoveryControl | undefined {
+  if (recommendation === undefined || recommendation === null) return undefined;
+  if (typeof recommendation.action === 'string') {
+    return recommendation.action === 'connectedServices.authentication.beginReconnect' ? 'reconnect' : undefined;
+  }
+  switch (recommendation.action.localId) {
+    case CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionTransfer: return 'transfer';
+    case CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionDelete: return 'lifecycle';
+    case CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPollRetry: return 'pollRetry';
+    case CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionRetest: return 'retest';
+    case CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryAttention: return 'delivery';
+    default: return undefined;
+  }
+}
+
+/**
+ * Reconnecting an expired account is the host's own Connected Accounts flow; the
+ * recommendation carries its exact account reference and machine, never a secret.
+ */
+function ConnectionReconnectControl(props: Readonly<{
+  recommendation: NonNullable<ChannelsConnection['recommendedRecovery']>;
+  onRefresh: () => void;
+  t: Translate;
+}>): React.ReactElement {
+  const reconnect = useExecutePluginAction('connectedServices.authentication.beginReconnect');
+  const busy = reconnect.execution.status === 'pending';
+  // The host Action admits this input against its own schema before anything runs.
+  const input = props.recommendation.input as PluginActionInputById['connectedServices.authentication.beginReconnect'];
+  return (
+    <Stack testID="channels-connection-reconnect-controls" gap="small">
+      <Button
+        testID="channels-connection-reconnect"
+        title={props.t('plugins.channels.surface.reconnectAccount', 'Reconnect account')}
+        busy={busy}
+        disabled={busy}
+        onPress={async () => {
+          const settled = await reconnect.execute(input);
+          if (settled.status === 'success') props.onRefresh();
+        }}
+      />
+      {reconnect.execution.status === 'error' ? (
+        <Status tone="danger" label={reconnect.execution.message} />
+      ) : null}
+    </Stack>
   );
 }
 
@@ -11223,6 +11389,8 @@ function ConnectionPollRetryControls(props: Readonly<{
   connection: ChannelsConnection;
   resource: ResourcePresentation;
   onRefresh: () => void;
+  /** The connection's one recommended recovery: drawn as the row's primary action. */
+  primary?: boolean;
   t: Translate;
 }>): React.ReactElement | null {
   const retryAction = useExecutePluginAction(
@@ -11262,6 +11430,7 @@ function ConnectionPollRetryControls(props: Readonly<{
     <Stack testID="channels-poll-retry-controls" gap="small">
       <Button
         testID="channels-connection-poll-retry"
+        variant={props.primary === true ? 'primary' : 'secondary'}
         title={busy
           ? props.t('plugins.channels.surface.pollRetrying', 'Retrying polling…')
           : props.t('plugins.channels.surface.pollRetry', 'Retry polling')}
@@ -11318,6 +11487,8 @@ type ConnectionRetestProps = Readonly<{
   connection: ChannelsConnection;
   resource: ResourcePresentation;
   onRefresh: () => void;
+  /** The connection's one recommended recovery: drawn as the row's primary action. */
+  primary?: boolean;
   t: Translate;
 }>;
 
@@ -11458,6 +11629,7 @@ function ConnectionRetestControls(props: ConnectionRetestProps): React.ReactElem
     <Stack testID="channels-connection-retest-controls" gap="small">
       <Button
         testID="channels-connection-retest"
+        variant={props.primary === true ? 'primary' : 'secondary'}
         title={busy
           ? props.t('plugins.channels.surface.connectionRetesting', 'Testing connection…')
           : props.t('plugins.channels.surface.connectionRetest', 'Test connection')}
@@ -11925,6 +12097,44 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
             gap="small"
           >
             <Status tone="danger" label={label} />
+            {/* The owner decides from the custody it read just now: what already arrived, what failed, and which revision the decision applies to. */}
+            <Text
+              tone="secondary"
+              value={row.state === 'partial'
+                ? props.t(
+                  'plugins.channels.surface.deliveryResolutionPartialExplanation',
+                  'Some parts reached the conversation before one failed. Accept keeps what arrived; discard records that the rest won’t be sent. Nothing is sent again either way.',
+                )
+                : props.t(
+                  'plugins.channels.surface.deliveryResolutionUnknownExplanation',
+                  'Happier lost the answer while sending, so this may have arrived. Accept it if it did, discard it if it didn’t. Nothing is sent again either way.',
+                )}
+            />
+            <Metadata
+              testID={`channels-delivery-resolution-facts-${row.custodyId}`}
+              entries={[
+                {
+                  label: props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted'),
+                  value: row.acceptedPartCount === 0
+                    ? props.t('plugins.channels.surface.deliveryResolutionAcceptedNone', 'None confirmed')
+                    : row.acceptedPartCount === 1
+                      ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
+                      : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount }),
+                },
+                ...(row.failedChunk === undefined ? [] : [{
+                  label: props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part'),
+                  value: props.t('plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 }),
+                  tone: 'danger' as const,
+                }]),
+                {
+                  label: props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery'),
+                  value: props.t('plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
+                    id: shortRowIdentity(row.custodyId),
+                    revision: row.revision,
+                  }),
+                },
+              ]}
+            />
             {row.createdThreadEndpointRequired === undefined ? null : (
               <Form.TextField
                 testID={`channels-delivery-resolution-thread-${row.custodyId}`}
@@ -13857,19 +14067,6 @@ type SessionConversationRowModel = Readonly<{
   group: SessionConversationGroup;
 }>;
 
-/** A reply time as the pane says it: the time today, the weekday this week, else the date. */
-function formatSessionReplyTime(atMs: number, locale: string, nowMs = Date.now()): string {
-  const at = new Date(atMs);
-  const now = new Date(nowMs);
-  if (at.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(at);
-  }
-  if (nowMs - atMs < 6 * 86_400_000 && nowMs >= atMs) {
-    return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(at);
-  }
-  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(at);
-}
-
 /** A deliberately paused binding is Paused, never Needs you; every other attention reason needs the person. */
 function sessionConversationGroup(
   binding: ChannelsBinding,
@@ -14003,10 +14200,10 @@ function SessionConversationPeek(props: Readonly<{
     ...(lastDelivery === undefined ? [] : [{
       label: t('plugins.channels.session.lastReply', 'Last reply'),
       value: lastDelivery.outcome === 'notDelivered'
-        ? t('plugins.channels.session.lastReplyNotDelivered', 'Not delivered · {time}', { time: formatSessionReplyTime(lastDelivery.atMs, locale) })
+        ? t('plugins.channels.session.lastReplyNotDelivered', 'Not delivered · {time}', { time: formatConversationTime(lastDelivery.atMs, locale) })
         : lastDelivery.outcome === 'pending'
-          ? t('plugins.channels.session.lastReplySending', 'Sending · {time}', { time: formatSessionReplyTime(lastDelivery.atMs, locale) })
-          : formatSessionReplyTime(lastDelivery.atMs, locale),
+          ? t('plugins.channels.session.lastReplySending', 'Sending · {time}', { time: formatConversationTime(lastDelivery.atMs, locale) })
+          : formatConversationTime(lastDelivery.atMs, locale),
       ...(lastDelivery.outcome === 'notDelivered' ? { tone: 'warning' as const } : {}),
     }]),
   ];
@@ -14042,7 +14239,7 @@ function SessionConversationRow(props: Readonly<{
   // The trailing time is the latest reply sent (lab XA); a paused conversation shows none.
   const lastReply = row.group === 'paused' || row.lastDelivery === undefined
     ? undefined
-    : formatSessionReplyTime(row.lastDelivery.atMs, locale);
+    : formatConversationTime(row.lastDelivery.atMs, locale);
   return (
     <List.Item
       testID={`channels-session-conversation:${binding.bindingId}`}

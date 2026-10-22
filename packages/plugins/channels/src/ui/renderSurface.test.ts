@@ -45,6 +45,7 @@ import {
   type ConversationConnectionFixtureAuthority,
 } from '../testkit/currentConnectionFixture.js';
 import { renderSurface } from './renderSurface.js';
+import { formatConversationTime } from './conversationRows.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
 import { createSessionCandidatePageFixture } from '../testkit/sessionCandidatePageFixture.js';
 
@@ -6230,6 +6231,55 @@ describe('Channels thread router conversation', () => {
     }
   });
 
+  it('tells a failed private routes read apart from loading and an unreachable machine, and retries it (FIX-LIVE58)', async () => {
+    const readReply = ConversationBindingReadResultV1Schema.parse({
+      kind: 'ready', revision: 1, binding: routerBinding,
+    });
+    let routerReads = 0;
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) {
+        if ((input as Readonly<{ bindingId: string }>).bindingId !== 'router-1') return { kind: 'notFound' };
+        routerReads += 1;
+        if (routerReads === 1) throw new PluginError({ code: 'unavailable', message: 'The machine did not answer the read.' });
+        return readReply;
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-read-error', mountNonce: 'fixture-router-read-error' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: 'router-1',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(() => routerBindingsResource),
+        readSession: ({ sessionId }) => routerThreadSessions[sessionId] ?? null,
+      },
+    });
+
+    try {
+      // A refused read is an error the reader can retry, not a machine that is away.
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Couldn\u2019t read the routes')).resolves.toBeDefined();
+      });
+      expect(document.body.textContent).toContain('The machine did not answer the read.');
+      expect(document.body.textContent).not.toContain('Routes are shown when your selected machine is reachable');
+      expect(document.body.textContent).not.toContain('Reading routes');
+
+      await fixture.press(await fixture.getByRole('button', { name: 'Retry' }));
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
+      });
+      expect(routerReads).toBe(2);
+      expect(document.body.textContent).not.toContain('Couldn\u2019t read the routes');
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('reports a started conversation as queued until its custody says delivered, and pages reply sessions (REV-C-06/07)', async () => {
     const custodyId = 'e'.repeat(43);
     const readReply = ConversationBindingReadResultV1Schema.parse({
@@ -9501,6 +9551,97 @@ describe('Channels collapsed row identity', () => {
       });
     } finally {
       await page.dispose();
+    }
+  });
+
+  it('shows each Session conversation\'s latest shareable reply, its time and its unread and Work facts, and the router none (c0.73 F3)', async () => {
+    const replyAt = new Date(2026, 9, 22, 9, 41).getTime();
+    const bindings = jsonResource({
+      bindings: [
+        { bindingId: 'binding-ready', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'Chantier Morges' },
+          target: { kind: 'session', summary: 'Morges', sessionId: 'session-ready' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly',
+          approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
+        { bindingId: 'binding-working', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'Devis Lausanne' },
+          target: { kind: 'session', summary: 'Lausanne', sessionId: 'session-working' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly',
+          approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
+        { bindingId: 'binding-hidden', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'Ressources humaines' },
+          target: { kind: 'session', summary: 'RH', sessionId: 'session-hidden' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly',
+          approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
+        { bindingId: 'binding-empty', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'Nouveau client' },
+          target: { kind: 'session', summary: 'Client', sessionId: 'session-empty' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly',
+          approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
+        { bindingId: 'binding-router', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'wilson@batiplus.ch' },
+          target: { kind: 'threadRouter', summary: 'threadRouter' }, inputMode: 'allAllowedMessages', deliveryMode: 'none',
+          approval: { kind: 'notApplicable' }, enabled: true, deletionState: 'none' },
+        { bindingId: 'binding-router-thread', parentBindingId: 'binding-router', revision: 1, connectionId: 'connection-1',
+          endpoint: { audience: 'shared', label: 'Fwd: facture' }, target: { kind: 'session', summary: 'Thread', sessionId: 'session-thread' },
+          inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
+      ],
+    }, '7');
+    const idle = { bucket: 'idle' as const, tone: 'neutral' as const, word: 'Idle' };
+    const base = { lifecycle: 'active' as const, runtime: 'idle' as const, operational: 'none' as const, pendingPermissions: [] };
+    const sessions: Readonly<Record<string, SessionStateV1>> = {
+      'session-ready': { ...base, sessionId: 'session-ready', workStatus: idle, hasUnreadMessages: true,
+        latestActivity: { kind: 'ready', text: 'Le devis est prêt,\n je l’envoie ce soir.', createdAt: replyAt } },
+      'session-working': { ...base, sessionId: 'session-working', runtime: 'working', operational: 'working',
+        workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' }, hasUnreadMessages: false,
+        latestActivity: { kind: 'ready', text: 'Puis-je lire le dossier ?', createdAt: replyAt } },
+      'session-hidden': { ...base, sessionId: 'session-hidden', title: 'Private title', workStatus: idle, latestActivity: { kind: 'hidden' } },
+      'session-empty': { ...base, sessionId: 'session-empty', workStatus: idle, hasUnreadMessages: false, latestActivity: { kind: 'empty' } },
+      'session-thread': { ...base, sessionId: 'session-thread', workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' },
+        hasUnreadMessages: true, latestActivity: { kind: 'ready', text: 'Thread reply', createdAt: replyAt } },
+    };
+    const readSessionIds: string[] = [];
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-activity-rows', mountNonce: 'fixture-activity-rows' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: '',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        // Opening the list reads; it never marks a Session read or runs an Action.
+        executeAction: async () => {
+          throw new Error('Unexpected mounted Action');
+        },
+        readResource: bindingResourceReader(() => bindings),
+        readSession: ({ sessionId }) => {
+          readSessionIds.push(sessionId);
+          return sessions[sessionId] ?? null;
+        },
+      },
+    });
+    try {
+      const ready = await collapsedRowByIdentity('channels-page-row-binding-ready');
+      await vi.waitFor(async () => {
+        const row = await collapsedRowByIdentity('channels-page-row-binding-ready');
+        expect(row.text).toContain('Le devis est prêt, je l’envoie ce soir.');
+      });
+      expect(ready.text).toContain('Chantier Morges');
+      const readyNow = await collapsedRowByIdentity('channels-page-row-binding-ready');
+      // The reply's own time, never the Session's update or scan time.
+      expect(readyNow.text).toContain(formatConversationTime(replyAt, createChannelsPageSurfaceContext().locale));
+      expect(readyNow.accessibleName).toContain('Unread');
+
+      const working = await collapsedRowByIdentity('channels-page-row-binding-working');
+      expect(working.text).toContain('Puis-je lire le dossier ?');
+      expect(working.text).toContain('Needs you');
+      expect(working.accessibleName).not.toContain('Unread');
+
+      const hidden = await collapsedRowByIdentity('channels-page-row-binding-hidden');
+      expect(hidden.text).toContain('Preview hidden');
+      expect(hidden.text).not.toContain('Private title');
+      const empty = await collapsedRowByIdentity('channels-page-row-binding-empty');
+      expect(empty.text).toContain('No replies yet');
+
+      // A router is not a Session and never borrows a thread's reply, unread or Work.
+      const router = await collapsedRowByIdentity('channels-page-row-binding-router');
+      expect(router.text).not.toContain('Thread reply');
+      expect(router.text).not.toContain('Needs you');
+      expect(readSessionIds).not.toContain('session-thread');
+    } finally {
+      await fixture.dispose();
     }
   });
 

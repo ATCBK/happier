@@ -401,6 +401,13 @@ export type ConversationOutwardDeliveryResolutionRow = Readonly<{
   custodyId: string;
   revision: number;
   state: 'partial' | 'outcomeUnknown' | 'archiveRecoverable';
+  /**
+   * How many native parts the provider already accepted before the ambiguity. Only the count: the
+   * provider's message IDs stay out of this projection like the content does.
+   */
+  acceptedPartCount: number;
+  /** The zero-based native chunk that failed in a partial delivery. */
+  failedChunk?: number;
   createdThreadEndpointRequired?: Readonly<{ parentId: string }>;
 }>;
 
@@ -1046,6 +1053,8 @@ export async function readConversationOutwardDeliveryResolutionPage(input: Reado
       custodyId: record.custodyId,
       revision: record.revision,
       state,
+      acceptedPartCount: record.custody.providerMessageIds.length,
+      ...(record.custody.failedChunk === undefined ? {} : { failedChunk: record.custody.failedChunk }),
       ...createdThreadEndpointRequirement(record),
       recommendedRecovery: recommendConversationDeliveryRecovery({ custodyId: record.custodyId, revision: record.revision, state }),
     });

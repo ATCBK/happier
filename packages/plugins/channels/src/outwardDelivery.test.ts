@@ -2273,6 +2273,11 @@ describe('Channels control-response outward custody', () => {
     // false-attention rows precedes or displaces it.
     expect(new Set(firstPage.rows.map((row) => row.custodyId))).toEqual(unresolvedCustodyIds);
     expect(firstPage.nextCursor).toBeUndefined();
+    // The owner decides with what the provider already accepted and which part failed.
+    for (const row of firstPage.rows) {
+      expect(row.acceptedPartCount).toBe(1);
+      expect(row.failedChunk).toBe(row.state === 'partial' ? 1 : undefined);
+    }
 
     // The bounded region still pages when the caller asks for smaller pages.
     const firstSmall = await readConversationOutwardDeliveryResolutionPage({
@@ -2320,7 +2325,7 @@ describe('Channels control-response outward custody', () => {
       deliveriesCollection: deliveries as never, connectionId: 'connection-1',
     });
     expect(page.rows).toEqual([{ custodyId: unknown.record.custodyId, revision: unknown.record.revision,
-      state: 'outcomeUnknown', createdThreadEndpointRequired: { parentId: endpoint.id },
+      state: 'outcomeUnknown', acceptedPartCount: 0, createdThreadEndpointRequired: { parentId: endpoint.id },
       recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
         input: { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision },
         reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
@@ -2334,6 +2339,7 @@ describe('Channels control-response outward custody', () => {
     expect((await readConversationOutwardDeliveryResolutionPage({
       deliveriesCollection: deliveries as never, connectionId: 'connection-1',
     })).rows).toEqual([{ custodyId: confirmed.record.custodyId, revision: confirmed.record.revision, state: 'outcomeUnknown',
+      acceptedPartCount: 0,
       recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
         input: { custodyId: confirmed.record.custodyId, expectedRevision: confirmed.record.revision },
         reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
@@ -2400,6 +2406,8 @@ describe('Channels control-response outward custody', () => {
           custodyId: partial.record.custodyId,
           revision: partial.record.revision,
           state: 'partial',
+          acceptedPartCount: 1,
+          failedChunk: 1,
           recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
             input: { custodyId: partial.record.custodyId, expectedRevision: partial.record.revision },
             reason: 'partial', unavailableReason: 'ownerDecisionRequired' },
@@ -2408,6 +2416,7 @@ describe('Channels control-response outward custody', () => {
           custodyId: unknown.record.custodyId,
           revision: unknown.record.revision,
           state: 'outcomeUnknown',
+          acceptedPartCount: 1,
           recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
             input: { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision },
             reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
@@ -2665,6 +2674,7 @@ describe('Channels control-response outward custody', () => {
         custodyId: recoverable.record.custodyId,
         revision: archived.record.revision,
         state: 'archiveRecoverable',
+        acceptedPartCount: 0,
         recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
           input: { custodyId: recoverable.record.custodyId, expectedRevision: archived.record.revision, resolution: 'retryAfterUnarchive' }, reason: 'endpointArchived' },
       }],

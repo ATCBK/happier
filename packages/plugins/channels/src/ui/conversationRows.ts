@@ -817,6 +817,51 @@ export function isHostMethodCurrentlyUnavailable(
   )) === true;
 }
 
+/** A conversation time as a list says it: the time today, the weekday this week, else the date. */
+export function formatConversationTime(atMs: number, locale: string, nowMs = Date.now()): string {
+  const at = new Date(atMs);
+  const now = new Date(nowMs);
+  if (at.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(at);
+  }
+  if (nowMs - atMs < 6 * 86_400_000 && nowMs >= atMs) {
+    return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(at);
+  }
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(at);
+}
+
+/**
+ * What a Session-bound conversation row can say about its Session, from the
+ * host's mounted read only: the latest shareable reply and its own time, the
+ * viewer's unread fact and the Work state. Anything the read did not establish
+ * stays absent; unavailable is never shown as empty or read. Routers and
+ * Automations have no Session here and get nothing.
+ */
+export type ChannelsConversationActivity = Readonly<{
+  /** `ready` carries the reply; `empty` and `hidden` are the read's explicit answers. */
+  preview?: Readonly<{ kind: 'ready'; text: string; createdAt: number }> | Readonly<{ kind: 'empty' | 'hidden' }>;
+  /** True or false only when the host said so. */
+  unread?: boolean;
+  /** The Work state, only when it changes what the reader does (needs you, working, failed). */
+  work?: Readonly<{ word: string; tone: 'neutral' | 'attention' | 'danger' }>;
+}>;
+
+export function channelsConversationActivity(
+  session: SessionStateReadV1<ChannelsConversationSessionState> | undefined,
+): ChannelsConversationActivity | undefined {
+  if (session === undefined || session.status !== 'ready' || session.state === null) return undefined;
+  const { latestActivity, hasUnreadMessages, workStatus } = session.state;
+  const preview = latestActivity.kind === 'ready'
+    ? { kind: 'ready' as const, text: latestActivity.text.replace(/\s+/g, ' ').trim(), createdAt: latestActivity.createdAt }
+    : latestActivity.kind === 'unavailable' ? undefined : { kind: latestActivity.kind };
+  const speaks = workStatus.tone !== 'neutral' || workStatus.bucket === 'working';
+  return {
+    ...(preview === undefined ? {} : { preview }),
+    ...(hasUnreadMessages === undefined ? {} : { unread: hasUnreadMessages }),
+    ...(speaks ? { work: { word: workStatus.word, tone: workStatus.tone } } : {}),
+  };
+}
+
 /** What a conversation row says at its end: only a state, never activity. */
 export type ChannelsConversationRowStatus =
   | Readonly<{ kind: 'paused' }>
@@ -985,7 +1030,8 @@ export function resolveChannelsConversationReadState(
 const NO_BINDINGS: readonly ChannelsBinding[] = Object.freeze([]);
 const NO_CONNECTIONS: readonly ChannelsConnection[] = Object.freeze([]);
 
-function useConversationSessionStates(bindings: readonly ChannelsBinding[]) {
+/** The batched Session reads for the index's Session-bound rows (router threads excluded, as in the index). */
+export function useConversationSessionStates(bindings: readonly ChannelsBinding[]) {
   const ids = React.useMemo(() => {
     const bindingIds = new Set(bindings.map(binding => binding.bindingId));
     return bindings.flatMap(binding => binding.target.kind === 'session' && binding.target.sessionId !== undefined
