@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import axios from "axios";
 
 import {
     PeerTcpTunnelRelayAuthorizationPayloadV2Schema,
@@ -20,13 +21,18 @@ import { createServer } from "node:http";
 import { registerPeerTcpTunnelRelayTerminator } from "../../../../../cli/src/daemon/peer/mediation/tunnel/relay";
 import { connectPeerTcpTunnelTcp } from "../../../../../cli/src/daemon/peer/mediation/tunnel/open";
 import { startFirstBytesLocalCapabilityProxy } from "../../../../../cli/src/daemon/peer/mediation/loopback/firstBytesLocalCapability";
-import { writeProviderBrokerApplicationFailure } from "../../../../../cli/src/providers/broker/providerBrokerApplicationServer";
+import { startProviderBrokerApplicationServer, writeProviderBrokerApplicationFailure } from "../../../../../cli/src/providers/broker/providerBrokerApplicationServer";
+import { createProviderBrokerRequestHandler } from "../../../../../cli/src/providers/broker/providerBrokerRequestHandler";
+import { createQualifiedConnectedAccountIdentityDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
+import { createConnectedServiceCredentialRevision } from "@/app/api/routes/connect/credentials/credentialRevision";
 import { TeamCredentialTestActionOutputV1Schema } from "@happier-dev/protocol/teams/credentials/actionsV1";
+import { TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1, TeamCredentialResourceTestAdmissionV1Schema, TeamCredentialResourceTestAdmissionResponseV1Schema } from "@happier-dev/protocol/teams/credentials/externalProviderApiV1";
 
 describe("Resource Test relay composition (SQLite integration)", () => {
     afterEach(() => vi.restoreAllMocks());
     let harness: LightSqliteHarness;
     let app: ReturnType<typeof createAuthenticatedTestApp>;
+    let homeUrl: string;
 
     beforeAll(async () => {
         harness = await createLightSqliteHarness({
@@ -48,7 +54,7 @@ describe("Resource Test relay composition (SQLite integration)", () => {
         });
         app = createAuthenticatedTestApp();
         registerTeamCredentialResourceRoutes(app);
-        await app.ready();
+        homeUrl = await app.listen({ host: "127.0.0.1", port: 0 });
     }, 180_000);
 
     afterAll(async () => {
@@ -74,8 +80,9 @@ describe("Resource Test relay composition (SQLite integration)", () => {
         return await db.account.create({ data: { encryptionMode: "plain", publicKey: null } });
     }
 
-    it.each(["available", "stalled_activation", "silent_carrier", "slow_response", "source_refusal", "upstream_unauthorized"] as const)("tests a revision-zero resource through the real broker terminator: %s", async outcome => {
-        const ordinaryResponse = outcome === "available" || outcome === "source_refusal" || outcome === "upstream_unauthorized";
+    it.each(["available", "stalled_activation", "silent_carrier", "slow_response", "source_refusal", "upstream_unauthorized", "application_exception"] as const)("tests a revision-zero resource through the real broker terminator: %s", async outcome => {
+        const realApplication = outcome === "available" || outcome === "application_exception";
+        const ordinaryResponse = realApplication || outcome === "available" || outcome === "source_refusal" || outcome === "upstream_unauthorized";
         const custodian = await createAccount();
         const team = await db.team.create({ data: { name: "Initial resource Test" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: "owner" } });
@@ -88,13 +95,23 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             },
             operationProtocolCapabilitiesRevision: 1,
         } });
+        const connectedAccount = {
+            service: { pluginId: "happier.agent.codex", localId: "openai-codex" },
+            accountId: "initial-connected-account",
+        };
+        const credential = await db.serviceAccountToken.create({ data: {
+            accountId: custodian.id, servicePluginId: connectedAccount.service.pluginId,
+            serviceLocalId: connectedAccount.service.localId,
+            qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(connectedAccount.service),
+            connectedAccountId: connectedAccount.accountId,
+            qualifiedIdentityDigest: createQualifiedConnectedAccountIdentityDigest(connectedAccount),
+            authenticationModeId: "api-key", token: Buffer.from("fixture-only"),
+            metadata: { credentialRevision: createConnectedServiceCredentialRevision() },
+        } });
         const source = {
             v: 1, kind: "connected_account",
-            target: { kind: "account", account: {
-                service: { pluginId: "happier.agent.codex", localId: "openai-codex" },
-                accountId: "initial-connected-account",
-            } },
-            credentialIncarnation: "initial-credential-incarnation",
+            target: { kind: "account", account: connectedAccount },
+            credentialIncarnation: credential.id,
         } as const;
         // Keep the database's initial revision, just as the saved-resource route does.
         const resource = await db.teamCredentialResource.create({ data: {
@@ -120,7 +137,9 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             status: "success", application,
             request: { v: 1, kind: "resource_test", requestId: "initial-resource-test",
                 teamId: team.id, resourceId: resource.id, route: "responses",
-                method: "POST", pathAndQuery: "/v1/responses", bodyBase64: "e30=" },
+                method: "POST", pathAndQuery: "/v1/responses",
+                headers: { "content-type": "application/json" },
+                bodyBase64: Buffer.from(JSON.stringify({ model: "gpt-5", input: "Reply with OK.", max_output_tokens: 16 })).toString("base64") },
         } });
         const signing = peerMediationGrantSigningEnv();
         const trustRoots = [{ keyId: signing.HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID!,
@@ -152,6 +171,12 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             request.on("end", () => {
                 applicationRequest = JSON.parse(Buffer.concat(chunks).toString("utf8"));
                 respond = () => {
+                    if (outcome === "application_exception") {
+                        // A genuine upstream network failure, after real Home
+                        // admission. No internal handler or admission is mocked.
+                        request.socket.destroy();
+                        return;
+                    }
                     if (outcome === "source_refusal") {
                         writeProviderBrokerApplicationFailure({
                             header(name, value) { response.setHeader(name, value); },
@@ -175,6 +200,44 @@ describe("Resource Test relay composition (SQLite integration)", () => {
         const address = upstream.address();
         if (!address || typeof address === "string") throw new Error("Provider application not listening");
         const proxy = await startFirstBytesLocalCapabilityProxy({ targetPort: address.port });
+        const applicationServer = realApplication ? await startProviderBrokerApplicationServer({
+            handler: createProviderBrokerRequestHandler({
+                resolveTrustRoots: () => [], nowMs: Date.now,
+                createRequestId: () => "initial-resource-test",
+                resolveRequestPolicy: async () => null,
+                admit: async () => ({ ok: false, reasonCode: "resource_unavailable" }),
+                resolveResourceTestRequestPolicy: async () => ({
+                    resourceRevision: resource.revision, policy: null, application,
+                    modelCatalog: { models: [{ id: "gpt-5" }], resolveCanonicalModelId: id => id === "gpt-5" ? id : null },
+                }),
+                admitResourceTest: async request => {
+                    // Cross the real Home HTTP route with the same strict
+                    // request/response codecs used by ApiClient. A rejected
+                    // Home response throws AxiosError, as on the daemon.
+                    const admitted = await axios.post(`${homeUrl}${TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1}`,
+                        TeamCredentialResourceTestAdmissionV1Schema.parse({ v: 1, binding: request.binding, brokerMachineId: broker.id,
+                            relayAuthorization: request.relayAuthorization, requestFacts: request.requestFacts }),
+                        { headers: { "x-test-user-id": custodian.id }, signal: request.request.signal });
+                    const admission = TeamCredentialResourceTestAdmissionResponseV1Schema.parse(admitted.data);
+                    if (!admission.ok) return admission;
+                    // Credential materialization/Provider HTTP is the external
+                    // boundary here. The real handler, policy, Home admission,
+                    // application parser, relay and TCP retain their wiring.
+                    return { ok: true, access: {
+                        endpointUrl: () => `http://127.0.0.1:${address.port}/v1`,
+                        request: async providerRequest => {
+                            const response = await fetch(`http://127.0.0.1:${address.port}${providerRequest.pathAndQuery}`, {
+                                method: providerRequest.method, headers: providerRequest.headers,
+                                body: providerRequest.body ? Buffer.from(providerRequest.body) : undefined,
+                                signal: providerRequest.signal,
+                            });
+                            return { ok: response.ok, status: response.status, statusText: response.statusText,
+                                headers: Object.fromEntries(response.headers), body: response.body };
+                        },
+                    } };
+                },
+            }),
+        }) : null;
         const terminator = registerPeerTcpTunnelRelayTerminator({
             accountId: custodian.id, machineId: broker.id, nowMs: Date.now,
             relayAuthorizationTrustRoots: trustRoots,
@@ -195,7 +258,11 @@ describe("Resource Test relay composition (SQLite integration)", () => {
                 connecting();
                 return new Promise(() => {});
             },
-            resolveProviderBrokerApplicationTarget: async () => proxy,
+            resolveProviderBrokerApplicationTarget: async ({ binding, relayAuthorization, signal }) => {
+                if (!applicationServer) return proxy;
+                if (binding.kind !== "resource_test") throw new Error("Expected resource Test");
+                return await applicationServer.createStreamTarget({ kind: "external", binding, relayAuthorization }, signal);
+            },
             observability: { emit(event) {
                 if (outcome === "available" && event.kind === "flow.denied") resolveDenied(String(event.data.reasonCode ?? "unknown"));
             } },
@@ -264,13 +331,17 @@ describe("Resource Test relay composition (SQLite integration)", () => {
                     : outcome === "source_refusal" || outcome === "upstream_unauthorized"
                         ? { result: "needs_attention", readiness: { kind: "source_unavailable" },
                             code: outcome === "source_refusal" ? "source_unavailable" : "upstream_unavailable" }
-                    : { result: "needs_attention", readiness: { kind: "broker_unavailable" } });
+                    : { result: "needs_attention", readiness: { kind: "broker_unavailable" },
+                        ...(outcome === "application_exception" ? { code: "broker_unavailable" } : {}) });
             if (outcome === "source_refusal" || outcome === "upstream_unauthorized") {
                 expect(diagnostics).toHaveBeenCalledWith({ module: "team-credential-resource-test", stage: "dispatch", code: result.code });
                 expect(JSON.stringify(result)).not.toContain("private");
             }
             expect(admitted).toBe(true);
-            if (ordinaryResponse || outcome === "slow_response") expect(applicationRequest).toMatchObject({ kind: "resource_test", resourceId: resource.id });
+            if (realApplication) {
+                expect(applicationRequest).toMatchObject({ model: "gpt-5", input: "Reply with OK." });
+                expect(await db.usageEvent.count({ where: { teamCredentialResourceId: resource.id } })).toBe(1);
+            } else if (ordinaryResponse || outcome === "slow_response") expect(applicationRequest).toMatchObject({ kind: "resource_test", resourceId: resource.id });
             else expect(applicationRequest).toBeUndefined();
         } finally {
             vi.useRealTimers();
@@ -278,6 +349,7 @@ describe("Resource Test relay composition (SQLite integration)", () => {
                 sender: { kind: "machine", machineId: broker.id }, recipient: { kind: "user", socketId: relaySocketId },
                 frame: { v: 1, kind: "abort", tunnelId, reasonCode: "test_cleanup" } });
             await terminator.dispose();
+            await applicationServer?.close();
             await proxy.close();
             upstream.closeAllConnections();
             await new Promise<void>(resolve => upstream.close(() => resolve()));

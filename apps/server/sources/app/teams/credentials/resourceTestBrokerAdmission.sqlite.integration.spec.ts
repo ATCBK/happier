@@ -64,7 +64,6 @@ describe('Team credential resource-test broker admission', () => {
             custodianAccountId: custodian.id,
             displayName: 'Saved provider',
             enabled: true,
-            revision: 1,
             disclosureCeiling: 'brokered_only',
             sessionUsePolicy: 'personal_allowed',
             sourceBindingJson: JSON.stringify(source),
@@ -153,6 +152,7 @@ describe('Team credential resource-test broker admission', () => {
         const first = await admit();
         expect(first).toMatchObject({
             ok: true,
+            resourceRevision: 0,
             resourceId: resource.id,
             brokerMachineId: broker.id,
             operation: { kind: 'resource_test', actorAccountId: actor.id },

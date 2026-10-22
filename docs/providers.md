@@ -944,7 +944,10 @@ response headers and application refusals. Application-response records include
 the HTTP status and only a schema-admitted broker code; unknown headers become a
 constant diagnostic. The daemon logs source-open/currentness and application
 failure stages as well. These records omit request/response content and exception
-text. In 0.3 development, the Test result's optional, closed `code` preserves the
+text. Unexpected application exceptions return the existing typed
+`broker_unavailable` refusal; the file diagnostic includes only recognized error
+names and system, Fastify or Axios error codes. In 0.3 development, the Test
+result's optional, closed `code` preserves the
 exact admitted application refusal or the carrier's public failure classification;
 `source_unavailable` alone does not establish an absent or expired credential.
 A trusted broker update refusal retains the existing `incompatible` readiness reason.

@@ -283,7 +283,7 @@ export const TeamCredentialResourceTestAdmissionResponseV1Schema = lazyZodSchema
   z.strictObject({
     ok: z.literal(true),
     resourceId: ExternalProviderIdentityV1Schema,
-    resourceRevision: z.number().check(z.int(), z.positive()),
+    resourceRevision: z.number().check(z.int(), z.nonnegative()),
     brokerMachineId: ExternalProviderIdentityV1Schema,
     source: TeamCredentialSourceBindingV1Schema,
     operation: z.strictObject({
