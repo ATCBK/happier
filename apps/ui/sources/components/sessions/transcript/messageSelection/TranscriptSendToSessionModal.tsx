@@ -1,5 +1,4 @@
 import { Typography } from '@/constants/Typography';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
 import {
     View,
@@ -21,7 +20,7 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { useSessionListIndexByServerId, useSessionListRowRenderablesForItems, useSessions } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
+import { readSessionRowPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { t } from '@/text';
@@ -131,11 +130,7 @@ function appendSessionListTargets(
 
 /** Empty when the target Session's Agent is unknown; the icon then shows its neutral mark. */
 function resolveSessionAgentId(session: TranscriptSendToSessionTargetSource): string {
-    return (
-        'agentState' in session
-            ? readSessionPresentationAgentId(session)
-            : resolveAgentIdFromSessionMetadata(session.metadata)
-    ) ?? '';
+    return readSessionRowPresentationAgentId(session) ?? '';
 }
 
 const TranscriptSendToSessionRowMeta = React.memo(function TranscriptSendToSessionRowMeta(

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import type { SessionTerminalWorkspaceV1 } from '@happier-dev/protocol';
 
 import { getAgentCore } from '@/agents/catalog/catalog';
@@ -53,7 +53,7 @@ export function useSessionTerminalDescribeContext(sessionId: string, serverId: s
     const useStore = getStorage();
     const agentId = useStore((state) => {
         const session = selectSession(state as never, sessionId, serverId);
-        return session ? resolveAgentIdFromSessionMetadata(session.metadata) ?? null : null;
+        return session ? readSessionPresentationAgentId(session) : null;
     });
     const agentAsking = useStore((state) => selectSessionAgentAsksInTerminal(selectSession(state as never, sessionId, serverId)));
     const agentTerminalHost = useStore((state) => {
@@ -72,7 +72,7 @@ export function useSessionTerminalDescribeContext(sessionId: string, serverId: s
             if (name) names.set(machine.id, name);
         }
         const sessionMachineId = machineTarget?.machineId ?? null;
-        const agentCore = agentId ? getAgentCore(agentId as never) : null;
+        const agentCore = agentId ? getAgentCore(agentId) : null;
         return {
             agentId,
             agentName: agentCore ? t(agentCore.displayNameKey as never) : null,

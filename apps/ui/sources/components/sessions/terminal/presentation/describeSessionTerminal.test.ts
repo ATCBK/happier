@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { renderHook, createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storage';
+import { useSessionTerminalDescribeContext } from './useSessionTerminalPresentation';
 
 import type { SessionTerminalTabV1 } from '@happier-dev/protocol';
 
 import type { TerminalSurfaceSummary } from '../terminalSurfaceSummary';
 import { describeSessionTerminal, describeSessionTerminalTab, type SessionTerminalDescribeContext } from './describeSessionTerminal';
+
+afterEach(standardCleanup);
 
 const context = (overrides: Partial<SessionTerminalDescribeContext> = {}): SessionTerminalDescribeContext => ({
     agentId: 'claude',
@@ -18,6 +23,20 @@ const context = (overrides: Partial<SessionTerminalDescribeContext> = {}): Sessi
 const summary = (overrides: Partial<TerminalSurfaceSummary>): TerminalSurfaceSummary => ({ title: null, bell: null, status: 'connected', error: null, url: null, ...overrides });
 
 describe('describeSessionTerminal (terminal lab B1/A1/ST)', () => {
+    it.each(['codex', 'acme.agent', null])('uses public Session Agent %s for the attached terminal mark', async agentId => {
+        const initial = getStorage().getState();
+        const session = createSessionFixture({ id: 'terminal-agent', serverId: 'home', metadataLayoutVersion: 1,
+            metadata: { v: 1, ...(agentId ? { agentPresentation: { agentId } } : {}) } as never,
+            ownerMetadataView: { path: '/private', host: 'home', flavor: 'claude' } });
+        getStorage().setState({ sessions: { [session.id]: session } });
+        try {
+            const hook = await renderHook(() => useSessionTerminalDescribeContext(session.id, 'home'));
+            const description = describeSessionTerminal({ id: 'agent-terminal', target: { kind: 'session_attach' } }, null, hook.getCurrent());
+            expect(description.mark).toEqual(agentId ? { kind: 'agent', agentId } : { kind: 'shell' });
+            await hook.unmount();
+        } finally { getStorage().setState(initial, true); }
+    });
+
     it('turns the agent’s tab amber while it asks in its own terminal, and names where it runs', () => {
         const asking = describeSessionTerminal({ id: 'a', target: { kind: 'session_attach' } }, summary({}), context({ agentAsking: true }));
         expect(asking).toMatchObject({ title: 'Claude', status: 'attention', mark: { kind: 'agent', agentId: 'claude' } });
