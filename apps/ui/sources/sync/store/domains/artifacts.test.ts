@@ -24,6 +24,33 @@ function artifact(id: number): Extract<DecryptedArtifact, { isDecrypted: true }>
 }
 
 describe('createArtifactsDomain', () => {
+    it('retains unchanged Artifact slices when exact board or workflow reads hydrate or revise a body', () => {
+        const store = createHarness();
+        const head: DecryptedArtifact = { ...artifact(1), storageMode: 'plain', access: 'owner', ownerAccountId: 'owner',
+            bodyVersion: 1, header: { title: 'Board', kind: 'work-board.v1', sessions: ['session'] },
+            rawHeader: { title: 'Board', kind: 'work-board.v1', sessions: ['session'] }, sessions: ['session'],
+            storageIdentity: { contentKeyEnvelope: 'plain', provenanceKeyEnvelope: null } };
+        store.getState().applyArtifacts([head]);
+        store.getState().updateArtifact({ ...structuredClone(head), body: 'Loaded board' });
+        const loaded = store.getState().artifacts[head.id];
+        expect(loaded.header).toBe(head.header);
+        expect(loaded.rawHeader).toBe(head.rawHeader);
+        expect(loaded.sessions).toBe(head.sessions);
+        expect(loaded.storageIdentity).toBe(head.storageIdentity);
+        const before = store.getState();
+        const notify = vi.fn();
+        const off = store.subscribe(notify);
+        try {
+            store.getState().updateArtifact(structuredClone(loaded));
+            expect(store.getState()).toBe(before);
+            expect(notify).not.toHaveBeenCalled();
+            store.getState().updateArtifact({ ...structuredClone(loaded), bodyVersion: 2, body: 'Revised board' });
+            expect(store.getState().artifacts[head.id].header).toBe(head.header);
+            expect(store.getState().artifacts[head.id].body).toBe('Revised board');
+            expect(notify).toHaveBeenCalledTimes(1);
+        } finally { off(); }
+    });
+
     it('does not claim inventory readiness for a targeted body publication', () => {
         const store = createHarness();
         store.getState().applyArtifacts([{ ...artifact(1), body: 'Demanded approval' }]);

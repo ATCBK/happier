@@ -7,6 +7,7 @@ import { createSessionFixture, createSessionListRenderableSessionFixture } from 
 
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { buildMachineDisplayRenderableFromMachine } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
 import { createMachinesDomain, subscribeMachineUpdates, type MachinesDomain } from './machines';
@@ -38,6 +39,25 @@ function machine(id: string, overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('machine inventory reference stability through the real store', () => {
+    it('uses the same display publication policy for list snapshots and Machine updates', () => {
+        const store = createTestStore();
+        const initial = buildMachineDisplayRenderableFromMachine(machine('display', { availability: { kind: 'available' } }));
+        store.getState().replaceMachineDisplays([initial]);
+        const previous = store.getState();
+        const notify = vi.fn();
+        const off = store.subscribe(notify);
+        try {
+            store.getState().replaceMachineDisplays([{ ...structuredClone(initial), updatedAt: 2, activeAt: 2 }]);
+            expect(store.getState()).toBe(previous);
+            expect(notify).not.toHaveBeenCalled();
+            expect(store.getState().machineDisplayById.display.activeAt).toBe(2);
+            store.getState().replaceMachineDisplays([{ ...structuredClone(initial), metadataVersion: 2 }]);
+            expect(store.getState().machineDisplayById.display.metadata).toBe(initial.metadata);
+            expect(store.getState().machineDisplayById.display.availability).toBe(initial.availability);
+            expect(notify).toHaveBeenCalledTimes(1);
+        } finally { off(); }
+    });
+
     it('retains unchanged Machine slices when daemon resources change and publishes installation changes', () => {
         const store = createTestStore();
         const options = { sourceServerId: getActiveServerSnapshot().serverId };

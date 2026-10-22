@@ -8,6 +8,7 @@ import { settingsDefaults, type Settings } from '@/sync/domains/settings/setting
 import { isActionEnabledInState, isActionApprovalRequiredInState, resolveActionsSettingsV1FromState } from '@/sync/domains/settings/actionsSettings';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { loadAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
+import type { CustomerInfo } from '@/sync/domains/purchases/types';
 import { clearPersistence } from '@/sync/domains/state/persistence';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -115,12 +116,15 @@ describe('createSettingsDomain settings projection reference stability', () => {
     });
 
     it('keeps the settings projection reference when a server echo carries structurally identical settings', async () => {
-        const { getState } = createTestStore();
+        const api = createTestStore();
+        const { getState } = api;
         await getState().activateSettingsScope(scope);
         getState().applySettingsForScope(scope, buildServerEchoSettings(), 1);
 
         const settingsBeforeEcho = getState().settings;
         const favoritesBeforeEcho = settingsBeforeEcho.favoriteDirectories;
+        const notified = vi.fn();
+        api.subscribe(notified);
 
         getState().applySettingsForScope(scope, buildServerEchoSettings(), 2);
 
@@ -128,6 +132,93 @@ describe('createSettingsDomain settings projection reference stability', () => {
         expect(getState().settings.favoriteDirectories).toBe(favoritesBeforeEcho);
         expect(getState().settingsVersion).toBe(2);
         expect(loadAccountSettings(scope).version).toBe(2);
+        expect(notified).toHaveBeenCalledTimes(1);
+        const afterVersionChange = getState();
+        getState().applySettingsForScope({ ...scope }, buildServerEchoSettings(), 2);
+        expect(getState()).toBe(afterVersionChange);
+        expect(notified).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppresses equal scope activation and clearing while publishing Account changes', async () => {
+        const api = createTestStore();
+        await api.getState().activateSettingsScope(scope);
+        const previous = api.getState();
+        const notified = vi.fn();
+        api.subscribe(notified);
+
+        await api.getState().activateSettingsScope({ ...scope });
+        expect(api.getState()).toBe(previous);
+        expect(notified).not.toHaveBeenCalled();
+
+        await api.getState().activateSettingsScope({ ...scope, accountId: 'account-b' });
+        expect(api.getState().settingsScope?.accountId).toBe('account-b');
+        expect(api.getState().settings).toBe(previous.settings);
+        expect(api.getState().purchases).toBe(previous.purchases);
+        expect(notified).toHaveBeenCalledTimes(1);
+
+        api.getState().clearSettingsScope();
+        const cleared = api.getState();
+        api.getState().clearSettingsScope();
+        expect(api.getState()).toBe(cleared);
+        expect(notified).toHaveBeenCalledTimes(2);
+    });
+
+    it('suppresses equal purchases and keeps unchanged subscription references on entitlement changes', () => {
+        const api = createTestStore();
+        const customer: CustomerInfo = {
+            activeSubscriptions: { subscription: {} },
+            entitlements: { all: { voice: { identifier: 'voice', isActive: true } } },
+            originalAppUserId: 'account-a',
+            requestDate: new Date(0),
+        };
+        api.getState().applyPurchases(customer);
+        const previous = api.getState();
+        const notified = vi.fn();
+        api.subscribe(notified);
+
+        api.getState().applyPurchases(structuredClone(customer));
+        expect(api.getState()).toBe(previous);
+        expect(notified).not.toHaveBeenCalled();
+
+        api.getState().applyPurchases({ ...customer,
+            entitlements: { all: { voice: { identifier: 'voice', isActive: false } } },
+        });
+        expect(api.getState().purchases.entitlements.voice).toBe(false);
+        expect(api.getState().purchases.activeSubscriptions).toBe(previous.purchases.activeSubscriptions);
+        expect(notified).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves equal local collections alongside a real setting change', () => {
+        const api = createTestStore();
+        api.getState().applyLocalSettings({ acknowledgedCliVersions: { 'machine-a': '1.2.3' } });
+        const previous = api.getState();
+        const notified = vi.fn();
+        api.subscribe(notified);
+
+        api.getState().applyLocalSettings({ acknowledgedCliVersions: { 'machine-a': '1.2.3' } });
+        expect(api.getState()).toBe(previous);
+        expect(notified).not.toHaveBeenCalled();
+
+        api.getState().applyLocalSettings({ acknowledgedCliVersions: { 'machine-a': '1.2.3' }, uiFontScale: 1.1 });
+        expect(api.getState().localSettings.acknowledgedCliVersions).toBe(previous.localSettings.acknowledgedCliVersions);
+        expect(api.getState().localSettings.uiFontScale).toBe(1.1);
+        expect(notified).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps unchanged concurrent indexes when grouping changes leave their empty result unchanged', () => {
+        const api = createTestStore();
+        api.setState({
+            ordinarySessionListMembershipByServerId: { 'server-other': [] },
+            sessionListIndexByServerId: { 'server-other': [] },
+        });
+        const originalGrouping = api.getState().settings.sessionListInactiveGroupingV1;
+        api.getState().applySettingsLocal({ sessionListInactiveGroupingV1: originalGrouping === 'project' ? 'date' : 'project' });
+        const previousIndexes = api.getState().sessionListIndexByServerId;
+
+        api.getState().applySettingsLocal({ sessionListInactiveGroupingV1: originalGrouping });
+
+        expect(api.getState().settings.sessionListInactiveGroupingV1).toBe(originalGrouping);
+        expect(api.getState().sessionListIndexByServerId).toBe(previousIndexes);
     });
 
     it('lands a genuine remote change while preserving references for the keys that did not change', async () => {

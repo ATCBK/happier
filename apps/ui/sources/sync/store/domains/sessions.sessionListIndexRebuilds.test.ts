@@ -24,7 +24,7 @@ import { buildSessionListIndexFromViewData } from '../../domains/sessionList/ses
 import type { SessionListIndexItem } from '../../domains/sessionList/sessionListIndex';
 import { getSessionStorageKind } from '../../domains/session/sessionStorageKind';
 import { readExternalSessionLink } from '../../domains/session/external/readExternalSessionLink';
-import type { ScmWorkingSnapshot, Session } from '../../domains/state/storageTypes';
+import type { ScmStatus, ScmWorkingSnapshot, Session } from '../../domains/state/storageTypes';
 import { createDemoOpenCodeSessionFixture } from '@/demoMode/world/sessions';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -123,6 +123,195 @@ function readSessionListIndexSessionIds(
         .filter((item): item is Extract<SessionListIndexItem, { type: 'session' }> => item.type === 'session')
         .map((item) => item.sessionId);
 }
+
+describe('sessions domain: unchanged writes', () => {
+    it('reuses equal nested Session data when another field really changes', () => {
+        const { domain, get, getSetCalls } = createHarness();
+        const input = currentSession({ id: 's1', metadata: { machineId: 'm1', path: '/repo', host: 'pub.test' } });
+        domain.applySessions([input]);
+        const previous = get().sessions.s1;
+        const notifications = getSetCalls();
+        domain.applySessions([{ ...structuredClone(input), seq: input.seq + 1 }]);
+        const next = get().sessions.s1;
+        expect(next.seq).toBe(input.seq + 1);
+        expect(next).not.toBe(previous);
+        expect(next.metadata).toBe(previous.metadata);
+        expect(getSetCalls()).toBe(notifications + 1);
+        const settled = get();
+        domain.applySessions([{ ...structuredClone(input), seq: input.seq + 1 }]);
+        expect(get()).toBe(settled);
+    });
+
+    it.each(['replace', 'merge', 'reconcile'] as const)('reuses equal nested row data through %s publication', (mode) => {
+        const { domain, get } = createHarness();
+        const serverId = getActiveServerSnapshot().serverId;
+        const row = buildSessionListRenderableFromSession(currentSession({ id: 's1', metadata: { machineId: 'm1', path: '/repo', host: 'pub.test' } }));
+        domain.applyServerScopedSessionListRows(serverId, [row], { source: 'ordinary', mode: 'replace' });
+        const previousRows = get().sessionListRowsByServerId[serverId];
+        const previous = previousRows.s1;
+        const next = { ...structuredClone(row), seq: row.seq + 1 };
+        if (mode === 'merge') domain.mergeSessionListRowsForServerScope(serverId, [next]);
+        else if (mode === 'reconcile') domain.reconcileSessionListRowsForServerScope(serverId, [next], previousRows);
+        else domain.applyServerScopedSessionListRows(serverId, [next], { source: 'ordinary', mode: 'replace' });
+        expect(get().sessionListRowsByServerId[serverId].s1.seq).toBe(next.seq);
+        expect(get().sessionListRowsByServerId[serverId].s1.metadata).toBe(previous.metadata);
+    });
+
+    it('retains equal persisted local slices across repeated scope activation and clearing', () => {
+        const { domain, get, getSetCalls } = createHarness();
+        const scope = { serverId: 'home', accountId: 'account_a' };
+        domain.activateSessionLocalStateScope(scope);
+        const settled = get();
+        const notifications = getSetCalls();
+        domain.activateSessionLocalStateScope({ ...scope });
+        expect(get()).toBe(settled);
+        expect(getSetCalls()).toBe(notifications);
+        domain.clearSessionLocalStateScope();
+        const cleared = get();
+        domain.clearSessionLocalStateScope();
+        expect(get()).toBe(cleared);
+    });
+
+    it('does not notify the real store for ready echoes and equal SCM status, while publishing fresh status', () => {
+        const { domain, get, getSetCalls } = createHarness();
+        const status: ScmStatus = {
+            branch: 'main', isDirty: false, changedFileCount: 0, includedCount: 0, lastUpdatedAt: 1,
+            includedLinesAdded: 0, includedLinesRemoved: 0, pendingLinesAdded: 0, pendingLinesRemoved: 0,
+            linesAdded: 0, linesRemoved: 0, linesChanged: 0,
+        };
+        domain.applyReady();
+        domain.applyScmStatus('s1', status);
+        const settled = get();
+        const notifications = getSetCalls();
+        domain.applyReady();
+        domain.applyScmStatus('s1', { ...status });
+        expect(get()).toBe(settled);
+        expect(get().sessionScmStatus.s1).toBe(status);
+        expect(getSetCalls()).toBe(notifications);
+        domain.applyScmStatus('s1', { ...status, lastUpdatedAt: 2 });
+        expect(get().sessionScmStatus.s1?.lastUpdatedAt).toBe(2);
+        expect(getSetCalls()).toBe(notifications + 1);
+    });
+
+    it.each(['session', 'workspace'] as const)('retains equal %s review drafts without notifying and still publishes edits', (kind) => {
+        const { domain, get, getSetCalls } = createHarness();
+        const upsert = kind === 'session' ? domain.upsertSessionReviewCommentDraft : domain.upsertWorkspaceReviewCommentDraft;
+        const include = kind === 'session' ? domain.setSessionReviewCommentDraftIncluded : domain.setWorkspaceReviewCommentDraftIncluded;
+        const draft = {
+            id: 'comment', filePath: 'a.ts', source: 'file' as const,
+            anchor: { kind: 'fileLine' as const, startLine: 1 },
+            snapshot: { selectedLines: ['line'], beforeContext: [], afterContext: [] }, body: 'review', createdAt: 1,
+        };
+        upsert('s1', draft);
+        const settled = get();
+        const notifications = getSetCalls();
+        upsert('s1', structuredClone(draft));
+        include('s1', 'missing', false);
+        include('s1', draft.id, true);
+        expect(get()).toBe(settled);
+        expect(getSetCalls()).toBe(notifications);
+        include('s1', draft.id, false);
+        expect(getSetCalls()).toBe(notifications + 1);
+        const edited = get();
+        include('s1', draft.id, false);
+        expect(get()).toBe(edited);
+        upsert('s1', { ...draft, body: 'edited' });
+        expect(getSetCalls()).toBe(notifications + 2);
+    });
+
+    it('retains equal action drafts without notifying and publishes actual input/status changes', () => {
+        const { domain, get, getSetCalls } = createHarness();
+        const scope = { serverId: 'home', accountId: 'account_a' };
+        const address = { serverId: 'home', sessionId: 's1' };
+        const created = domain.createSessionActionDraft(scope, address, { actionId: 'review.start', input: { base: { kind: 'none' } } });
+        const settled = get();
+        const notifications = getSetCalls();
+        domain.updateSessionActionDraftInput(scope, address, created.id, { base: { kind: 'none' } });
+        domain.setSessionActionDraftStatus(scope, address, created.id, 'editing', null);
+        expect(get()).toBe(settled);
+        expect(getSetCalls()).toBe(notifications);
+        domain.updateSessionActionDraftInput(scope, address, created.id, { instructions: 'review this' });
+        domain.setSessionActionDraftStatus(scope, address, created.id, 'running');
+        expect(getSetCalls()).toBe(notifications + 2);
+        domain.clearSessionLocalStateScope();
+        const beforeHydration = getSetCalls();
+        domain.updateSessionActionDraftInput(scope, address, created.id, { instructions: 'review this' });
+        expect(Object.values(get().sessionActionDraftsByAddressKey).flat().some((draft) => draft.id === created.id)).toBe(true);
+        expect(getSetCalls()).toBe(beforeHydration + 1);
+        const hydrated = get();
+        domain.updateSessionActionDraftInput(scope, address, created.id, { instructions: 'review this' });
+        expect(get()).toBe(hydrated);
+    });
+
+    it('publishes only real workspace SCM selection and operation changes', () => {
+        const { domain, get, getSetCalls } = createHarness();
+        const scope = { serverId: 'home', machineId: 'm1', rootPath: '/repo' };
+        domain.markWorkspaceScmTouchedPaths(scope, ['a.ts'], 10);
+        domain.markWorkspaceScmCommitSelectionPaths(scope, ['a.ts'], 10);
+        domain.upsertWorkspaceScmCommitSelectionPatch(scope, { path: 'a.ts', patch: 'patch' }, 10);
+        const started = domain.beginWorkspaceScmOperation(scope, 'commit');
+        if (!started.started) throw new Error('Expected operation');
+        domain.updateWorkspaceScmOperationProgress(scope, started.operation.id, 'running');
+        const settled = get();
+        const notifications = getSetCalls();
+        domain.markWorkspaceScmTouchedPaths(scope, ['a.ts'], 10);
+        domain.markWorkspaceScmTouchedPaths(scope, []);
+        domain.markWorkspaceScmCommitSelectionPaths(scope, ['a.ts'], 10);
+        domain.upsertWorkspaceScmCommitSelectionPatch(scope, { path: 'a.ts', patch: 'patch' }, 10);
+        domain.pruneWorkspaceScmTouchedPaths(scope, new Set(['a.ts']));
+        domain.pruneWorkspaceScmCommitSelectionPaths(scope, new Set(['a.ts']));
+        domain.pruneWorkspaceScmCommitSelectionPatches(scope, new Set(['a.ts']));
+        domain.unmarkWorkspaceScmCommitSelectionPaths(scope, ['missing']);
+        domain.removeWorkspaceScmCommitSelectionPatch(scope, 'missing');
+        domain.beginWorkspaceScmOperation(scope, 'commit');
+        domain.updateWorkspaceScmOperationProgress(scope, started.operation.id, 'running');
+        expect(get()).toBe(settled);
+        expect(getSetCalls()).toBe(notifications);
+        domain.markWorkspaceScmTouchedPaths(scope, ['a.ts'], 11);
+        domain.pruneWorkspaceScmCommitSelectionPaths(scope, new Set());
+        domain.pruneWorkspaceScmCommitSelectionPatches(scope, new Set());
+        domain.finishWorkspaceScmOperation(scope, started.operation.id);
+        expect(getSetCalls()).toBe(notifications + 4);
+        const cleared = get();
+        domain.clearWorkspaceScmCommitSelectionPaths(scope);
+        domain.clearWorkspaceScmCommitSelectionPatches(scope);
+        domain.finishWorkspaceScmOperation(scope, started.operation.id);
+        expect(get()).toBe(cleared);
+    });
+
+    it.each(['session', 'workspace'] as const)('keeps equal %s project status and errors stable, including real freshness changes', (kind) => {
+        const { domain, get, getSetCalls } = createHarness();
+        const scope = { serverId: getActiveServerSnapshot().serverId, machineId: 'm1', rootPath: '/repo' };
+        domain.applySessions([currentSession({ id: 's1', metadata: { machineId: 'm1', path: '/repo', host: 'pub.test' } })]);
+        const updateStatus = (status: ScmStatus) => kind === 'session'
+            ? domain.updateSessionProjectScmStatus('s1', status)
+            : domain.updateWorkspaceScmStatus(scope, status);
+        const updateError = (error: { message: string; at: number } | null) => kind === 'session'
+            ? domain.updateSessionProjectScmSnapshotError('s1', error)
+            : domain.updateWorkspaceScmSnapshotError(scope, error);
+        const readStatus = () => kind === 'session' ? domain.getSessionProjectScmStatus('s1') : domain.getWorkspaceScmStatus(scope);
+        const status: ScmStatus = {
+            branch: 'main', isDirty: false, changedFileCount: 0, includedCount: 0, lastUpdatedAt: 1,
+            includedLinesAdded: 0, includedLinesRemoved: 0, pendingLinesAdded: 0, pendingLinesRemoved: 0,
+            linesAdded: 0, linesRemoved: 0, linesChanged: 0,
+        };
+        updateStatus(status);
+        updateError({ message: 'refresh failed', at: 1 });
+        const settled = get();
+        const notifications = getSetCalls();
+        updateStatus({ ...status });
+        updateError({ message: 'refresh failed', at: 1 });
+        expect(get()).toBe(settled);
+        expect(readStatus()).toBe(status);
+        expect(getSetCalls()).toBe(notifications);
+        updateStatus({ ...status, lastUpdatedAt: 2 });
+        updateError(null);
+        expect(getSetCalls()).toBe(notifications + 2);
+        const cleared = get();
+        updateError(null);
+        expect(get()).toBe(cleared);
+    });
+});
 
 describe('sessions domain: sessionListIndex rebuild gating', () => {
     it('publishes a nonfocused promoted Home refresh into its canonical row and membership projection', async () => {

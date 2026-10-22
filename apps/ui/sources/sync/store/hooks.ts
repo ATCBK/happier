@@ -271,7 +271,7 @@ export function useSessionSelector<T>(id: string, serverId: string | null | unde
  */
 export type SessionDisplayNameSource = Readonly<Pick<
   Session,
-  'id' | 'serverId' | 'metadataLayoutVersion' | 'ownerMetadataView' | 'encryptionMode' | 'encryptedContentAvailability'
+  'id' | 'serverId' | 'archivedAt' | 'metadataLayoutVersion' | 'ownerMetadataView' | 'encryptionMode' | 'encryptedContentAvailability'
   | 'lockedDisplayTitle' | 'access' | 'accessLevel'
 > & { metadata: Session['metadata'] | SessionListRenderableSession['metadata'] }>;
 
@@ -303,6 +303,7 @@ export function selectSessionDisplayNameSource(
   if (!session) return null;
   return {
     id: session.id,
+    archivedAt: session.archivedAt,
     serverId: normalizedServerId || directSession?.serverId,
     encryptionMode: session.encryptionMode,
     encryptedContentAvailability: session.encryptedContentAvailability,
@@ -2350,10 +2351,13 @@ export function useAuthoringMemoryField<K extends keyof AuthoringMemory>(name: K
   return getStorage()((state) => state.authoringMemory[name]);
 }
 
-export function useAllMachines(): Machine[] {
+export function useAllMachines<T>(select: (machines: Machine[]) => T): T;
+export function useAllMachines(): Machine[];
+export function useAllMachines(select?: (machines: Machine[]) => unknown) {
   return getStorage()(
     useShallow((state) => {
-      return resolveVisibleMachinesForActiveServerFromState(state);
+      const machines = resolveVisibleMachinesForActiveServerFromState(state);
+      return select ? select(machines) : machines;
     })
   );
 }

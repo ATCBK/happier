@@ -49,6 +49,17 @@ afterEach(() => {
 });
 
 describe('messages domain: ordering', () => {
+    it('retains the Session when transcript ready metadata was already projected by sync', () => {
+        const session = createSessionFixture({ id: 's1', seq: 9, latestReadyEventSeq: 9, latestReadyEventAt: 9000 });
+        const { get, domain } = createHarness({ sessions: { s1: session } });
+        const sessions = get().sessions;
+        domain.applyMessages('s1', [{ id: 'ready-already-projected', seq: 9, localId: null,
+            createdAt: 9000, isSidechain: false, role: 'event', content: { type: 'ready' } }]);
+        expect(get().sessionMessages.s1.latestReadyEventSeq).toBe(9);
+        expect(get().sessions).toBe(sessions);
+        expect(get().sessions.s1).toBe(session);
+    });
+
     it('does not republish an already reset transcript but still clears new coverage and messages', () => {
         const { get, domain } = createHarness({});
         domain.applyMessagesLoaded('s1');

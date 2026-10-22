@@ -731,6 +731,10 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 const didReadyMetadataChange =
                     nextLatestReadyEventSeq !== existingSession.latestReadyEventSeq
                     || nextLatestReadyEventAt !== existingSession.latestReadyEventAt;
+                const didSessionReadyMetadataChange = session != null && (
+                    nextLatestReadyEventSeq !== session.latestReadyEventSeq
+                    || nextLatestReadyEventAt !== session.latestReadyEventAt
+                );
                 const currentSessionSeq = normalizeTranscriptSeq(session?.seq) ?? 0;
                 const shouldAdvanceSessionSeq =
                     session != null
@@ -774,11 +778,11 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     (session!.permissionMode ?? 'default') !== inferredPermissionMode;
                 let nextSessionForRenderable = session ?? null;
 
-                if (needsUpdate || shouldWritePermissionMode || shouldAdvanceSessionSeq || (session && didReadyMetadataChange)) {
+                if (needsUpdate || shouldWritePermissionMode || shouldAdvanceSessionSeq || (session && didReadyMetadataChange && didSessionReadyMetadataChange)) {
                     const baseSession: Session = {
                         ...session,
                         ...(shouldAdvanceSessionSeq && { seq: latestCommittedMessageSeq }),
-                        ...(didReadyMetadataChange && {
+                        ...(didReadyMetadataChange && didSessionReadyMetadataChange && {
                             latestReadyEventSeq: nextLatestReadyEventSeq,
                             latestReadyEventAt: nextLatestReadyEventAt,
                         }),

@@ -2,6 +2,21 @@ import type { DecryptedArtifact } from '../../domains/artifacts/artifactTypes';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { StoreGet, StoreSet } from './_shared';
 
+function retainArtifactSlices(previous: DecryptedArtifact | undefined, incoming: DecryptedArtifact): DecryptedArtifact {
+  if (!previous?.isDecrypted || !incoming.isDecrypted) return incoming;
+  const before = previous;
+  let retained = incoming;
+  function retainField<Key extends 'header' | 'rawHeader' | 'sessions' | 'body' | 'provenance' | 'storageIdentity'>(key: Key): void {
+    const value = before[key];
+    if (value === incoming[key] || value === null || typeof value !== 'object'
+      || !sameStrictJsonValue(value, incoming[key])) return;
+    if (retained === incoming) retained = { ...incoming };
+    retained[key] = value;
+  }
+  for (const key of ['header', 'rawHeader', 'sessions', 'body', 'provenance', 'storageIdentity'] as const) retainField(key);
+  return retained;
+}
+
 function retainOpenedContent(previous: DecryptedArtifact | undefined, incoming: DecryptedArtifact): DecryptedArtifact {
   if (!previous?.isDecrypted || !incoming.isDecrypted
     || incoming.bodyVersion === undefined || incoming.bodyVersion !== previous.bodyVersion
@@ -47,7 +62,7 @@ function reconcileArtifacts(
       ...(before.access !== undefined ? { access: incomingArtifact.access ?? before.access } : {}),
       ...(before.ownerAccountId !== undefined ? { ownerAccountId: incomingArtifact.ownerAccountId ?? before.ownerAccountId } : {}),
     } : incomingArtifact;
-    const artifact = retainOpenedContent(before, withKnownAccess);
+    const artifact = retainArtifactSlices(before, retainOpenedContent(before, withKnownAccess));
     if (sameStrictJsonValue(before, artifact)) continue;
     if (!before || before.headerVersion !== artifact.headerVersion || before.bodyVersion !== artifact.bodyVersion
       || before.storageMode !== artifact.storageMode) storageChanged = true;

@@ -237,7 +237,7 @@ export function bindActionOperationRuntimeToAccountLifetime(params: Readonly<{
 export function ActionOperationRuntime(): null {
     const accountScope = useActiveServerAccountScope();
     const membership = useMachinePresenceMembership(accountScope?.serverId ?? null);
-    const machines = useAllMachines();
+    const machineIds = useAllMachines(machines => machines.map(machine => machine.id).sort());
     const socket = useSocketStatus();
     const coordinator = React.useMemo(() => createActionOperationRuntimeCoordinator(), []);
     const accountLifetimeRef = React.useRef<ActiveServerAccountScopeLifetime | null>(null);
@@ -275,9 +275,9 @@ export function ActionOperationRuntime(): null {
         actionOperationStore.retainAccountMachines({
             accountId,
             serverId,
-            machineIds: new Set(machines.map((machine) => machine.id)),
+            machineIds: new Set(machineIds),
         });
-    }, [accountId, machines, serverId]);
+    }, [accountId, machineIds, serverId]);
 
     React.useEffect(() => {
         if (!accountId || !serverId || socket.status === 'connected') return;

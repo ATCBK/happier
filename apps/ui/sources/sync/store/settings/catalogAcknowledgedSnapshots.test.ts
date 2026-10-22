@@ -1,39 +1,53 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { applyAcknowledgedMcpServerCatalog, getMcpServerCatalogSnapshot } from './mcpServerCatalogSnapshot';
-import { applyAcknowledgedProviderCatalog, getProviderCatalogSnapshot } from './providerCatalogSnapshot';
-import { applyAcknowledgedAcpCatalog, applyAcpCatalogSnapshot, beginAcpCatalogLoad, getAcpCatalogSnapshot } from './acpCatalogSnapshot';
-import { applyAcknowledgedConnectedAccountCatalog, getConnectedAccountCatalogValue } from './connectedAccountCatalogSnapshot';
-import { applyAcknowledgedNotificationChannelCatalog, getNotificationChannelCatalogValue } from './notificationChannelCatalogSnapshot';
-import { applyAcknowledgedConnectedMetadata, getConnectedMetadataCatalog } from './connectedMetadataCatalogSnapshot';
+import { applyAcknowledgedMcpServerCatalog, getMcpServerCatalogSnapshot, subscribeMcpServerCatalogSnapshots } from './mcpServerCatalogSnapshot';
+import { applyAcknowledgedProviderCatalog, getProviderCatalogSnapshot, subscribeProviderCatalogSnapshots } from './providerCatalogSnapshot';
+import { applyAcknowledgedAcpCatalog, applyAcpCatalogSnapshot, beginAcpCatalogLoad, getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from './acpCatalogSnapshot';
+import { applyAcknowledgedConnectedAccountCatalog, getConnectedAccountCatalogValue, subscribeConnectedAccountCatalogSnapshots } from './connectedAccountCatalogSnapshot';
+import { applyAcknowledgedNotificationChannelCatalog, getNotificationChannelCatalogValue, subscribeNotificationChannelCatalogSnapshots } from './notificationChannelCatalogSnapshot';
+import { applyAcknowledgedConnectedMetadata, getConnectedMetadataCatalog, subscribeConnectedMetadataCatalog } from './connectedMetadataCatalogSnapshot';
+import { applyAcknowledgedRemoteHostCatalog, getRemoteHostCatalogSnapshot, subscribeRemoteHostCatalogSnapshots } from './remoteHostCatalogSnapshot';
 
 describe('acknowledged catalog display evidence', () => {
     const scope = { serverId: 'acknowledged-owner', accountId: 'account' };
     const cases = [
-        { domain: 'mcp', publish: (revision: number, current: boolean) => applyAcknowledgedMcpServerCatalog(scope,
+        { domain: 'mcp', subscribe: subscribeMcpServerCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedMcpServerCatalog(scope,
             { v: 1, servers: [], bindings: [] }, revision, current), read: () => getMcpServerCatalogSnapshot(scope) },
-        { domain: 'providers', publish: (revision: number, current: boolean) => applyAcknowledgedProviderCatalog(scope,
+        { domain: 'providers', subscribe: subscribeProviderCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedProviderCatalog(scope,
             DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, revision, current, null), read: () => getProviderCatalogSnapshot(scope) },
-        { domain: 'acp', publish: (revision: number, current: boolean) => applyAcknowledgedAcpCatalog(scope,
+        { domain: 'acp', subscribe: subscribeAcpCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedAcpCatalog(scope,
             { v: 1, definitions: [] }, revision, current), read: () => getAcpCatalogSnapshot(scope) },
-        { domain: 'configurations', publish: (revision: number, current: boolean) => applyAcknowledgedConnectedAccountCatalog(scope,
+        { domain: 'configurations', subscribe: subscribeConnectedAccountCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedAccountCatalog(scope,
             { key: 'configurations', value: { v: 1, entries: [] } }, revision, current), read: () => getConnectedAccountCatalogValue(scope, 'configurations') },
-        { domain: 'purposes', publish: (revision: number, current: boolean) => applyAcknowledgedConnectedAccountCatalog(scope,
+        { domain: 'purposes', subscribe: subscribeConnectedAccountCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedAccountCatalog(scope,
             { key: 'purposes', value: { v: 1, bindings: [] } }, revision, current), read: () => getConnectedAccountCatalogValue(scope, 'purposes') },
-        { domain: 'notifications', publish: (revision: number, current: boolean) => applyAcknowledgedNotificationChannelCatalog(scope,
+        { domain: 'notifications', subscribe: subscribeNotificationChannelCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedNotificationChannelCatalog(scope,
             [], revision, current), read: () => getNotificationChannelCatalogValue(scope) },
-        { domain: 'acknowledgements', publish: (revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
+        { domain: 'acknowledgements', subscribe: subscribeConnectedMetadataCatalog, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
             { kind: 'acknowledgements', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope) },
+        { domain: 'presentation', subscribe: subscribeConnectedMetadataCatalog, publish: (revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
+            { kind: 'presentation', record: { v: 1, entries: [] } }, revision, current), read: () => getConnectedMetadataCatalog(scope) },
+        { domain: 'remote hosts', subscribe: subscribeRemoteHostCatalogSnapshots, publish: (revision: number, current: boolean) => applyAcknowledgedRemoteHostCatalog(scope,
+            [], revision, current), read: () => getRemoteHostCatalogSnapshot(scope) },
     ];
-    it.each(cases)('keeps $domain evidence stale and rejects older or retired receipts', ({ publish, read }) => {
+    it.each(cases)('keeps $domain evidence stale and suppresses equal, older or retired receipts', ({ publish, read, subscribe }) => {
         publish(5, true);
         const acknowledged = read();
+        const notify = vi.fn();
+        const unsubscribe = subscribe(notify);
+        onTestFinished(unsubscribe);
         expect(acknowledged).toMatchObject('acknowledgementsStale' in acknowledged!
             ? { acknowledgementsStale: true } : { stale: true });
         publish(4, true);
         expect(read()).toBe(acknowledged);
         publish(6, false);
         expect(read()).toBe(acknowledged);
+        publish(5, true);
+        expect(read()).toBe(acknowledged);
+        expect(notify).not.toHaveBeenCalled();
+        publish(6, true);
+        expect(read()).not.toBe(acknowledged);
+        expect(notify).toHaveBeenCalledTimes(1);
     });
 
     it('retains partial ACP revision evidence through refresh and failure before admitting receipts', () => {

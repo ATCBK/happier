@@ -1,7 +1,6 @@
 import type { Machine, Session } from '../../domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import {
-    areMachineDisplayRenderablesEqual,
     areMachineDisplaySemanticsEqual,
     buildMachineDisplayRenderableFromMachine,
     type MachineDisplayRenderable,
@@ -569,7 +568,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         state.machines[machine.id],
                     ]);
                     const previousDisplay = state.machineDisplayById[machine.id];
-                    return [machine.id, previousDisplay && areMachineDisplayRenderablesEqual(previousDisplay, nextDisplay) ? previousDisplay : nextDisplay];
+                    return [machine.id, retainMachineDisplayForPresenceOnly(previousDisplay, nextDisplay)];
                 }));
                 if (Object.keys(nextMachineDisplays).length === Object.keys(state.machineDisplayById).length
                     && Object.entries(nextMachineDisplays).every(([id, display]) => display === state.machineDisplayById[id])) {

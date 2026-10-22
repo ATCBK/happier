@@ -147,7 +147,7 @@ function rebuildSessionListIndexesForSettingsChange(
     for (const serverId in state.ordinarySessionListMembershipByServerId ?? {}) {
         if (serverId === activeServerId) continue;
         const entry = state.concurrentSessionListCacheByServerId?.[serverId];
-        concurrentUpdates[serverId] = buildSessionListIndexWithServerScope({
+        const nextIndex = buildSessionListIndexWithServerScope({
             sessions: readOrdinaryRowsForServer(state, serverId),
             machines: buildMachineDisplaysByIdFromMachineList(state.machineListByServerId?.[serverId]),
             activeGroupingV1: nextSettings.sessionListActiveGroupingV1,
@@ -159,6 +159,8 @@ function rebuildSessionListIndexesForSettingsChange(
             },
             previousIndex: nextSessionListIndexByServerId[serverId] ?? null,
         });
+        if (nextIndex === nextSessionListIndexByServerId[serverId]) continue;
+        concurrentUpdates[serverId] = nextIndex;
         didUpdateConcurrent = true;
     }
 
