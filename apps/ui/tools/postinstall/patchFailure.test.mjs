@@ -35,6 +35,7 @@ test('UI postinstall verifies installed artifacts without patch-package and find
       .flatMap(([, marker, count = 1]) => Array(count).fill(marker));
     await writeFile(join(packageDir, file), markers.join('\n'));
   }
+  await writeFile(join(packageDir, 'package.json'), '{"name":"react-native-enriched-markdown"}\n');
   const result = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
     cwd: ui, encoding: 'utf8', env: { ...process.env, HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
       HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
@@ -46,6 +47,7 @@ test('UI postinstall verifies installed artifacts without patch-package and find
   const sentrySource = join(root, 'apps/node_modules/@sentry/react-native/ios/RNSentryStart.m');
   await mkdir(dirname(sentrySource), { recursive: true });
   await writeFile(sentrySource, '// unpatched native source\n');
+  await writeFile(join(root, 'apps/node_modules/@sentry/react-native/package.json'), '{"name":"@sentry/react-native"}\n');
   const ancestorResult = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
     cwd: ui, encoding: 'utf8', env: { ...process.env, HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
       HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },

@@ -104,6 +104,7 @@ test('UI dependency preflight verifies other patches resolved from an ancestor',
         fs.cpSync(fixture, path.join(root, 'node_modules/react-native-enriched-markdown'), { recursive: true });
         fs.mkdirSync(uiPackageDir, { recursive: true });
         fs.mkdirSync(packageDir, { recursive: true });
+        writePackageManifest(packageDir, 'fixture-dependency');
         fs.mkdirSync(path.join(root, 'patches'));
         fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'),
             'patchedDependencies:\n  fixture-dependency@1.0.0: patches/fixture.patch\n');
@@ -137,6 +138,7 @@ test('UI dependency preflight verifies other patches even when enriched-markdown
             + '@@ -0,0 +1 @@\n+export const feature = true;\n');
         for (const packageDir of [path.join(root, 'node_modules/fixture-dependency'), path.join(uiPackageDir, 'node_modules/fixture-dependency')]) {
             fs.mkdirSync(packageDir, { recursive: true });
+            writePackageManifest(packageDir, 'fixture-dependency');
             fs.writeFileSync(path.join(packageDir, 'index.js'), 'export const patched = true;\n');
             fs.writeFileSync(path.join(packageDir, 'feature.js'), 'export const feature = true;\n');
         }
@@ -149,6 +151,34 @@ test('UI dependency preflight verifies other patches even when enriched-markdown
         assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
         fs.writeFileSync(path.join(uiPackageDir, 'node_modules/fixture-dependency/index.js'), 'export const patched = true;\n');
         fs.writeFileSync(path.join(uiPackageDir, 'node_modules/fixture-dependency/feature.js'), 'export const feature = false;\n');
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(fixture, { recursive: true, force: true });
+    }
+});
+
+test('UI dependency preflight ignores a manifest-less cache directory but still verifies installed copies', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-cache-dir-preflight-'));
+    const fixture = createPatchedPackageFixture();
+    const uiPackageDir = path.join(root, 'apps', 'ui');
+    const hoistedCopy = path.join(root, 'node_modules', 'fixture-dependency');
+    const appLocalDir = path.join(uiPackageDir, 'node_modules', 'fixture-dependency');
+    try {
+        fs.cpSync(fixture, path.join(root, 'node_modules/react-native-enriched-markdown'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'patches'));
+        fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'),
+            'patchedDependencies:\n  fixture-dependency@1.0.0: patches/fixture.patch\n');
+        fs.writeFileSync(path.join(root, 'patches', 'fixture.patch'),
+            '--- a/lib/index.js\n+++ b/lib/index.js\n@@ -1 +1 @@\n-unpatched\n+patched\n');
+        fs.mkdirSync(path.join(hoistedCopy, 'lib'), { recursive: true });
+        writePackageManifest(hoistedCopy, 'fixture-dependency');
+        fs.writeFileSync(path.join(hoistedCopy, 'lib/index.js'), 'patched\n');
+        // A tool cache left under the app's node_modules, with no package in it.
+        fs.mkdirSync(path.join(appLocalDir, '.worklets'), { recursive: true });
+        assert.doesNotThrow(() => verifyUiPatchedDependencies({ uiPackageDir }));
+
+        writePackageManifest(appLocalDir, 'fixture-dependency');
         assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
@@ -169,7 +199,12 @@ function createPatchedPackageFixture() {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, (markersByFile.get(relativePath) ?? []).join('\n'), 'utf8');
     }
+    writePackageManifest(fixtureDir, 'react-native-enriched-markdown');
     return fixtureDir;
+}
+
+function writePackageManifest(packageDir, name) {
+    fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
 }
 
 test('dependency preflight rejects an installed eager math loader', () => {
