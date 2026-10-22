@@ -2,6 +2,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { ProviderProbeObservationIdentityV1Schema } from '@happier-dev/protocol/providers/fingerprints';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -22,6 +24,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { applyProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
 const providerHarness = createProviderSettingsHarness({ machines: [] });
@@ -239,9 +242,19 @@ describe('useProviderConnections', () => {
             body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } },
         });
         let finishRead!: (response: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;
-        machineRpcWithServerScope.mockResolvedValueOnce(createProviderConnectionsDescribeFixture({
-            connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: 'Acme' })],
-        }));
+        const initialMachineReply = createProviderConnectionsDescribeFixture({
+            connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: 'Acme', displayNameMode: 'custom',
+                probeObservationIdentity: ProviderProbeObservationIdentityV1Schema.parse('probe-observation:v1:current-machine') })],
+            discoveryCandidates: [{ v: 1, machineId: 'machine-a', contributionKey: 'acme.plugin/acme', providerName: 'Acme',
+                endpointTemplateId: 'native', normalizedEndpointUrl: 'http://127.0.0.1:11434/',
+                evidence: { kind: 'attributed_listener' }, ownership: 'adopted',
+                connection: { status: 'matched', connectionId: ProviderConnectionIdSchema.parse('pc_a') } }],
+            localInstallations: [{ v: 1, machineId: 'machine-a', contributionKey: 'acme.plugin/acme', providerName: 'Acme',
+                status: 'installed_not_running', managedStartAvailable: true }],
+        });
+        initialMachineReply.discoveryCandidatesTruncated = true;
+        initialMachineReply.localInstallationsStatus = 'incomplete';
+        machineRpcWithServerScope.mockResolvedValueOnce(initialMachineReply);
         const hook = await renderHook(() => useProviderConnections({ enabled: true, machineId: 'machine-a', serverId }));
         await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
         const answered = hook.getCurrent().data;
@@ -255,6 +268,12 @@ describe('useProviderConnections', () => {
         try {
             await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
             expect(hook.getCurrent().data?.connections).toMatchObject([{ connectionId: 'pc_a', displayName: 'Acme' }]);
+            expect(hook.getCurrent().data?.connections[0]).toBe(answered?.connections[0]);
+            expect(hook.getCurrent().data?.connections[0]?.probeObservationIdentity).toBe('probe-observation:v1:current-machine');
+            expect(hook.getCurrent().data).toMatchObject({
+                discoveryCandidates: initialMachineReply.discoveryCandidates, discoveryCandidatesTruncated: true,
+                localInstallations: initialMachineReply.localInstallations, localInstallationsStatus: 'incomplete',
+            });
             expect(hook.getCurrent().catalog?.connections).toMatchObject([{ id: 'pc_a', displayName: 'Acme' }]);
             expect(hook.getCurrent().loading).toBe(false);
             await hook.rerender();
@@ -263,6 +282,68 @@ describe('useProviderConnections', () => {
         } finally {
             await act(async () => {
                 finishRead(createProviderConnectionsDescribeFixture({ connections: [] }));
+                await refresh;
+            });
+        }
+        expect(hook.getCurrent().data?.connections[0]?.probeObservationIdentity).toBeNull();
+        expect(hook.getCurrent().data?.discoveryCandidates).toEqual([]);
+        expect(hook.getCurrent().data?.localInstallations).toEqual([]);
+    });
+
+    it('publishes changed, added and deleted Account facts while retaining only equivalent Machine augmentation', async () => {
+        const savedConnection = (id: string, revision: number) => ({
+            v: 1, id, source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-chat'), name: id,
+                baseUrl: id === 'pc_changed' && revision === 2 ? 'https://changed.example.test/v1' : 'https://models.example.test/v1',
+                requiresApiKey: false,
+            }) }, role: 'named', displayName: `${id} ${revision}`, displayNameMode: 'custom', revision, createdAt: 1, updatedAt: revision,
+        });
+        let catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [savedConnection('pc_a', 1), savedConnection('pc_renamed', 1), savedConnection('pc_changed', 1),
+                savedConnection('pc_deleted', 1), savedConnection('pc_grant', 1)],
+            accountGrants: [{ v: 1, connectionId: 'pc_grant', connectionSecurityFingerprint: 'stale-account-grant', confirmedAt: 1 }],
+        });
+        let catalogRevision = 1;
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision: catalogRevision, content: { t: 'plain', v: catalog } } }),
+        });
+        machineRpcWithServerScope.mockResolvedValue(createProviderConnectionsDescribeFixture({
+            connections: catalog.connections.map(row => createProviderConnectionViewFixture({
+                connectionId: row.id, revision: row.revision, displayName: row.displayName,
+                probeObservationIdentity: ProviderProbeObservationIdentityV1Schema.parse(`probe-observation:v1:${row.id}`),
+            })),
+        }));
+        const hook = await renderHook(() => useProviderConnections({ enabled: true, machineId: 'machine-a', serverId }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().data?.connections[0]?.probeObservationIdentity).toBe('probe-observation:v1:pc_a'));
+        catalog = ProviderConnectionsCatalogV1Schema.parse({ ...catalog,
+            connections: [savedConnection('pc_a', 1), savedConnection('pc_renamed', 2), savedConnection('pc_changed', 2),
+                savedConnection('pc_new', 1), savedConnection('pc_grant', 1)],
+            accountGrants: [],
+        });
+        catalogRevision += 1;
+        let finishRead!: (response: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;
+        machineRpcWithServerScope.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+        let refresh!: Promise<unknown>;
+        let refreshCompleted = false;
+        await act(async () => { refresh = hook.getCurrent().refresh().finally(() => { refreshCompleted = true; }); });
+        try {
+            await waitForHomeGovernance(() => expect(typeof finishRead === 'function' || refreshCompleted).toBe(true));
+            expect({ machineReadStarted: typeof finishRead === 'function', error: hook.getCurrent().error,
+                machineError: hook.getCurrent().machineError }).toMatchObject({ machineReadStarted: true, error: null });
+            expect(hook.getCurrent().data?.connections.map(row => ({
+                connectionId: row.connectionId, revision: row.revision, probeObservationIdentity: row.probeObservationIdentity,
+            }))).toEqual([
+                { connectionId: 'pc_a', revision: 1, probeObservationIdentity: 'probe-observation:v1:pc_a' },
+                { connectionId: 'pc_renamed', revision: 2, probeObservationIdentity: 'probe-observation:v1:pc_renamed' },
+                { connectionId: 'pc_changed', revision: 2, probeObservationIdentity: null },
+                { connectionId: 'pc_new', revision: 1, probeObservationIdentity: null },
+                { connectionId: 'pc_grant', revision: 1, probeObservationIdentity: null },
+            ]);
+            expect(hook.getCurrent().data?.connections.find(row => row.connectionId === 'pc_renamed')?.displayName).toBe('pc_renamed 2');
+            expect(hook.getCurrent().data?.connections.find(row => row.connectionId === 'pc_grant')?.grants.accountState).toBe('absent');
+        } finally {
+            await act(async () => {
+                finishRead?.(createProviderConnectionsDescribeFixture({ connections: [] }));
                 await refresh;
             });
         }
@@ -370,9 +451,11 @@ describe('useProviderConnections', () => {
             await hook.rerender();
         });
 
+        // Account A must disappear synchronously; Account B's empty snapshot
+        // arrives before its deferred Machine augmentation starts.
+        expect(hook.getCurrent().data?.connections ?? []).toEqual([]);
+        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2));
         expect(hook.getCurrent().data?.connections).toEqual([]);
-        await act(async () => {});
-        expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2);
 
         await act(async () => {
             resolveA(createProviderConnectionsDescribeFixture({

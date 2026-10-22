@@ -12,6 +12,7 @@ import {
 } from '@/sync/domains/scope/activeServerAccountScope';
 import { getProviderCatalogSnapshot, subscribeProviderCatalogSnapshots, type ProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import {
     registerProviderConnectionReader,
     refreshProviderConnectionReaders,
@@ -20,6 +21,16 @@ import {
 export type { ProviderConnectionRefreshScope } from './providerConnectionRefresh';
 
 type Success = Extract<DaemonProviderConnectionsDescribeResponseV1, { status: 'success' }>;
+type Connection = Success['connections'][number];
+
+function accountFactsMatch(previous: Connection, next: Connection): boolean {
+    // A display-only rename advances the saved revision without changing the
+    // facts a Machine checked. Grants and secret bindings can change without
+    // advancing that revision, so compare every other Account-derived field.
+    return stableJsonStringify({ ...previous, displayName: next.displayName,
+        displayNameMode: next.displayNameMode, revision: next.revision }) === stableJsonStringify(next);
+}
+
 type ProviderConnectionsState = Readonly<{
     scopeKey: string | null;
     accountScopeKey?: string;
@@ -161,8 +172,29 @@ export function useProviderConnections(input: Readonly<{
                 catalog = { ...admitted, data: { ...admitted.data,
                     connections: admitted.data.connections.filter(connection => revisions.get(connection.id) === connection.revision) } };
             }
-            setState({ scopeKey, accountScopeKey, accountLifetime, data: accountData, accountData, catalog,
-                error: null, machineError: null, loading: true });
+            setState((current) => {
+                const sameTarget = machineId && current.scopeKey === scopeKey
+                    && current.accountLifetime === accountLifetime;
+                const previousAccountRows = new Map(sameTarget ? current.accountData?.connections.map(row => [row.connectionId, row]) : []);
+                const previousRows = new Map(sameTarget ? current.data?.connections.map(row => [row.connectionId, row]) : []);
+                const connections = accountResult.connections.map(row => {
+                    const previousAccountRow = previousAccountRows.get(row.connectionId);
+                    const previousRow = previousRows.get(row.connectionId);
+                    if (!previousAccountRow || !previousRow || previousRow.revision !== previousAccountRow.revision
+                        || !accountFactsMatch(previousAccountRow, row)) return row;
+                    if (previousRow.displayName === row.displayName && previousRow.displayNameMode === row.displayNameMode
+                        && previousRow.revision === row.revision) return previousRow;
+                    return { ...previousRow, displayName: row.displayName, displayNameMode: row.displayNameMode, revision: row.revision };
+                });
+                const machineCollections = sameTarget && current.data ? {
+                    discoveryCandidates: current.data.discoveryCandidates,
+                    discoveryCandidatesTruncated: current.data.discoveryCandidatesTruncated,
+                    localInstallations: current.data.localInstallations,
+                    ...(current.data.localInstallationsStatus ? { localInstallationsStatus: current.data.localInstallationsStatus } : {}),
+                } : {};
+                return { scopeKey, accountScopeKey, accountLifetime, data: { ...accountResult, ...machineCollections, connections }, accountData: accountResult, catalog,
+                    error: null, machineError: null, loading: true };
+            });
             if (!machineId) return accountData;
             const result = await describeProviderConnections({ machineId, serverId,
                 ...(input.connectionId ? { connectionId: input.connectionId } : {}),
