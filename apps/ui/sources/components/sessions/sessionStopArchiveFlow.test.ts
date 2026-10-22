@@ -40,10 +40,10 @@ describe('stopSessionAndMaybeArchive', () => {
             archiveSession: async () => ({ success: false, code: 'session_active', message: 'raw conflict' }),
         })).rejects.toMatchObject({ message: 'archive failed', code: 'session_active' });
         await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'never' }))
-            .rejects.toMatchObject({ message: 'runtime already retired' });
+            .rejects.toMatchObject({ name: 'HappyError', message: 'runtime already retired', code: 'session_stop_not_found' });
         await expect(stopSessionAndMaybeArchive({ ...params, archiveAfterStop: 'always',
             stopSession: async () => ({ success: false, code: 'session_stop_failed', message: 'Session not found' }),
-        })).rejects.toMatchObject({ message: 'Session not found' });
+        })).rejects.toMatchObject({ name: 'HappyError', message: 'Session not found', code: 'session_stop_failed' });
         expect(archiveSession).toHaveBeenCalledTimes(1);
     });
 

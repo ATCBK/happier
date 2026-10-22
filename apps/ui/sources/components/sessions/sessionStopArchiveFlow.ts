@@ -10,6 +10,7 @@ type SessionMutationResult = Readonly<{
     message?: string;
     code?: string;
     recovery?: SessionStopRecovery;
+    details?: unknown;
 }>;
 
 /** Read the Session stop owner's result from the Action's JSON output. */
@@ -55,7 +56,7 @@ export function resolveSessionStopFailureMessage(
     if (result.recovery === 'retry_when_runtime_available') {
         return t('sessionInfo.stopSessionControlUnavailable');
     }
-    return result.message || fallbackMessage;
+    return result.message && result.message !== 'unknown_error' ? result.message : fallbackMessage;
 }
 
 export function isSessionArchivePending(address: SessionAddress): boolean {
@@ -84,7 +85,10 @@ export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArch
         const canAttemptArchiveWithoutRuntime = params.archiveAfterStop === 'always'
             && stopResult.code === 'session_stop_not_found';
         if (!stopResult.success && !isAcceptedPendingSessionStop(stopResult) && !canAttemptArchiveWithoutRuntime) {
-            throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
+            throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false, {
+                code: stopResult.code,
+                details: stopResult.details,
+            });
         }
         if (params.archiveAfterStop === 'never') return;
         const archiveResult = await params.archiveSession(operation);

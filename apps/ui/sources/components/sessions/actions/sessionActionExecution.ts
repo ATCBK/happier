@@ -259,7 +259,8 @@ function resolveMoveToFolder(context: SessionActionExecutionContext | undefined)
 
 function throwIfFailed(result: SessionActionOperationResult | void, fallbackMessage: string): void {
     if (!result || result.success) return;
-    throw new HappyError(result.message || fallbackMessage, false, { code: result.code, details: result.details });
+    const message = result.message && result.message !== result.code ? result.message : fallbackMessage;
+    throw new HappyError(message, false, { code: result.code, details: result.details });
 }
 
 function throwUnsupportedSingleTargetAction(): never {
