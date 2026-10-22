@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -92,7 +93,7 @@ describe('Next focus through the mounted RN-web transcript', () => {
         const accountId = 'focus-owner';
         const serverId = await homes.addHome({ name: 'Next transcript', serverUrl, accountId });
         await homes.selectHomes([serverId]);
-        connection = await restoreServerAccountForTest({ serverUrl, accountId, request: homes.request });
+        connection = await restoreServerAccountForTest({ serverUrl, accountId, request: createSessionReadBatchFetchBoundary(homes.request) });
         const now = Date.now();
         const input = { questions: [{ question: 'Do you prefer River or Meadow?', header: 'Choice',
             options: [{ label: 'River', description: 'River' }, { label: 'Meadow', description: 'Meadow' }], multiSelect: false }] };

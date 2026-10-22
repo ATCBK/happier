@@ -3,6 +3,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import nacl from 'tweetnacl';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -48,7 +49,7 @@ it.each(['accepted', 'refused', 'foreign-root', 'uncertain'] as const)('FIX81 ca
     const machineId = 'machine';
     const onTransportIssued = vi.fn();
     const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(12));
-    const machine = { id: machineId, kind: 'persistent', active: true,
+    const machine = { ...createPlainMachineRowFixture({ id: machineId, accountId: 'requester' }),
         installationId: 'installation', installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null, replacedByMachineId: null,
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'requester', displayName: 'Requester' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
@@ -103,7 +104,7 @@ it('refuses non-JSON detached input before issuing an Action and reports no Run 
     const serverId = await homes.addHome({ name: 'Invalid detached input', serverUrl: 'https://invalid-detached.test',
         serverIdentityId: 'srv_invalid_detached', accountId: 'requester', currentAccount: true });
     const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(12));
-    const machine = { id: 'machine', kind: 'persistent', active: true, installationId: 'installation',
+    const machine = { ...createPlainMachineRowFixture({ id: 'machine', accountId: 'requester' }), installationId: 'installation',
         installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null, replacedByMachineId: null,
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'requester', displayName: 'Requester' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };

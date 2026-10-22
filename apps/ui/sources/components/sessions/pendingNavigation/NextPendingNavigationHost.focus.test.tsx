@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -56,7 +57,7 @@ describe('Next focus across workspace navigation updates', () => {
             const serverUrl = 'https://next-focus.test';
             const serverId = await homes.addHome({ name: 'Next focus', serverUrl, accountId: 'focus-owner' });
             await homes.selectHomes([serverId]);
-            connection = await restoreServerAccountForTest({ serverUrl, accountId: 'focus-owner', request: homes.request });
+            connection = await restoreServerAccountForTest({ serverUrl, accountId: 'focus-owner', request: createSessionReadBatchFetchBoundary(homes.request) });
             const now = Date.now();
             const questionArguments = { questions: [{ id: 'answer', question: 'Describe your choice', selection: 'text', required: true }] };
             const firstState = AgentStateSchema.parse({ requests: {

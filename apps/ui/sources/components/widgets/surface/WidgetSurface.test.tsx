@@ -8,6 +8,7 @@ import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredW
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
@@ -258,7 +259,7 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     const containingSession = createPlainSessionCurrentProjectionRecordFixture({ id: 'destination', metadata: null });
     const features = createRootLayoutFeaturesResponse();
     if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Expected the Board feature');
-    const connection = await restoreServerAccountForTest({ serverUrl: `https://saved-builtin-${owner}.test`, accountId: 'viewer', request: async (url, init) => {
+    const connection = await restoreServerAccountForTest({ serverUrl: `https://saved-builtin-${owner}.test`, accountId: 'viewer', request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/machines') return Response.json({ machines: [] });
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
@@ -270,7 +271,7 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
         const tokens = { input: total - 5, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total };
         const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
         return Response.json({ v: 1, totals: { eventCount: 1, tokens, cost }, series: [{ bucketStartMs: start, bucketEndMs: start + 86_400_000, eventCount: 1, tokens, cost }] });
-    } });
+    }) });
     const viewer = getActiveServerAccountScope();
     if (!viewer) throw new Error('Expected current viewer');
     // Shared Session content is an inline copy, never a foreign private Account reference.

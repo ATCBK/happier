@@ -1,18 +1,20 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { SessionStatusActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 const { createVoiceToolHandlers } = await import('@/voice/tools/handlers');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { getStorage } = await import('@/sync/domains/state/storage');
 const initial = getStorage().getState();
-beforeEach(async () => { await homes.reset(); });
+beforeEach(async () => { await homes.reset(); installHomeGovernanceBoundaries(httpBoundary); });
 afterEach(() => { getStorage().setState(initial, true); standardCleanup(); });
 
 it.each(['ui', 'voice'] as const)('reads configured versus denied invocation through the registered exact-Home %s status Action without Machine work', async surface => {

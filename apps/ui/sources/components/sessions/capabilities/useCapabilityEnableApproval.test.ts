@@ -3,6 +3,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { createDeferred, renderScreen, standardCleanup, createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
@@ -27,7 +28,8 @@ import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChan
 import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 const machineTransport = vi.hoisted(() => vi.fn<(request: { method: string; payload: unknown }) => Promise<unknown>>());
 // The daemon network hop is external. Its replay runs the real Protocol owner,
@@ -55,7 +57,7 @@ const { McpAlwaysAllowDecision } = await import('@/components/tools/shell/permis
 const { PermissionPromptCard } = await import('@/components/tools/shell/permissions/PermissionPromptCard');
 const { ResolvedMcpToolIdentityV1Schema } = await import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1');
 
-beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); machineTransport.mockReset(); });
+beforeEach(async () => { await homes.reset(); installHomeGovernanceBoundaries(httpBoundary); await loadSyncSingletonForTests(); machineTransport.mockReset(); });
 afterEach(async () => { standardCleanup(); await homes.reset(); });
 
 it('loads the MCP server default and saves Always allow after the answered tray card unmounts', async () => {

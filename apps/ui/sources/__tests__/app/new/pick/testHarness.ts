@@ -1,6 +1,7 @@
 import React from 'react';
 import { afterEach, beforeAll, beforeEach, vi } from 'vitest';
-import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_EVENTS } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, PluginProjectionV2Schema, RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_EVENTS } from '@happier-dev/protocol';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
@@ -145,13 +146,17 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
             accountId: `account:${profile.id}`, request: async (input, init) => {
                 if (!homes) throw new Error('Picker Home boundary unavailable');
                 const url = new URL(String(input));
+                if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                    return createMachineReadBatchResponseFixture(init.body, id => createPlainMachineRowFixture({
+                        id, accountId: `account:${profile.id}`,
+                    }));
+                }
                 if ((init?.method ?? 'GET') === 'GET' && url.pathname.startsWith('/v1/machines/')) {
                     const home = homes.findByServerUrl(url.origin);
                     if (!home) throw new Error(`Unexpected Machine lookup Home: ${url.origin}`);
-                    homes.answer(home.serverId, url.pathname, { body: { machine: {
-                        id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)),
-                        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-                    } } });
+                    homes.answer(home.serverId, url.pathname, { body: { machine: createPlainMachineRowFixture({
+                        id: decodeURIComponent(url.pathname.slice('/v1/machines/'.length)), accountId: `account:${profile.id}`,
+                    }) } });
                 }
                 return homes.request(input, init);
             } });

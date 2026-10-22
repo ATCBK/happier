@@ -20,6 +20,7 @@ import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testH
 import { chatListHarnessState, resetChatListHarness } from '@/dev/testkit/harness/chatListHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
@@ -97,7 +98,7 @@ describe('Session open → turn projection → mounted transcript', () => {
         const sessionResponse = createDeferred<void>();
         if (mode !== 'background-in-flight') sessionResponse.resolve();
         const http = createHomeHubArtifactHttpBoundary('reader');
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://session-open.test', accountId: 'reader', request: async (input, init) => {
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://session-open.test', accountId: 'reader', request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(String(input)).pathname;
             requests.push(path);
             if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
@@ -115,7 +116,7 @@ describe('Session open → turn projection → mounted transcript', () => {
             if (path === `/v1/sessions/${sessionId}/messages`)
                 return Response.json({ messages, hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
             return http.request(input, init);
-        } });
+        }) });
         await sync.refreshSessions({ awaitSessionListHydration: true });
         expect(requests.filter(path => path.endsWith('/turns'))).toEqual([]);
         if (mode === 'cached') {

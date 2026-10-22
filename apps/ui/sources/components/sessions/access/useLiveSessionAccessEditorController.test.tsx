@@ -33,6 +33,7 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
 import { encryptDataKeyForRecipientV0 } from '@/sync/encryption/directShareEncryption';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { isDataKeyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -218,7 +219,7 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         )
         : null;
 
-    setRuntimeFetch(async (url, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v2/cursor') return Response.json({ cursor: '0' });
         if (path === '/v1/auth/ping') return new Response('{}');
@@ -392,7 +393,7 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
                 responsibleAccountId: null, responsibleAccount: null,
             } }));
         }
-        if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+        if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
         if (path.endsWith('/data-key/envelopes')) {
             if (state.envelopeStatus !== 200) return new Response(JSON.stringify({ error: 'session_data_key_envelope_request_failed' }), { status: state.envelopeStatus });
             if (!sessionEncrypted) return new Response(JSON.stringify({ status: 'not_required' }));
@@ -411,7 +412,7 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         }
         // This Home fixture exposes only the domain surfaces exercised here.
         return Response.json({ error: 'not_found' }, { status: 404 });
-    });
+    }));
 
     await setActiveServerId(profile.id, { scope: 'device' });
     const credentials = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });

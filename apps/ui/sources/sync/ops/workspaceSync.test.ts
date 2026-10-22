@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-    MACHINE_PLAIN_DATA_KEY_MARKER,
     computeWorkspaceSyncPolicyDigest,
     decodePlainArtifactStoredContent,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -115,8 +115,12 @@ describe('workspace sync UI operations', () => {
             if (pathname === '/v1/features') return Response.json(features);
             if (pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (pathname === '/v1/auth/ping') return Response.json({ ok: true });
+            if (pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return createMachineReadBatchResponseFixture(init.body, id => id === 'machine-controller'
+                    ? createPlainMachineRowFixture({ id, accountId: 'workspace-sync-account' }) : null);
+            }
             if (pathname === '/v1/machines/machine-controller') {
-                return Response.json({ machine: { id: 'machine-controller', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+                return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine-controller', accountId: 'workspace-sync-account' }) });
             }
             const artifactResponse = artifacts.handle(pathname, init);
             if (artifactResponse) return await artifactResponse;

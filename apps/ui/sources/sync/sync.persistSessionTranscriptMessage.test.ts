@@ -6,6 +6,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
 
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
@@ -94,7 +95,7 @@ function createTranscriptInput(
 function installRuntimeRequest(
     request: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>,
 ): void {
-    setRuntimeFetch(async (input, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
         const url = String(input);
         const path = new URL(url).pathname;
         if (path === '/health' || path === '/v1/auth/ping') {
@@ -120,9 +121,9 @@ function installRuntimeRequest(
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
         if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         if (path === '/v2/sessions/active' || path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
-        if (!path.startsWith('/v2/sessions/voice-history-')) return Response.json({}, { status: 404 });
+        if (!path.startsWith('/v2/sessions/voice-history-')) return Response.json({ error: 'not_found' }, { status: 404 });
         return await request(input, init);
-    });
+    }));
 }
 
 describe('sync.persistSessionTranscriptMessage', () => {

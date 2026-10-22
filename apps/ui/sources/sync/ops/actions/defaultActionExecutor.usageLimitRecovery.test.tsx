@@ -11,6 +11,7 @@ import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 vi.mock('socket.io-client', async importOriginal => (
@@ -39,7 +40,7 @@ afterEach(() => { standardCleanup(); vi.restoreAllMocks(); });
 it('binds the recovery Action to the existing Session RPC adapter for an agent', async () => {
     await loadSyncSingletonForTests();
     const home = createHomeGovernanceHarness();
-    installHomeGovernanceBoundaries(home);
+    installHomeGovernanceBoundaries({ ...home, request: createSessionReadBatchFetchBoundary(home.request) });
     const serverId = await home.addHome({ name: 'Recovery port', serverUrl: 'https://recovery-port.test', accountId: 'recovery-account' });
     const session = createSessionFixture({ id: 'port-session', serverId, active: true, encryptionMode: 'plain' });
     home.answer(serverId, `/v2/sessions/${session.id}`, { body: createPlainSessionByIdResponseFixture(session) });
@@ -86,7 +87,7 @@ it.each(controls.flatMap(control => (['approve', 'reject'] as const).map(decisio
     'governs mounted $control.0 with Require approval ($decision)', async ({ control: [label, actionId, method, args], decision }) => {
         const bridge = await loadSyncSingletonForTests();
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
+        installHomeGovernanceBoundaries({ ...home, request: createSessionReadBatchFetchBoundary(home.request) });
         const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: {
             [actionId]: { approvalRequiredSurfaces: ['ui'] },
         } });
@@ -105,11 +106,11 @@ it.each(controls.flatMap(control => (['approve', 'reject'] as const).map(decisio
         const token = home.findByServerUrl(serverUrl)?.token;
         if (!token) throw new Error('Missing test Account credential');
         const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId: 'srv_recovery',
-            accountId: 'recovery-account', credentials: { token }, request: async (url, init) => {
+            accountId: 'recovery-account', credentials: { token }, request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const response = await home.request(url, init);
                 return response.status === 404
                     ? createEmptyAccountBootstrapHttpResponse(new URL(String(url)).pathname, init) ?? response : response;
-            } });
+            }) });
         storage.setState({ settings: { ...settingsDefaults, actionsSettingsV1 }, settingsVersion: 1, isDataReady: true });
         storage.getState().applySessions([session]);
         storage.getState().applyMachines([createMachineFixture({ id: machine.id, activeAt: Date.now() })], true, { sourceServerId: serverId });

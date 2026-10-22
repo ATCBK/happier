@@ -31,6 +31,7 @@ import {
 } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { vi } from 'vitest';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 import type { Socket } from 'socket.io-client';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 // IndexedDB is the genuine browser persistence leaf; record transactions and Sync stay real.
@@ -502,6 +503,7 @@ function configureProviderSettingsSocket(socket: Socket, serverUrl: string | und
 /** Account admission, row publication and retirement stay real; only Home HTTP and Socket transport are substituted. */
 export function createProviderSettingsAccountHarness() {
     const home = createHomeGovernanceHarness();
+    const sessionReadRequest = createSessionReadBatchFetchBoundary(home.request);
     const bootstrapHome: typeof home = {
         ...home,
         request: async (input, init) => {
@@ -513,7 +515,7 @@ export function createProviderSettingsAccountHarness() {
             const path = `${url.pathname}${url.search}`;
             const method = (requestInit?.method ?? 'GET').toUpperCase();
             // Keep the original leaf's request census and every explicit error/response override.
-            const response = await home.request(input, requestInit);
+            const response = await sessionReadRequest(input, requestInit);
             if (!record || record.answers.has(`${method} ${path}`) || record.answers.has(path)
                 || record.answers.has(`${method} ${url.pathname}`) || record.answers.has(url.pathname)) return response;
             return createEmptyAccountBootstrapHttpResponse(path, requestInit) ?? response;

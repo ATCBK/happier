@@ -11,6 +11,7 @@ import { installApprovalCommonModuleMocks } from '@/components/approvals/approva
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -22,7 +23,7 @@ import { resumeSession } from '../sessions';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { voiceSettingsParse, writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
@@ -166,7 +167,10 @@ describe('default Action original Home selection', () => {
                 agentState: null, dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0 });
             const httpPaths: string[] = [];
             let relayedInput: unknown;
-            setRuntimeFetch(async (rawUrl, init) => {
+            const machine = { ...createPlainMachineRowFixture({ id: 'alice-machine', accountId: 'alice' }),
+                installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey),
+                access: { custodian, role: 'use' as const, resourceMode: 'plain' as const, accessState: 'ready' as const } };
+            setRuntimeFetch(createSessionReadBatchFetchBoundary(async (rawUrl, init) => {
                 const url = new URL(String(rawUrl));
                 expect(url.origin).toBe(profile.serverUrl);
                 httpPaths.push(url.pathname);
@@ -178,11 +182,12 @@ describe('default Action original Home selection', () => {
                 if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
                 if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (url.pathname === '/v2/sessions/bob-session') return Response.json({ session: sessionWire });
+                if (url.pathname === '/v1/sessions/bob-session/turns') return Response.json({ error: 'not_found' }, { status: 404 });
                 if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-                if (url.pathname === '/v1/machines') return Response.json([{ id: 'alice-machine', kind: 'persistent', active: true,
-                    installationId: 'alice-installation', installationPublicKey: encodeBase64(installation.publicKey),
-                    revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
-                    access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
+                if (url.pathname === '/v1/machines') return Response.json([machine]);
+                if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                    return createMachineReadBatchResponseFixture(init.body, id => id === machine.id ? machine : null);
+                }
                 if (url.pathname === '/v1/machines/alice-machine/access') return Response.json({
                     machineId: 'alice-machine', custodian,
                     access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' },
@@ -211,7 +216,7 @@ describe('default Action original Home selection', () => {
                             : { ok: true, status: 'opened', sessionId: 'bob-session', serverId: homeId } } });
                 }
                 throw new Error(`Unexpected requester preparation HTTP effect: ${url.pathname}`);
-            });
+            }));
             machineRpcBoundary.mockImplementation(async request => {
                 if (request.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
                     return createExistingSessionDirectoryPreflightResult(request.payload);

@@ -5,6 +5,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const homes = createHomeGovernanceHarness();
@@ -26,7 +27,7 @@ beforeEach(async () => {
     await homes.reset();
     serverId = await homes.addHome({ name: 'Draft destination', serverUrl: 'https://draft-destination.test', accountId: 'alice' });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://draft-destination.test', accountId: 'alice',
-        request: homes.request });
+        request: createSessionReadBatchFetchBoundary(homes.request) });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

@@ -5,7 +5,7 @@ import { standardCleanup } from '@/dev/testkit';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
     ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -37,9 +37,12 @@ async function createSuggestionFixture(input: Readonly<{
         const path = new URL(String(url)).pathname;
         const authorization = new Headers(init?.headers).get('Authorization');
         const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
-        if ((path === '/v1/machines' || path === '/v1/machines/m1') && accountId) {
+        if ((path === '/v1/machines' || path === '/v1/machines/m1' || path === '/v1/machines/read-batch') && accountId) {
             const machine = { ...createPlainMachineRowFixture({ id: 'm1', accountId }),
                 installationId: 'suggestion-installation', installationPublicKey: encodeBase64(installation.publicKey) };
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return createMachineReadBatchResponseFixture(init.body, id => id === machine.id ? machine : null);
+            }
             return Response.json(path === '/v1/machines' ? [machine] : { machine });
         }
         if (path === '/v1/actions/execution.run.start/execution-authorization' && accountId) {

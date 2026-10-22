@@ -16,6 +16,7 @@ import {
   installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
@@ -24,7 +25,8 @@ import { PluginProjectionV2Schema, RPC_METHODS } from '@happier-dev/protocol';
 const homes = createHomeGovernanceHarness();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() =>
   vi.fn<(input: unknown) => Promise<unknown>>(),
@@ -97,6 +99,7 @@ const preview = {
 let serverId: string;
 beforeEach(async () => {
   await homes.reset();
+  installHomeGovernanceBoundaries(httpBoundary);
   await loadSyncSingletonForTests();
   serverId = await homes.addHome({
     name: 'Session Home',

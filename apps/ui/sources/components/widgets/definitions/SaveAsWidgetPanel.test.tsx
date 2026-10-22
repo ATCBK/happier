@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -14,6 +15,7 @@ import { type JsonValue, createPlainSessionOwnerMetadataEnvelopeV1, projectSessi
 import { readBuiltinWidgetDescriptorV1, resolveConfiguredWidgetInputs, WidgetInstanceActionOutputSchemasV1, type WidgetInputBindingsV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 const harness = createHomeGovernanceHarness();
+const readBatchRequest = createSessionReadBatchFetchBoundary(harness.request);
 installHomeGovernanceBoundaries(harness);
 // This Home serves writes: deliver the Socket boundary's real connected event
 // so scoped Actions retain the connection owner's admitted HTTP authority.
@@ -53,7 +55,7 @@ describe('Save as widget placement', () => {
         // Restoring a mounted Home also probes readiness through the raw fetch
         // boundary, below the scoped HTTP leaves installed by this harness.
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        setRuntimeFetch(harness.request);
+        setRuntimeFetch(readBatchRequest);
     });
     afterEach(async () => {
         standardCleanup(); restoreUuid?.(); restoreUuid = null;
@@ -193,7 +195,7 @@ describe('Session widget placement through the destination setup', () => {
     beforeEach(async () => {
         await harness.reset();
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        setRuntimeFetch(harness.request);
+        setRuntimeFetch(readBatchRequest);
     });
     afterEach(async () => {
         standardCleanup(); restoreUuid?.(); restoreUuid = null;
@@ -337,7 +339,7 @@ describe('Session widget placement through the destination setup', () => {
             const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
             if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
                 return Promise.resolve(new Response('{}', { status: 503 }));
-            return harness.request(input, init);
+            return readBatchRequest(input, init);
         });
         harness.artifacts(home.account.serverId).afterNextCreate(async () => {
             readsUnavailable = true;
@@ -384,7 +386,7 @@ describe('Session widget placement through the destination setup', () => {
             const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
             if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
                 return Promise.resolve(new Response('{}', { status: 503 }));
-            return harness.request(input, init);
+            return readBatchRequest(input, init);
         });
         harness.artifacts(home.account.serverId).afterNextCreate(async () => {
             // The first create is the definition; the next is its Home layout.
@@ -423,7 +425,7 @@ describe('Session widget placement through the destination setup', () => {
                 const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
                 if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
                     return Promise.resolve(new Response('{}', { status: 503 }));
-                return harness.request(input, init);
+                return readBatchRequest(input, init);
             });
             harness.artifacts(home.account.serverId).afterNextCreate(async () => {
                 readsUnavailable = true;

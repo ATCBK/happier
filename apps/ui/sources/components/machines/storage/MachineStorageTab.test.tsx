@@ -17,6 +17,7 @@ import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPr
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -45,7 +46,8 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 // Only the Machine network is replaced; credential binding, Actions, the storage and policy stores and the tab run for real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: transport.rpc }));
 const home = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(home);
+const httpBoundary = { ...home, request: createSessionReadBatchFetchBoundary(home.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -163,7 +165,7 @@ async function holdingSession(serverId: string) {
 }
 
 const before = storage.getState();
-beforeEach(async () => { await home.reset(); machineStorageStore.reset(); transport.rpc.mockReset(); routerPush.mockReset(); });
+beforeEach(async () => { await home.reset(); installHomeGovernanceBoundaries(httpBoundary); machineStorageStore.reset(); transport.rpc.mockReset(); routerPush.mockReset(); });
 afterEach(async () => { standardCleanup(); setPreferredLanguageFromSettings('en'); machineStorageStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('MachineStorageTab', () => {

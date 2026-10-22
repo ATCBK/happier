@@ -2,10 +2,10 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import type { ConnectedAccountDaemonControlResponse, ConnectedAccountPeerOperationTransport } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -45,7 +45,7 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         syncBridge = await loadSyncSingletonForTests();
         serverId = await homes.addHome({ name: 'Admission Home', serverUrl: 'https://account-admission.test', accountId: 'account-a' });
         for (const id of ['machine-a', 'machine-b']) homes.answer(serverId, `/v1/machines/${id}`, {
-            body: { machine: { id, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+            body: { machine: createPlainMachineRowFixture({ id, accountId: 'account-a' }) },
         });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://account-admission.test', accountId: 'account-a', request: homes.request });
         const { storage } = await import('@/sync/domains/state/storage');

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, createPlainSessionByIdResponseFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 installSessionFilesViewBoundaries();
 await prepareSessionFilesViewTestkit();
@@ -38,9 +39,9 @@ describe('mounted machine request lifetime', () => {
         'settles a nonreplying %s request when its owner cancels', async (kind) => {
             const reply = createDeferred<void>();
             fixture = await createSessionFilesViewFixture({ rpc: async () => { await reply.promise; return {}; },
-                request: async url => new URL(String(url)).pathname === '/v2/sessions/s1'
+                request: createSessionReadBatchFetchBoundary(async url => new URL(String(url)).pathname === '/v2/sessions/s1'
                     ? Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({ id: 's1', active: true })))
-                    : Response.json({}, { status: 404 }),
+                    : Response.json({ error: 'not_found' }, { status: 404 })),
             });
             const controller = new AbortController();
             const options = { serverId: fixture.home.id, signal: controller.signal };

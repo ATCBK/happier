@@ -118,6 +118,7 @@ vi.mock('@/log', () => ({
 }));
 
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { disconnectActiveServerConnection, switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { invalidateServerReachabilitySupervisor } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 await loadSyncSingletonForTests();
@@ -375,7 +376,7 @@ async function restoreTestHome(serverUrl = 'http://localhost:53288', serverIdent
   await account?.dispose();
   account = await restoreServerAccountForTest({
     serverUrl, serverIdentityId, credentials: { token: TEST_TOKEN },
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       const requestUrl = new URL(String(url));
       const path = requestUrl.pathname + requestUrl.search;
       if (requestUrl.pathname === '/health') return Response.json({});
@@ -386,7 +387,7 @@ async function restoreTestHome(serverUrl = 'http://localhost:53288', serverIdent
       if (requestUrl.pathname === '/v2/changes') return (await fetchChangesMock(path, init)).clone();
       if (requestUrl.pathname === '/v2/cursor') return (await fetchCurrentChangesCursorMock(path, init)).clone();
       return (await apiSocketRequestMock(path, init)).clone();
-    },
+    }),
   });
   await waitForHomeGovernance(() => expect(storage.getState().isDataReady).toBe(true));
 }

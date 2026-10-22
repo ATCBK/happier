@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { renderHook, createSessionFixture, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -19,7 +20,8 @@ import { MetadataSchema } from '@happier-dev/session-core/state';
 import { sessionCapabilityApplyNotice } from './sessionCapabilityApplyNotice';
 
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>());
 // Only the remote Machine RPC transport is substituted; P2 preview/selection and UI models are real.
@@ -37,7 +39,7 @@ const preview = { ok: true, machinePlatform: 'posix', mcp: { strictMode: false, 
     applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } } };
 let serverId: string;
 beforeEach(async () => {
-    await homes.reset(); await loadSyncSingletonForTests();
+    await homes.reset(); installHomeGovernanceBoundaries(httpBoundary); await loadSyncSingletonForTests();
     serverId = await homes.addHome({ name: 'Session Home', serverUrl: 'https://popover-capabilities.test', accountId: 'owner' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     transport.mockReset(); transport.mockResolvedValue(preview);

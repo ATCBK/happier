@@ -16,6 +16,7 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -74,7 +75,9 @@ const configureSessionSocket: NonNullable<Parameters<typeof restoreServerAccount
 };
 installDisconnectedServerSocketBoundary(configureSessionSocket);
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const readBatchRequest = createSessionReadBatchFetchBoundary(homes.request);
+const httpBoundary = { ...homes, request: readBatchRequest };
+installHomeGovernanceBoundaries(httpBoundary);
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
@@ -119,7 +122,7 @@ function holdSessionResponseBody(sessionId: string, suffix = '', method = 'GET')
   const reading = createDeferred<void>();
   const released = createDeferred<void>();
   let held = false;
-  setRuntimeFetch(async (input, init) => {
+  setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
     const response = await homes.request(input, init);
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (held || (init?.method ?? 'GET') !== method || url.pathname !== `/v2/sessions/${sessionId}${suffix}`) return response;
@@ -137,9 +140,9 @@ function holdSessionResponseBody(sessionId: string, suffix = '', method = 'GET')
         controller.close();
       },
     }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
-  });
+  }));
   return { reading: reading.promise, release: () => released.resolve(),
-    restore: () => installHomeGovernanceBoundaries(homes) };
+    restore: () => installHomeGovernanceBoundaries(httpBoundary) };
 }
 
 const modes = (agentId: string, currentModeId: string, ids: readonly string[]) => ({
@@ -174,7 +177,7 @@ describe('default Action executor mode and catalog contracts', () => {
       })).toMatchObject({ kind: 'applied' });
     }
     connection = await restoreServerAccountForTest({ serverUrl, serverIdentityId: identity, accountId: 'alice', credentials,
-      request: homes.request, configureSocket: configureSessionSocket });
+      request: readBatchRequest, configureSocket: configureSessionSocket });
     storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
@@ -408,7 +411,7 @@ describe('default Action executor mode and catalog contracts', () => {
       homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
     }
     const { invalidateAccountEncryptionModeCacheForChanges } = await import('@/sync/api/account/apiAccountEncryptionMode');
-    setRuntimeFetch(async (input, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
       const response = await homes.request(input, init);
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (init?.method !== 'PATCH' || url.pathname !== `/v2/sessions/${sessionId}`) return response;
@@ -426,7 +429,7 @@ describe('default Action executor mode and catalog contracts', () => {
           controller.close();
         },
       }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
-    });
+    }));
     try {
       const { sync } = await import('@/sync/sync');
       const publication = sync.patchSessionMetadataWithRetry(sessionId,
@@ -446,7 +449,7 @@ describe('default Action executor mode and catalog contracts', () => {
       expect(requests.filter(request => request.input === null)).toHaveLength(1);
       expect(requests.filter(request => request.input !== null)).toHaveLength(1);
     } finally {
-      installHomeGovernanceBoundaries(homes);
+      installHomeGovernanceBoundaries(httpBoundary);
     }
   });
   it('resolves a manager selector from the exact authorized Session projection', async () => {
@@ -1441,7 +1444,7 @@ describe('default Action executor mode and catalog contracts', () => {
     const legacyId = await homes.addHome({ name: 'Archive proof Home', serverUrl, accountId: 'alice', active: false,
       credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) } });
     // The focused Account restore's single-origin boundary does not own this remote Home.
-    installHomeGovernanceBoundaries(homes);
+    installHomeGovernanceBoundaries(httpBoundary);
     homes.answer(legacyId, '/v2/account/settings', { body: { content: { t: 'plain', v: storage.getState().settings }, version: 1 } });
     const sessionId = 'promoted-archive-proof';
     const row = createPlainSessionCurrentProjectionRecordFixture({ id: sessionId, active: false });
@@ -1554,7 +1557,7 @@ describe('default Action executor mode and catalog contracts', () => {
     const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
     serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', serverIdentityId: 'srv_mode_home', accountId: 'alice', credentials });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials,
-      request: homes.request, configureSocket: configureSessionSocket });
+      request: readBatchRequest, configureSocket: configureSessionSocket });
     storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

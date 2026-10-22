@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // Transform the real, shared runtime once during collection rather than inside
 // the first transport assertion's deadline. setup() installs each HTTP answer.
@@ -45,7 +46,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
         return new Response(JSON.stringify({ sources: [] }), { status: 200 });
     });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    setRuntimeFetch(async (url, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/auth/ping') return new Response('{}', { status: 200 });
         // The shared Action front door reads the Account's own settings before it
@@ -53,7 +54,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
         // so it is answered here rather than in every per-test route table.
         if (path === '/v2/account/settings') return new Response(JSON.stringify({ content: null, version: 0 }));
         return request(String(url), init);
-    });
+    }));
     return { target, request, credentials, token, storage, active, TokenStorage };
 }
 
@@ -114,7 +115,7 @@ describe('Session access exact Account transport', () => {
                     renameSession: true, assignResponsibility: true, stopSession: true, deleteSession: true,
                 } },
             } }));
-            if (address.pathname.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (address.pathname.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (address.pathname.endsWith('/messages')) {
                 const older = address.searchParams.has('beforeSeq');
                 return new Response(JSON.stringify({ messages: [{ id: older ? 'call-message' : 'answer-message', seq: older ? 1 : 2,
@@ -227,7 +228,7 @@ describe('Session access exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 1, metadata: '',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v2/sessions/access-grants/set') {
                 return new Response(JSON.stringify({ changed: true, grant }));
             }
@@ -271,7 +272,7 @@ describe('Session access exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') return new Response(JSON.stringify({ user: {
                 id: 'recipient', firstName: 'Recipient', lastName: null, avatar: null,
                 username: 'recipient', bio: null, badges: [], status: 'friend',
@@ -361,7 +362,7 @@ describe('Session access exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') return new Response(JSON.stringify({ user: {
                 id: 'recipient', firstName: 'Recipient', lastName: null, avatar: null,
                 username: 'recipient', bio: null, badges: [], status: 'friend',
@@ -435,7 +436,7 @@ describe('Session access exact Account transport', () => {
                     agentStateVersion: 1, agentState: null, share: null,
                 } }));
             }
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') return new Response(JSON.stringify({ user: {
                 id: 'recipient', firstName: 'Recipient', lastName: null, avatar: null,
                 username: 'recipient', bio: null, badges: [], status: 'friend',
@@ -508,7 +509,7 @@ describe('Session access exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') return new Response(JSON.stringify({ user: {
                 id: 'recipient', firstName: 'Recipient', lastName: null, avatar: null,
                 username: 'recipient', bio: null, badges: [], status: 'friend',
@@ -567,7 +568,7 @@ describe('Session access exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') return new Response(JSON.stringify({ user: {
                 id: 'recipient', firstName: 'Recipient', lastName: null, avatar: null,
                 username: 'recipient', bio: null, badges: [], status: 'friend',
@@ -669,7 +670,7 @@ describe('Session access exact Account transport', () => {
                     agentStateVersion: 1, agentState: null, share: null,
                 } }));
             }
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/user/recipient') {
                 if (recipientRequestFails) return new Response('{}', { status: 503 });
                 return new Response(JSON.stringify({ user: {
@@ -754,7 +755,7 @@ describe('Session access exact Account transport', () => {
                 encryptionMode: 'plain', dataEncryptionKey: null, metadataVersion: 1, metadata: '{}',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/public-shares') {
                 if (init?.method === 'POST') {
                     bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -826,7 +827,7 @@ describe('Session access exact Account transport', () => {
                     agentStateVersion: 1, agentState: null, share: null,
                 } }));
             }
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/public-shares') {
                 bodies.push(String(init?.body));
                 if (bodies.length === 1) throw new TypeError('response lost after dispatch');

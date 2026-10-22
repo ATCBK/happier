@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { executeSessionAccessHttpAction } from './sessionAccessApi';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
@@ -86,7 +87,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
         let legacyWrappedKey = 'existing-legacy-wrapped-key';
         let legacyPosts = 0;
         const physicalBodies: string[] = [];
-        setRuntimeFetch(async (url, init) => {
+        setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return new Response('{}');
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
@@ -94,7 +95,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
             if (path === '/v1/account/encryption/currentness') return Response.json(accountCurrentness);
             if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
             if (path === '/v2/sessions/same') return Response.json({ session });
-            if (path.endsWith('/turns')) return new Response('{}',{status:404});
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path === '/v1/sessions/same/public-share') {
                 // The predecessor strips unknown fields and can update a
                 // retained legacy publication without rotating its token hash.
@@ -112,7 +113,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
                     isConsentRequired:false,updatedAt:2,keyDerivation:'fragment_v1'},viewerOrigin:'https://target-material.example'}));
             }
             throw new Error(`Unexpected boundary request ${path}`);
-        });
+        }));
         const issued: {lookupId:string;secret:string}[] = [];
         const result = await executeSessionAccessHttpAction({scope:{serverId:target.id,accountId:'target-account'},
             availability:'available',actionId:'session.public_link.create',input:{sessionId:'same',isConsentRequired:false},

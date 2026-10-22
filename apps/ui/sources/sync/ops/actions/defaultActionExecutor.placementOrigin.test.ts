@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
     MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -85,7 +86,7 @@ describe('Session spawn first-dispatch placement origin', () => {
         getStorage().setState(initialState, true);
         resetServerFeaturesClientForTests();
         invalidateAccountEncryptionModeCache();
-        const request = async (url: RequestInfo | URL) => {
+        const request = async (url: RequestInfo | URL, init?: RequestInit) => {
             const pathname = new URL(String(url)).pathname;
             if (pathname === '/health' || pathname === '/v1/auth/ping') return Response.json({ ok: true });
             if (pathname === '/v1/features' || pathname === '/v1/features/authenticated') return Response.json(features);
@@ -97,9 +98,13 @@ describe('Session spawn first-dispatch placement origin', () => {
                 access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
                 canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
             }));
-            if (pathname === '/v1/machines/machine-a') return Response.json({ machine: {
-                id: 'machine-a', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } });
+            if (pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return createMachineReadBatchResponseFixture(init.body, id => id === 'machine-a'
+                    ? createPlainMachineRowFixture({ id, accountId: 'alice' }) : null);
+            }
+            if (pathname === '/v1/machines/machine-a') return Response.json({
+                machine: createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' }),
+            });
             // Unimplemented background endpoints are HTTP refusals, not a
             // failed network dial that marks this otherwise reachable Home offline.
             return Response.json({ error: 'not_found' }, { status: 404 });

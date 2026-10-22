@@ -10,6 +10,7 @@ import { createDefaultWorkspaceExecutionSettingsV1 } from '@happier-dev/protocol
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -86,11 +87,13 @@ let requesterHomeId: string;
 const serverUrl = 'https://finite-requester.test';
 const requesterToken = createAccountTokenForTests('requester', { currentAccount: true });
 function answerOwnMachineActions(homeId: string, accountId: string, serverIdentityId = 'srv_finite_requester'): void {
-    const machines = ['source', 'selected-worker'].map(id => ExternalActionMachineBootstrapV1Schema.parse({
+    const machines = ['source', 'selected-worker'].map(id => ({
+        ...createPlainMachineRowFixture({ id, accountId }),
+        ...ExternalActionMachineBootstrapV1Schema.parse({
         id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
         installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId, displayName: accountId }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-    }));
+    }) }));
     homes.answer(homeId, '/v1/machines', { body: machines });
     for (const machine of machines) homes.answer(homeId, `GET /v1/machines/${machine.id}`, { body: { machine } });
     for (const actionId of ['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect'] as const) {
@@ -286,7 +289,7 @@ describe('Project finite delivery through the default UI Action host', () => {
         // Own non-finite Open uses its incumbent RPC. Foreign custody is the
         // reachable Account HTTP path whose lost acknowledgement must not replay.
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
-        const machine = { ...ExternalActionMachineBootstrapV1Schema.parse({
+        const machine = { ...createPlainMachineRowFixture({ id: 'source', accountId: 'custodian' }), ...ExternalActionMachineBootstrapV1Schema.parse({
             id: 'source', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
             installationId: 'source-installation',
             dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
@@ -683,7 +686,7 @@ describe('Project finite delivery through the default UI Action host', () => {
         } } } });
         const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3));
         const machineId = 'alice-project-machine';
-        const machine = { id: machineId, kind: 'persistent', active: true, installationId: 'alice-project-installation',
+        const machine = { ...createPlainMachineRowFixture({ id: machineId, accountId: guestOwned ? 'bob' : 'alice' }), kind: 'persistent', active: true, installationId: 'alice-project-installation',
             installationPublicKey: encodeBase64(installation.publicKey), revokedAt: null, replacedByMachineId: null,
             dataEncryptionKey: null, runnerContentKeyBinding: null,
             access: { custodian: guestOwned ? { accountId: 'bob', displayName: 'Bob' } : { accountId: 'alice', displayName: 'Alice' },
@@ -1093,9 +1096,9 @@ describe('Project finite delivery through the default UI Action host', () => {
                     { machineId: 'selected-worker', priorityTier: 0, enabled: true, state: 'connected' }] },
             availability: { state: 'known', connectedCount: 2, enabledCount: 2 },
         } });
-        homes.answer(requesterHomeId, 'GET /v1/machines/ineligible-first-member', { body: { machine: {
-            id: 'ineligible-first-member', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } } });
+        homes.answer(requesterHomeId, 'GET /v1/machines/ineligible-first-member', { body: {
+            machine: createPlainMachineRowFixture({ id: 'ineligible-first-member', accountId: 'requester' }),
+        } });
         rpcResponses.set(`ineligible-first-member:${statusMethod}`, {
             eligible: false, candidate: null, load: { kind: 'unknown' }, explanation: 'not_accepting',
         });

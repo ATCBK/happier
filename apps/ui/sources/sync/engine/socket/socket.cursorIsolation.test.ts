@@ -17,6 +17,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createDeferred } from '@/dev/testkit';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { V2SessionRecordSchema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
@@ -91,7 +92,7 @@ describe('socket update handling cursor isolation', () => {
         account = await restoreServerAccountForTest({
             serverUrl: 'https://socket-cursor.example',
             credentials: { token: createAccountTokenForTests('account-a'), secret: encodeBase64(secret, 'base64url') },
-            request: async (input) => {
+            request: createSessionReadBatchFetchBoundary(async (input) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
@@ -112,8 +113,8 @@ describe('socket update handling cursor isolation', () => {
                 if (path === '/v2/sessions' || path === '/v2/sessions/active') {
                     return Response.json({ sessions: [], nextCursor: null, hasNext: false });
                 }
-                return Response.json({}, { status: 404 });
-            },
+                return Response.json({ error: 'not_found' }, { status: 404 });
+            }),
         });
         runtime = (await import('@/sync/syncEngine')).sync;
         // Account restoration starts a real list bootstrap. Observe its settled

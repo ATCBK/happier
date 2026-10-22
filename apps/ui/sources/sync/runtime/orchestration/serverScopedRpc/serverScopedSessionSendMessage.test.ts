@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseReleasedServerV021Features } from '@/dev/testkit';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { storage } from '@/sync/domains/state/storage';
 import type { Encryption } from '@/sync/encryption/encryption';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -158,14 +159,15 @@ describe('sendSessionMessageWithServerScope', () => {
     }), 1);
     const cancellation = new AbortController();
     const writes: Array<Readonly<{ url: string; body: Record<string, unknown> }>> = [];
-    runtimeFetchMock.mockImplementation(async (request: Readonly<{ url: string; init?: RequestInit }>) => {
+    const sessionReadRequest = createSessionReadBatchFetchBoundary(async (input, init) => {
+      const request = { url: String(input), init };
       if (request.init?.method === 'GET' && request.url.endsWith('/v1/account/encryption')) {
         return Response.json({ mode: 'plain', updatedAt: 1 });
       }
       if (request.init?.method === 'GET' && request.url.endsWith('/v2/account/settings')) {
         return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
       }
-      if (request.init?.method === 'GET' && request.url.endsWith('/v2/sessions/same')) {
+      if (request.init?.method === 'GET' && new URL(request.url).pathname === '/v2/sessions/same') {
         if (entryPoint === 'cancelled_voice_handler') cancellation.abort();
         return Response.json({ session: {
           id: 'same', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
@@ -180,6 +182,9 @@ describe('sendSessionMessageWithServerScope', () => {
           agentStateVersion: 1, agentState: null, share: null,
         } });
       }
+      if (request.init?.method === 'GET' && new URL(request.url).pathname === '/v1/sessions/same/turns') {
+        return Response.json({ error: 'not_found' }, { status: 404 });
+      }
       if (request.init?.method === 'POST') {
         const body = JSON.parse(String(request.init.body)) as Record<string, unknown>;
         writes.push({ url: request.url, body });
@@ -187,6 +192,8 @@ describe('sendSessionMessageWithServerScope', () => {
       }
       throw new Error(`Unexpected network request: ${request.init?.method} ${request.url}`);
     });
+    runtimeFetchMock.mockImplementation(async (request: Readonly<{ url: string; init?: RequestInit }>) =>
+      sessionReadRequest(request.url, request.init));
     // Voice enters through the Account-qualified Action owner before it reaches
     // the same scoped Pending sender. That owner uses the canonical runtimeFetch
     // boundary directly for settings/encryption reads, while the sender uses the

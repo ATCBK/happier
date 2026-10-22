@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { Encryption } from '@/sync/encryption/encryption';
 import { storage } from '@/sync/domains/state/storage';
@@ -38,7 +39,7 @@ it.each(['read', 'discard', 'block', 'restore', 'deleteDiscarded', 'reorder'] as
                     secret: encodeBase64(ownerSecret) } },
             { key: 'active', serverUrl: 'https://pending-active.test', accountId: 'pending-active' },
         ],
-        route: request => {
+        route: createSessionReadBatchHttpBoundary(request => {
             if (request.path === '/v1/features') return Response.json({
                 features: {},
                 capabilities: { session: { runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 1 } } },
@@ -63,7 +64,7 @@ it.each(['read', 'discard', 'block', 'restore', 'deleteDiscarded', 'reorder'] as
                 return Response.json({});
             }
             return undefined;
-        },
+        }).handle,
     });
     try {
         const owner = homes.homes.owner!;

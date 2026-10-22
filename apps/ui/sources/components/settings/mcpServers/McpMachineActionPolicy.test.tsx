@@ -2,14 +2,13 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { socketRpcCodec } from '@happier-dev/sync-client';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -105,9 +104,11 @@ describe('offered MCP Machine Actions through their selected Home', () => {
                     ? { actions: { [actionId]: { disabledSurfaces: ['ui'] } } }
                     : { approvalWaivedSurfaces: { [actionId]: ['ui'] } }) }),
             } } });
-            if (parsed.pathname === `/v1/machines/${machine.id}`) return Response.json({ machine: {
-                ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } });
+            if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machine.id ? createPlainMachineRowFixture({ id, accountId: 'machine-owner' }) : null);
+            if (parsed.pathname === `/v1/machines/${machine.id}`) return Response.json({
+                machine: createPlainMachineRowFixture({ id: machine.id, accountId: 'machine-owner' }),
+            });
             if (parsed.pathname === `/v1/machines/${machine.id}/access`) {
                 const custodian = { accountId: 'machine-owner', displayName: 'Machine owner' };
                 return Response.json(MachineAccessGrantsListResponseV1Schema.parse({ machineId: machine.id, custodian,

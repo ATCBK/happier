@@ -18,6 +18,7 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
@@ -84,8 +85,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 
 const harness = createHomeGovernanceHarness();
+const httpBoundary = { ...harness, request: createSessionReadBatchFetchBoundary(harness.request) };
 let ingressConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
-installHomeGovernanceBoundaries(harness);
+installHomeGovernanceBoundaries(httpBoundary);
 // Load the real executor after installing its environment boundaries. Cold graph
 // transformation belongs to collection, rather than a single behavior test's timer.
 const executorModule = await import('./defaultActionExecutor');
@@ -179,6 +181,7 @@ async function loadExecutor() {
 describe('withDefaultActionExecuteContext', () => {
     beforeEach(async () => {
         await harness.reset();
+        installHomeGovernanceBoundaries(httpBoundary);
         lifetime.disposed = 0;
         lifetime.runPrepared = 0;
         follow.execute.mockReset();
@@ -192,7 +195,7 @@ describe('withDefaultActionExecuteContext', () => {
             try { await ingressConnection.dispose(); }
             finally {
                 ingressConnection = null;
-                installHomeGovernanceBoundaries(harness);
+                installHomeGovernanceBoundaries(httpBoundary);
             }
         }
     });
@@ -466,7 +469,7 @@ describe('withDefaultActionExecuteContext', () => {
         ingressConnection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.example', accountId: ACCOUNT_ID });
         // Restore uses a single-Home credential boundary; the Action front door
         // must keep the governance harness's real credentials for both Homes.
-        installHomeGovernanceBoundaries(harness);
+        installHomeGovernanceBoundaries(httpBoundary);
         const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
         const scope = getActiveServerAccountScope();
         if (!scope) throw new Error('The real Sync Account scope was not restored');

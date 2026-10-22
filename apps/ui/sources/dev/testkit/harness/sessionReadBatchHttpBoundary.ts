@@ -38,7 +38,7 @@ export function createSessionReadBatchFetchBoundary<TResult extends Response | n
     request: (...args: Parameters<RuntimeFetch>) => Promise<TResult>,
 ): (...args: Parameters<RuntimeFetch>) => Promise<TResult | Response> {
     return async (input, init) => {
-        const url = new URL(String(input));
+        const url = new URL(input instanceof Request ? input.url : String(input));
         if (url.pathname !== '/v2/sessions/read-batch' || init?.method !== 'POST') return request(input, init);
         const boundary = createSessionReadBatchHttpBoundary(async component => {
             if (component.path === '/v2/sessions/read-batch') return undefined;

@@ -8,6 +8,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createExistingSessionDirectoryPreflightResult, createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { DiscussionInviteRequestV1Schema, DiscussionParticipantPolicySetRequestV1Schema, DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionMessageV1Schema, DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionModelParticipantLaunchV1Schema, projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
@@ -354,7 +355,7 @@ it.each(['success', 'repeated', 'failed', 'pending', 'unknown', 'approval', 'rem
     const serverId = await homes.addHome({ name: 'Model mention', serverUrl, accountId: 'alice', currentAccount: true });
     const token = homes.findByServerUrl(serverUrl)?.token;
     if (!token) throw new Error('Missing fixture Account token');
-    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: createSessionReadBatchFetchBoundary(homes.request) });
     spawnServerId = serverId;
     const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
     const machine = createMachineFixture({ id: 'machine-a', activeAt: machineRow.activeAt });
@@ -575,7 +576,7 @@ it.each(['stopped', 'already_stopped', 'active', 'unknown', 'not_found', 'unread
     const serverId = await homes.addHome({ name: 'Model removal', serverUrl, accountId: 'alice', currentAccount: true });
     const token = homes.findByServerUrl(serverUrl)?.token;
     if (!token) throw new Error('Missing fixture Account token');
-    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: createSessionReadBatchFetchBoundary(homes.request) });
     const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
     homes.answer(serverId, '/v1/machines', { body: { machines: [machineRow] } });
     homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
@@ -704,7 +705,7 @@ it.each([{ enriched: false, failure: false, pending: false }, { enriched: true, 
     const serverId = await homes.addHome({ name: 'Model transport', serverUrl, accountId: 'alice', currentAccount: true });
     const token = homes.findByServerUrl(serverUrl)?.token;
     if (!token) throw new Error('Missing fixture Account token');
-    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: createSessionReadBatchFetchBoundary(homes.request) });
     spawnServerId = serverId;
     const row = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
     const machine = createMachineFixture({ id: row.id, activeAt: row.activeAt });

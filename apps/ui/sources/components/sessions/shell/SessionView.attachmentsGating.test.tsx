@@ -17,6 +17,8 @@ import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/
 import { readServerEnabledBit, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -320,7 +322,7 @@ describe('SessionView attachments gating', () => {
     account = await restoreServerAccountForTest({
       serverUrl: 'https://attachments-session.test', accountId: 'u1',
       additionalRequestOrigins: ['https://attachments-other.test'],
-      request: async (url, init) => {
+      request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const requestUrl = new URL(String(url));
         const path = requestUrl.pathname;
         const requestServerId = requestUrl.origin === 'https://attachments-other.test' ? otherHomeId : sessionHomeId;
@@ -337,6 +339,9 @@ describe('SessionView attachments gating', () => {
           status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
         }));
         if (path === '/v1/machines') return Response.json([createTransferMachineRow()]);
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+          return createMachineReadBatchResponseFixture(JSON.parse(String(init.body)), id => id === 'm1' ? createTransferMachineRow() : null);
+        }
         if (path === '/v1/machines/m1') return Response.json({ machine: createTransferMachineRow() });
         if (path === '/v2/sessions/s1' && (init?.method ?? 'GET') === 'GET') {
           return Response.json(createPlainSessionByIdResponseFixture(sessionState.session));
@@ -344,7 +349,7 @@ describe('SessionView attachments gating', () => {
         if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
         return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
-      },
+      }),
     });
     await waitForHomeGovernance(() => expect(storage.getState()).toMatchObject({
       isDataReady: true, profile: { id: 'u1' },

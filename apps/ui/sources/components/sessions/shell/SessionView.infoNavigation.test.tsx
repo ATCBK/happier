@@ -13,6 +13,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -325,7 +326,7 @@ function applySessionHome(serverId = account.home.id) {
 async function restoreHome(serverUrl: string) {
     await loadSyncSingletonForTests();
     const accountHttp = createHomeHubArtifactHttpBoundary('account-a');
-    const account = await restoreServerAccountForTest({ serverUrl, request: async (url, init) => {
+    const account = await restoreServerAccountForTest({ serverUrl, request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -337,7 +338,7 @@ async function restoreHome(serverUrl: string) {
         if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
         return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
-    } });
+    }) });
     await waitForHomeGovernance(() => expect(storage.getState()).toMatchObject({
         isDataReady: true, profile: { id: 'account-a' },
     }));

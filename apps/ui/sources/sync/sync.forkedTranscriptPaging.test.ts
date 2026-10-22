@@ -13,6 +13,7 @@ vi.mock('react-native', async () => {
 
 const requestMock = vi.hoisted(() => vi.fn());
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -28,7 +29,7 @@ async function restoreTestHome(serverUrl = 'https://transcript-tests.example'): 
     account = await restoreServerAccountForTest({
         serverUrl,
         accountId: 'transcript-account',
-        request: async (url, init) => {
+        request: createSessionReadBatchFetchBoundary(async (url, init) => {
             const requestUrl = new URL(String(url));
             const path = requestUrl.pathname + requestUrl.search;
             if (requestUrl.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
@@ -43,7 +44,7 @@ async function restoreTestHome(serverUrl = 'https://transcript-tests.example'): 
                 return await requestMock(path, init);
             }
             return Response.json({ error: 'not_found' }, { status: 404 });
-        },
+        }),
     });
 }
 import type { Session } from './domains/state/storageTypes';

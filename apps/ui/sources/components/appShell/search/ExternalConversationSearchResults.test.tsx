@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { PluginProjectionV2Schema, makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol';
 import { createDeferred, createMachineFixture, createRootLayoutFeaturesResponse, findAllHostTestInstances, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
@@ -149,7 +149,7 @@ describe('activated external conversation results', () => {
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
         registerStorageStateReader(() => storage.getState());
-        const httpResponse: Parameters<typeof network.setHttpResponder>[0] = async input => {
+        const httpResponse: Parameters<typeof network.setHttpResponder>[0] = async (input, init) => {
             const url = new URL(String(input));
             if (url.pathname === '/health') return Response.json({});
             if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
@@ -159,6 +159,8 @@ describe('activated external conversation results', () => {
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
                 experiments: true, featureToggles: { 'memory.search': true },
             } }, version: 1 });
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: url.origin === home.serverUrl ? 'account-a' : 'account-b' }) : null);
             if (url.pathname === '/v1/machines') return Response.json([
                 createPlainMachineRowFixture({ id: 'machine-1', accountId: url.origin === home.serverUrl ? 'account-a' : 'account-b' }),
             ]);

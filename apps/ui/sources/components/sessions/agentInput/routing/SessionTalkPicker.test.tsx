@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,7 +45,7 @@ beforeEach(async () => {
   const serverUrl = 'https://picker-composition.test';
   serverId = await homes.addHome({ name: 'Picker', serverUrl, accountId: 'alice', currentAccount: true });
   restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
-    credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+    credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: createSessionReadBatchFetchBoundary(homes.request) });
   await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
 });
 afterEach(async () => {

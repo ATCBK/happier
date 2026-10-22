@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -26,7 +27,7 @@ it('demands authorized targets only while open and retains incomplete refreshes 
     const serverUrl = 'https://talk-picker.test';
     const serverId = await homes.addHome({ name: 'Picker', serverUrl, accountId: 'alice', currentAccount: true });
     restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
-        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: createSessionReadBatchFetchBoundary(homes.request) });
     await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
     getStorage().setState({ sessions: {}, sessionListRowsByServerId: {} });
     const source = createSessionFixture({ id: 'source', serverId, encryptionMode: 'plain',
@@ -78,7 +79,7 @@ it('keeps unrelated selector previews and reads stable while Matching changes', 
     const serverUrl = 'https://talk-picker-filter.test';
     const serverId = await homes.addHome({ name: 'Filter picker', serverUrl, accountId: 'alice', currentAccount: true });
     restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
-        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: createSessionReadBatchFetchBoundary(homes.request) });
     await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
     getStorage().setState({ sessions: {}, sessionListRowsByServerId: {} });
     const source = createSessionFixture({ id: 'source', serverId, encryptionMode: 'plain',
