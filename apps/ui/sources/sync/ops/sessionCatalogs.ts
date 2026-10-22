@@ -12,6 +12,9 @@ import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export type MachineSessionCatalogProbeParams = Readonly<{
     machineId: string;
@@ -187,6 +190,15 @@ function applyCatalogSnapshots(
     ]);
 }
 
+const catalogReads = createScopedResolutionSingleFlight<void>();
+
+function readSessionCatalogTargetKey(sessionId: string): string {
+    const inactive = isInactiveSession(sessionId);
+    const machine = inactive ? readMachineControlTargetForSession(sessionId) : null;
+    return JSON.stringify([resolvePreferredServerIdForSessionId(sessionId), sessionId,
+        inactive, readSessionCwd(sessionId), machine?.machineId, machine?.basePath]);
+}
+
 export async function ensureSessionSuggestionCatalogs(
     sessionId: string,
     request: SessionSuggestionCatalogRequest,
@@ -202,15 +214,33 @@ export async function ensureSessionSuggestionCatalogs(
 
     if (!shouldLoadVendorPlugins && !shouldLoadSkills) return;
 
-    const cwd = readSessionCwd(sessionId);
-    const [vendorPluginCatalog, skillCatalog] = await Promise.all([
-        shouldLoadVendorPlugins ? listVendorPluginCatalog(sessionId, cwd, options?.signal) : Promise.resolve(undefined),
-        shouldLoadSkills ? listSkillCatalog(sessionId, cwd, options?.signal) : Promise.resolve(undefined),
-    ]);
-
-    if (options?.signal?.aborted) return;
-    applyCatalogSnapshots(sessionId, {
-        ...(vendorPluginCatalog ? { vendorPluginCatalog } : {}),
-        ...(skillCatalog ? { skillCatalog } : {}),
-    });
+    const targetKey = readSessionCatalogTargetKey(sessionId);
+    const activeAccount = captureActiveServerAccountScopeLifetime();
+    const serverId = resolvePreferredServerIdForSessionId(sessionId);
+    const account = activeAccount && (!serverId || areServerProfileIdentifiersEquivalent(serverId, activeAccount.scope.serverId))
+        ? activeAccount : null;
+    const load = async (signal?: AbortSignal) => {
+        if (signal?.aborted || account?.isCurrent() === false || readSessionCatalogTargetKey(sessionId) !== targetKey) return;
+        const cwd = readSessionCwd(sessionId);
+        const [vendorPluginCatalog, skillCatalog] = await Promise.all([
+            shouldLoadVendorPlugins ? listVendorPluginCatalog(sessionId, cwd, signal) : Promise.resolve(undefined),
+            shouldLoadSkills ? listSkillCatalog(sessionId, cwd, signal) : Promise.resolve(undefined),
+        ]);
+        if (signal?.aborted || account?.isCurrent() === false || readSessionCatalogTargetKey(sessionId) !== targetKey) return;
+        const current = storage.getState().sessions[sessionId];
+        const currentMetadata = current ? readSessionOwnerMetadataView(current) : null;
+        applyCatalogSnapshots(sessionId, {
+            ...(vendorPluginCatalog && !hasCatalogSnapshot(currentMetadata, 'sessionVendorPluginCatalogV1') ? { vendorPluginCatalog } : {}),
+            ...(skillCatalog && !hasCatalogSnapshot(currentMetadata, 'sessionSkillCatalogV1') ? { skillCatalog } : {}),
+        });
+    };
+    try {
+        // Only the existing admitted Account lifetime can share a request. Other
+        // Homes keep the same reader without borrowing the focused Account's scope.
+        if (account) await catalogReads.run(JSON.stringify([targetKey, shouldLoadVendorPlugins, shouldLoadSkills]),
+            load, { scope: account, signal: options?.signal });
+        else await load(options?.signal);
+    } catch (error) {
+        if (!options?.signal?.aborted) throw error;
+    }
 }
