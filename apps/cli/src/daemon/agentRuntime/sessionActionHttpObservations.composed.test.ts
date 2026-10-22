@@ -94,6 +94,9 @@ import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import type { SessionActionRpcTransport } from '@/session/actions/createCliActionDeps';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { BasePermissionHandler } from '@/agent/permissions/BasePermissionHandler';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -344,6 +347,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     ExternalActionExecutionAuthorizationV1Schema.parse(authorization);
     return { authorization, target };
   };
+  let sessionActionRpcTransport: SessionActionRpcTransport | undefined;
   const execute = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl, token, credentials,
     ...(accountRelease ? {} : { machineId: storage.state.machineId,
       prepareExternalActionAuthorization: ({ operation, sessionActionOrigin }: Parameters<NonNullable<Parameters<typeof createDaemonSessionAccountActionExecutor>[0]['prepareExternalActionAuthorization']>>[0]) => prepare(operation, sessionActionOrigin) }),
@@ -352,6 +356,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
         serverId, serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
         externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
         actionsSettingsProvider,
+        ...(sessionActionRpcTransport ? { sessionActionRpcTransport } : {}),
         ...(accountRelease && accountCurrentProcess ? { pluginActionExecutionOwner: 'current_process' as const,
           invokeContributedAction: createCommittedContributedActionInvoker() } : {}),
         ...(clientAction ? {
@@ -373,6 +378,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0, callerPermissionMode: 'default',
       agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 } } });
   return { credentials, app, observations, members, prepare, execute, operation, actionsSettingsProvider, lifecycleEffects, authoredAccount,
+    setSessionActionRpcTransport: (transport: SessionActionRpcTransport) => { sessionActionRpcTransport = transport; },
     failAuthorization: (status?: 401 | 403 | 503, cancel?: () => void) => {
       authorizationStatus = status; cancelAuthorization = cancel;
     },
@@ -389,6 +395,113 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it.each(['bound', 'restricted', 'foreign-witness', 'wrong-handler'] as const)(
+  'answers a worker question through MCP and the source daemon origin: %s', async binding => {
+  const f = await fixture();
+  const worker = createMutableApiSessionClientFixture({ sessionId: childId,
+    serverBinding: { serverId, serverUrl: serverHttpBaseUrl },
+    agentState: { requests: {}, completedRequests: {} },
+    overrides: { readQuestionSessionSnapshot: async id => ({ sessionId: id, accountId: storage.account.id,
+      managerSessionId: id === childId ? sessionId : null, available: true, answersWorkerQuestions: true }) },
+  });
+  class QuestionHandler extends BasePermissionHandler { protected getLogPrefix() { return '[C7 answer]'; } }
+  new QuestionHandler(worker);
+  const workerMcp = createHappierMcpServer({ ...worker,
+    getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+    getActiveTurnPermissionWitness: () => ({ turnId: 'worker-turn', inputId: 'worker-input',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
+  }, { authorityScope: 'session', sessionCredentials: { token: 'worker-session-token', encryption: null },
+    actionsSettingsProvider: f.actionsSettingsProvider });
+  const command = 'node /runtime/.runner-snapshots/manager-answer/dist/index.mjs';
+  const runner = { pid: process.pid, processStartTimeMs: 23349,
+    processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:manager-answer' };
+  processIdentity.mockResolvedValue({ ...runner, command });
+  const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
+  const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+    path, sessionId, runner, retainedAgent: createAgentSessionRunnerFactoryBinding({
+      v: 1, pluginId: 'acme.plugin', pluginVersion: '1.2.3', agentId: 'acme-agent', localAgentId: 'acme-agent',
+      sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+      locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+      normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js',
+    }) };
+  await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31004, capability: 'C'.repeat(43) });
+  vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', path);
+  const witness = { turnId: 'manager-turn', inputId: 'manager-input', userMessageSeq: 1, userMessageSeqs: [1],
+    callerPermissionMode: 'read-only' as const,
+    causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const },
+    agentStartCaller: { kind: 'session' as const,
+      sessionId: binding === 'foreign-witness' ? childId : sessionId, starterDepth: 0, turnDepth: 0 } };
+  // IPC and the Session socket are genuine process/network boundaries. Keep
+  // daemon custody, authenticated Home reads, strict RPC and question owners real.
+  vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+    const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
+    expect(request.context).toEqual({ token: 'C'.repeat(43), sessionId });
+    if (request.operation.kind !== 'action.execute') throw new Error('Expected Action envelope');
+    const outcome = await f.execute(request.operation, { sessionId, isCurrent: async () => true });
+    return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });
+  });
+  const transport = vi.fn<SessionActionRpcTransport>(async request => {
+    expect(request.origin).toMatchObject({ caller: { sessionId }, sourceTurnId: 'manager-turn',
+      sourceInputId: 'manager-input', callerPermissionMode: 'read-only' });
+    // Substitute the authenticated Machine→Home→Session network only. The
+    // actual source origin is produced by daemon custody and the strict reader.
+    return await worker.rpcHandlerManager.handleRequest({ method: `${request.sessionId}:${request.method}`,
+      requestId: 'answer-receiver', params: request.input,
+      callerAuthority: 'account_automation', sessionActionOrigin: request.origin,
+      authorization: { kind: 'session.permission.respond', sessionId: childId,
+        actor: { kind: 'accountUser', accountId: storage.account.id, relationship: 'owner' } } });
+  });
+  f.setSessionActionRpcTransport(transport);
+  const runtime = createHappierMcpServer({ sessionId,
+    getServerBinding: () => ({ serverId, serverUrl: serverHttpBaseUrl }),
+    rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+    updateMetadata() {}, getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0, getPermissionMode: () => 'read-only',
+    getActiveTurnAdmissionWitness: () => witness, getActiveTurnPermissionWitness: () => witness,
+  }, { credentials: f.credentials, isCredentialCurrent: async () => true,
+    ...(binding === 'restricted' ? { authorityScope: 'session' as const, sessionCredentials: f.credentials } : {}),
+    actionsSettingsProvider: f.actionsSettingsProvider });
+  const client = new Client({ name: 'c7-manager-answer', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const workerClient = new Client({ name: 'c7-worker-question', version: '1' });
+  const [workerClientTransport, workerServerTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await workerMcp.mcp.connect(workerServerTransport);
+    await workerClient.connect(workerClientTransport);
+    const raised = await workerClient.callTool({ name: 'action_execute', arguments: { actionId: 'session.needs_you.raise',
+      input: { mode: 'continue', assumption: 'Proceed', lasting: false, type: 'decision',
+        questions: [{ id: 'choose', prompt: 'Continue?', type: 'text' }] } } });
+    const requestId = Object.keys(worker.getAgentStateSnapshot()?.requests ?? {})[0];
+    expect(requestId, JSON.stringify(raised)).toBeTruthy();
+    expect(worker.getAgentStateSnapshot()?.requests?.[requestId!]).toMatchObject({ currentHandler: { kind: 'session', sessionId } });
+    if (binding === 'wrong-handler') worker.updateAgentState(state => ({ ...state, requests: { ...state.requests,
+      [requestId!]: { ...state.requests![requestId!]!, currentHandler: { kind: 'session', sessionId: 'another-manager' } } } }));
+    await runtime.mcp.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: {
+      actionId: 'session.user_action.answer', input: { sessionId: childId, requestId,
+        answers: [{ question: 'Continue?', values: ['yes'] }] },
+    } }));
+    if (binding === 'bound' || binding === 'restricted') {
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(worker.getAgentStateSnapshot()?.completedRequests?.[requestId!]).toMatchObject({
+        answeredBy: { kind: 'session', sessionId }, structuredAnswersV1: { 'Continue?': ['yes'] } });
+      expect(worker.getAgentStateSnapshot()?.requests?.[requestId!]).toBeUndefined();
+      expect(f.observations).not.toContainEqual(expect.objectContaining({
+        path: '/v1/actions/session.user_action.answer/execution-authorization' }));
+    } else {
+      expect(result).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining(
+        binding === 'foreign-witness' ? 'target_unavailable' : 'present_user_required') }] });
+      expect(worker.getAgentStateSnapshot()?.completedRequests?.[requestId!]).toBeUndefined();
+      expect(worker.getAgentStateSnapshot()?.requests?.[requestId!]).toBeDefined();
+      if (binding === 'foreign-witness') expect(transport).not.toHaveBeenCalled();
+    }
+  } finally {
+    await client.close(); await runtime.mcp.close(); await workerClient.close(); await workerMcp.mcp.close();
+    await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('C'.repeat(43)) });
+    await f.close();
+  }
+});
 
 it('admits the addressed reply policy read under its original signed Account root', async () => {
   const f = await fixture();

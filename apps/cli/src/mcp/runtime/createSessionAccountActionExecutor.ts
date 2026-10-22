@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { ACTION_ID_FAMILIES_V1, ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
-import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
+import { isSessionActionRpcMethodV1 } from '@happier-dev/protocol/socketRpc';
 import { WaitActionInputV1Schema } from '@happier-dev/protocol/actions/specs/wait';
 import type { ActionExecuteResult, ActionExecutorContext, ActionId } from '@happier-dev/protocol';
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
@@ -95,9 +95,14 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       const nativeInventoryRead = !params.hasAccountAuthority
         && (actionId === 'action.options.resolve' || actionId === 'agents.models.list' || actionId === 'agents.config_options.list'
           || actionId === 'agents.session_modes.list');
+      // Origin-required RPCs use the existing source-daemon custody channel,
+      // including cross-Session question answers. Own questions stay with the
+      // bound request store and its same canonical host-witness origin.
+      const sessionOriginRpc = spec && isSessionActionRpcMethodV1(spec.bindings?.rpcMethod ?? actionId)
+        && !(actionId === 'session.needs_you.raise' && requestedSessionId === params.client.sessionId);
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
-        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead
+        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !sessionOriginRpc
         && builtIn.data !== 'session.spawn_new'
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.
@@ -107,8 +112,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         && !(builtIn.data.startsWith('scm.') && !params.hasAccountAuthority)
         // Machine plugin policy and lifecycle belong to the daemon's canonical
         // plugin-change owner, never to the restricted Session runner.
-        && !(isPluginDevLoopActionIdV1(builtIn.data) && executionPlacement === 'machine')
-        && !(Object.hasOwn(RoleActionInputSchemasV1, builtIn.data) && builtIn.data.startsWith('session.')))) {
+        && !(isPluginDevLoopActionIdV1(builtIn.data) && executionPlacement === 'machine'))) {
         return await params.base.execute(actionId, input, context);
       }
       // This daemon Action channel returns one result, not a passive snapshot

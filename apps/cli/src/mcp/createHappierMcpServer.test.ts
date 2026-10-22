@@ -11,7 +11,7 @@ import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchem
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { encrypt, decrypt, encodeBase64 } from '@/api/encryption';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
-import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
+import { publishServerHttpRuntimeOrigin, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
@@ -44,7 +44,8 @@ import type { HappyMcpSessionClient } from './startHappyServer';
 import { createSessionDaemonAuthorityFixture } from './runtime/sessionDaemonAuthority.testkit';
 import { configuration } from '@/configuration';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY, readCurrentRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
@@ -53,6 +54,9 @@ import { deriveSessionMessageReplyReturnLocalIdV1, SessionMessageReplyReadResult
 import { forEachJsonSchemaChild, type JsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { AgentModelsProbeObservationSchema, AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
+import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 
 const env = process.env;
 
@@ -65,6 +69,7 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
   sessionId: string;
   readMetadata: () => Readonly<Record<string, unknown>> | null;
   mode?: 'plain' | 'e2ee';
+  serveAccountCatalog?: boolean;
   machineActionDirectTargetTransport?: Parameters<typeof createCliActionExecutorFromCredentials>[0]['machineActionDirectTargetTransport'];
 }>) {
   const mode = params.mode ?? 'plain';
@@ -74,6 +79,11 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
   const restore = installAxiosFastifyAdapter({ app, origin: getTestServerBinding().serverUrl });
   let sessionReads = 0;
   app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode }));
+  if (params.serveAccountCatalog) {
+    app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+    app.get('/v1/artifacts', async () => []);
+    app.get(ACP_CATALOG_ROWS_ROUTE_V1, async () => ({ status: 'absent' }));
+  }
   app.get('/v2/sessions/:sessionId', async (_request, reply) => {
     sessionReads += 1;
     const metadata = params.readMetadata();
@@ -431,6 +441,69 @@ describe('createHappierMcpServer real host admission', () => {
         }).success).toBe(true);
       }
     } finally { await client.close(); bridge.happierMcpServer.stop(); await sessionAuthority.close(); await daemon.close(); }
+  }, 30_000);
+
+  it('retains intent-dependent policy repair and no-creation evidence through native MCP', async () => {
+    const sessionId = 'c666666666666666666666671';
+    const catalogs = await installAccountCatalogDaemonTransport({ sessionId, serveAccountCatalog: true, readMetadata: () => createTestMetadata() });
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.fixture`, encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      scopeKey: runWithServerHttpBaseUrl(getTestServerBinding().serverUrl, () => resolveAccountSettingsScopeKey(credentials)),
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
+    });
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const features = () => ({ status: 'ready' as const, features: FeaturesResponseSchema.parse({
+      features: { voice: { enabled: true } }, capabilities: {},
+    }) });
+    const host = hostClient(sessionId, {
+      getBackendTarget: () => ({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }),
+      getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: configuration.happyHomeDir }),
+      getServerFeaturesSnapshot: features,
+      getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+    });
+    let manager: ExecutionRunHostBridge | undefined;
+    const registration = registerExecutionRunHandlers(host.rpcHandlerManager, {
+      sessionId, cwd: configuration.happyHomeDir, parentProvider: 'codex', sendAcp: async () => {},
+      getServerFeaturesSnapshot: features, onManagerCreated: created => { manager = created; },
+    });
+    process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
+    const bridge = await createHappierMcpBridge(host, { credentials });
+    const client = new Client({ name: 'native-run-policy-test', version: '1' });
+    const request = { intent: 'voice_agent', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+      instructions: 'Private reply-only instructions', permissionMode: 'read_only', retentionPolicy: 'ephemeral',
+      runClass: 'bounded', ioMode: 'request_response', modelId: 'gpt-6-luna', configOptions: { reasoning_effort: 'low' } };
+    try {
+      const config = bridge.mcpServers.happier;
+      await client.connect(new StdioClientTransport({ command: config.command,
+        args: [...(config.args ?? [])], env: config.env ? { ...config.env } : undefined }));
+      const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
+        arguments: { actionId: 'execution.run.start', input: request } }));
+      expect(reply.isError).toBe(true);
+      const content = reply.content.find(item => item.type === 'text');
+      if (content?.type !== 'text') throw new Error('Missing policy refusal');
+      const failure = JSON.parse(content.text);
+      expect(failure, JSON.stringify(failure)).toMatchObject({ errorCode: 'execution_run_not_allowed', details: {
+        executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+      } });
+      expect(failure.details.issues).toEqual([
+        { code: 'invalid_value', path: ['retentionPolicy'], acceptedValues: ['resumable'] },
+        { code: 'invalid_value', path: ['runClass'], acceptedValues: ['long_lived'] },
+        { code: 'invalid_value', path: ['ioMode'], acceptedValues: ['streaming'] },
+      ]);
+      expect(content.text).not.toContain(request.instructions);
+      expect(manager?.listPublicForRequest({}, sessionId)).toEqual([]);
+      const discovery = CallToolResultSchema.parse(await client.callTool({ name: 'action_options_resolve',
+        arguments: { actionId: 'execution.run.start', fieldPath: 'intent' } }));
+      expect(discovery.isError ?? false, JSON.stringify(discovery)).toBe(false);
+      const optionContent = discovery.content.find(item => item.type === 'text');
+      if (optionContent?.type !== 'text') throw new Error('Missing intent discovery');
+      const options = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(JSON.parse(optionContent.text)).options;
+      expect(options.find(option => option.value === 'voice_agent')?.description)
+        .toMatch(/retentionPolicy: resumable.*runClass: long_lived.*ioMode: streaming/u);
+      expect(options.find(option => option.value === 'delegate')?.description).toMatch(/ordinary bounded child work/u);
+    } finally { await client.close(); bridge.happierMcpServer.stop(); registration.dispose(); await manager?.dispose(); await catalogs.close(); }
   }, 30_000);
 
   it.each([

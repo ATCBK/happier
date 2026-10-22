@@ -279,6 +279,7 @@ export function createHappierMcpServer(
         await (localActionContext
           ? sessionScopedRpc('execution.run.start', request, { localActionContext })
           : client.executionRuns?.start?.(request) ?? sessionScopedRpc('execution.run.start', request)),
+        { executionRunStart: true },
       ),
     list: async (request: unknown) =>
       normalizeExecutionRunRpcPayload(
