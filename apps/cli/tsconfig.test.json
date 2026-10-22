@@ -604,6 +604,7 @@
     "src/api/api.peerMediationRouteGrant.test.ts",
     "src/api/api.plaintextMachine.runtimeCatalog.integration.test.ts",
     "src/api/api.plaintextSessionCreate.runtimeCatalog.integration.test.ts",
+    "src/api/api.providerBroker.requestLifetime.integration.test.ts",
     "src/api/api.providerBroker.runtimeCatalog.integration.test.ts",
     "src/api/api.runtimeCatalog.integration.test.ts",
     "src/api/api.sessionDataEncryptionKey.runtimeCatalog.integration.test.ts",

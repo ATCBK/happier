@@ -116,6 +116,7 @@
     "src/agent/runtime/resolveRequestedSessionDirectory.ts",
     "src/agent/runtime/session/activity/runtimeActivityApplicability.ts",
     "src/agent/runtime/session/errors/connectedServiceRuntimeAuthRecoveryContext.ts",
+    "src/agent/runtime/session/errors/sessionPreparationFailure.ts",
     "src/agent/runtime/session/events/agentSessionRuntimeEventStream.ts",
     "src/agent/runtime/session/events/runtimeTranscriptScope.ts",
     "src/agent/runtime/session/follow/sessionFollowContextBudget.ts",

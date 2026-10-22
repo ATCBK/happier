@@ -660,6 +660,7 @@
     "src/prompts/skills/native/foundSkillTransferPayload.ts",
     "src/prompts/skills/native/scanNativeSkillRoots.ts",
     "src/providers/broker/externalProviderTerminalTokens.ts",
+    "src/providers/broker/providerBrokerApplicationFailureContext.ts",
     "src/providers/broker/providerBrokerTransportFailure.ts",
     "src/providers/broker/requestPolicyV1.ts",
     "src/providers/broker/resourceTestCandidate.ts",
