@@ -105,11 +105,11 @@ describe('Account Follow protocol contract', () => {
     expect(project({ preset: 'important', voice: true })).toBe(true);
     expect(project({ preset: 'important' }, true)).toBe(false);
     expect(project({ preset: 'custom', events: { finished: { delivery: 'quiet', voice: true } } })).toBe(true);
-    expect(project({ preset: 'custom', events: { finished: { delivery: 'off', voice: true } } })).toBe(false);
+    expect(project({ preset: 'custom', events: { finished: { delivery: 'off', voice: true } } })).toBe(true);
     expect(project(undefined, true)).toBe(true);
     for (const policy of [
       { preset: 'important', voice: true },
-      { preset: 'custom', events: { finished: { delivery: 'off', voice: true } } },
+      { preset: 'custom', events: { finished: { delivery: 'off' } } },
     ] satisfies FollowPolicyV1[]) {
       const expected = policy.preset === 'important';
       expect(projectSessionFollowFactsV1({ following: true, notificationLevel: 'important', includeInVoice: !expected, policy }))
@@ -120,16 +120,17 @@ describe('Account Follow protocol contract', () => {
     expect(projectSessionFollowFactsV1({ following: true, notificationLevel: 'important', includeInVoice: true, followPolicy: '{broken' }))
       .toMatchObject({ includeInVoice: false });
   });
-  it('projects Include in Voice for current viewers while accepting released projections without it', () => {
+  it('projects Include in Voice and notification breadth from the current policy', () => {
     expect(projectSessionFollowFactsV1({
       following: true,
       notificationLevel: 'important',
       includeInVoice: true,
-    })).toEqual({ follows: true, notificationLevel: 'important', includeInVoice: true });
+      policy: { preset: 'important', voice: true },
+    })).toEqual({ follows: true, notificationLevel: 'important', includeInVoice: true, policy: { preset: 'important', voice: true } });
     expect(projectSessionFollowFactsV1({
       following: true,
-      notificationLevel: 'important',
-    })).toEqual({ follows: true, notificationLevel: 'important' });
+      followPolicy: JSON.stringify({ preset: 'important' }),
+    })).toEqual({ follows: true, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } });
   });
 
   it('closes the notification vocabulary at none | important | all_messages', () => {
@@ -303,6 +304,8 @@ describe('Account Follow protocol contract', () => {
       'invalid_parameters',
       'feature_unavailable',
       'session_not_found',
+      'source_not_found',
+      'source_unavailable',
       'account_inactive',
       'session_archived',
     ]);

@@ -105,7 +105,7 @@ describe("ephemeral Runner Session HTTP authority (integration)", () => {
                 accountId: fixture.accountId,
                 sessionId: fixture.sessionId,
                 following: true,
-                notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: "important" }),
             },
         });
         await db.sessionAttentionStanding.create({

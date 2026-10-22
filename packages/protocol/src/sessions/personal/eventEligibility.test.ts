@@ -80,11 +80,11 @@ describe('resolveSessionPersonalEventEligibilityV1', () => {
   });
   it('uses semantic approval capability for an Action confirmation without granting question authority', () => {
     const reader = { ...TEAM_READER, event: 'user_action_required' as const, tracked: true,
-      followFacts: { follows: true, notificationLevel: 'important' as const },
+      followFacts: { follows: true, notificationLevel: 'important' as const, policy: { preset: 'important' as const } },
       capabilities: { canSubmitAgentInput: false, canApprovePermissions: true } };
     expect(resolveSessionPersonalEventEligibilityV1({ ...reader,
       followEvent: { kind: 'needs_you', type: 'approval' },
-    })).toEqual({ eligible: true, reason: 'follow_important' });
+    })).toEqual({ eligible: true, reason: 'follow_policy' });
     expect(resolveSessionPersonalEventEligibilityV1({ ...reader,
       followEvent: { kind: 'needs_you', type: 'decision' },
     })).toEqual({ eligible: false });
@@ -142,7 +142,7 @@ describe('resolveSessionPersonalEventEligibilityV1', () => {
       targeted: true,
       responsible: true,
       tracked: true,
-      followFacts: { follows: true, notificationLevel: 'important' },
+      followFacts: { follows: true, notificationLevel: 'important', policy: { preset: 'important' as const } },
     })).toEqual({ eligible: true, reason: 'assignment_target' });
     expect(resolveSessionPersonalEventEligibilityV1({
       ...TEAM_READER,
@@ -197,14 +197,14 @@ describe('resolveSessionPersonalEventEligibilityV1', () => {
     const important: SessionPersonalEventEligibilityInputV1 = {
       ...TEAM_READER,
       tracked: true,
-      followFacts: { follows: true, notificationLevel: 'important' },
+      followFacts: { follows: true, notificationLevel: 'important', policy: { preset: 'important' as const } },
     };
     expect(resolveSessionPersonalEventEligibilityV1(important))
-      .toEqual({ eligible: true, reason: 'follow_important' });
+      .toEqual({ eligible: true, reason: 'follow_policy' });
     expect(resolveSessionPersonalEventEligibilityV1({ ...important, event: 'message' }))
       .toEqual({ eligible: false });
     expect(resolveSessionPersonalEventEligibilityV1({ ...important, event: 'human_message' }))
-      .toEqual({ eligible: true, reason: 'follow_important' });
+      .toEqual({ eligible: true, reason: 'follow_policy' });
   });
 
   it('admits every permitted material message only at all_messages', () => {
@@ -212,8 +212,8 @@ describe('resolveSessionPersonalEventEligibilityV1', () => {
       ...TEAM_READER,
       event: 'message',
       tracked: true,
-      followFacts: { follows: true, notificationLevel: 'all_messages' },
-    })).toEqual({ eligible: true, reason: 'follow_all_messages' });
+      followFacts: { follows: true, notificationLevel: 'all_messages', policy: { preset: 'everything' as const } },
+    })).toEqual({ eligible: true, reason: 'follow_policy' });
   });
 
   it('keeps a following collaborator with notifications off out of every ongoing event', () => {
@@ -255,7 +255,7 @@ describe('resolveSessionPersonalEventEligibilityV1', () => {
       ...TEAM_READER,
       event: 'user_action_required',
       tracked: true,
-      followFacts: { follows: true, notificationLevel: 'important' },
+      followFacts: { follows: true, notificationLevel: 'important', policy: { preset: 'important' as const } },
       capabilities: { canSubmitAgentInput: false, canApprovePermissions: false },
     })).toEqual({ eligible: false });
   });

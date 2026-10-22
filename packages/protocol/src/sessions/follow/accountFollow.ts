@@ -5,7 +5,7 @@ import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { isSessionPersonallyTrackedForViewerV1 } from '../personal/tracking.js';
 import { TurnIdSchema } from '../idsV1.js';
 import { SessionFollowFrontierV1Schema, type SessionFollowFrontierV1 } from './sessionFollowFrontierV1.js';
-import { FOLLOW_EVENT_KINDS_V1, FollowPolicyV1Schema, resolveFollowDeliveryV1, resolveLegacySessionFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
+import { FOLLOW_EVENT_KINDS_V1, FollowPolicyV1Schema, resolveFollowDeliveryV1, type FollowEventV1, type FollowPolicyV1, type FollowEventMapV1 } from './sessionFollowPolicyV1.js';
 import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
 import type { SessionFollowRuleDefinitionV1 } from './sessionFollowRuleV1.js';
 import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
@@ -117,8 +117,7 @@ export function resolvePersonalFollowOnceAttentionV1(input: Readonly<{
 }
 
 /**
- * The one Follow notification vocabulary. It is closed on purpose: schemas,
- * persisted values, predicates and prose all use these three values.
+ * Scalar ingress/presentation vocabulary. Stored event decisions use FollowPolicyV1.
  */
 export const SessionFollowNotificationLevelSchema = lazyZodSchema(() => z.enum([
   'none',
@@ -126,6 +125,35 @@ export const SessionFollowNotificationLevelSchema = lazyZodSchema(() => z.enum([
   'all_messages',
 ]));
 export type SessionFollowNotificationLevel = z.infer<typeof SessionFollowNotificationLevelSchema>;
+
+/** The scalar edit boundary immediately translates into the canonical policy. */
+export function normalizeAccountFollowNotificationChoiceV1(input: Readonly<{
+  notificationLevel: SessionFollowNotificationLevel; includeInVoice: boolean;
+}>): FollowPolicyV1 {
+  if (!input.includeInVoice) return input.notificationLevel === 'none' ? { preset: 'custom', events: {} }
+    : { preset: input.notificationLevel === 'all_messages' ? 'everything' : 'important' };
+  if (input.notificationLevel === 'all_messages') return { preset: 'everything', voice: true };
+  if (input.notificationLevel === 'important') return { preset: 'important', voice: true };
+  const events: FollowEventMapV1 = {};
+  for (const kind of FOLLOW_EVENT_KINDS_V1) {
+    const setting = { delivery: 'off', voice: true } as const;
+    if (kind === 'needs_you') events.needs_you = { decision: setting, approval: setting, blocked: setting };
+    else events[kind] = setting;
+  }
+  return { preset: 'custom', events };
+}
+
+/** Compatibility presentation only; event delivery always reads the policy. */
+export function projectAccountFollowNotificationLevelV1(policy: FollowPolicyV1 | undefined): SessionFollowNotificationLevel {
+  if (!policy) return 'none';
+  if (policy.preset === 'quiet') return 'none';
+  if (resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } }).selected) return 'all_messages';
+  return FOLLOW_EVENT_KINDS_V1.some(kind => {
+    const events: FollowEventV1[] = kind === 'needs_you'
+      ? [{ kind, type: 'decision' }, { kind, type: 'approval' }, { kind, type: 'blocked' }] : [{ kind }];
+    return events.some(event => resolveFollowDeliveryV1({ policies: [policy], event }).selected);
+  }) ? 'important' : 'none';
+}
 
 /**
  * The Account-private projection of one `AccountSessionFollow` row.
@@ -293,11 +321,10 @@ export const ABSENT_SESSION_FOLLOW_FACTS_V1: SessionFollowFactsV1 = Object.freez
 /**
  * The one stored-row → Follow-facts mapping, shared by the Home reader and the
  * client editor so a suppression row cannot mean two different things on the two
- * sides of the wire. A malformed stored level stays quiet rather than being
- * reinterpreted as an active choice.
+ * sides of the wire. Stored policies are parsed by the custody boundary above.
  */
 export function projectSessionFollowFactsV1(
-  row: Readonly<{ following: boolean; notificationLevel: unknown; includeInVoice?: boolean;
+  row: Readonly<{ following: boolean; notificationLevel?: unknown; includeInVoice?: boolean;
     followPolicy?: string | null; notifyOnce?: string | null; hasPersistentFollow?: boolean; persistent?: boolean;
     policy?: z.infer<typeof FollowPolicyV1Schema>; once?: PersonalFollowOnceV1 | null; onceAfterAgentStateVersion?: number; onceDelivery?: PersonalFollowOnceOccurrenceV1 }> | null | undefined,
 ): SessionFollowFactsV1 {
@@ -307,8 +334,7 @@ export function projectSessionFollowFactsV1(
     ...(row.once === undefined ? {} : { once: row.once }),
     ...(row.onceAfterAgentStateVersion === undefined ? {} : { onceAfterAgentStateVersion: row.onceAfterAgentStateVersion }),
     ...(row.onceDelivery === undefined ? {} : { onceDelivery: row.onceDelivery }) };
-  const level = SessionFollowNotificationLevelSchema.safeParse(row.notificationLevel);
-  if (!row.following || !level.success) return {
+  if (!row.following) return {
     follows: false,
     notificationLevel: 'none',
     ...(row.includeInVoice === undefined ? {} : { includeInVoice: false }),
@@ -319,7 +345,7 @@ export function projectSessionFollowFactsV1(
   };
   return {
     follows: true,
-    notificationLevel: level.data,
+    notificationLevel: projectAccountFollowNotificationLevelV1(custody.policy ?? row.policy),
     ...(row.includeInVoice === undefined && row.policy === undefined && custody.policy === undefined ? {} : {
       includeInVoice: resolveAccountFollowVoiceSelectionV1({ includeInVoice: row.includeInVoice, policy: custody.policy ?? row.policy }) !== null,
     }),
@@ -348,13 +374,12 @@ export function resolveEffectiveSessionFollowNotificationLevelV1(params: Readonl
 export function resolveEffectiveAccountFollowPolicyV1(params: Readonly<{
   facts: SessionFollowFactsV1; isSessionOwner: boolean;
 }>): FollowPolicyV1 | null {
-  return params.facts.policy ?? resolveLegacySessionFollowPolicyV1(resolveEffectiveSessionFollowNotificationLevelV1(params));
+  return params.facts.policy ?? (params.facts.notificationLevel === null && params.isSessionOwner ? { preset: 'important' } : null);
 }
 
 /**
- * Builds the canonical stored shape of an explicit Unfollow. The suppression
- * bit lives in the same row so a later assignment or re-grant cannot undo the
- * choice; it carries no notifications, no Voice and no Voice frontier.
+ * The public projection of an explicit Unfollow. Persistence keeps the
+ * suppression bit; notificationLevel is derived and never written to storage.
  */
 export const EXPLICIT_SESSION_UNFOLLOW_STATE_V1 = Object.freeze({
   following: false as const,

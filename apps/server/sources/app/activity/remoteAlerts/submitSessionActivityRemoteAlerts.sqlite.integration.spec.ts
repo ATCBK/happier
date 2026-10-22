@@ -118,7 +118,7 @@ describe("Home remote alert submission (SQLite)", () => {
         // deliberately quiet completion is exercised by its own contract below.
         await db.accountSessionFollow.createMany({
             data: [owner, follower].map(account => ({ sessionId: session.id, accountId: account.id,
-                following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: policy }) })),
+                following: true, followPolicy: JSON.stringify({ preset: policy }) })),
         });
         return { owner, follower, reader, session };
     }
@@ -129,7 +129,7 @@ describe("Home remote alert submission (SQLite)", () => {
         await db.sessionShare.create({ data: { sessionId: other.id, sharedByUserId: owner.id,
             sharedWithUserId: follower.id, accessLevel: 'view' } });
         await db.accountSessionFollow.create({ data: { accountId: follower.id, sessionId: other.id,
-            following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: 'everything' }) } });
+            following: true, followPolicy: JSON.stringify({ preset: 'everything' }) } });
         const ownerToken = await enrollRemoteAlerts(owner.id, accountSettingsWithRemoteAlerts());
         const followerToken = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
         const app = createAuthenticatedTestApp();
@@ -215,7 +215,7 @@ describe("Home remote alert submission (SQLite)", () => {
         expect(submittedAlertPayloads()).toEqual([]);
         const follow = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
         expect(parsePersistedPersonalFollowOnceV1(follow.notifyOnce)).toMatchObject({ state: 'fulfilled' });
-        expect(follow).toMatchObject({ following: false, notificationLevel: 'none' });
+        expect(follow).toMatchObject({ following: false, followPolicy: null });
     });
 
     it('delivers the committed terminal one-shot winner without enrolling ongoing Follow or replaying it', async () => {
@@ -236,7 +236,7 @@ describe("Home remote alert submission (SQLite)", () => {
         expect(await submitSessionActivityRemoteAlerts({ ...event, acceptedOnceAccountIds: [follower.id] })).toEqual([follower.id]);
         expect(submittedAlertPayloads()).toEqual([expect.objectContaining({ to: token })]);
         expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } }))
-            .toMatchObject({ following: false, notificationLevel: 'none' });
+            .toMatchObject({ following: false, followPolicy: null });
         sendPushNotificationsAsyncSpy.mockClear();
         expect(await submitSessionActivityRemoteAlerts(event)).toEqual([]);
         expect(submittedAlertPayloads()).toEqual([]);

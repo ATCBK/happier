@@ -22,6 +22,7 @@ import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG, ARTIFACT_PLAIN_DATA_KEY_MA
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { transitionSessionArchiveStateInTx } from '@/app/session/archive/transitionSessionArchiveStateInTx';
 import { changeDeliveryMute } from './sessionDeliveryMuteService';
+import { normalizeAccountFollowNotificationChoiceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 // The push provider is the external boundary; Follow, transactions, badge
 // candidacy, counting and coalescing execute through their real owners.
@@ -265,10 +266,10 @@ describe('Account Follow service', () => {
         await expect(replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [second.id] }))
             .resolves.toEqual({ ok: true, value: { changed: true, sessionIds: [second.id] } });
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } }))
-            .toMatchObject({ following: true, notificationLevel: 'important', includeInVoice: false });
+            .toMatchObject({ following: true, followPolicy: JSON.stringify({ preset: 'important', voice: false }), includeInVoice: false });
         expect(await db.accountSessionFollow.findUnique({ where: {
             accountId_sessionId: { accountId: viewer.id, sessionId: second.id },
-        } })).toMatchObject({ following: true, notificationLevel: 'all_messages', includeInVoice: true });
+        } })).toMatchObject({ following: true, followPolicy: JSON.stringify({ preset: 'everything', voice: true }), includeInVoice: false });
 
         await expect(replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [] }))
             .resolves.toMatchObject({ ok: true, value: { changed: true, sessionIds: [] } });
@@ -297,7 +298,7 @@ describe('Account Follow service', () => {
         await expect(replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [key.sessionId, 'missing'] }))
             .resolves.toEqual({ ok: false, error: 'session_not_found' });
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } }))
-            .toMatchObject({ following: true, notificationLevel: 'important', includeInVoice: true });
+            .toMatchObject({ following: true, followPolicy: JSON.stringify({ preset: 'important', voice: true }), includeInVoice: false });
     });
 
     it('replaces modern Voice inclusions through their event policy without changing event selection', async () => {
@@ -317,15 +318,16 @@ describe('Account Follow service', () => {
         } } });
         expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } })).toMatchObject({ includeInVoice: false });
         await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'custom', events: {
-            finished: { delivery: 'off', voice: true },
+            finished: { delivery: 'off' },
         } } } });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: false } } });
         expect(await replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [key.sessionId] }))
-            .toMatchObject({ ok: true, value: { sessionIds: [] } });
-        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: false,
+            .toMatchObject({ ok: true, value: { sessionIds: [key.sessionId] } });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: true,
             policy: { preset: 'custom', events: { finished: { delivery: 'off', voice: true } } },
         } } });
         expect(await replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [key.sessionId] }))
-            .toMatchObject({ ok: true, value: { changed: false, sessionIds: [] } });
+            .toMatchObject({ ok: true, value: { changed: false, sessionIds: [key.sessionId] } });
     });
 
     it('refreshes the affected Account badge after committed Follow choices and stays quiet on no-op', async () => {
@@ -461,14 +463,15 @@ describe('Account Follow service', () => {
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } })).toMatchObject({ voiceDeliveredFrontier: null });
     });
 
-    it('keeps legacy Voice ingress distinct from modern policy writes without dual-writing authority', async () => {
+    it('normalizes scalar Voice ingress into policy and lets modern edits replace that authority', async () => {
         const { key } = await fixture();
         for (const notificationLevel of ['important', 'none'] as const) {
             await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'quiet' } } });
             expect(await setAccountSessionFollow({ ...key, preferences: { notificationLevel, includeInVoice: true } }))
                 .toMatchObject({ ok: true, value: { follow: { includeInVoice: true }, voiceInitialSnapshotPending: true } });
             expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } }))
-                .toMatchObject({ notificationLevel, includeInVoice: true, followPolicy: null });
+                .toMatchObject({ includeInVoice: false,
+                    followPolicy: JSON.stringify(normalizeAccountFollowNotificationChoiceV1({ notificationLevel, includeInVoice: true })) });
         }
         expect(await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'important' }, includeInVoice: true } }))
             .toMatchObject({ ok: true, value: { follow: { includeInVoice: false } } });
@@ -593,6 +596,7 @@ describe('Account Follow service', () => {
             expected: null,
             observed: pending[0]!.observed,
             consumed: pending[0]!.observed,
+            policy: pending[0]!.policy,
             acceptance,
             authentication: defaultAuthentication,
             runtimeAuthority,
@@ -612,6 +616,7 @@ describe('Account Follow service', () => {
             expected: null,
             observed: pending[0]!.observed,
             consumed: pending[0]!.observed,
+            policy: pending[0]!.policy,
             acceptance,
             authentication: defaultAuthentication,
             runtimeAuthority,
@@ -634,6 +639,7 @@ describe('Account Follow service', () => {
             expected: advanced[0]!.expected,
             observed: advanced[0]!.observed,
             consumed: { ...advanced[0]!.observed, transcriptSeq: 12 },
+            policy: advanced[0]!.policy,
             acceptance,
             authentication: defaultAuthentication,
             runtimeAuthority,
@@ -645,6 +651,7 @@ describe('Account Follow service', () => {
             expected: advanced[0]!.expected,
             observed: advanced[0]!.observed,
             consumed: advanced[0]!.observed,
+            policy: advanced[0]!.policy,
             acceptance,
             authentication: defaultAuthentication,
             runtimeAuthority,
@@ -660,6 +667,7 @@ describe('Account Follow service', () => {
             expected: null,
             observed: advanced[0]!.observed,
             consumed: advanced[0]!.observed,
+            policy: advanced[0]!.policy,
             acceptance,
             authentication: defaultAuthentication,
             runtimeAuthority,
@@ -779,7 +787,7 @@ describe('Account Follow service', () => {
 
         expect(await db.accountSessionFollow.findUnique({
             where: { accountId_sessionId: key },
-        })).toMatchObject({ following: false, notificationLevel: 'none', includeInVoice: false });
+        })).toMatchObject({ following: false, followPolicy: null, includeInVoice: false });
         expect(await db.accountSessionReadState.findUnique({
             where: { accountId_sessionId: key },
         })).toMatchObject({ lastViewedSessionSeq: 2, unreadSince });
@@ -875,6 +883,6 @@ describe('Account Follow service', () => {
         })).resolves.toMatchObject({ ok: true });
         expect(await db.accountSessionFollow.findUnique({ where: {
             accountId_sessionId: { accountId: viewer.id, sessionId: session.id },
-        } })).toMatchObject({ following: true, notificationLevel: 'important' });
+        } })).toMatchObject({ following: true, followPolicy: JSON.stringify({ preset: 'important' }) });
     });
 });

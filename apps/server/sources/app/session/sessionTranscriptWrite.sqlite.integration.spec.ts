@@ -1014,7 +1014,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             sessionId: session.id, sharedByUserId: account.id, sharedWithUserId: viewer.id, accessLevel: "view" as const,
         })) });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "none",
+            sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "custom", events: {} }),
         } });
         await db.accountSessionReadState.createMany({ data: [account, follower].map(viewer => ({
             sessionId: session.id, accountId: viewer.id, lastViewedSessionSeq: 0,

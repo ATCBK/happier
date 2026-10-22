@@ -235,7 +235,7 @@ describe("personal event recipients", () => {
         await db.sessionShare.createMany({ data: [reader, follower].map(account => ({
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
         })) });
-        await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important" } });
+        await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }) } });
         expect((await listSessionPersonalEventRecipients({ sessionId: session.id, event: "ready" })).map(row => row.accountId).sort())
             .toEqual([owner.id, follower.id].sort());
         expect((await listSessionPersonalEventRecipients({ sessionId: session.id, event: "discussion_mention", targetAccountIds: [reader.id] })).map(row => row.accountId))
@@ -269,7 +269,7 @@ describe("personal event recipients", () => {
         await db.sessionShare.createMany({ data: [muted, other].map(account => ({ sessionId: session.id,
             sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: 'view' as const })) });
         await db.accountSessionFollow.createMany({ data: [muted, other].map(account => ({ sessionId: session.id,
-            accountId: account.id, following: true, notificationLevel: 'important' as const })) });
+            accountId: account.id, following: true, followPolicy: JSON.stringify({ preset: "important" }) })) });
         const before = await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready' });
         expect(before.map(row => row.accountId).sort()).toEqual([owner.id, muted.id, other.id].sort());
         await db.account.update({ where: { id: muted.id }, data: { deliveryMutes: JSON.stringify([
@@ -311,7 +311,7 @@ describe("personal event recipients", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: directFollower.id, accessLevel: "view",
         } });
         await db.accountSessionFollow.createMany({ data: [restrictedFollower, inheritFollower, directFollower].map(account => ({
-            sessionId: session.id, accountId: account.id, following: true, notificationLevel: "important" as const,
+            sessionId: session.id, accountId: account.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         })) });
 
         expect((await listSessionPersonalEventRecipients({ sessionId: session.id, event: "ready" })).map(row => row.accountId).sort())

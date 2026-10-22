@@ -118,15 +118,15 @@ describe("Session responsibility owner (SQLite integration)", () => {
         const assigned = await setSessionResponsibility(input);
         expect(assigned).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         const where = { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } };
-        const created = await db.$queryRaw<Array<{ notificationLevel: string }>>`
-            SELECT notificationLevel FROM AccountSessionFollow
+        const created = await db.$queryRaw<Array<{ followPolicy: string | null }>>`
+            SELECT followPolicy FROM AccountSessionFollow
             WHERE accountId = ${fixture.collaborator.id} AND sessionId = ${fixture.session.id}
         `;
         expect(created).toEqual([]);
         expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
         await db.accountSessionFollow.create({ data: {
             accountId: fixture.collaborator.id, sessionId: fixture.session.id,
-            following: false, notificationLevel: "none",
+            following: false, followPolicy: null,
         } });
         const unreadSince = new Date(1234);
         await db.accountSessionReadState.create({ data: {
@@ -138,7 +138,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
         const reassigned = await setSessionResponsibility(input);
         expect(reassigned).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({
-            following: false, notificationLevel: "none",
+            following: false, followPolicy: null,
         });
         expect(await db.accountSessionReadState.findUnique({ where })).toMatchObject({
             lastViewedSessionSeq: 1, unreadSince,

@@ -79,7 +79,7 @@ describe("accountRoutes (activity badge snapshot) (integration)", () => {
                 accountId: account.id,
                 sessionId: session.id,
                 following: true,
-                notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: "important" }),
             },
         });
 

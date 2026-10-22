@@ -70,7 +70,7 @@ describe("tracked Session badge-refresh push fanout (SQLite)", () => {
             sessionId: session.id, teamId: team.id, accessLevel: "view" as const, effectiveAt: new Date(0),
         })) });
         await db.accountSessionFollow.createMany({ data: [restrictedFollower, inheritFollower].map(account => ({
-            sessionId: session.id, accountId: account.id, following: true, notificationLevel: "important" as const,
+            sessionId: session.id, accountId: account.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         })) });
         await db.accountPushToken.createMany({ data: [
             { accountId: owner.id, token: `ExponentPushToken[${owner.id}]` },

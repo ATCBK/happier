@@ -109,7 +109,7 @@ describe("Account-status Session access effects (SQLite integration)", () => {
                 data: { accountId: target.id, key, value: new Uint8Array([1]), version: 1 },
             });
             await db.accountSessionFollow.create({
-                data: { accountId: target.id, sessionId: session.id, following: true, notificationLevel: "important" },
+                data: { accountId: target.id, sessionId: session.id, following: true, followPolicy: JSON.stringify({ preset: "important" }) },
             });
         }
         await db.sessionFollowEdge.create({

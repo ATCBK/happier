@@ -745,7 +745,7 @@ describe("Session access grant service (SQLite integration)", () => {
         expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
         await db.accountSessionFollow.create({ data: {
             accountId: fixture.collaborator.id, sessionId: fixture.session.id,
-            following: true, notificationLevel: "important",
+            following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         expect(await db.accountSessionFollow.count({ where: { accountId: fixture.owner.id } })).toBe(0);
         const direct = { ...input, subject: { kind: "account" as const, accountId: fixture.collaborator.id } };
@@ -891,7 +891,7 @@ describe("Session access grant service (SQLite integration)", () => {
         expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
         await db.accountSessionFollow.create({ data: {
             accountId: fixture.collaborator.id, sessionId: fixture.session.id,
-            following: false, notificationLevel: "none",
+            following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }),
         } });
         await inTx((tx) => deleteSessionAccessGrantInTx(tx, input));
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false });

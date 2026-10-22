@@ -79,9 +79,9 @@ describe("Follow at the Session archive HTTP owner", () => {
         } });
         const where = { accountId_sessionId: { accountId: owner.id, sessionId: source.id } };
         await db.accountSessionFollow.create({ data: { accountId: owner.id, sessionId: source.id,
-            following: true, notificationLevel: 'important', includeInVoice: true, voiceDeliveredFrontier: frontier(9) } });
+            following: true, followPolicy: JSON.stringify({ preset: 'important', voice: true }), includeInVoice: false, voiceDeliveredFrontier: frontier(9) } });
         await db.accountSessionFollow.create({ data: { accountId: suppressed.id, sessionId: source.id,
-            following: false, notificationLevel: 'none', includeInVoice: false } });
+            following: false, followPolicy: null, includeInVoice: false } });
         const readFollow = async (accountId = owner.id) => {
             const rows = await db.$queryRaw<Array<{ following: boolean; includeInVoice: boolean; voiceDeliveredFrontier: string | null }>>`
                 SELECT following, includeInVoice, voiceDeliveredFrontier FROM AccountSessionFollow

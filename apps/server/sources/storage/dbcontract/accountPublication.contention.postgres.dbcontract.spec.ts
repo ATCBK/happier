@@ -401,7 +401,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 policyJson: JSON.stringify({ preset: 'important' }),
             } });
             if (session && operation === "follow-remove") await db.accountSessionFollow.create({ data: {
-                accountId: account.id, sessionId: session.id, following: true, notificationLevel: "none", includeInVoice: false,
+                accountId: account.id, sessionId: session.id, following: true, followPolicy: JSON.stringify({ preset: 'custom', events: {} }), includeInVoice: false,
             } });
             if (session && operation === "follow-source-remove") await db.sessionFollowEdge.create({ data: {
                 sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: session.id }),

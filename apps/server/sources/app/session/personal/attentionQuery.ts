@@ -36,8 +36,7 @@ export async function* iterateBoundedSessionPersonalAttentionRows<Row, Cursor>(p
 
 /** Tracking is ownership or an active Follow; retained read rows never establish it. */
 export function createSessionPersonallyTrackedWhere(accountId: string): Prisma.SessionWhereInput {
-    return { OR: [{ accountId }, { accountFollows: { some: { accountId, following: true,
-        notificationLevel: { in: ["none", "important", "all_messages"] } } } }] };
+    return { OR: [{ accountId }, { accountFollows: { some: { accountId, following: true, hasPersistentFollow: true } } }] };
 }
 
 /**

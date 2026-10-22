@@ -44,7 +44,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
                 homeId, accountId: account.id, sessionId: source.id, machineId: machine.id, installationId,
             } } });
             await db.accountSessionFollow.create({ data: { accountId: account.id, sessionId: source.id,
-                following: true, notificationLevel: 'important' } });
+                following: true, followPolicy: JSON.stringify({ preset: "important" }) } });
             const scope = { accountId: account.id, authentication, ruleId: randomUUID() };
             const created = await setAccountFollowRule({ ...scope, mutation: { receiver: { kind: 'account' }, expectedVersion: -1,
                 content: { t: 'plain', v: { v: 1, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' } } } } });

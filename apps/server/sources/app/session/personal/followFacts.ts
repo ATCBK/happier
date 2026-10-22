@@ -5,7 +5,6 @@ import type { Tx } from "@/storage/inTx";
 /** Shared projection for batched list reads and singular Follow facts. Malformed stored choices stay quiet. */
 export function projectSessionFollowFacts(row: Readonly<{
     following: boolean;
-    notificationLevel: string;
     includeInVoice?: boolean;
     followPolicy?: string | null;
     notifyOnce?: string | null;
@@ -31,7 +30,7 @@ export async function resolveSessionFollowFactsInTx(
 ): Promise<SessionFollowFactsV1> {
     const row = await tx.accountSessionFollow.findUnique({
         where: { accountId_sessionId: params },
-        select: { following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
+        select: { following: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
     });
     return projectSessionFollowFacts(row);
 }
@@ -55,7 +54,7 @@ export async function resolveSessionFollowFactsForAccountsInTx(
 ): Promise<ReadonlyMap<string, SessionFollowFactsV1>> {
     const rows = params.accountIds.length === 0 ? [] : await tx.accountSessionFollow.findMany({
         where: { sessionId: params.sessionId, accountId: { in: [...params.accountIds] } },
-        select: { accountId: true, following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
+        select: { accountId: true, following: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
     });
     const byAccountId = new Map(rows.map((row) => [row.accountId, projectSessionFollowFacts(row)]));
     return new Map(params.accountIds.map((accountId) => [accountId, byAccountId.get(accountId) ?? projectSessionFollowFacts(null)]));

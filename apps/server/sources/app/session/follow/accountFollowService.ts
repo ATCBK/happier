@@ -1,4 +1,4 @@
-import { AccountSessionFollowV1Schema, OtherAccountFollowV1Schema, EXPLICIT_SESSION_UNFOLLOW_STATE_V1, projectSessionFollowFactsV1, SessionAutoFollowPreferencesV1Schema, type AccountFollowRelationV1, type AccountSessionFollowV1, type OtherAccountFollowV1, type SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { AccountSessionFollowV1Schema, OtherAccountFollowV1Schema, EXPLICIT_SESSION_UNFOLLOW_STATE_V1, projectSessionFollowFactsV1, normalizeAccountFollowNotificationChoiceV1, projectAccountFollowNotificationLevelV1, SessionAutoFollowPreferencesV1Schema, type AccountFollowRelationV1, type AccountSessionFollowV1, type OtherAccountFollowV1, type SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { SetSessionFollowRequestSchema, ReplaceSessionVoiceInclusionsRequestSchema, type SetSessionFollowRequest, type GetSessionFollowResponse } from '@happier-dev/protocol/sessions/follow/api';
 import { compareSessionFollowFrontierProgressV1, encodePersistedSessionFollowFrontierV1, isSessionFollowConsumptionWithinCurrentV1, isSessionFollowFrontierEqualV1, isSessionFollowTurnEqualV1, parsePersistedSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
@@ -81,7 +81,6 @@ const FOLLOW_SELECT = {
     sourceExecutionRunId: true,
     sourceWorkflowRunId: true,
     following: true,
-    notificationLevel: true,
     includeInVoice: true,
     voiceDeliveredFrontier: true,
     followPolicy: true,
@@ -126,7 +125,6 @@ function isVoiceInitialSnapshotPending(row: Readonly<{
 function projectAccountSessionFollow(row: Readonly<{
     sessionId: string | null;
     following: boolean;
-    notificationLevel: string;
     includeInVoice: boolean;
     followPolicy?: string | null;
     notifyOnce?: string | null;
@@ -137,7 +135,7 @@ function projectAccountSessionFollow(row: Readonly<{
     return AccountSessionFollowV1Schema.parse({
         sessionId: row.sessionId,
         following: row.following,
-        notificationLevel: row.notificationLevel,
+        notificationLevel: row.following ? projectAccountFollowNotificationLevelV1(custody.policy) : 'none',
         includeInVoice: row.following && resolveAccountFollowVoiceSelectionV1({ includeInVoice: row.includeInVoice, ...custody }) !== null,
         ...(row.hasPersistentFollow === false ? { persistent: false } : {}),
         ...custody,
@@ -363,8 +361,6 @@ export async function setOtherAccountFollow(input: Readonly<{
             if (!follow) return { ok: false, error: 'source_unavailable' };
             return { ok: true, value: { changed: false, follow } };
         }
-        const notificationLevel = policy.preset === 'everything' ? 'all_messages'
-            : policy.preset === 'quiet' ? 'none' : 'important';
         const raw = input.source.kind === 'discussion' ? { sourceDiscussionId: input.source.discussionId }
             : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
             : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
@@ -382,9 +378,9 @@ export async function setOtherAccountFollow(input: Readonly<{
                         ? deriveSessionFollowOriginalOccurrenceKeyV1(runOccurrence.original) : null };
         const row = await tx.accountSessionFollow.upsert({ where: { accountId_sourceKey: key },
             create: { accountId: input.accountId, sourceKey, ...raw, ...baseline,
-                following: true, hasPersistentFollow: true, notificationLevel,
+                following: true, hasPersistentFollow: true,
                 includeInVoice: false, followPolicy },
-            update: { following: true, hasPersistentFollow: true, notificationLevel,
+            update: { following: true, hasPersistentFollow: true,
                 includeInVoice: false, followPolicy, ...(reseed ? baseline : {}) },
             select: FOLLOW_SELECT });
         if (JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(input.source))
@@ -413,9 +409,9 @@ export async function removeOtherAccountFollow(input: Readonly<{
             : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
             : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
         await tx.accountSessionFollow.upsert({ where: { accountId_sourceKey: key },
-            create: { ...key, ...raw, following: false, hasPersistentFollow: true, notificationLevel: 'none',
+            create: { ...key, ...raw, following: false, hasPersistentFollow: true,
                 includeInVoice: false, followPolicy: serializeFollowPolicyV1({ preset: 'quiet' }) },
-            update: { following: false, hasPersistentFollow: true, notificationLevel: 'none',
+            update: { following: false, hasPersistentFollow: true,
                 includeInVoice: false, followPolicy: serializeFollowPolicyV1({ preset: 'quiet' }) } });
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true } };
@@ -464,10 +460,11 @@ export async function setAccountSessionFollow(input: Readonly<{
         const key = { accountId: input.accountId, sessionId: input.sessionId };
         const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sessionId: key }, select: FOLLOW_SELECT });
         const persistentMutation = preferences.policy !== undefined || preferences.notificationLevel !== undefined;
-        // Legacy ingress retains its independent notification/Voice choices.
-        // Do not manufacture a second explicit policy beside those fields.
+        // Scalar edits are ingress only; persistence has one policy authority.
         const policyWrite = preferences.policy !== undefined ? { followPolicy: JSON.stringify(preferences.policy) }
-            : preferences.notificationLevel !== undefined ? { followPolicy: null } : {};
+            : preferences.notificationLevel !== undefined ? { followPolicy: serializeFollowPolicyV1(normalizeAccountFollowNotificationChoiceV1({
+                notificationLevel: preferences.notificationLevel, includeInVoice: preferences.includeInVoice === true,
+            })) } : {};
         let notifyOnce = existing?.notifyOnce ?? null;
         if (preferences.once !== undefined) {
             if (preferences.once === null) notifyOnce = null;
@@ -487,15 +484,11 @@ export async function setAccountSessionFollow(input: Readonly<{
                     ? existing!.notifyOnce : JSON.stringify(armed);
             }
         }
-        const notificationLevel = persistentMutation
-            ? preferences.notificationLevel ?? (preferences.policy?.preset === 'everything' ? 'all_messages' : preferences.policy?.preset === 'quiet' ? 'none' : 'important')
-            : existing?.notificationLevel ?? 'none';
-        const includeInVoice = preferences.policy !== undefined ? false
-            : preferences.includeInVoice ?? existing?.includeInVoice ?? false;
+        const includeInVoice = persistentMutation ? false : existing?.includeInVoice ?? false;
         const following = persistentMutation ? true : existing?.following ?? false;
         const hasPersistentFollow = persistentMutation || existing?.hasPersistentFollow === true;
         const followPolicy = 'followPolicy' in policyWrite ? policyWrite.followPolicy : existing?.followPolicy ?? null;
-        if (existing && existing.following === following && existing.notificationLevel === notificationLevel
+        if (existing && existing.following === following
             && existing.includeInVoice === includeInVoice && existing.followPolicy === followPolicy && existing.notifyOnce === notifyOnce
             && existing.hasPersistentFollow === hasPersistentFollow) {
             return { ok: true, value: {
@@ -505,13 +498,13 @@ export async function setAccountSessionFollow(input: Readonly<{
             } };
         }
         const wasTracked = await isSessionPersonallyTrackedInTx(tx, { ...key, ownerAccountId: session.accountId });
+        const voiceSelected = resolveAccountVoiceSelection({ includeInVoice, followPolicy }) !== null;
+        const previouslySelected = existing !== null && resolveAccountVoiceSelection(existing) !== null;
         const row = await tx.accountSessionFollow.upsert({
             where: { accountId_sessionId: key },
-            create: { ...key, following, hasPersistentFollow, notificationLevel, includeInVoice, followPolicy, notifyOnce, voiceDeliveredFrontier: null },
-            update: { following, hasPersistentFollow, notificationLevel, includeInVoice, followPolicy, notifyOnce,
-                ...(preferences.includeInVoice !== undefined && (!includeInVoice || !existing?.includeInVoice)
-                    || resolveAccountVoiceSelection({ includeInVoice, followPolicy }) !== null
-                        && (!existing || resolveAccountVoiceSelection(existing) === null)
+            create: { ...key, following, hasPersistentFollow, includeInVoice, followPolicy, notifyOnce, voiceDeliveredFrontier: null },
+            update: { following, hasPersistentFollow, includeInVoice, followPolicy, notifyOnce,
+                ...(!voiceSelected || !previouslySelected
                     ? { voiceDeliveredFrontier: null } : {}) },
             select: FOLLOW_SELECT,
         });
@@ -534,7 +527,8 @@ export async function removeAccountSessionFollow(input: Readonly<{ accountId: st
         const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sessionId: key }, select: FOLLOW_SELECT });
         if (!existing && !await readableSession(tx, input)) return { ok: false, error: "session_not_found" };
         if (existing && existing.hasPersistentFollow && !existing.following && existing.notifyOnce === null) return { ok: true, value: { changed: false } };
-        const suppressed = { ...EXPLICIT_SESSION_UNFOLLOW_STATE_V1, hasPersistentFollow: true, followPolicy: null, notifyOnce: null, voiceDeliveredFrontier: null };
+        const { notificationLevel: _notificationLevel, ...unfollowState } = EXPLICIT_SESSION_UNFOLLOW_STATE_V1;
+        const suppressed = { ...unfollowState, hasPersistentFollow: true, followPolicy: null, notifyOnce: null, voiceDeliveredFrontier: null };
         await tx.accountSessionFollow.upsert({ where: { accountId_sessionId: key }, create: { ...key, ...suppressed }, update: suppressed });
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true } };
@@ -654,21 +648,21 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
             const key = { accountId: input.accountId, sessionId };
             const row = existingBySessionId.get(sessionId);
             if (row?.following && resolveAccountVoiceSelection(row) !== null) continue;
-            const policy = row ? projectPersonalFollowCustodyV1(row).policy : undefined;
-            const voicePolicy = policy ? editFollowPolicyV1(policy, { kind: 'voice', enabled: true }) : undefined;
+            const policy = row?.following ? projectPersonalFollowCustodyV1(row).policy : undefined;
+            const voicePolicy = policy ? editFollowPolicyV1(policy, { kind: 'voice', enabled: true })
+                : normalizeAccountFollowNotificationChoiceV1({ notificationLevel: 'none', includeInVoice: true });
             if (row?.following && !row.includeInVoice && policy && voicePolicy && isFollowPolicyEqualV1(policy, voicePolicy)) continue;
             const session = sessions.get(sessionId)!;
             const wasTracked = await isSessionPersonallyTrackedInTx(tx, { ...key, ownerAccountId: session.accountId });
             await tx.accountSessionFollow.upsert({
                 where: { accountId_sessionId: key },
-                create: { ...key, following: true, notificationLevel: 'none', includeInVoice: true, voiceDeliveredFrontier: null },
+                create: { ...key, following: true, includeInVoice: false, followPolicy: serializeFollowPolicyV1(voicePolicy), voiceDeliveredFrontier: null },
                 update: {
                     following: true,
                     hasPersistentFollow: true,
-                    includeInVoice: !policy,
-                    ...(voicePolicy ? { followPolicy: JSON.stringify(voicePolicy) } : {}),
+                    includeInVoice: false,
+                    followPolicy: serializeFollowPolicyV1(voicePolicy),
                     voiceDeliveredFrontier: null,
-                    ...(row?.following ? {} : { notificationLevel: 'none' }),
                 },
             });
             await beginViewerReadTrackingOnFollowEntryInTx({ tx, ...key, wasTracked, authentication: input.authentication });

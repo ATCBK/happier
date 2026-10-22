@@ -47,7 +47,7 @@ export function createSessionPersonalProjectionSelect(accountId: string, context
         // transcript row, content, or count is read here.
         messages: { where: { authorAccountId: accountId }, take: 1, select: { id: true } },
         accountReadStates: { where: { accountId }, select: { accountId: true, lastViewedSessionSeq: true, unreadSince: true } },
-        accountFollows: { where: { accountId }, select: { accountId: true, following: true, notificationLevel: true, includeInVoice: true,
+        accountFollows: { where: { accountId }, select: { accountId: true, following: true, includeInVoice: true,
             followPolicy: true, notifyOnce: true, hasPersistentFollow: true } },
         sessionPins: { where: { accountId }, select: { accountId: true } },
         sessionAttentionStandings: { where: { accountId }, select: { accountId: true, standing: true, remindAt: true } },
@@ -84,7 +84,7 @@ export function createSessionPersonalAttentionProjectionSelectForAccounts(accoun
         },
         accountFollows: {
             where: { accountId: { in: ids } },
-            select: { accountId: true, following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
+            select: { accountId: true, following: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
         },
         sessionAttentionStandings: {
             where: { accountId: { in: ids } },

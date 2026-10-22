@@ -10,6 +10,24 @@ import {
 } from './sessionFollowPolicyV1.js';
 
 describe('Follow policy receiver projections', () => {
+  it('keeps Voice-only interest independent of Inbox and Session delivery', () => {
+    const policy: FollowPolicyV1 = { preset: 'custom', events: { message: { delivery: 'off', voice: true } } };
+    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } })).toEqual({
+      selected: false, interrupt: false, voice: true,
+      person: { inbox: false, push: false, voice: true }, session: { nextTurn: false, wake: false },
+    });
+    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' }, muted: true }).person.voice).toBe(false);
+    expect(resolveFollowDeliveryV1({ policies: [{ preset: 'custom', events: { message: { delivery: 'off' } } }],
+      event: { kind: 'message' } }).person.voice).toBe(false);
+  });
+  it('keeps Important Voice additive for messages without changing continue-mode question delivery', () => {
+    const policy: FollowPolicyV1 = { preset: 'important', voice: true };
+    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } })).toMatchObject({
+      selected: false, person: { inbox: false, push: false, voice: true }, session: { nextTurn: false, wake: false },
+    });
+    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'needs_you', type: 'decision', mode: 'continue' } }))
+      .toMatchObject({ person: { inbox: true, push: false, voice: true }, session: { nextTurn: true, wake: false } });
+  });
   it.each([{ preset: 'quiet' }, { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } } } }] satisfies FollowPolicyV1[])(
     'routes an exact Discussion answer obligation as a direct ask without changing $preset informational policy', policy => {
       const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };

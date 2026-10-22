@@ -768,7 +768,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     accountId: owner.id,
                     sessionId: created.session.id,
                     following: true,
-                    notificationLevel: "important",
+                    followPolicy: JSON.stringify({ preset: 'important', voice: true }),
                     includeInVoice: true,
                     voiceDeliveredFrontier: JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }),
                 },

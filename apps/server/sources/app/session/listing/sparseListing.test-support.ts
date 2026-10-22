@@ -142,7 +142,7 @@ export async function verifySparseSessionListing(provider: "sqlite" | "postgres"
                 sessionId: session.id,
                 accountId: viewer.id,
                 following: true,
-                notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: "important" }),
             },
         });
         await db.accountSessionReadState.create({
@@ -196,7 +196,7 @@ export async function verifySparseSessionListing(provider: "sqlite" | "postgres"
             accountId: viewer.id,
             sessionId: session.id,
             following: true,
-            notificationLevel: "important",
+            followPolicy: JSON.stringify({ preset: "important" }),
         })) }),
     ]);
 

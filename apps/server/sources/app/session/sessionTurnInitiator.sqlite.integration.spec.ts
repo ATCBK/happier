@@ -123,7 +123,7 @@ describe("Host-stamped SessionTurn facts (SQLite integration)", () => {
                 event: 'user_action_required', turnId, requestId, agentStateVersion: 1,
             } });
             expect(row).toMatchObject({ following: before.following, hasPersistentFollow: before.hasPersistentFollow,
-                notificationLevel: before.notificationLevel, includeInVoice: before.includeInVoice,
+                followPolicy: before.followPolicy, includeInVoice: before.includeInVoice,
                 voiceDeliveredFrontier: before.voiceDeliveredFrontier });
             expect(await (layout === 0 ? updateSessionAgentState({ actorUserId: account.id, sessionId: session.id,
                 expectedVersion: 1, agentStateCiphertext: '{}', pendingUserActionRequestCount: 0,

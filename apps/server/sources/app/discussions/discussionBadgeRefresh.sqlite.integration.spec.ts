@@ -78,7 +78,7 @@ describe("Discussion grants control Account badge facts (SQLite)", () => {
         // baseline. `browser` has the same access and no Follow, so it is the
         // control for "broad access is never badge fanout".
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+            sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         for (const tracked of [owner, follower]) {
             await db.accountSessionReadState.create({ data: {

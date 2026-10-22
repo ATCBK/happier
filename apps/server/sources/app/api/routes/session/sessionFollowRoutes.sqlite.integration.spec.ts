@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { decodeBase64 } from 'privacy-kit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { normalizeAccountFollowNotificationChoiceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -22,6 +23,7 @@ import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGran
 import { auth } from '@/app/auth/auth';
 import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
 import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { resolveAccountVoiceSelection } from '@/app/session/follow/accountFollowService';
 
 async function buildApp(accountId: string, sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal) {
     const app = Fastify({ logger: false });
@@ -370,7 +372,8 @@ describe('Account Session Follow HTTP resource', () => {
             const payload = { notificationLevel: 'none', includeInVoice: true };
             const created = await app.inject({ method: 'PUT', url, payload });
             expect(created.statusCode).toBe(200);
-            expect(created.json()).toEqual({ changed: true, follow: { sessionId: session.id, following: true, ...payload, once: null }, voiceInitialSnapshotPending: true });
+            expect(created.json()).toEqual({ changed: true, follow: { sessionId: session.id, following: true, ...payload,
+                policy: normalizeAccountFollowNotificationChoiceV1({ notificationLevel: 'none', includeInVoice: true }), once: null }, voiceInitialSnapshotPending: true });
             expect((await app.inject({ method: 'GET', url: '/v2/account/session-follows' })).json()).toEqual({ follows: [created.json().follow] });
             expect(await db.accountSessionReadState.findUnique({ where: {
                 accountId_sessionId: { accountId: viewer.id, sessionId: session.id },
@@ -435,7 +438,7 @@ describe('Account Session Follow HTTP resource', () => {
             const payload = { notificationLevel: 'important', includeInVoice: true };
             const saved = await app.inject({ method: 'PUT', url, payload });
             expect(saved.statusCode).toBe(200);
-            expect(saved.json()).toEqual({ changed: true, follow: { sessionId: session.id, following: true, ...payload, once: null },
+            expect(saved.json()).toEqual({ changed: true, follow: { sessionId: session.id, following: true, ...payload, policy: { preset: 'important', voice: true }, once: null },
                 voiceInitialSnapshotPending: true });
             const change = await db.accountChange.findUnique({ where: {
                 accountId_kind_entityId: { accountId: owner.id, kind: 'account', entityId: 'session-follows' },
@@ -446,7 +449,7 @@ describe('Account Session Follow HTTP resource', () => {
             expect([disabled.statusCode, disabled.json()]).toEqual([404, { error: 'feature_unavailable' }]);
             expect(await db.accountSessionFollow.findUnique({ where: {
                 accountId_sessionId: { accountId: owner.id, sessionId: session.id },
-            } })).toMatchObject({ following: true, includeInVoice: true });
+            } })).toMatchObject({ following: true, includeInVoice: false, followPolicy: JSON.stringify({ preset: 'important', voice: true }) });
         } finally { await app.close(); }
     });
 
@@ -470,10 +473,10 @@ describe('Account Session Follow HTTP resource', () => {
             expect(response.statusCode).toBe(200);
             expect(response.json()).toEqual({ changed: true, sessionIds: [...sessionIds].sort() });
             expect((await db.accountSessionFollow.findMany({
-                where: { accountId: owner.id, following: true, includeInVoice: true },
-                select: { sessionId: true },
+                where: { accountId: owner.id, following: true },
+                select: { sessionId: true, includeInVoice: true, followPolicy: true },
                 orderBy: { sessionId: 'asc' },
-            })).map(row => row.sessionId)).toEqual([...sessionIds].sort());
+            })).filter(row => resolveAccountVoiceSelection(row) !== null).map(row => row.sessionId)).toEqual([...sessionIds].sort());
         } finally { await app.close(); }
     });
 });

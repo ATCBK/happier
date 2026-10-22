@@ -413,7 +413,7 @@ describe("Session listing predicate composition (SQLite)", () => {
                 accountId: viewer.id,
                 sessionId: shared.id,
                 following: true,
-                notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: "important" }),
             },
         });
         await db.accountSessionReadState.create({
@@ -856,7 +856,7 @@ describe("Session listing predicate composition (SQLite)", () => {
         } });
         // Tracking is Follow, not access: only `shared` may ever be loud.
         await db.accountSessionFollow.create({ data: {
-            sessionId: shared.id, accountId: viewer.id, following: true, notificationLevel: "important",
+            sessionId: shared.id, accountId: viewer.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         await db.accountSessionReadState.create({ data: {
             sessionId: shared.id, accountId: viewer.id, lastViewedSessionSeq: 0,
@@ -956,7 +956,7 @@ describe("Session listing predicate composition (SQLite)", () => {
             if (value.expected) expected.push(session.id);
             if (value.expectedBadge ?? value.expected) expectedBadge.push(session.id);
             await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: viewer.id, accessLevel: "view" } });
-            await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: viewer.id, following: value.follows !== false, notificationLevel: value.follows === false ? "none" : "important" } });
+            await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: viewer.id, following: value.follows !== false, followPolicy: JSON.stringify({ preset: "important" }) } });
             await db.accountSessionReadState.create({ data: { sessionId: session.id, accountId: viewer.id, lastViewedSessionSeq: value.cursor ?? 0 } });
             if (value.standing) await db.sessionAttentionStanding.create({ data: { sessionId: session.id, accountId: viewer.id, standing: true } });
         }

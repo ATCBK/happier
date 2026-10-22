@@ -154,7 +154,7 @@ describe("private viewer read state (SQLite integration)", () => {
     it("lets a tracked view-only reader change its own frontier without changing another Account", async () => {
         const { owner, collaborator, session } = await createSharedSession({ seq: 5 });
         await db.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: collaborator.id }, data: { accessLevel: "view" } });
-        await db.accountSessionFollow.create({ data: { accountId: collaborator.id, sessionId: session.id, following: true, notificationLevel: "none" } });
+        await db.accountSessionFollow.create({ data: { accountId: collaborator.id, sessionId: session.id, following: true, followPolicy: JSON.stringify({ preset: "custom", events: {} }) } });
         await inTx(async (tx) => {
             await beginViewerReadTrackingOnFollowEntryInTx({
                 tx,
@@ -547,7 +547,7 @@ describe("private viewer read state (SQLite integration)", () => {
 
     it("updates tracked unread at the canonical hosted transcript insert without reading new content", async () => {
         const { owner, collaborator, session } = await createSharedSession({ seq: 5 });
-        await db.accountSessionFollow.create({ data: { accountId: collaborator.id, sessionId: session.id, following: true, notificationLevel: "none" } });
+        await db.accountSessionFollow.create({ data: { accountId: collaborator.id, sessionId: session.id, following: true, followPolicy: JSON.stringify({ preset: "custom", events: {} }) } });
         await inTx(tx => beginViewerReadTrackingOnFollowEntryInTx({ tx, accountId: collaborator.id, sessionId: session.id, wasTracked: false }));
         const at = new Date(42_000);
         const result = await inTx(tx => writeSessionTranscriptMessageInTx(tx, {

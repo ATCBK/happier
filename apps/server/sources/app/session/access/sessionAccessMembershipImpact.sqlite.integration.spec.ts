@@ -88,11 +88,11 @@ describe("Membership Session access effects (SQLite integration)", () => {
         expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
         expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
         await db.accountSessionFollow.create({ data: {
-            accountId: f.member.id, sessionId: f.session.id, following: false, notificationLevel: "none",
+            accountId: f.member.id, sessionId: f.session.id, following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }),
         } });
         await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
         await reactivate();
-        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false, notificationLevel: "none" });
+        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }) });
     });
 
     it("rolls back access effects with the native mutation", async () => {

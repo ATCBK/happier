@@ -122,7 +122,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         const followed = await session(owner.id);
         await share(followed.id, owner.id, viewer.id);
         await db.accountSessionFollow.create({ data: {
-            sessionId: followed.id, accountId: viewer.id, following: true, notificationLevel: "important",
+            sessionId: followed.id, accountId: viewer.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         const pinned = await session(owner.id);
         await share(pinned.id, owner.id, viewer.id);
@@ -136,7 +136,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         const suppressed = await session(owner.id);
         await share(suppressed.id, owner.id, viewer.id);
         await db.accountSessionFollow.create({ data: {
-            sessionId: suppressed.id, accountId: viewer.id, following: false, notificationLevel: "none",
+            sessionId: suppressed.id, accountId: viewer.id, following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }),
         } });
 
         expect(await scopedSessionIds(viewer.id, "my_work")).toEqual(
@@ -226,7 +226,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         const viewer = await db.account.create({ data: { publicKey: randomUUID() } });
         const collective = await session(owner.id);
         await db.accountSessionFollow.create({ data: {
-            sessionId: collective.id, accountId: viewer.id, following: true, notificationLevel: "important",
+            sessionId: collective.id, accountId: viewer.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         await db.sessionPin.create({ data: { sessionId: collective.id, accountId: viewer.id } });
         await db.sessionAttentionStanding.create({ data: { sessionId: collective.id, accountId: viewer.id, standing: true } });

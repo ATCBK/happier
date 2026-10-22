@@ -163,7 +163,7 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
         if (!draftKey) throw new Error("Expected Session draft key");
         await Promise.all([
             db.accountSessionFollow.create({ data: {
-                accountId: member.id, sessionId: session.id, following: true, notificationLevel: "important",
+                accountId: member.id, sessionId: session.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
             } }),
             db.accountSessionReadState.create({ data: {
                 accountId: member.id, sessionId: session.id, lastViewedSessionSeq: 7,
@@ -226,7 +226,7 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
             // The narrow successor must not run Account-wide access-loss cleanup.
             expect(await db.accountSessionFollow.findUnique({
                 where: { accountId_sessionId: { accountId: member.id, sessionId: session.id } },
-            })).toMatchObject({ following: true, notificationLevel: "important" });
+            })).toMatchObject({ following: true, followPolicy: JSON.stringify({ preset: "important" }) });
             expect(await db.accountSessionReadState.findUnique({
                 where: { accountId_sessionId: { accountId: member.id, sessionId: session.id } },
             })).toMatchObject({ lastViewedSessionSeq: 7 });

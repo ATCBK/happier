@@ -159,7 +159,7 @@ describe("committed session mutations produce Home remote alerts", () => {
         await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
             sharedWithUserId: follower.id, accessLevel: 'view' } });
         await db.accountSessionFollow.createMany({ data: [owner, follower].map(account => ({ accountId: account.id,
-            sessionId: session.id, following: true, notificationLevel: 'all_messages',
+            sessionId: session.id, following: true,
             followPolicy: JSON.stringify({ preset: 'custom', events: { message: { delivery: 'interrupt' },
                 failed_or_stopped: { delivery: 'interrupt' } } }) })) });
         await Promise.all([owner, follower].map(account => enrollRemoteAlerts(account.id)));
@@ -375,7 +375,7 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: assignee.id, accessLevel: "view",
         } });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: assignee.id, following: true, notificationLevel: "important",
+            sessionId: session.id, accountId: assignee.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         await enrollRemoteAlerts(assignee.id);
 
@@ -407,7 +407,7 @@ describe("committed session mutations produce Home remote alerts", () => {
                 sessionId: session.id,
                 accountId: assignee.id,
                 following: false,
-                notificationLevel: "none",
+                followPolicy: null,
             } });
         }
         await enrollRemoteAlerts(assignee.id);
@@ -457,11 +457,11 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: follower.id, accessLevel: "view",
         } });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+            sessionId: session.id, accountId: follower.id, following: true,
             followPolicy: JSON.stringify({ preset: 'everything' }),
         } });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: owner.id, following: true, notificationLevel: 'important',
+            sessionId: session.id, accountId: owner.id, following: true,
             followPolicy: JSON.stringify({ preset: 'everything' }),
         } });
         await enrollRemoteAlerts(owner.id);
@@ -498,11 +498,11 @@ describe("committed session mutations produce Home remote alerts", () => {
                 sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: follower.id, accessLevel: "view",
             } });
             await db.accountSessionFollow.create({ data: {
-                sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+                sessionId: session.id, accountId: follower.id, following: true,
                 followPolicy: JSON.stringify({ preset: 'everything' }),
             } });
             await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: owner.id,
-                following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: 'everything' }) } });
+                following: true, followPolicy: JSON.stringify({ preset: 'everything' }) } });
             const [ownerToken, followerToken] = await Promise.all([
                 enrollRemoteAlerts(owner.id),
                 enrollRemoteAlerts(follower.id),
@@ -548,7 +548,7 @@ describe("committed session mutations produce Home remote alerts", () => {
             accessLevel: "edit", canApprovePermissions: true,
         } });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+            sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         await Promise.all([enrollRemoteAlerts(owner.id), enrollRemoteAlerts(follower.id)]);
         const publisherAuthority = await registerRuntimePublisher({
@@ -650,7 +650,7 @@ describe("committed session mutations produce Home remote alerts", () => {
                 accessLevel: "edit", canApprovePermissions: true,
             } });
             await db.accountSessionFollow.create({ data: {
-                sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+                sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
             } });
             const [ownerToken, followerToken] = await Promise.all([
                 enrollRemoteAlerts(owner.id),
@@ -712,7 +712,7 @@ describe("committed session mutations produce Home remote alerts", () => {
                 sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: follower.id, accessLevel: "view",
             } });
             await db.accountSessionFollow.create({ data: {
-                sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+                sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
             } });
             const [ownerToken, followerToken] = await Promise.all([
                 enrollRemoteAlerts(owner.id),
@@ -769,9 +769,9 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "edit" as const,
         })) });
         await db.accountSessionFollow.createMany({ data: [
-            { sessionId: session.id, accountId: author.id, following: true, notificationLevel: "all_messages" },
-            { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages" },
-            { sessionId: session.id, accountId: customHuman.id, following: true, notificationLevel: "important",
+            { sessionId: session.id, accountId: author.id, following: true, followPolicy: JSON.stringify({ preset: "everything" }) },
+            { sessionId: session.id, accountId: allMessages.id, following: true, followPolicy: JSON.stringify({ preset: "everything" }) },
+            { sessionId: session.id, accountId: customHuman.id, following: true,
                 followPolicy: JSON.stringify({ preset: 'custom', events: { person_wrote: { delivery: 'interrupt' } } }) },
         ] });
         const [authorToken, allMessagesToken, customHumanToken] = await Promise.all(
@@ -816,9 +816,9 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
         })) });
         await db.accountSessionFollow.createMany({ data: [
-            { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages",
+            { sessionId: session.id, accountId: allMessages.id, following: true,
                 followPolicy: JSON.stringify({ preset: 'custom', events: { message: { delivery: 'interrupt' } } }) },
-            { sessionId: session.id, accountId: important.id, following: true, notificationLevel: "important" },
+            { sessionId: session.id, accountId: important.id, following: true, followPolicy: JSON.stringify({ preset: "important" }) },
         ] });
         await Promise.all([allMessages, important].map((account) => enrollRemoteAlerts(account.id)));
 
@@ -853,7 +853,7 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: follower.id, accessLevel: "view",
         } });
         await db.accountSessionFollow.create({ data: {
-            sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+            sessionId: session.id, accountId: follower.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         } });
         const followerToken = await enrollRemoteAlerts(follower.id);
         const options = { operationSocketBatchLimits: { ok: true as const, limits: { maxItems: 200, maxSerializedBytes: 524_288 } } };

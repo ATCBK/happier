@@ -282,8 +282,7 @@ export async function countAccountPersonalAttentionRowsForAccountsInTx(
 
 /** Active Follow only; an explicit suppression row is never a Following member. */
 function createActiveFollowWhere(accountId: string): Prisma.SessionWhereInput {
-    return { accountFollows: { some: { accountId, following: true,
-        notificationLevel: { in: ["none", "important", "all_messages"] } } } };
+    return { accountFollows: { some: { accountId, following: true, hasPersistentFollow: true } } };
 }
 
 /**

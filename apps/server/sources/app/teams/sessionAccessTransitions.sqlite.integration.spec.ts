@@ -96,10 +96,10 @@ describe("Team mutations compose Session access transitions", () => {
         const where = { accountId_sessionId: { accountId: f.member.id, sessionId: f.session.id } };
         // Re-enabling a retained membership is not a new qualifying relationship (§6.3).
         expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
-        await db.accountSessionFollow.create({ data: { accountId: f.member.id, sessionId: f.session.id, following: false, notificationLevel: "none" } });
+        await db.accountSessionFollow.create({ data: { accountId: f.member.id, sessionId: f.session.id, following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }) } });
         await inTx(tx => suspendTeamMemberForActorInTx(tx, f.memberInput));
         await inTx(tx => reactivateTeamMemberForActorInTx(tx, f.memberInput));
-        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false, notificationLevel: "none" });
+        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false, followPolicy: JSON.stringify({ preset: "custom", events: {} }) });
     });
 
     it("removes final-access state but preserves state covered by an independent direct grant", async () => {

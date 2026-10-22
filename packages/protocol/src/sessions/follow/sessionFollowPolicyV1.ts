@@ -103,7 +103,7 @@ export type ResolveFollowDeliveryV1Params = Readonly<{
   }>;
 }>;
 
-function hasDirectDiscussionAnswerObligation(input: ResolveFollowDeliveryV1Params['discussionInput']): boolean {
+export function hasDirectDiscussionAnswerObligation(input: ResolveFollowDeliveryV1Params['discussionInput']): boolean {
   if (!input || input.reply?.mode !== 'return') return false;
   const { addressing, original, reply } = input;
   const snapshot = original.addressingV1;
@@ -131,7 +131,7 @@ function resolveRoute(policy: FollowPolicyV1, event: FollowEventV1) {
       ? policy.events.needs_you?.[event.type]
       : policy.events[event.kind];
   }
-  if (event.kind === 'message' && policy.preset !== 'everything') return undefined;
+  if (event.kind === 'message' && policy.preset !== 'everything') return { delivery: 'off' as const, voice: policy.voice };
   const urgent = event.kind === 'failed_or_stopped' || event.kind === 'stalled'
     || event.kind === 'needs_you' && event.mode !== 'continue';
   const interrupt = policy.preset === 'everything'
@@ -147,10 +147,11 @@ export function resolveFollowDeliveryV1(params: ResolveFollowDeliveryV1Params): 
   if (!params.muted && !params.causalEcho) {
     for (const policy of params.policies) {
       const route = resolveRoute(policy, params.event);
-      if (!route || route.delivery === 'off') continue;
+      if (!route) continue;
+      voice ||= route.voice === true;
+      if (route.delivery === 'off') continue;
       selected = true;
       interrupt ||= route.delivery === 'interrupt';
-      voice ||= route.voice === true;
     }
     // C3's concrete addressed C2 obligation is a direct ask, not an ambient
     // Follow event. Stored levels still govern informational/watch delivery.
@@ -180,13 +181,6 @@ export function resolveWorkerUpdateFollowDeliveryV1(params: Readonly<{
     policies: params.policies ?? [{ preset: 'important' }],
     event: kind === 'needs_you' ? { kind, ...(params.needsYou ?? { type: 'decision' }) } : { kind },
   });
-}
-
-/** Stored/predecessor level ingress only; all event decisions use the policy above. */
-export function resolveLegacySessionFollowPolicyV1(level: unknown): FollowPolicyV1 | null {
-  if (level === 'important' || level === 'quiet' || level === 'everything') return { preset: level };
-  if (level === 'all_messages') return { preset: 'everything' };
-  return null;
 }
 
 export type InboxItemAttentionTypeV1 = 'decision' | 'approval' | 'blocked' | 'update' | 'mention';

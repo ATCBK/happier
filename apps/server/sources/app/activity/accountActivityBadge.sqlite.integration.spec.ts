@@ -38,7 +38,7 @@ describe("Account activity badge admission (SQLite)", () => {
                     sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: "view",
                 } });
                 await db.accountSessionFollow.create({ data: {
-                    sessionId: session.id, accountId: reader.id, following: true, notificationLevel: "important",
+                    sessionId: session.id, accountId: reader.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
                 } });
                 await db.accountSessionReadState.create({ data: {
                     sessionId: session.id, accountId: reader.id, lastViewedSessionSeq: 0,
@@ -120,7 +120,7 @@ describe("Account activity badge admission (SQLite)", () => {
             sessionId: session.id, teamId: team.id, accessLevel: "view" as const, effectiveAt: new Date(0),
         })) });
         await db.accountSessionFollow.createMany({ data: [restrictedFollower, inheritFollower].map(account => ({
-            sessionId: session.id, accountId: account.id, following: true, notificationLevel: "important" as const,
+            sessionId: session.id, accountId: account.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         })) });
         // A `view` grant cannot act on the blocked count, so the followers'
         // attention is their own unread frontier; the owner's is the block.
@@ -164,7 +164,7 @@ describe("Account activity badge admission (SQLite)", () => {
             sessionId: session.id, teamId: team.id, accessLevel: "view", effectiveAt: new Date(0),
         } });
         await db.accountSessionFollow.createMany({ data: followers.map(account => ({
-            sessionId: session.id, accountId: account.id, following: true, notificationLevel: "important" as const,
+            sessionId: session.id, accountId: account.id, following: true, followPolicy: JSON.stringify({ preset: "important" }),
         })) });
         await db.accountSessionReadState.createMany({ data: followers.map(account => ({
             sessionId: session.id, accountId: account.id, lastViewedSessionSeq: 0,

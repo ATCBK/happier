@@ -3,10 +3,13 @@ import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
+import { FollowPolicyV1Schema, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { normalizeAccountFollowNotificationChoiceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 const migrations = resolve(import.meta.dirname, '../../../../prisma/sqlite/migrations');
 const genericMigration = '20261019150000_account_follow_generic_sources';
 const postgresMigrations = resolve(migrations, '../../migrations');
+const policyContractionMigration = '20261022140000_account_follow_policy_only';
 
 function applyMigration(sqlite: DatabaseSync, name: string) {
     const path = resolve(migrations, name, 'migration.sql');
@@ -14,6 +17,72 @@ function applyMigration(sqlite: DatabaseSync, name: string) {
 }
 
 describe('generic Follow source storage upgrade', () => {
+    it.each(['sqlite', 'postgres'] as const)('contracts legacy notification levels into policy without losing private custody (%s)', async provider => {
+        const database = provider === 'sqlite' ? new DatabaseSync(':memory:') : new PGlite();
+        const execute = async (sql: string) => { await database.exec(sql); };
+        const query = async (sql: string) => database instanceof DatabaseSync
+            ? database.prepare(sql).all() : (await database.query(sql)).rows;
+        const root = provider === 'sqlite' ? migrations : postgresMigrations;
+        try {
+            if (database instanceof PGlite) await database.waitReady;
+            await execute(`CREATE TABLE "Account" ("id" TEXT PRIMARY KEY);
+                CREATE TABLE "Session" ("id" TEXT PRIMARY KEY);
+                CREATE TABLE "Discussion" ("id" TEXT PRIMARY KEY);
+                CREATE TABLE "AutomationRun" ("id" TEXT PRIMARY KEY);
+                INSERT INTO "Account" VALUES ('account');`);
+            for (const name of ['20260906120000_add_account_session_follows', '20261018120000_account_follow_personal_once',
+                genericMigration, '20261021045500_personal_run_permission_progress']) {
+                await execute(readFileSync(resolve(root, name, 'migration.sql'), 'utf8'));
+            }
+            for (const [id, level, voice, following, persistent, policy] of [
+                ['important', 'important', false, true, true, null],
+                ['everything', 'all_messages', false, true, true, null],
+                ['quiet', 'none', false, true, true, null],
+                ['voice-only', 'none', true, true, true, null],
+                ['important-voice', 'important', true, true, true, null],
+                ['modern', 'all_messages', true, true, true, '{"preset":"quiet"}'],
+                ['suppressed', 'none', false, false, true, null],
+                ['once-only', 'important', false, false, false, null],
+            ] as const) {
+                await execute(`INSERT INTO "Session" VALUES ('${id}');
+                    INSERT INTO "AccountSessionFollow" ("id", "accountId", "sessionId", "sourceKey", "following",
+                        "hasPersistentFollow", "notificationLevel", "includeInVoice", "voiceDeliveredFrontier", "followPolicy", "notifyOnce")
+                    VALUES ('${id}', 'account', '${id}', 'session:${id}', ${following}, ${persistent}, '${level}', ${voice},
+                        'voice-frontier', ${policy === null ? 'NULL' : `'${policy}'`}, '{"kind":"first_needs_you"}');`);
+            }
+            const path = resolve(root, policyContractionMigration, 'migration.sql');
+            if (existsSync(path)) await execute(readFileSync(path, 'utf8'));
+            const rows = await query('SELECT * FROM "AccountSessionFollow" ORDER BY "id"');
+            expect(rows).toHaveLength(8);
+            for (const row of rows) {
+                expect(row).not.toHaveProperty('notificationLevel');
+                expect(row.voiceDeliveredFrontier).toBe('voice-frontier');
+                expect(row.notifyOnce).toBe('{"kind":"first_needs_you"}');
+                expect(Boolean(row.includeInVoice)).toBe(false);
+            }
+            const byId = new Map(rows.map(row => [row.id, row]));
+            expect(JSON.parse(String(byId.get('important')?.followPolicy))).toEqual({ preset: 'important' });
+            expect(JSON.parse(String(byId.get('everything')?.followPolicy))).toEqual({ preset: 'everything' });
+            expect(JSON.parse(String(byId.get('quiet')?.followPolicy))).toEqual({ preset: 'custom', events: {} });
+            expect(byId.get('modern')?.followPolicy).toBe('{"preset":"quiet"}');
+            expect(byId.get('suppressed')?.followPolicy).toBeNull();
+            expect(Boolean(byId.get('suppressed')?.following)).toBe(false);
+            expect(Boolean(byId.get('once-only')?.hasPersistentFollow)).toBe(false);
+            expect(byId.get('once-only')?.followPolicy).toBeNull();
+            for (const id of ['voice-only', 'important-voice']) {
+                const policy = FollowPolicyV1Schema.parse(JSON.parse(String(byId.get(id)?.followPolicy)));
+                expect(policy).toEqual(normalizeAccountFollowNotificationChoiceV1({
+                    notificationLevel: id === 'voice-only' ? 'none' : 'important', includeInVoice: true,
+                }));
+                expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } }).person)
+                    .toEqual({ inbox: false, push: false, voice: true });
+                expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'finished' } }).person)
+                    .toEqual({ inbox: id === 'important-voice', push: false, voice: true });
+            }
+        } finally {
+            await database.close();
+        }
+    });
     it('preserves Session personal rows and their one-shot/Voice custody while admitting distinct generic sources', () => {
         const sqlite = new DatabaseSync(':memory:');
         try {
