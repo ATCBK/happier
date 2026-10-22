@@ -17,15 +17,16 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { Modal } from '@/modal';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 const disclosure = vi.hoisted(() => vi.fn(async () => true));
-const createSocket = vi.hoisted(() => vi.fn());
 // The network socket factory is the boundary; scoped transport and RPC codecs stay real.
-vi.mock('@happier-dev/sync-client', async importOriginal => ({
-    ...await importOriginal<typeof import('@happier-dev/sync-client')>(),
-    createHappierSocket: (...args: unknown[]) => createSocket(...args),
-}));
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installApprovalCommonModuleMocks();
+installDisconnectedServerSocketBoundary();
 
 describe('original Account finite Project admission', () => {
     it('forwards the existing typed Session write scope through the real socket boundary without Account HTTP admission', async () => {
@@ -39,6 +40,7 @@ describe('original Account finite Project admission', () => {
         const authorization = { kind: 'session.write' as const, sessionId: 'source-session' };
         const result = { kind: 'pendingApproval', code: 'project_setup_consent_required', reviewedEffectDigest: 'reviewed' };
         const calls: unknown[] = [];
+        let socketCreations = 0;
         const networkPaths: string[] = [];
         const emitWithAck = async (event: string, value: unknown) => {
             expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
@@ -49,13 +51,20 @@ describe('original Account finite Project admission', () => {
             const opened = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, payload.params, payload.method);
             return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, result, opened.callId) };
         };
-        createSocket.mockReturnValue({ socket: { connected: true, id: 'session-socket', connect() {}, disconnect() {},
-            on() {}, off() {}, emit() {}, emitWithAck, timeout: () => ({ emitWithAck }) } });
+        installDisconnectedServerSocketBoundary(socket => {
+            socketCreations += 1;
+            configureConnectedServerSocketBoundary(socket);
+            socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(emitWithAck);
+        });
         let actionPosts = 0;
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
             networkPaths.push(path);
             if (path.startsWith('/v1/actions/')) actionPosts += 1;
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return createMachineReadBatchResponseFixture(JSON.parse(String(init.body)), id => id === 'guest'
+                    ? createPlainMachineRowFixture({ id, accountId: 'ui-owner' }) : null);
+            }
             expect(init?.method ?? 'GET').toBe('GET');
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/machines/guest') return Response.json({ machine: { id: 'guest', kind: 'persistent', dataEncryptionKey: null,
@@ -63,14 +72,14 @@ describe('original Account finite Project admission', () => {
             expect(path).toBe('/v1/auth/ping');
             return Response.json({ ok: true });
         });
-        onTestFinished(async () => { await serverScopedRpcSocketPool.stopAll(); resetRuntimeFetch(); });
+        onTestFinished(async () => { await serverScopedRpcSocketPool.stopAll(); resetRuntimeFetch(); installDisconnectedServerSocketBoundary(); });
         const account = await captureLazyActionAccountContext(homeId);
         onTestFinished(() => account.dispose());
         const received = await createUiProjectAction(account)({ actionId: 'projects.prepare',
             input: { workspace: { serverId: homeId, workspaceId: 'checkout', machineId: 'guest', rootPath: '/repo' }, phase: 'setup' },
             context: { surface: 'agent', authority: 'account_automation', actionRequestId: 'session-finite-request',
                 actionCaller: { kind: 'session', sessionId: authorization.sessionId, starterDepth: 0, turnDepth: 0 }, rpcSessionAuthorization: authorization } });
-        expect(received, JSON.stringify({ networkPaths, socketCreations: createSocket.mock.calls.length, calls })).toEqual(result);
+        expect(received, JSON.stringify({ networkPaths, socketCreations, calls })).toEqual(result);
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ authorization, requestId: 'session-finite-request' });
         expect(actionPosts).toBe(0);

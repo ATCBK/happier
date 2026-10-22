@@ -3,7 +3,8 @@ import 'fake-indexeddb/auto';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -24,7 +25,6 @@ import {
     buildQualifiedPluginContributionKey,
     buildMentionRefForKindV1,
     MENTION_KIND_V1,
-    MACHINE_PLAIN_DATA_KEY_MARKER,
     SessionModelSelectionV1Schema,
     SessionSpawnNewInputV2Schema,
     type SessionCapabilitySelectionV1,
@@ -228,7 +228,7 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
     const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: accountMode });
     const profileRows = new Map<string, ProfileRecordV1>();
-    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const fetchSpy = vi.fn(createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const authoringResponse = await authoringMemoryHttp.handle(input, init);
         if (authoringResponse) return authoringResponse;
         const url = String(input instanceof Request ? input.url : input);
@@ -273,8 +273,11 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
         if (url.endsWith('/v1/auth/ping')) {
             return Response.json({ ok: true });
         }
+        if (path === '/v1/machines/read-batch' && method === 'POST') {
+            return createMachineReadBatchResponseFixture(init?.body, id => id === 'm1' ? createPlainMachineRowFixture({ id, accountId }) : null);
+        }
         if (url.endsWith('/v1/machines/m1')) {
-            return Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+            return Response.json({ machine: createPlainMachineRowFixture({ id: 'm1', accountId }) });
         }
         if (url.endsWith('/v1/machines/m1/access')) {
             const custodian = { accountId, displayName: 'Test Account' };
@@ -353,7 +356,7 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             return Response.json(created);
         }
         return Response.json({ error: 'not_found' }, { status: 404 });
-    });
+    }));
 
     installNewSessionScreenModelCommonModuleMocks({
         // The default testkit translate renders `key(param=value)`, so an alert

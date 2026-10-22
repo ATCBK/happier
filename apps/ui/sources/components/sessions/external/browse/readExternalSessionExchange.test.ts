@@ -112,8 +112,8 @@ describe('readExternalSessionExchange', () => {
         expect(messages.messages.map(message => message.realID)).toEqual(['prompt', 'answer']);
         expect(messages.messages.map(message => 'text' in message ? message.text : '')).toEqual(['Explain this failure', 'The complete answer']);
         expect(requests[1]).toMatchObject({ method: expect.stringMatching(/^machine:/), params: { cursor: 'older' } });
-        const admission = homes.requests.find(request => request.path === '/v1/machines/machine');
-        expect(admission).toMatchObject({ serverId, token: expect.any(String) });
+        const admission = homes.requests.find(request => request.path === '/v1/machines/read-batch');
+        expect(admission).toMatchObject({ serverId, token: expect.any(String), input: { machineIds: ['machine'] } });
     });
     it('retains a three-page sidechain answer independently of newer parent prompts', async () => {
         const childPrompt: ExternalSessionTranscriptRawMessageV1 = { id: 'child-prompt', createdAtMs: 1, sidechainId: 'child',

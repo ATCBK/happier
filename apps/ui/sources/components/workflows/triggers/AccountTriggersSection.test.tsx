@@ -8,6 +8,7 @@ import { WorkflowTriggerSetV1Schema, AutomationDefinitionCreateRequestSchema, Au
     WorkflowDefinitionArtifactHeaderV1Schema, WorkflowDefinitionArtifactBodyV1Schema, type AutomationDefinitionDetail } from '@happier-dev/protocol';
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -28,7 +29,8 @@ vi.mock('@/components/ui/popover', async (importOriginal) => (await import('@/de
     .createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 280, placement: 'bottom' }));
 
 const home = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(home);
+const httpBoundary = { ...home, request: createSessionReadBatchFetchBoundary(home.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable,
@@ -126,6 +128,7 @@ beforeEach(async () => {
     publishAppliedActiveServerRuntimeAvailability(false);
     resetTriggerSets();
     await home.reset();
+    installHomeGovernanceBoundaries(httpBoundary);
     syncLoader = await loadSyncSingletonForTests();
     disposeLoader = await installRealActionExecutorModuleLoader();
     serverId = await home.addHome({ name: 'Account triggers', serverUrl: `https://account-trigger-${crypto.randomUUID()}.test`, accountId: 'account-a' });

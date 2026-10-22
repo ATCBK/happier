@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CurrentCursorResponseSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
@@ -127,7 +128,7 @@ async function addResponsibilityHome(): Promise<string> {
         serverIdentityId: HOME_IDENTITY_ID,
         accountId: home.accountId,
         credentials: { token: home.token },
-        request: async (input, init) => {
+        request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
             const method = (init?.method ?? 'GET').toUpperCase();
             if (method === 'GET' && path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -137,7 +138,7 @@ async function addResponsibilityHome(): Promise<string> {
             if (method === 'GET' && ['/v1/machines', '/v1/artifacts', '/v1/kv'].includes(path)) return Response.json([]);
             const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
             return bootstrapResponse ?? harness.request(input, init);
-        },
+        }),
     });
     serverId = restoredAccount.serverId;
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });

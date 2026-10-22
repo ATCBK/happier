@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { CurrentCursorResponseSchema, SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -43,7 +44,7 @@ describe('presentCreatedNewSession currentness', () => {
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://session-currentness.example.test',
             accountId: 'account-a',
-            request: async (input, init) => {
+            request: createSessionReadBatchFetchBoundary(async (input, init) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/health') return Response.json({ status: 'ok' });
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
@@ -66,8 +67,8 @@ describe('presentCreatedNewSession currentness', () => {
                     await sessionResponse;
                     return Response.json({ session: wireSession });
                 }
-                return new Response('{}', { status: 404 });
-            },
+                return Response.json({ error: 'not_found' }, { status: 404 });
+            }),
         });
         try {
             const { sync } = await import('@/sync/sync');

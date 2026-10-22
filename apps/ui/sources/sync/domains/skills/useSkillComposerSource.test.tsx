@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
@@ -199,9 +200,9 @@ it('applies a known library pick to its Session when the unrelated Account inven
     let selectedSkillUnavailable = false;
     let skillId: string;
     const catalog = createPromptLibraryCatalogBoundary();
-    const home = await createPlainArtifactHomeFixture('https://skill-composer-session.test', {
-        serverFeatures: createRootLayoutFeaturesResponse(),
-        handleRequest: async (path, init) => {
+    const sessionReadRequest = createSessionReadBatchFetchBoundary(async (input, init) => {
+            const url = new URL(String(input));
+            const path = `${url.pathname}${url.search}`;
             if (selectedSkillUnavailable && path === `/v1/artifacts/${skillId}`)
                 return Response.json({ error: 'unavailable' }, { status: 503 });
             if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET' && inventoryUnavailable)
@@ -219,7 +220,10 @@ it('applies a known library pick to its Session when the unrelated Account inven
                 return Response.json({ session: row });
             }
             return path === '/v2/account/settings/history' ? Response.json({ snapshots: [] }) : catalog.handle(path, init);
-        },
+    });
+    const home = await createPlainArtifactHomeFixture('https://skill-composer-session.test', {
+        serverFeatures: createRootLayoutFeaturesResponse(),
+        handleRequest: (path, init) => sessionReadRequest(new URL(path, 'https://skill-composer-session.test'), init),
     });
     const scope = { serverId: home.home.id, accountId: 'artifact-account' };
     const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');

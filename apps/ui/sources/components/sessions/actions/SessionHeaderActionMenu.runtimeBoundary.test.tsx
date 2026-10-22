@@ -1,12 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 import { createMachineFixture, createSessionFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -102,10 +102,12 @@ describe('SessionHeaderActionMenu real runtime boundaries', () => {
                 { key: 'projection', serverUrl: 'https://projection.home.test', accountId: 'header-account' },
                 { key: 'focused', serverUrl: 'https://focused.home.test', accountId: 'header-account' },
             ],
-            route: ({ path }) => {
+            route: ({ path, body }) => {
                 if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+                if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(body,
+                    id => id === MACHINE_ID ? createPlainMachineRowFixture({ id, accountId: 'header-account' }) : null);
                 if (path === `/v1/machines/${MACHINE_ID}`) return Response.json({
-                    machine: { id: MACHINE_ID, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
+                    machine: createPlainMachineRowFixture({ id: MACHINE_ID, accountId: 'header-account' }),
                 });
                 return undefined;
             },
@@ -203,7 +205,8 @@ describe('SessionHeaderActionMenu real runtime boundaries', () => {
         await flushHookEffects();
         expectRequest();
         expect(homes.requests).toEqual(expect.arrayContaining([expect.objectContaining({
-            home: 'projection', accountId: 'header-account', path: `/v1/machines/${MACHINE_ID}`,
+            home: 'projection', accountId: 'header-account', path: '/v1/machines/read-batch',
+            body: expect.objectContaining({ machineIds: expect.arrayContaining([MACHINE_ID]) }),
         })]));
         expect(ioSpy).toHaveBeenCalledWith(homes.homes.projection!.serverUrl, expect.objectContaining({
             auth: expect.objectContaining({ token: expect.any(String), clientType: 'user-scoped', clientPurpose: 'scoped-rpc' }),

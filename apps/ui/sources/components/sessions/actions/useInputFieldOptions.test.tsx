@@ -5,6 +5,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -282,11 +283,12 @@ describe('qualified input field options scope', () => {
             sessions: [record('listed', 'Listed session')], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
         }) });
         harness.answer(serverId, 'GET /v2/sessions/saved', { body: { session: record('saved', 'Saved session') } });
+        const readBatchRequest = createSessionReadBatchFetchBoundary(harness.request);
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://saved-session-options.example', accountId: 'viewer',
-            request: (url, init) => harness.request(url, init) });
+            request: readBatchRequest });
         installHomeGovernanceBoundaries(harness);
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        setRuntimeFetch(harness.request);
+        setRuntimeFetch(readBatchRequest);
         const listPages = () => harness.requests.filter(request => request.path.endsWith('/v2/sessions/query')).length;
         const screen = await renderScreen(<SavedSessionOptionsProbe serverId={serverId} sessionId="saved" asksOnlyForSaved />);
         try {

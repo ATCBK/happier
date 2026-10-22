@@ -58,6 +58,11 @@ describe('selected Machine reads through the real Home admission owner', () => {
         try {
             if (!first.readTransport || !second.readTransport) throw new Error('Captured Machine read transport unavailable');
             const leaving = readMachineRows({ readTransport: first.readTransport, machineIds: ids.slice(0, 2), signal: abort.signal });
+            // Independent prepared readers can resume at different microtask
+            // depths within the same event-loop turn; retain one physical batch.
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
             const stayed = readMachineRows({ readTransport: second.readTransport, machineIds: ids.slice(1) });
             pending.push(leaving, stayed);
             const abandoned = expect(leaving).rejects.toMatchObject({ name: 'AbortError' });
@@ -115,6 +120,7 @@ describe('selected Machine reads through the real Home admission owner', () => {
             } finally { next.dispose(); }
             await flushHookEffects();
         } finally {
+            abort.abort();
             release.resolve(); censusRelease.resolve(); await Promise.allSettled(pending);
             first.dispose(); second.dispose(); await homes.dispose(); await app.close();
         }

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, createPlainSessionByIdResponseFixture, createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineReadBatchResponseFixture, createPlainMachineRowFixture, createPlainSessionByIdResponseFixture, createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { ExecutionRunGetResponseSchema, ReviewFindingsV2Schema } from '@happier-dev/protocol';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ReviewWalkthroughResponseSchema } from '@happier-dev/protocol/reviews/reviewNarration';
@@ -64,8 +64,12 @@ async function setup(detached = true, actionError?: Error, beforeActionReply?: P
         });
         if (request.method === 'scm.diffSummary.refine') return { success: false, errorCode: 'revision_conflict', error: 'Saved result changed', latestRevision: 3 };
         return undefined;
-    }, request: createSessionReadBatchFetchBoundary(async url => {
+    }, request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            return createMachineReadBatchResponseFixture(init.body, id => id === 'm1'
+                ? createPlainMachineRowFixture({ id, accountId: 'alice' }) : null);
+        }
         if (path === '/v2/sessions/s1') return Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({ id: 's1', active: true })));
         return path === ACP_CATALOG_ROWS_ROUTE_V1
             ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } }))

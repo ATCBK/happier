@@ -64,7 +64,11 @@ it('gathers overlapping same-authority Session projections across independent co
     await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
         const read = (sessionIds: string[]) => readSessionBatchForAuthority({ authority, sessionIds,
             includeSnapshot: true, includeMessages: false, assertCurrent: () => {} });
-        const [left, right] = await Promise.all([read(['first', 'shared']), read(['shared', 'last'])]);
+        const first = read(['first', 'shared']);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        const [left, right] = await Promise.all([first, read(['shared', 'last'])]);
         expect([...left.keys()]).toEqual(['first', 'shared']);
         expect([...right.keys()]).toEqual(['shared', 'last']);
         const gathered = home!.requests.filter(request => request.path === '/v2/sessions/read-batch');

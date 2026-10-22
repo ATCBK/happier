@@ -12,6 +12,7 @@ import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtur
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -20,7 +21,8 @@ import { SpawnCapabilitiesPreviewOutputV1Schema } from '@happier-dev/protocol/ac
 import { EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
 
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 
 const transport = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>());
@@ -37,6 +39,7 @@ function isPreviewRequest(input: unknown): input is { payload: unknown } {
 describe('useNewSessionCapabilities', () => {
     beforeEach(async () => {
         await homes.reset();
+        installHomeGovernanceBoundaries(httpBoundary);
         await loadSyncSingletonForTests();
         serverId = await homes.addHome({ name: 'Preview', serverUrl: 'https://capability-preview.test', accountId: 'preview-owner' });
         homes.answer(serverId, '/v1/account/encryption/currentness', { body: {

@@ -1,4 +1,6 @@
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import 'fake-indexeddb/auto';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -96,7 +98,7 @@ async function createHarness() {
   const restoreAccount = () => restoreServerAccountForTest({
     serverUrl: 'https://server-a', accountId: 'account-a',
     additionalRequestOrigins: ['https://server-b'],
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       const target = new URL(String(url));
       const path = target.pathname;
       const sessionRows = target.origin === 'https://server-b' ? temporaryDestinationSessions : createdSessions;
@@ -131,7 +133,9 @@ async function createHarness() {
         const session = sessionRows.get(decodeURIComponent(sessionRead[1]));
         return session ? Response.json({ session }) : Response.json({ error: 'not_found' }, { status: 404 });
       }
-      if (path === '/v1/machines/m1') return Response.json({ machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+      if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => id === 'm1' ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
+      if (path === '/v1/machines/m1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' }) });
       if (path === '/v1/machines/m1/access') {
         const custodian = { accountId: 'account-a', displayName: 'Account A' };
         return Response.json({ machineId: 'm1', custodian,
@@ -140,7 +144,7 @@ async function createHarness() {
         });
       }
       return Response.json({ error: 'not_found' }, { status: 404 });
-    },
+    }),
   });
   let account = await restoreAccount();
   const { storage } = await import('@/sync/domains/state/storageStore');

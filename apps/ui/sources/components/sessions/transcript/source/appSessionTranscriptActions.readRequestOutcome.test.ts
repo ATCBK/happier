@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { standardCleanup } from '@/dev/testkit';
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -11,6 +12,7 @@ type Homes = Awaited<ReturnType<typeof serveAccountHomes>>;
 type RequestState = 'pending' | 'settled' | 'absent';
 
 let homes: Homes | undefined;
+let sessionBoundary: ReturnType<typeof createSessionReadBatchHttpBoundary> | undefined;
 afterEach(async () => {
     standardCleanup();
     retireActiveServerAccountScopeLifetime();
@@ -27,10 +29,7 @@ function agentStateFor(state: RequestState): string {
 
 /** Home A serves the request in `state`; Home B (focused) always has it settled, so a read on B would be visible. */
 async function serve(state: RequestState, options?: Readonly<{ hold?: { entered: () => void; released: Promise<void> }; failRead?: boolean }>) {
-    homes = await serveAccountHomes({ homes: [
-        { key: 'a', serverUrl: 'https://review-permission-a.test', accountId: 'account-a' },
-        { key: 'b', serverUrl: 'https://review-permission-b.test', accountId: 'account-b' },
-    ], route: async (incoming) => {
+    sessionBoundary = createSessionReadBatchHttpBoundary(async (incoming) => {
         if (incoming.path === '/v2/sessions/s1') {
             if (options?.failRead && incoming.home === 'a') return Response.json({ error: 'unavailable' }, { status: 503 });
             if (options?.hold && incoming.home === 'a') { options.hold.entered(); await options.hold.released; }
@@ -39,13 +38,17 @@ async function serve(state: RequestState, options?: Readonly<{ hold?: { entered:
         }
         if (incoming.path === '/v1/sessions/s1/turns') return Response.json({ v: 1, sessionId: 's1', updatedAt: 1, turns: [] });
         return undefined;
-    } });
+    });
+    homes = await serveAccountHomes({ homes: [
+        { key: 'a', serverUrl: 'https://review-permission-a.test', accountId: 'account-a' },
+        { key: 'b', serverUrl: 'https://review-permission-b.test', accountId: 'account-b' },
+    ], route: sessionBoundary.handle });
     publishAppliedActiveServerSnapshot({ serverId: homes.homes.b!.id, serverUrl: homes.homes.b!.serverUrl, generation: 0 });
     const { createAppSessionTranscriptActions } = await import('./appSessionTranscriptActions');
     return { a: homes.homes.a!, actions: createAppSessionTranscriptActions('s1', homes.homes.a!.id) };
 }
 
-const sessionReads = (home: string) => homes!.httpRequests.filter((incoming) => incoming.path === '/v2/sessions/s1' && incoming.home === home);
+const sessionReads = (home: string) => sessionBoundary!.componentRequests.filter((incoming) => incoming.path === '/v2/sessions/s1' && incoming.home === home);
 
 describe('createAppSessionTranscriptActions.readRequestOutcome', () => {
     it('reads the exact Session on its own Home, never the focused one, and reports a waiting request as pending', async () => {

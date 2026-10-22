@@ -218,11 +218,18 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                             batch = { items: [], read };
                             const created = batch;
                             partition.set(groupKey, created);
-                            queueMicrotask(() => {
+                            // Gather through a short preparation chain without depending on
+                            // timer tasks (which consumer clocks may freeze). This is
+                            // best-effort coalescing, not global microtask quiescence;
+                            // later asks still share any identical pending resource read.
+                            let preparationTurns = 32;
+                            const flush = () => {
+                                if (preparationTurns-- > 0) { queueMicrotask(flush); return; }
                                 if (partition.get(groupKey) === created) partition.delete(groupKey);
                                 if (partition.size === 0) queues.forget(scope, partition);
                                 void dispatch(created);
-                            });
+                            };
+                            queueMicrotask(flush);
                         }
                         batch.items.push({ id, signal, accept, reject });
                     }), { scope, signal: cancellation.signal });

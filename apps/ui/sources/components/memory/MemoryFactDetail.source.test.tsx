@@ -4,6 +4,7 @@ import type { MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryD
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -13,7 +14,8 @@ import { act, createDeferred, flushHookEffects } from '@/dev/testkit';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
+const httpBoundary = { ...homes, request: createSessionReadBatchFetchBoundary(homes.request) };
+installHomeGovernanceBoundaries(httpBoundary);
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const { MemoryFactDetail } = await import('./MemoryFactDetail');
@@ -25,6 +27,7 @@ const initial = getStorage().getState();
 let serverId: string;
 beforeEach(async () => {
     await homes.reset();
+    installHomeGovernanceBoundaries(httpBoundary);
     serverId = await homes.addHome({ name: 'Source', serverUrl: 'https://memory-source.test', accountId: 'alice', currentAccount: true });
     const features = createRootLayoutFeaturesResponse({ features: { sessions: { conversations: { enabled: true } } } });
     homes.answer(serverId, '/v1/features', { body: features });

@@ -184,7 +184,7 @@ describe('openExternalSessionCandidate', () => {
         expect(await opening).toBe('opened');
         expect(params.openSession).toHaveBeenCalledWith('selected-home-session', { machineId: target.machineId, serverId: target.serverId }, undefined);
         expect(requests).toMatchObject([{ method: expect.stringMatching(/^machine-a:/), params: { remoteSessionId: 'native-session' } }]);
-        expect(homes.requests.find(request => request.serverId === selectedHomeId && request.path === '/v1/machines/machine-a'))
-            .toMatchObject({ token: expect.any(String) });
+        expect(homes.requests.find(request => request.serverId === selectedHomeId && request.path === '/v1/machines/read-batch'))
+            .toMatchObject({ token: expect.any(String), input: { machineIds: ['machine-a'] } });
     });
 });

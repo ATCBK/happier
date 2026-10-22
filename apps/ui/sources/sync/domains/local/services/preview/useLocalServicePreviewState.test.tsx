@@ -15,7 +15,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 const daemonBoundary = vi.hoisted(() => ({ requests: [] as Array<{
@@ -131,7 +131,7 @@ describe('useLocalServicePreviewState', () => {
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl) => (
             serverUrl === home.serverUrl ? { token } : null
         ));
-        setRuntimeFetch(async (input) => {
+        setRuntimeFetch(async (input, init) => {
             const url = new URL(String(input));
             if (url.origin !== home.serverUrl) throw new Error(`Unexpected preview Home: ${url.origin}`);
             if (url.pathname === '/health') return Response.json({ status: 'ok' });
@@ -140,6 +140,8 @@ describe('useLocalServicePreviewState', () => {
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             const machine = { ...createPlainMachineRowFixture({ id: 'machine_1', accountId: 'preview-account' }), runnerContentKeyBinding: null };
             if (url.pathname === '/v1/machines') return Response.json([machine]);
+            if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machine.id ? machine : null);
             if (url.pathname === '/v1/machines/machine_1') return Response.json({ machine });
             return Response.json({}, { status: 404 });
         });

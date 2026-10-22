@@ -8,6 +8,7 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { changeTextTestInstance, createRootLayoutFeaturesResponse, createSessionFixture, flushHookEffects,
     renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import type { Message } from '@happier-dev/session-core/messages';
@@ -108,7 +109,7 @@ async function mount(options: Readonly<{ disabled?: boolean; payload?: ReviewFin
             } },
             { key: 'focused', serverUrl: 'https://follow-up-focused.test', accountId: 'focused-account' },
         ],
-        route: (request) => {
+        route: createSessionReadBatchHttpBoundary((request) => {
             if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (request.path === '/v1/reviews/comments') return Response.json({ items: [], cursor: null });
@@ -121,7 +122,7 @@ async function mount(options: Readonly<{ disabled?: boolean; payload?: ReviewFin
             if (request.path.includes('/messages')) return Response.json({ messages: [], hasMore: false, nextCursor: null });
             if (request.path.includes('/pending')) return Response.json({ pending: [], discarded: [], pendingVersion: 1, pendingCount: 0 });
             return undefined;
-        },
+        }).handle,
     });
     await restoreConnectionToActiveServer((await TokenStorage.getCredentialsForServerUrl(homes.homes.focused!.serverUrl))!);
     storage.getState().applySessions([createSessionFixture({ id: 'review-session', serverId: homes.homes.review!.id, active: true })]);

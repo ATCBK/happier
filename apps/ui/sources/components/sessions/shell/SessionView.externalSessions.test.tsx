@@ -51,10 +51,11 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -683,8 +684,12 @@ function syncShellStorageStore() {
   storageState.sessions.s1 = createSessionFixture(storageState.sessions.s1);
   const machine = createMachineFixture({ id: 'machine-1', storageMode: 'plain', active: true, activeAt: Date.now(),
     ...storageState.machines['machine-1'] });
-  const row = { ...machine, metadata: encodePlainMachineStoredContent(machine.metadata),
+  const row = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-canonical' }),
+    seq: machine.seq, createdAt: machine.createdAt, updatedAt: machine.updatedAt,
+    active: machine.active, activeAt: machine.activeAt,
+    metadata: encodePlainMachineStoredContent(machine.metadata), metadataVersion: machine.metadataVersion,
     daemonState: machine.daemonState === null ? null : encodePlainMachineStoredContent(machine.daemonState),
+    daemonStateVersion: machine.daemonStateVersion,
     dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } satisfies FetchedMachineRow;
   wireMachine = row;
   shellStorageStore.setState({
@@ -890,12 +895,14 @@ describe('SessionView (direct sessions)', () => {
     pendingHttpSpy.mockResolvedValue(Response.json({ error: 'Session input refused', code: 'session_input_target_unavailable' }, { status: 409 }));
     const connection = await restoreServerAccountForTest({
       serverUrl: 'https://server-canonical', accountId: 'account-canonical',
-      request: async (url, init) => {
+      request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
         if (path === '/v1/machines') return Response.json(wireMachine ? [wireMachine] : []);
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+          id => wireMachine?.id === id ? wireMachine : null);
         if (path === '/v1/machines/machine-1' && wireMachine) return Response.json({ machine: wireMachine });
         if (path.endsWith('/pending') && init?.method === 'POST') return pendingHttpSpy(path, JSON.parse(String(init.body)));
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -916,9 +923,12 @@ describe('SessionView (direct sessions)', () => {
           }
           return Response.json({ session: wireSession });
         }
+        if (path === '/v1/sessions/s1/turns' && wireSession) return Response.json({
+          v: 1, sessionId: wireSession.id, updatedAt: wireSession.updatedAt, turns: [],
+        });
         if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
         return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
-      },
+      }),
     });
     shellCredentials = connection.credentials;
     onTestFinished(() => connection.dispose());

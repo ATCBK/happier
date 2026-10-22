@@ -3,6 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
 
 describe('scoped batch pending reads', () => {
+    it('gathers concurrent readers after their independent asynchronous preparations', async () => {
+        const realTask = globalThis.setTimeout;
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const reads = createScopedBatchResolutionSingleFlight<string>();
+            const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+            const first = reads.run('details', ['a', 'b'], request);
+            // Credential/carrier preparations have unequal promise depths.
+            for (let depth = 0; depth < 32; depth += 1) await Promise.resolve();
+            const second = reads.run('details', ['b', 'c'], request);
+            // Observe a completed microtask checkpoint without advancing the
+            // frozen timer queue used by consumer deadline/cleanup tests.
+            await new Promise<void>(resolve => realTask(resolve, 0));
+            expect(request.mock.calls.map(([ids]) => ids)).toEqual([['a', 'b', 'c']]);
+            const [left, right] = await Promise.all([first, second]);
+            expect([...left.keys()]).toEqual(['a', 'b']);
+            expect([...right.keys()]).toEqual(['b', 'c']);
+        } finally { vi.useRealTimers(); }
+    });
+
     it('gathers matching authority paths without assigning reference ids', async () => {
         const reads = createScopedBatchResolutionSingleFlight<string>();
         const configuration = {};

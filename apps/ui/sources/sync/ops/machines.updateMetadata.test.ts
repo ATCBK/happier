@@ -218,7 +218,8 @@ describe('machineUpdateMetadata', () => {
         expect(sync.encryption).toBeNull();
         expect(getStorage().getState().machines.m1).toBeUndefined();
         expect(sent).toHaveLength(1);
-        expect(homes.requestsFor('/v1/machines/m1')).toHaveLength(1);
+        expect(homes.requestsFor('/v1/machines/read-batch')).toHaveLength(1);
+        expect(homes.requestsFor('/v1/machines/read-batch')[0]?.input).toMatchObject({ machineIds: ['m1'] });
     });
 
     it.each(['confirmed', 'lost', 'malformed', 'mismatched', 'version-mismatch', 'key-mismatch'] as const)(
@@ -271,7 +272,8 @@ describe('machineUpdateMetadata', () => {
         expect(getStorage().getState().machines.m1).toBeUndefined();
         expect(homes.findByServerUrl('https://machine-metadata.test')?.accountId).toBe('replacement');
         expect(sent).toHaveLength(1);
-        expect(homes.requestsFor('/v1/machines/m1')).toHaveLength(1);
+        expect(homes.requestsFor('/v1/machines/read-batch')).toHaveLength(1);
+        expect(homes.requestsFor('/v1/machines/read-batch')[0]?.input).toMatchObject({ machineIds: ['m1'] });
     });
 
     it('preserves a typed Home stored-content upgrade requirement without a local snapshot preflight', async () => {
