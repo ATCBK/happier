@@ -219,7 +219,10 @@ a promise that every concurrent append is already searchable. Happier Session
 readiness follows the queue's completed `indexed` or `empty` outcome, unless a
 transcript revision or an active transcript indexing operation is pending. Session inventory
 sequences can include non-message events; they do not reopen a completed
-transcript scan. A batch removes checked snapshots from its active Session set
+transcript scan. Session `updatedAt` also changes for metadata and does not mark
+transcript content dirty. The worker revalidates retained content once on first
+observation after startup; later edits arrive through the durable transcript-change feed.
+A batch removes checked snapshots from its active Session set
 before yielding and removes each completed Session before reading its siblings.
 The optional `worker.sessionProgress` diagnostic separates the inventory's
 `observedSeq`, the deep lane's checked/excluded `checkedSeq`, and its transcript
@@ -571,12 +574,17 @@ authoritative empty answer remains empty. Server selection positions become
 1-based file-line anchors through the existing file opener. This is active-file
 outline data, not a workspace symbol index.
 
-These are unreleased source contracts, not a claim that `@` is wired end to end.
-PAGE/P3 must still connect the active P4 live-buffer getter and editor flush,
-plus the passive controller outline read, to Universal Search's symbol source.
-The current symbols-unavailable placeholder must not be replaced with saved
-disk text, a persisted draft or a second active-editor registry. Loaded UI
-acceptance and released availability remain separate checks.
+Global Search obtains its default folder scope and symbol source from the
+presented File page in the active pane, through the existing
+`readActiveFileViewActionOwner` bridge, not DOM focus.
+The File owner combines its selected-tab state with the destination's existing
+presentation focus; retained background destinations do not compete as active
+Files merely because their local File tabs remain selected. Its live-buffer/flush and
+passive outline readers stay with the File page's existing intelligence owner;
+there is no second active-editor registry or saved-disk substitute. Explicitly
+addressed Search and terminal Jump retain their own scope rather than inheriting
+the presented File. These are unreleased source contracts; loaded UI acceptance
+and released availability remain separate checks.
 
 ## Search, Find and external History (0.3 development)
 
