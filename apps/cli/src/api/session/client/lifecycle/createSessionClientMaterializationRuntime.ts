@@ -2,7 +2,6 @@ import { configuration } from '@/configuration';
 import {
     applyKnownPendingQueueState,
     countMaterializablePendingRows,
-    derivePendingQueueStateAfterMaterializeResult,
     type KnownPendingQueueState,
     type PendingQueueState,
     UNKNOWN_PENDING_QUEUE_STATE,
@@ -40,7 +39,6 @@ export type SessionClientMaterializationRuntime = Readonly<{
     hasActiveLocalTurn: () => boolean;
     getActiveLocalTurnProgressAt: () => number | null;
     shouldForceRefreshStaleBlockedTurnStatus: () => boolean;
-    observeMaterializeResult: (params: Readonly<{ didMaterialize: boolean; pendingQueueState?: KnownPendingQueueState | null }>) => boolean;
     hasMaterializedLocalId: (localId: string) => boolean;
     hasSelfEchoSuppressedLocalId: (localId: string) => boolean;
     hasAgentQueueEchoSuppressedLocalId: (localId: string) => boolean;
@@ -238,16 +236,6 @@ export function createSessionClientMaterializationRuntime(
             }
             lastStaleBlockedTurnStatusRefreshAt = now;
             return true;
-        },
-
-        observeMaterializeResult(params) {
-            const result = derivePendingQueueStateAfterMaterializeResult({
-                current: pendingQueueState,
-                didMaterialize: params.didMaterialize,
-                authoritativeState: params.pendingQueueState ?? null,
-            });
-            pendingQueueState = result.state;
-            return result.changed;
         },
 
         hasMaterializedLocalId,

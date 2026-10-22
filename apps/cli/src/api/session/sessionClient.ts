@@ -1928,7 +1928,6 @@ export class ApiSessionClient extends EventEmitter {
                 this.accountSettingsSyncBarrier !== null ? 'after_runtime_idle' : requested,
             getPendingQueueState: () => this.materializationRuntime.getPendingQueueState(),
             applyPendingQueueState: (state) => this.materializationRuntime.applyPendingQueueState(state),
-            observePendingMaterializeResult: (params) => this.materializationRuntime.observeMaterializeResult(params),
             onPendingQueueStateChanged: () => {
                 this.emit('metadata-updated');
             },

@@ -54,7 +54,7 @@ describe('createSessionClientMaterializationRuntime', () => {
 	    expect(runtime.shouldForceRefreshStaleBlockedTurnStatus()).toBe(false);
 	    expect(runtime.shouldAttemptPendingMaterialization()).toBe(true);
 
-	    expect(runtime.observeMaterializeResult({ didMaterialize: true })).toBe(true);
+	    expect(runtime.applyPendingQueueState({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 4 })).toBe(true);
 	    expect(runtime.getPendingQueueState()).toEqual({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 4 });
 	    expect(runtime.shouldAttemptPendingMaterialization()).toBe(false);
 	  });

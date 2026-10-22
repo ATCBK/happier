@@ -571,7 +571,6 @@ export function createSessionClientInteractionApi(
         }>) => boolean;
         getPendingQueueState: () => PendingQueueState;
         applyPendingQueueState: (state: KnownPendingQueueState) => boolean;
-        observePendingMaterializeResult: (params: Readonly<{ didMaterialize: boolean; pendingQueueState?: KnownPendingQueueState | null }>) => boolean;
         onPendingQueueStateChanged: () => void;
         getStoredContentCryptoContext: () => SessionStoredContentCryptoContext;
     }>,
@@ -723,10 +722,9 @@ export function createSessionClientInteractionApi(
         if (!hasCurrentContractAuthority()) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
         }
-        const pendingStateChanged = !target && deps.observePendingMaterializeResult({
-            didMaterialize: materializeResult.didMaterialize,
-            pendingQueueState: materializeResult.pendingQueueState,
-        });
+        const pendingStateChanged = !target && materializeResult.pendingQueueState
+            ? deps.applyPendingQueueState(materializeResult.pendingQueueState)
+            : false;
         if (pendingStateChanged) {
             deps.onPendingQueueStateChanged();
         }

@@ -1,10 +1,12 @@
 import { AxiosError, AxiosHeaders } from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY } from '@happier-dev/connection-supervisor';
 
 import { logger } from '@/ui/logger';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createSessionClientInteractionApi } from './sessionClientInteractionApi';
+import { createSessionClientMaterializationRuntime } from '../lifecycle/createSessionClientMaterializationRuntime';
 import { encodeBase64, encrypt } from '../../../encryption';
 import { runPermissionModePromptLoop, type PermissionModePromptLoopTurnOperations } from '@/agent/runtime/runPermissionModePromptLoop';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
@@ -149,7 +151,6 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       shouldAttemptPendingMaterialization: () => true,
       getPendingQueueState: () => ({ known: false as const }),
       applyPendingQueueState: vi.fn(() => false),
-      observePendingMaterializeResult: vi.fn(() => false),
       onPendingQueueStateChanged: vi.fn(),
       getStoredContentCryptoContext: () => ({
         mode: 'e2ee' as const,
@@ -179,6 +180,77 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       reason: 'server_restarting',
       errorMessage: 'Server restart in progress',
     });
+  });
+
+  it.each([true, false])('preserves a newer pending hint when an accepted materialization ACK omits its projection (materialized: %s)', async (didMaterialize) => {
+    const runtime = createSessionClientMaterializationRuntime({
+      onKeepAliveStateMayHaveChanged: () => undefined,
+      initialPendingQueueState: { known: true, pendingCount: 2, pendingBlockedCount: 0, pendingVersion: 1 },
+    });
+    const queue = new MessageQueue2<null, UserMessage>(() => 'mode');
+    const socket = createSocketStub();
+    // Only the socket transport is stubbed; supervision and queue ownership stay real.
+    const supervisor = createManagedConnectionSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness: async () => ({ status: 'ready' }),
+      createTransport: () => ({
+        connect: async () => { socket.connected = true; },
+        disconnect: async () => { socket.connected = false; },
+        destroy: async () => undefined,
+        isConnected: () => socket.connected,
+        onConnected: (listener) => {
+          socket.on('connect', listener);
+          return () => { socket.off('connect', listener); };
+        },
+        onDisconnected: (listener) => {
+          socket.on('disconnect', listener);
+          return () => { socket.off('disconnect', listener); };
+        },
+        onError: (listener) => {
+          socket.on('connect_error', listener);
+          return () => { socket.off('connect_error', listener); };
+        },
+      }),
+    });
+    socketAckMock.mockImplementationOnce(async () => {
+      runtime.applyPendingQueueState({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2 });
+      return didMaterialize ? {
+        ok: true, didMaterialize: true, didWrite: false, localId: 'projection-less-claim',
+        message: {
+          id: null, seq: null, localId: 'projection-less-claim', messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Claimed prompt' } } },
+          createdAt: 1_000, updatedAt: 1_000,
+          providerAction: 'send', deliveryState: { mode: 'provider', unresolved: true },
+        },
+      } : { ok: true, didMaterialize: false };
+    });
+    const api = createApi({
+      getSocket: () => socket as never,
+      getSessionConnectionSupervisor: () => supervisor,
+      getStoredContentCryptoContext: () => ({ mode: 'plain', ctx: null }),
+      getPendingQueueState: runtime.getPendingQueueState,
+      applyPendingQueueState: runtime.applyPendingQueueState,
+      shouldAttemptPendingMaterialization: runtime.shouldAttemptPendingMaterialization,
+      deliverMaterializedUserMessageToAgentQueue: (message) => {
+        queue.push(message, null);
+        return true;
+      },
+    });
+
+    try {
+      await supervisor.start();
+      await expect(api.materializeNextPendingMessageSafely()).resolves.toMatchObject({
+        type: didMaterialize ? 'materialized' : 'no_pending',
+      });
+      expect(queue.queue.map(({ message }) => ({ localId: message.localId, content: message.content }))).toEqual(
+        didMaterialize ? [{ localId: 'projection-less-claim', content: { type: 'text', text: 'Claimed prompt' } }] : [],
+      );
+      expect(runtime.getPendingQueueState()).toEqual({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2 });
+      expect(runtime.shouldAttemptPendingMaterialization()).toBe(true);
+    } finally {
+      await supervisor.stop();
+      queue.close();
+    }
   });
 
   it('retains Pending custody before claim until the authenticated Home is available, then derives portable requester attribution', async () => {
@@ -600,7 +672,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         getState: () => ({ phase: 'online' }),
       } as never),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 6 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       onPendingQueueStateChanged: vi.fn(),
       handleSessionScopedUpdate,
     } as any);
@@ -696,7 +768,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         getState: () => ({ phase: 'online' }),
       } as never),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 2, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       onPendingQueueStateChanged: vi.fn(),
     } as any);
 
@@ -857,7 +929,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getMetadata: () => createTestMetadata({ permissionMode: 'safe-yolo' }),
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       deliverMaterializedUserMessageToAgentQueue: deliver,
       handleSessionScopedUpdate,
       markPendingQueueMaterializedLocalId,
@@ -961,7 +1033,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true), deliverMaterializedUserMessageToAgentQueue: deliver,
+      applyPendingQueueState: vi.fn(() => true), deliverMaterializedUserMessageToAgentQueue: deliver,
     });
     await api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
     expect(deliver).not.toHaveBeenCalled();
@@ -1018,7 +1090,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       deliverMaterializedUserMessageToAgentQueue: deliver,
     });
     const outcome = await api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
@@ -1282,7 +1354,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getMetadata: () => createTestMetadata({ permissionMode: 'default' }),
       getStoredContentCryptoContext: () => mode === 'plain' ? { mode, ctx: null } : { mode, ctx },
       getPendingQueueState: () => ({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: () => true,
+      applyPendingQueueState: () => true,
       deliverMaterializedUserMessageToAgentQueue: message => { admittedMessage = message; return receive?.(message) === true; },
     });
     const session = createMutableApiSessionClientFixture({ sessionId: 's1',
@@ -1432,7 +1504,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getMetadata: () => createTestMetadata({ permissionMode: 'safe-yolo' }),
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       deliverMaterializedUserMessageToAgentQueue: deliver,
       handleSessionScopedUpdate,
     } as any);
@@ -1536,7 +1608,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getMetadata: () => createTestMetadata({ permissionMode: 'read-only' }),
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       deliverMaterializedUserMessageToAgentQueue: deliver,
       handleSessionScopedUpdate,
     } as any);
@@ -1612,7 +1684,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       getMetadata: () => createTestMetadata({ permissionMode: 'default' }),
       getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
       getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
-      observePendingMaterializeResult: vi.fn(() => true),
+      applyPendingQueueState: vi.fn(() => true),
       deliverMaterializedUserMessageToAgentQueue: deliver,
       handleSessionScopedUpdate,
     } as any);
