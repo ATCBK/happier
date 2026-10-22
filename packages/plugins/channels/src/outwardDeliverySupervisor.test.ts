@@ -3271,9 +3271,9 @@ describe('Channels outward-delivery supervisor', () => {
 
   it.each([
     { state: 'delivered', result: { kind: 'delivered', providerMessageIds: ['private-receipt'] } },
-    { state: 'notDelivered', result: { kind: 'notDelivered', retry: 'never' } },
+    { state: 'notDelivered', result: { kind: 'notDelivered', retry: 'never', code: 'senderUntrusted' } },
     { state: 'retryDue', result: { kind: 'notDelivered', retry: 'after', retryAfterMs: 5_000 } },
-    { state: 'outcomeUnknown', result: { kind: 'outcomeUnknown', providerMessageIds: ['private-receipt'] } },
+    { state: 'outcomeUnknown', result: { kind: 'outcomeUnknown', providerMessageIds: ['private-receipt'], code: 'sentCopyUnconfirmed' } },
     { state: 'partial', result: { kind: 'partial', providerMessageIds: ['private-receipt'], failedChunk: 1, retrySafe: false } },
     { state: 'retryDue', result: { kind: 'notReady', reason: 'network', diagnostic: 'private provider error and address' } },
   ] satisfies readonly { state: string; result: ConversationDeliveryResultV1 }[])(
@@ -3302,6 +3302,7 @@ describe('Channels outward-delivery supervisor', () => {
       settlementStatus: 'settled', providerOperation: 'deliver', providerResultKind: result.kind,
       ...('retry' in result ? { providerRetry: result.retry } : {}),
       ...('reason' in result ? { providerResultCode: result.reason } : {}),
+      ...('code' in result ? { providerResultCode: result.code } : {}),
       ...(settledState === 'retryDue' ? { retryNotBefore: result.kind === 'notReady' ? 1_100 : 5_100 } : {}),
     }]);
     expect(row?.value.payload).toMatchObject({ state: settledState, attemptCount: 1 });

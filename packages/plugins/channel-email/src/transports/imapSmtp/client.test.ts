@@ -36,7 +36,7 @@ import { EMAIL_CONFIG_SCHEMA } from '../../config';
 import { textPdf } from '../../../../channels/src/testkit/textPdf';
 import { ChannelFileValueV1Schema } from '../../../../channels/src/channelAttachment';
 
-const mailbox = 'wilson@example.com';
+const mailbox = 'wilson@test.local';
 const raw = (id: string) => Buffer.from(`From: sales@example.com\r\nTo: ${mailbox}\r\nMessage-ID: <${id}@example.com>\r\nSubject: Meubles\r\n\r\nBonjour.\r\n`);
 
 describe('IMAP/SMTP transport against real TLS protocol servers', () => {
@@ -105,15 +105,19 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     if (originalCertificates) setDefaultCACertificates(originalCertificates);
   });
 
-  it.each(['ready', 'wrong-transport', 'submit-handler-not-started', 'submit-result-lost'] as const)('composes trusted mail through registered Channels ingress and reply custody (%s)', async (scenario) => {
+  it.each(['ready', 'wrong-transport', 'submit-handler-not-started', 'submit-result-lost', 'smtp-refused', 'fresh-root'] as const)('composes trusted mail through registered Channels ingress and reply custody (%s)', async (scenario) => {
     const wrongTransport = scenario === 'wrong-transport';
     let refuseSubmission = scenario === 'submit-handler-not-started';
+    const freshRoot = scenario === 'fresh-root';
     const credentialRef = { service: { pluginId: emailPlugin.manifest.id, localId: IMAP_SMTP_CONNECTED_ACCOUNT_ID }, accountId: mailbox };
     const config = EMAIL_CONFIG_SCHEMA.parse({ mailbox, transport: { pluginId: emailPlugin.manifest.id, contributionId: 'imap-smtp' },
-      transportConfig: {}, trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' }, allowedDomains: ['example.com'] });
+      transportConfig: {}, trustStrategy: { kind: 'authenticationResults', authservId: freshRoot ? 'mx.seed1.test.local' : 'mx.example.com' },
+      allowedDomains: [freshRoot ? 'test.local' : 'example.com'] });
     const nativeSubmissions: EmailTransportSubmitRawInputV1[] = [];
     const polls: ConversationPollResultV1[] = [];
     const refusals: unknown[] = [];
+    const logger = { debug() {}, info: vi.fn<PluginServices['logger']['info']>(),
+      warn: vi.fn<PluginServices['logger']['warn']>(), error() {}, diagnostic() {} };
     let journey: Awaited<ReturnType<typeof createChannelsJourneyFixture>>;
     // Only the Connected Account store and host catalog are substituted. The
     // real plugin registers both its provider and its own TCP transport once.
@@ -189,12 +193,12 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     } });
     const { outboundTextLimit: _fixtureDefault, ...connectionPayload } = baseConnection.payload;
     const connection = { ...baseConnection, payload: connectionPayload };
-    const endpoint = { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox };
+    const endpoint = { kind: 'thread', audience: 'direct', id: freshRoot ? '<fresh-root@test.local>' : '<root@example.com>', parentId: mailbox };
     const binding = { id: 'email-seam-binding', 'record-kind': 'binding', v: 1, 'connection-id': connection.id,
       'binding-id': 'email-seam-binding', 'created-at': 1, 'updated-at': 1, payload: { endpoint,
         target: { kind: 'session', sessionId: 'email-seam-session', policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only',
           approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
-        allowedPrincipalIds: ['sales@example.com'], allowBotSenders: false, inputMode: 'allAllowedMessages',
+        allowedPrincipalIds: [freshRoot ? 'owner@test.local' : 'sales@example.com'], allowBotSenders: false, inputMode: 'allAllowedMessages',
         inboundDebounceMs: 0, linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1, enabled: true, deletionState: 'none' } };
     const admitted: Extract<SessionSendRequest, { kind: 'userText' }>[] = [];
     const transcript: SessionTranscriptGetExternalShareableResultV1['items'][number][] = [];
@@ -243,7 +247,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
       return spec.outputSchema.parse({ ok: true, projection: 'externalShareableV1', sessionId,
         scannedThroughSeq: transcript.length, nextCursor: String(transcript.length), hasMore: false, items });
     } } as unknown as PluginServices['actions'];
-    journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions });
+    journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions, logger });
     try {
       await journey.state.put(createConversationSessionProjectionFrontierRow({ bindingId: binding.id, targetSessionId: sessionId,
         transcriptCursor: '0', lastScannedSeq: 0, revision: 1, now: 1 }), { expectedRevision: 'absent' });
@@ -262,6 +266,32 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         uidValidity: String(imap.control.getMailbox('INBOX').uidvalidity), lastUid: 1,
       } }]);
       expect(admitted).toEqual([]);
+      if (freshRoot) {
+        // Reload34b P's public topology: a fresh root, no References/Sender,
+        // one allowed owner and an aligned receiving-MTA authentication result.
+        imap.control.addMessage('INBOX', { raw: Buffer.from([
+          'From: owner@test.local', `To: ${mailbox}`, 'Message-ID: <fresh-root@test.local>',
+          'Authentication-Results: mx.seed1.test.local; dmarc=pass header.from=test.local',
+          'Subject: Plain control', '', 'Bonjour.',
+        ].join('\r\n')) });
+        await journey.poll();
+        expect(admitted).toHaveLength(1);
+        const origin = transcript[0];
+        if (origin?.kind !== 'userText') throw new Error('Expected fresh-root admission');
+        transcript.push({ kind: 'assistantText', sessionId, seq: 2, itemId: 'root-answer', turnId: 'root-turn', final: 'completed',
+          text: 'Reçu.', consumedInputs: [{ localId: origin.localId, origin: origin.origin }] });
+        await journey.outward();
+        expect(nativeSubmissions[0]?.envelope).toEqual({ from: mailbox, to: ['owner@test.local'] });
+        expect(submitted).toHaveLength(1);
+        const reply = await simpleParser(submitted[0]!);
+        expect(reply.inReplyTo).toBe('<fresh-root@test.local>');
+        expect(reply.references).toBe('<fresh-root@test.local>');
+        expect([...journey.deliveries.rows.values()].map(row => row.value.payload))
+          .toContainEqual(expect.objectContaining({ state: 'delivered', attemptCount: 1 }));
+        await journey.outward();
+        expect(submitted).toHaveLength(1);
+        return;
+      }
       imap.control.addMessage('INBOX', { raw: incoming('incoming', 'sales@example.com', [trusted]) });
       imap.control.addMessage('INBOX', { raw: incoming('spoof', 'sales@example.com', ['Authentication-Results: attacker.invalid; dmarc=pass header.from=example.com', trusted]) });
       imap.control.addMessage('INBOX', { raw: incoming('outsider', 'other@example.com', [trusted]) });
@@ -293,12 +323,28 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
       if (origin.kind !== 'userText') throw new Error('Expected the admitted user transcript input');
       transcript.push({ kind: 'assistantText', sessionId, seq: 2, itemId: 'email-answer', turnId: 'email-turn', final: 'completed',
         text: 'Oui, **disponible**.', consumedInputs: [{ localId: origin.localId, origin: origin.origin }] });
+      if (scenario === 'smtp-refused') {
+        rejection = 550;
+        await journey.outward();
+        expect(submitted).toHaveLength(0);
+        expect(nativeSubmissions).toHaveLength(1);
+        expect([...journey.deliveries.rows.values()].map(row => row.value.payload))
+          .toContainEqual(expect.objectContaining({ state: 'notDelivered', attemptCount: 1 }));
+        const records = [...logger.info.mock.calls, ...logger.warn.mock.calls].map(call => call[1]);
+        expect(records).toContainEqual(expect.objectContaining({ providerResultKind: 'notDelivered',
+          providerRetry: 'never', providerResultCode: 'submissionRejected' }));
+        await journey.outward();
+        expect(nativeSubmissions).toHaveLength(1);
+        return;
+      }
       if (refuseSubmission) {
         await journey.outward();
         expect(submitted).toHaveLength(0);
         expect(nativeSubmissions).toHaveLength(0);
         const pending = [...journey.deliveries.rows.values()].find(row => row.value[CHANNEL_DELIVERIES_FIELD.bindingId] === binding.id);
         expect(pending?.value.payload).toMatchObject({ state: 'retryDue', attemptCount: 1 });
+        expect([...logger.info.mock.calls, ...logger.warn.mock.calls].map(call => call[1]))
+          .toContainEqual(expect.objectContaining({ providerResultCode: 'submissionNotStarted' }));
         const retryAt = pending?.value[CHANNEL_DELIVERIES_FIELD.retryNotBefore];
         if (!pending || typeof retryAt !== 'number') throw new Error('Expected the custody owner retry deadline');
         refuseSubmission = false;
@@ -309,6 +355,10 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         await journey.outward();
       }
       expect(submitted).toHaveLength(1);
+      if (scenario === 'submit-result-lost') {
+        expect([...logger.info.mock.calls, ...logger.warn.mock.calls].map(call => call[1]))
+          .toContainEqual(expect.objectContaining({ providerResultCode: 'submissionOutcomeUnknown' }));
+      }
       expect(nativeSubmissions[0]?.envelope).toEqual({ from: mailbox, to: ['sales@example.com'] });
       const reply = await simpleParser(submitted[0]!);
       expect(reply.inReplyTo).toBe('<incoming@example.com>');
@@ -683,7 +733,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
   it.each([[451, 'safe'], [550, 'never']] as const)('maps SMTP %i to %s without a Sent copy', async (code, retry) => {
     rejection = code;
     expect(await transport.submitRaw(raw('refused'), { from: mailbox, to: ['sales@example.com'] }, '<refused@example.com>'))
-      .toEqual({ kind: 'notDelivered', retry });
+      .toEqual({ kind: 'notDelivered', retry, code: code < 500 ? 'submissionTemporarilyRejected' : 'submissionRejected' });
     expect(imap.control.listMessages('Sent')).toHaveLength(0);
   });
 

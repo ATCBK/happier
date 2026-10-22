@@ -9,6 +9,17 @@ import {
 } from './delivery.js';
 
 describe('Channels V1 provider delivery results', () => {
+    it('retains closed content-free refusal and uncertainty codes without requiring them from older providers', () => {
+        for (const result of [
+            { kind: 'notDelivered', retry: 'never', code: 'senderUntrusted' },
+            { kind: 'outcomeUnknown', code: 'sentCopyUnconfirmed' },
+        ]) {
+            expect(ConversationDeliveryResultV1Schema.parse(result)).toEqual(result);
+            expect(ConversationDeliveryResultV1Schema.safeParse({ ...result, code: 'private@example.com' }).success).toBe(false);
+            const { code: _code, ...olderResult } = result;
+            expect(ConversationDeliveryResultV1Schema.parse(olderResult)).toEqual(olderResult);
+        }
+    });
     it('admits a new thread with principal recipients and preserves 120KB HTML plus created endpoint evidence', () => {
         const endpoint = { kind: 'direct', audience: 'direct', id: 'mailbox' } as const;
         const content = { text: 'Brief', html: '<p>' + 'a'.repeat(120 * 1024) + '</p>' };

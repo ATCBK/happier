@@ -139,8 +139,42 @@ const conversationPartialDeliveryV1 = defineProtocolObject({
     retrySafe: defineProtocolLiteral(false),
 }, { policy: 'closed' });
 
+// Content-free effect evidence only: codes never carry provider prose, addresses,
+// message identities or credentials, and never decide custody retry policy.
+const conversationDeliveryResultCodeV1 = defineProtocolUnion([
+    defineProtocolLiteral('invalidConfiguration'),
+    defineProtocolLiteral('invalidEndpoint'),
+    defineProtocolLiteral('replyContextMissing'),
+    defineProtocolLiteral('replyMessageMismatch'),
+    defineProtocolLiteral('replyThreadMismatch'),
+    defineProtocolLiteral('senderUntrusted'),
+    defineProtocolLiteral('senderNotHuman'),
+    defineProtocolLiteral('integrationSelf'),
+    defineProtocolLiteral('recipientInvalid'),
+    defineProtocolLiteral('credentialInvalid'),
+    defineProtocolLiteral('permissionMissing'),
+    defineProtocolLiteral('network'),
+    defineProtocolLiteral('rateLimited'),
+    defineProtocolLiteral('providerConflict'),
+    defineProtocolLiteral('unsupported'),
+    defineProtocolLiteral('submissionNotStarted'),
+    defineProtocolLiteral('submissionOutcomeUnknown'),
+    defineProtocolLiteral('noRecipientsAccepted'),
+    defineProtocolLiteral('submissionRejected'),
+    defineProtocolLiteral('submissionTemporarilyRejected'),
+    defineProtocolLiteral('sentCopyUnconfirmed'),
+    defineProtocolLiteral('reconciliationUnsupported'),
+    defineProtocolLiteral('reconciliationNotFound'),
+    defineProtocolLiteral('reconciliationMismatch'),
+    defineProtocolLiteral('providerResultInvalid'),
+    defineProtocolLiteral('providerInvocationFailed'),
+    defineProtocolLiteral('providerInvocationUnavailable'),
+    defineProtocolLiteral('contentUnrepresentable'),
+]);
+
 const conversationNotDeliveredV1 = defineProtocolObject({
     kind: defineProtocolLiteral('notDelivered'),
+    code: conversationDeliveryResultCodeV1.optional(),
     retry: defineProtocolUnion([
         defineProtocolLiteral(CONVERSATION_DELIVERY_RETRY_KINDS_V1[0]),
         defineProtocolLiteral(CONVERSATION_DELIVERY_RETRY_KINDS_V1[1]),
@@ -163,6 +197,7 @@ const conversationEndpointArchivedV1 = defineProtocolObject({
 
 const conversationOutcomeUnknownV1 = defineProtocolObject({
     kind: defineProtocolLiteral('outcomeUnknown'),
+    code: conversationDeliveryResultCodeV1.optional(),
     providerMessageIds: conversationProviderMessageIdsV1.optional(),
     endpoint: ConversationResolvedEndpointV1ProtocolSchema.optional(),
 }, { policy: 'closed' });

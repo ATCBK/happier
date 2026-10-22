@@ -189,7 +189,7 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
           client.send({ from: envelope.from, to: [...envelope.to] }, Buffer.from(mime), (error, result) => error ? reject(error) : resolve(result));
         }), signal);
         confirmed = info.accepted.length > 0;
-        if (!confirmed) return { kind: 'notDelivered', retry: 'never' };
+        if (!confirmed) return { kind: 'notDelivered', retry: 'never', code: 'noRecipientsAccepted' };
         // Observe the server's actual Sent copy for this delivery; no vendor-name rule.
         await withImap(async (client) => {
           const folder = await sentFolder(client);
@@ -202,10 +202,12 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
         return { kind: 'delivered', providerMessageIds: [messageId] };
       } catch (error) {
         signal?.throwIfAborted();
-        if (confirmed) return { kind: 'outcomeUnknown', providerMessageIds: [messageId] };
+        if (confirmed) return { kind: 'outcomeUnknown', providerMessageIds: [messageId], code: 'sentCopyUnconfirmed' };
         const code = smtpResponseCode(error);
-        if (code !== undefined && code >= 400 && code < 600) return { kind: 'notDelivered', retry: code < 500 ? 'safe' : 'never' };
-        return submissionStarted ? { kind: 'outcomeUnknown' } : { kind: 'notDelivered', retry: 'safe' };
+        if (code !== undefined && code >= 400 && code < 600) return { kind: 'notDelivered', retry: code < 500 ? 'safe' : 'never',
+          code: code === 535 ? 'credentialInvalid' : code < 500 ? 'submissionTemporarilyRejected' : 'submissionRejected' };
+        return submissionStarted ? { kind: 'outcomeUnknown', code: 'submissionOutcomeUnknown' }
+          : { kind: 'notDelivered', retry: 'safe', code: 'submissionNotStarted' };
       }
     },
     async findSent(messageId: string, signal?: AbortSignal): Promise<boolean> {

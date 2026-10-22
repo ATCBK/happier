@@ -289,6 +289,8 @@ function logOutwardDeliverySupervisorDeliveryOutcome(
         providerOperation: settlement.operation,
         providerResultKind: providerResult.kind,
         ...(providerResult.kind === 'notReady' ? { providerResultCode: providerResult.reason } : {}),
+        ...((providerResult.kind === 'notDelivered' || providerResult.kind === 'outcomeUnknown') && providerResult.code !== undefined
+          ? { providerResultCode: providerResult.code } : {}),
         ...(providerResult.kind === 'notDelivered' ? { providerRetry: providerResult.retry } : {}),
         ...(providerResult.kind === 'endpointArchived' ? { providerRecovery: providerResult.recovery } : {}),
         ...(result.custody.retryNotBefore === undefined ? {} : { retryNotBefore: result.custody.retryNotBefore }),

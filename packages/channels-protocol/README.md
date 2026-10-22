@@ -603,6 +603,13 @@ ambiguous effect. Optional `deliveryReconcile` can prove presence or absence;
 without it the core settles honestly as unknown when it cannot prove the
 effect.
 
+In unreleased 0.3 source, `notDelivered` and `outcomeUnknown` may carry an
+optional closed `code`. The delivery result schema owns its content-free
+vocabulary; raw provider errors, addresses and message identifiers are not
+codes. The existing attempt-settlement diagnostic projects it as
+`providerResultCode`. Older omitted-code results remain readable. The code is
+diagnostic evidence, not retry or recovery authority.
+
 ## Credentials, trust, and authority
 
 Provider plugins are trusted arbitrary code. The contribution contract gives

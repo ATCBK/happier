@@ -41,6 +41,10 @@ identifiers, attempt count, settled state, typed provider result kind and any
 typed refusal reason or retry mode, plus the retry deadline when set. These
 development records exclude message content, addresses and raw provider errors;
 rejoining an already settled delivery does not create another attempt record.
+Email's unreleased delivery diagnostics also identify the refusal or uncertain
+phase with a closed reason code, including reply identity or trust checks,
+credential refusal, SMTP rejection and an unconfirmed Sent copy. These codes
+describe the attempt; they do not authorize a resend or change its retry policy.
 When `repliesOnly` excludes a final answer because it consumed no input from
 that binding, development diagnostics record that decision with the semantic
 item and turn identifiers, sequence and consumed-input count, without message

@@ -249,7 +249,7 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
     async invoke(signal) {
       let current = invocation;
       const currentRecord = record;
-      if (current === undefined || currentRecord === undefined) return { kind: 'outcomeUnknown' };
+      if (current === undefined || currentRecord === undefined) return { kind: 'outcomeUnknown', code: 'providerInvocationUnavailable' };
       const invoke = async (
         target: ConversationOutwardDeliveryProviderActionInvocation,
         actionInput: typeof target.input,
@@ -260,12 +260,13 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
           );
           // The host checks routing before the effect and exact invocation currentness afterward.
           const result = ConversationDeliveryResultV1Schema.safeParse(execution.result);
-          return result.success ? result.data : { kind: 'outcomeUnknown' };
+          return result.success ? result.data : { kind: 'outcomeUnknown', code: 'providerResultInvalid' };
         } catch (error) {
           // A missing delivery handler proves no send started. A missing
           // reconciliation handler says nothing about the earlier send.
           return input.operation === 'deliver' && isPluginActionHandlerInvocationNotStartedAdvisory(error)
-            ? { kind: 'notDelivered', retry: 'safe' } : { kind: 'outcomeUnknown' };
+            ? { kind: 'notDelivered', retry: 'safe', code: 'submissionNotStarted' }
+            : { kind: 'outcomeUnknown', code: 'providerInvocationFailed' };
         }
       };
       const limit = current.outboundTextLimit;
@@ -275,7 +276,7 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
       }
       const content = current.input.content;
       const chunks = splitConversationOutboundText(content.text, limit);
-      if (chunks === null) return { kind: 'notDelivered', retry: 'never' };
+      if (chunks === null) return { kind: 'notDelivered', retry: 'never', code: 'contentUnrepresentable' };
       const providerMessageIds: string[] = [];
       for (const [index, text] of chunks.entries()) {
         if (signal.aborted) return index === 0
