@@ -786,6 +786,20 @@ explicit exact model selection. The host resolves Account defaults for the child
 Agent; an unavailable default snapshot refuses. Omission still inherits applied
 parent state. Choice projections do not authorize credentials or model execution.
 
+In 0.3 development source, discover `execution.run.start`'s `intent` options
+before choosing its retention, Run class and I/O mode. Each option describes
+its purpose and the accepted values for all three fields, projected from the
+shared [intent policy matrix](../packages/protocol/src/execution/runs/intentPolicyMatrix.ts).
+Use `delegate` for ordinary bounded child work; `voice_agent` serves an ongoing
+Voice conversation and requires its retained streaming combination. MCP,
+Agent, UI and friendly CLI discovery consume that same projection. A policy
+refusal before Run creation retains `execution_run_not_allowed` and reports
+`details.executionRunStart.runCreation: "noRunCreated"`, with content-free
+`details.issues` naming every incompatible field and its intent-specific
+accepted values. Missing or malformed creation evidence remains
+`outcomeUnknown`; callers must reconcile that outcome before considering a
+fresh start.
+
 | Decision or fact | Owner |
 |---|---|
 | The Action registry: every row, its schemas, surfaces, safety and approval | `packages/protocol/src/actions/actionSpecs.ts` |
@@ -1497,8 +1511,13 @@ An unknown outcome without an observed operation does not invent an address.
 The shared UI Session-creation client joins a returned operation through
 `action.operations.get` with `waitForTerminal: true` and the original invocation's
 signal and Action transport. New Session, Voice carriers and embedded creation
-therefore consume the same terminal result without another create. The qualified
-terminal result advances the shared operation store even if its socket notification
+therefore consume the same terminal result without another create. The UI routes
+the read and keys the store with the requester's Home scope; a daemon's stack-local
+server identifier is not a client profile identity. Direct and settled successful
+results carry the requester's Home identifier, including manual recovery and
+committed results awaiting key preparation. Operation, Action, Machine and
+captured Account identity still qualify the returned result. The terminal
+snapshot advances the shared operation store even if its socket notification
 was missed. An embed credential still needs its existing operation-read grant;
 creation does not widen that credential's authority. Pending receipts without an
 operation retain the same-creation-key reconciliation contract above.
