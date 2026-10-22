@@ -132,5 +132,6 @@ export function useApprovalRequestTitle(input: ApprovalRequestTitleInput, server
   usePreferredLanguage();
   const reference = readActionApprovalSubject({ ...input, actionId: input.actionId ?? '' });
   const reading = useApprovalReferenceReading(reference, reference?.id ?? '', serverId);
-  return resolveApprovalRequestTitle({ ...input, subject: reading.named ? reading.text : null });
+  // A subject still being read is not a name yet; the title gains it once the read lands.
+  return resolveApprovalRequestTitle({ ...input, subject: reading.named && !reading.resolving ? reading.text : null });
 }
