@@ -17,12 +17,15 @@ afterEach(() => {
 describe('daemon control HTTP authentication', () => {
   it.each([
     '/plugins/catalog/read',
+    '/session-activity-changed',
     '/connected-service-run/applied-parent-selection',
     '/connected-service-run/generation-current',
   ])('waits for %s beyond the generic control timeout while preserving caller cancellation', async (path) => {
     envScope.patch({ HAPPIER_DAEMON_HTTP_TIMEOUT: '100' });
     const expected = path === '/plugins/catalog/read'
       ? { kind: 'available', plugins: [], tools: [] }
+      : path === '/session-activity-changed'
+        ? { ok: true }
       : path === '/connected-service-run/generation-current'
         ? { ok: true, current: true }
         : { status: 'unavailable' };

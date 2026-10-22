@@ -11,9 +11,13 @@ import { logger } from '@/ui/logger';
 import axios from 'axios';
 import { createSessionFollowOccurrenceDispatcher } from '@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { daemonPost } from './controlHttp';
 
 describe('private Session activity invalidation', () => {
   it('correlates a source occurrence before waiting for dispatch without logging its authored local id or evidence', async () => {
+    const env = createEnvKeyScope(['HAPPIER_DAEMON_HTTP_TIMEOUT']);
+    env.patch({ HAPPIER_DAEMON_HTTP_TIMEOUT: '100' });
     const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -46,15 +50,19 @@ describe('private Session activity invalidation', () => {
       v: 1, ownerAccountId: 'account-1', event: { kind: 'update_posted' }, facts: { serverId: 'private-home', kind: 'session' },
     } };
     try {
-      const pending = app.inject({ method: 'POST', url: '/session-activity-changed',
-        headers: { 'x-happier-daemon-token': 'token' }, payload: { sessionId: 'source', followOccurrence: occurrence } }).then(result => result);
+      // Use the actual HTTP client and control ingress: source reconciliation
+      // may outlast generic control waits without retiring the Follow source.
+      const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+      const pending = daemonPost('/session-activity-changed', { sessionId: 'source', followOccurrence: occurrence },
+        { target: { pid: process.pid, httpPort: Number(address.port), controlToken: 'token' } });
       await vi.waitFor(() => expect(entered).toBe(true));
       const checkpoints = () => log.mock.calls.filter(([message]) => message === '[Session Follow] Occurrence ingress')
         .map(([, fields]) => fields);
       expect(checkpoints()).toEqual([expect.objectContaining({ requestId: expect.any(String), sourceSessionId: 'source',
         sourceMessageSeq: 7, status: 'started' })]);
+      await new Promise<void>(resolve => setTimeout(resolve, 150));
       release();
-      expect((await pending).statusCode).toBe(200);
+      expect(await pending).toEqual({ ok: true });
       expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId: 'source', sourceMessageSeq: 7, status: 'completed' });
       const ignored = await app.inject({ method: 'POST', url: '/session-activity-changed',
         headers: { 'x-happier-daemon-token': 'token' }, payload: { sessionId: 'source',
@@ -62,7 +70,7 @@ describe('private Session activity invalidation', () => {
       expect(ignored.statusCode).toBe(200);
       expect(checkpoints().at(-1)).toEqual({ requestId: expect.any(String), status: 'ignored' });
       expect(JSON.stringify(checkpoints())).not.toContain('private-');
-    } finally { release(); await app.close(); dispatcher.dispose(); http.mockRestore(); log.mockRestore(); }
+    } finally { release(); await app.close(); dispatcher.dispose(); http.mockRestore(); log.mockRestore(); env.restore(); }
   });
 
   it('forwards canonical Run hints after the parent retires and rejects a mismatched source Session', async () => {

@@ -59,6 +59,9 @@ async function resolveTimeout(path: string, options: DaemonControlRequestOptions
   // Catalog preparation follows its request lifetime. A loaded daemon may
   // take longer than the generic control wait without being unavailable.
   if (path === '/plugins/catalog/read') return null;
+  // Source reconciliation may await current Account rules and Home reads.
+  // Its operation lifetime, not the generic control wait, bounds completion.
+  if (path === '/session-activity-changed') return null;
   // Applied Account/currentness reads serve the containing Session or Run
   // operation. A generic control wait is not evidence of retired authority.
   if (path === '/connected-service-run/applied-parent-selection'
