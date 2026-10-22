@@ -22,6 +22,28 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('createSessionTurnLifecycle', () => {
+    it('publishes the exact accepted failure issue once per turn to the recovery observer', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        const accepted = vi.fn(async (_event: unknown, _issue: unknown) => {});
+        const lifecycle = createSessionTurnLifecycle({
+            session: { sessionId: 'accepted-issues', async enqueueSessionTurnMutation(mutation) { mutations.push(mutation); } },
+            agentId: 'claude', onAcceptedTurnFailure: accepted,
+        });
+        for (const [turnId, emittedAtMs] of [['first-turn', 1000], ['second-turn', 3000]] as const) {
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'accepted-issues', turnId, emittedAtMs }));
+            const failed = canonicalRuntimeEvent({ kind: 'turn-failed', sessionId: 'accepted-issues', turnId, emittedAtMs: emittedAtMs + 10,
+                diagnostic: { code: 'usage_limit', severity: 'error', message: 'Usage limit reached' } });
+            lifecycle.observeRuntimeEvent(failed);
+            lifecycle.observeRuntimeEvent(failed);
+        }
+        await lifecycle.drainAcceptedLifecycle();
+        const failed = mutations.filter((mutation) => mutation.action === 'fail');
+        expect(accepted).toHaveBeenCalledTimes(2);
+        expect(accepted.mock.calls[0]?.[1]).toBe(failed[0]?.issue);
+        expect(accepted.mock.calls[1]?.[1]).toBe(failed[1]?.issue);
+        expect(accepted.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ occurredAt: 1010 }));
+    });
+
     it.each(['turn-cancelled', 'turn-complete'] as const)(
         'settles the exact yielded question turn as waiting after %s', async kind => {
             const mutations: SessionTurnMutationV1[] = [];

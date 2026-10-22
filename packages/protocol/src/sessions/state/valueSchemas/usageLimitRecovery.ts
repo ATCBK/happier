@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import type { SessionRuntimeIssueV1 } from '../../control/runtimeIssueV1.js';
 
 import {
   ConnectedServiceAuthGroupIdSchema,
@@ -68,5 +69,32 @@ export const SessionUsageLimitRecoveryV1Schema = lazyZodSchema(() => z.strictObj
     recoveryCredits: z.optional(ConnectedServiceQuotaRecoveryCreditsV1Schema),
   }));
 export type SessionUsageLimitRecoveryV1 = z.infer<typeof SessionUsageLimitRecoveryV1Schema>;
+
+/** Stable issue identity shared by recovery producers, controls, and presentation. */
+export function buildUsageLimitIssueFingerprint(issue: SessionRuntimeIssueV1, fallbackAgentId = 'unknown-agent'): string {
+  return ['usage-limit', issue.agentId ?? fallbackAgentId, issue.agentTurnId ?? 'unknown-turn',
+    String(issue.occurredAt), String(issue.usageLimit?.resetAtMs ?? 'no-reset')].join(':');
+}
+
+export function isSessionUsageLimitRecoveryForIssue(
+  issue: SessionRuntimeIssueV1,
+  recovery: Pick<SessionUsageLimitRecoveryV1, 'issueFingerprint'>,
+  fallbackAgentId?: string,
+): boolean {
+  return recovery.issueFingerprint === buildUsageLimitIssueFingerprint(issue, fallbackAgentId);
+}
+
+/** A different observed failure cannot inherit an earlier recovery's authority. */
+export function readSessionUsageLimitRecoveryForIssue(
+  value: unknown,
+  issue?: SessionRuntimeIssueV1 | null,
+  fallbackAgentId?: string,
+): SessionUsageLimitRecoveryV1 | null {
+  const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(value);
+  if (!parsed.success) return null;
+  return issue && !isSessionUsageLimitRecoveryForIssue(issue, parsed.data, fallbackAgentId)
+    ? null
+    : parsed.data;
+}
 
 export const SessionStateUsageLimitRecoveryValueSchema = SessionUsageLimitRecoveryV1Schema;

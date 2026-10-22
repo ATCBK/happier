@@ -1,3 +1,4 @@
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -3415,6 +3416,12 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
         recoveryNotify.mockImplementation(async (body: unknown) => {
           expect(vi.mocked(base.session.enqueueAgentMessageCommitted!).mock.calls.some(([, value]) => value.type === 'turn_failed')).toBe(true);
           expect(failedTurnAccepted).toBe(true);
+          const mutation = vi.mocked(base.session.enqueueSessionTurnMutation!).mock.calls
+            .map(([value]) => value).find((value) => value.action === 'fail');
+          if (!mutation || mutation.action !== 'fail') throw new Error('Missing accepted failure issue');
+          expect(body).toMatchObject({ classification: {
+            runtimeIssueFingerprint: buildUsageLimitIssueFingerprint(mutation.issue),
+          } });
           reports.push(body);
           return { ok: true, result: { status: 'recovery_superseded', reason: 'source_tuple_mismatch', serviceId: 'happier.agent.antigravity/antigravity-account' } };
         });

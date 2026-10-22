@@ -1,3 +1,4 @@
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { describe, expect, it } from 'vitest';
 import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol';
 
@@ -69,6 +70,45 @@ const temporaryThrottleIssue = {
 } as const;
 
 describe('sessionUsageLimitRecoveryPresentation', () => {
+    it('hides cancellation only for its exact current issue', () => {
+        const issue = SessionRuntimeIssueV1Schema.parse({
+            ...usageLimitIssue, agentId: 'claude', agentTurnId: 'turn-b', occurredAt: 2_000,
+            usageLimit: { ...usageLimitIssue.usageLimit, resetAtMs: 5_000 },
+        });
+        const recoveryState = readSessionUsageLimitRecoveryFromMetadata({ sessionUsageLimitRecoveryV1: {
+            v: 1, status: 'cancelled', issueFingerprint: 'usage-limit:claude:turn-b:2000:5000',
+            runtimeAuthRecoveryAttemptId: 'current-attempt', armedAtMs: 2_000,
+            resetAtMs: 5_000, nextCheckAtMs: null, attemptCount: 1, maxAttempts: 3,
+            lastProbeError: null, selectedAuth: { kind: 'native' },
+        } });
+        expect(buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true, lastRuntimeIssue: issue, latestTurnStatus: 'failed', recoveryState,
+            settings: { v: 1, mode: 'ask' }, translate: translateUsageLimitRecoveryKeyForTest,
+        })).toBeNull();
+    });
+
+    it.each(['cancelled', 'waiting'] as const)('keeps a fresh issue independent of an older %s recovery', (status) => {
+        const issue = SessionRuntimeIssueV1Schema.parse({
+            ...usageLimitIssue, agentId: 'claude', agentTurnId: 'turn-b', occurredAt: 2_000,
+            usageLimit: { ...usageLimitIssue.usageLimit, resetAtMs: 5_000 },
+        });
+        const recoveryState = readSessionUsageLimitRecoveryFromMetadata({ sessionUsageLimitRecoveryV1: {
+            v: 1, status, issueFingerprint: 'usage-limit:claude:turn-a:100:500',
+            runtimeAuthRecoveryAttemptId: 'old-attempt', armedAtMs: 100,
+            resetAtMs: 500, nextCheckAtMs: null, attemptCount: 1, maxAttempts: 3,
+            lastProbeError: null, selectedAuth: { kind: 'native' },
+        } });
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true, lastRuntimeIssue: issue, latestTurnStatus: 'failed', recoveryState,
+            hasInterruptedWorkToResume: true, nowMs: 3_000, checkNowSupported: true,
+            settings: { v: 1, mode: 'ask' }, translate: translateUsageLimitRecoveryKeyForTest,
+        });
+        expect(presentation?.issueFingerprint).toBe('usage-limit:claude:turn-b:2000:5000');
+        expect(presentation?.armedAtMs).toBe(2_000);
+        expect(presentation).not.toHaveProperty('runtimeAuthRecoveryAttemptId');
+        expect(presentation?.banner.mode).toBe('enable');
+    });
+
     it('projects overload retry timing and controls without quota actions, including while awaiting the provider', () => {
         const recoveryState = readSessionUsageLimitRecoveryFromMetadata({ sessionUsageLimitRecoveryV1: {
             v: 1, status: 'waiting', issueFingerprint: 'temporary-throttle:s1:1', armedAtMs: temporaryThrottleIssue.occurredAt,
@@ -108,7 +148,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status,
-                    issueFingerprint: 'usage-limit:s1:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: 1_700_000_070_000,
@@ -128,7 +168,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status,
-                    issueFingerprint: 'usage-limit:s1:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: 1_700_000_070_000,
@@ -146,7 +186,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             sessionUsageLimitRecoveryV1: {
                 v: 1,
                 status: 'waiting',
-                issueFingerprint: 'usage-limit:s1:1',
+                issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                 armedAtMs: 1,
                 resetAtMs: 1_700_000_060_000,
                 nextCheckAtMs: 1_700_000_070_000,
@@ -164,7 +204,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status,
-                    issueFingerprint: 'usage-limit:s1:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: 1_700_000_070_000,
@@ -216,7 +256,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             sessionUsageLimitRecoveryV1: {
                 v: 1,
                 status: 'waiting',
-                issueFingerprint: 'usage-limit:s1:1',
+                issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                 armedAtMs: 1,
                 resetAtMs: 1_700_000_060_000,
                 nextCheckAtMs: 1_700_000_070_000,
@@ -245,7 +285,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             sessionUsageLimitRecoveryV1: {
                 v: 1,
                 status: 'waiting',
-                issueFingerprint: 'usage-limit:s1:1',
+                issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                 armedAtMs: 1,
                 resetAtMs: 1_700_000_060_000,
                 nextCheckAtMs: 1_700_000_070_000,
@@ -274,7 +314,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             sessionUsageLimitRecoveryV1: {
                 v: 1,
                 status: 'waiting',
-                issueFingerprint: 'usage-limit:s1:1',
+                issueFingerprint: buildUsageLimitIssueFingerprint({ ...switchAccountUsageLimitIssue, usageLimit: { ...switchAccountUsageLimit, resetAtMs: null } }),
                 armedAtMs: 1,
                 resetAtMs: null,
                 nextCheckAtMs: 1_700_000_070_000,
@@ -336,7 +376,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status: 'exhausted',
-                    issueFingerprint: 'usage-limit:s1:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(usageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: null,
@@ -444,7 +484,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status: 'exhausted',
-                    issueFingerprint: 'usage-limit:codex:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(switchAccountUsageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: null,
@@ -480,7 +520,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
                 sessionUsageLimitRecoveryV1: {
                     v: 1,
                     status: 'exhausted',
-                    issueFingerprint: 'usage-limit:codex:1',
+                    issueFingerprint: buildUsageLimitIssueFingerprint(switchAccountUsageLimitIssue),
                     armedAtMs: 1,
                     resetAtMs: 1_700_000_060_000,
                     nextCheckAtMs: null,

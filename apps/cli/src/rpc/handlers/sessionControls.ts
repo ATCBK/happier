@@ -28,7 +28,7 @@ import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/r
 import { configuration } from '@/configuration';
 import { SkillCatalogItemV1Schema } from '@happier-dev/protocol/runtime/catalog/skills';
 import { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
-import { routeRuntimeAuthUsageLimitRecoveryCheckNow, type CheckRuntimeAuthUsageLimitRecovery } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
+import { routeRuntimeAuthUsageLimitRecoveryCheckNow, type CheckRuntimeAuthUsageLimitRecovery, type ReadCurrentUsageLimitRecoveryIssue } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
   resolveUsageLimitRecoveryEnabled,
   usageLimitRecoveryDisabledResult,
@@ -276,6 +276,7 @@ export function registerSessionControlHandlers(
     waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
     isUsageLimitRecoveryEnabled?: (() => Promise<boolean> | boolean) | null;
     checkRuntimeAuthUsageLimitRecovery?: CheckRuntimeAuthUsageLimitRecovery | null;
+    readCurrentUsageLimitRecoveryIssue?: ReadCurrentUsageLimitRecoveryIssue | null;
     notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{
       sessionId: string;
       attemptId: string;
@@ -736,6 +737,7 @@ export function registerSessionControlHandlers(
       metadata: opts.getSessionMetadata?.() ?? null,
       resumePromptMode: parsed.data.resumePromptMode,
       checkRuntimeAuthUsageLimitRecovery: opts.checkRuntimeAuthUsageLimitRecovery,
+      readCurrentUsageLimitRecoveryIssue: opts.readCurrentUsageLimitRecoveryIssue,
     }) : null;
     if (daemonResult) return daemonResult;
     if (typeof opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow !== 'function') {

@@ -7,6 +7,7 @@ export function readRuntimeAuthFailureReportSourceIdentity(
 ) {
   return {
     serviceId: classification.serviceId,
+    ...(classification.runtimeIssueFingerprint ? { runtimeIssueFingerprint: classification.runtimeIssueFingerprint } : {}),
     ...(classification.sourceProviderOrganizationId
       ? { sourceProviderOrganizationId: classification.sourceProviderOrganizationId } : {}),
     profileId: classification.profileId,

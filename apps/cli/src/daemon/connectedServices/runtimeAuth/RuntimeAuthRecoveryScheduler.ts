@@ -896,11 +896,22 @@ function mergeRuntimeAuthRecoveryIntent(
     // not revive it merely because its caller omitted the report id.
     return next.lastSettledTransition === 'working' ? next : previous;
   }
+  if (next.classification.runtimeIssueFingerprint
+    && next.classification.runtimeIssueFingerprint !== previous.classification.runtimeIssueFingerprint) return next;
+  const classification = previous.classification.runtimeIssueFingerprint
+    && !next.classification.runtimeIssueFingerprint
+    && isDeepStrictEqual(
+      { ...previous.classification, runtimeIssueFingerprint: undefined },
+      { ...next.classification, runtimeIssueFingerprint: undefined },
+    )
+    ? { ...next.classification, runtimeIssueFingerprint: previous.classification.runtimeIssueFingerprint }
+    : next.classification;
   if (previous.status === 'checking') {
     return previous;
   }
   return {
     ...next,
+    classification,
     attemptId: previous.attemptId ?? next.attemptId,
     lastSettledTransition: previous.lastSettledTransition ?? next.lastSettledTransition,
     ...(mergePendingVisibleEvents(previous.pendingVisibleEvents, next.pendingVisibleEvents) === undefined

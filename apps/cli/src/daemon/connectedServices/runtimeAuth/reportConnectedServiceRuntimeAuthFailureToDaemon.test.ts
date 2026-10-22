@@ -28,6 +28,25 @@ const classification = {
 } satisfies ConnectedServiceRuntimeFailureClassification;
 
 describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
+  it('distinguishes fresh accepted failures while coalescing duplicate observations', async () => {
+    const reportIds: string[] = [];
+    const outboxDir = await createTempDir('accepted-failure-occurrences');
+    try {
+      const notify: NonNullable<Parameters<typeof reportConnectedServiceRuntimeAuthFailureToDaemon>[0]['notify']> = async (body) => {
+        reportIds.push(body.reportId!);
+        return { ok: true, result: { status: 'switch_reason_disabled' },
+          recoveryReceipt: { reportId: body.reportId!, attemptId: `attempt:${body.reportId}` } };
+      };
+      for (const fingerprint of ['usage-limit:claude:unknown:1000:no-reset', 'usage-limit:claude:unknown:1000:no-reset', 'usage-limit:claude:unknown:3000:no-reset']) {
+        await reportConnectedServiceRuntimeAuthFailureToDaemon({ sessionId: 'accepted-failure-occurrences',
+          classification: { ...classification, runtimeIssueFingerprint: fingerprint }, notify, reportOutboxDir: outboxDir, nowMs: () => 4000 });
+      }
+      expect(reportIds).toHaveLength(2);
+      expect(new Set(reportIds).size).toBe(2);
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally { await removeTempDir(outboxDir); }
+  });
+
   it('keeps the local recovery report lifecycle-owned instead of imposing a wall-clock deadline', () => {
     expect(CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS).toBeNull();
     expect(DEFAULT_REQUEST_AUTH_RECOVERY_DEADLINE_MS).toBeGreaterThan(0);

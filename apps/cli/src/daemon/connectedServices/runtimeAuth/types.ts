@@ -29,7 +29,10 @@ export const ConnectedServiceRuntimeAuthFailureKindSchema = z.enum(
 export type ConnectedServiceRuntimeLimitCategory = ConnectedServiceLimitCategoryV1;
 export type ConnectedServiceRuntimeQuotaScope = ProviderAccountUsageQuotaScopeV1;
 export type ConnectedServiceRuntimeFailureClassification =
-  AgentConnectedAccountRuntimeFailureClassificationV1;
+  AgentConnectedAccountRuntimeFailureClassificationV1 & Readonly<{
+    /** Host association with the exact accepted public runtime issue. */
+    runtimeIssueFingerprint?: string | null;
+  }>;
 export type ConnectedServiceRuntimeAuthTargetInput = Readonly<{
   target: Readonly<{ agentId: string; targetId?: string | null }>;
   selection: AgentConnectedAccountRuntimeAuthSelectionV1;

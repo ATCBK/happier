@@ -16,6 +16,7 @@ import { logger } from '@/ui/logger';
 import { notifyDaemonConnectedServiceUsageLimitWaitResumeCancel } from '@/daemon/controlClient';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
 import { createExecutionBudgetRegistry } from '@/daemon/executionBudget/createExecutionBudgetRegistry';
 import type { StoredCredentials } from '@/persistence';
 import {
@@ -935,6 +936,15 @@ export function registerSessionClientRuntimeHandlers(
         transcriptActionExecutor,
         notifyUsageLimitWaitResumeCancelled: async (request) =>
             await notifyDaemonConnectedServiceUsageLimitWaitResumeCancel(request),
+        readCurrentUsageLimitRecoveryIssue: async (sessionId) => {
+            const credentials = await readOwnerAccountCredentials();
+            if (!credentials || !await ownerAccountIsCurrent()) throw new Error('usage_limit_recovery_account_unavailable');
+            const rawSession = await runWithServerHttpBaseUrl(params.serverUrl, () => fetchSessionById({
+                token: credentials.token, sessionId,
+            }));
+            if (!rawSession) throw new Error('usage_limit_recovery_session_unavailable');
+            return readLatestUsageLimitFailureIssue(rawSession);
+        },
         checkRuntimeAuthUsageLimitRecovery: async (request) => {
             const machineId = params.getSessionMetadata()?.machineId;
             if (!machineId) return { ok: false, errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' };

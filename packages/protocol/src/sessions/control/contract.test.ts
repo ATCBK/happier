@@ -14,6 +14,23 @@ import {
 } from './contract.js';
 
 describe('sessionControl contract exports', () => {
+  it('shares exact failure identity between recovery producers and readers', () => {
+    const issue = protocol.SessionRuntimeIssueV1Schema.parse({
+      v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit',
+      agentId: 'claude', agentTurnId: 'turn-b', occurredAt: 2_000,
+      usageLimit: { v: 1, resetAtMs: 5_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+    });
+    const issueFingerprint = protocol.buildUsageLimitIssueFingerprint(issue);
+    expect(issueFingerprint).toBe('usage-limit:claude:turn-b:2000:5000');
+    const intent = { v: 1, status: 'waiting', issueFingerprint, armedAtMs: 2_000,
+      resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0, maxAttempts: 3,
+      lastProbeError: null, selectedAuth: { kind: 'native' } };
+    expect(protocol.readSessionUsageLimitRecoveryForIssue(intent, issue)?.issueFingerprint).toBe(issueFingerprint);
+    expect(protocol.readSessionUsageLimitRecoveryForIssue(intent, { ...issue, occurredAt: 2_001 })).toBeNull();
+    expect(protocol.readSessionUsageLimitRecoveryForIssue(intent)?.issueFingerprint).toBe(issueFingerprint);
+    expect(protocol.isSessionUsageLimitRecoveryForIssue(issue, { issueFingerprint: 'opaque-attempt' })).toBe(false);
+  });
+
   it('validates the Home-accepted Team model witness instead of preserving an unchecked authority bag', () => {
     const session = { id: 'session', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
       metadata: '{}', metadataVersion: 0, agentState: null, agentStateVersion: 0, dataEncryptionKey: null,

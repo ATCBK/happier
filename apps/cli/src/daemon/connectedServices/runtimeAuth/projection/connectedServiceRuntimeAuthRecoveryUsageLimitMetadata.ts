@@ -15,7 +15,7 @@ export function buildRuntimeAuthUsageLimitRecoveryProjection(
   return {
     v: 1,
     status,
-    issueFingerprint: attemptId,
+    issueFingerprint: intent.classification.runtimeIssueFingerprint ?? attemptId,
     runtimeAuthRecoveryAttemptId: attemptId,
     armedAtMs: intent.armedAtMs,
     resetAtMs: intent.classification.resetsAtMs ?? null,

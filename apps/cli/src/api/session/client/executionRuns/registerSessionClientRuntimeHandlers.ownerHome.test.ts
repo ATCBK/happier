@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
-import { buildBackendTargetKeyV2, FeaturesResponseSchema, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol';
+import { buildBackendTargetKeyV2, FeaturesResponseSchema, SessionUsageLimitRecoveryV1Schema, SessionRuntimeIssueV1Schema, type SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -14,7 +14,7 @@ import { ApiMachineClient } from '@/api/apiMachine';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
-import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
 import { RoleActionOutputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
@@ -57,6 +57,7 @@ afterEach(async () => {
 
 async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>, roleCatalog = false, usageLimitRecovery?: boolean,
   onStalledMutation?: () => void) {
+  let usageLimitIssue: SessionRuntimeIssueV1 | null = null;
   const settingsResponse = AccountSettingsV2GetResponseSchema.parse({
     version: settingsVersion, content: { t: 'plain', v: rawSettings },
   });
@@ -76,6 +77,11 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
       response.end(JSON.stringify(FeaturesResponseSchema.parse({ features: { sessions: {
         enabled: true, usageLimitRecovery: { enabled: usageLimitRecovery },
       } } })));
+    } else if (usageLimitRecovery !== undefined && request.method === 'GET' && request.url?.startsWith('/v2/sessions/')) {
+      const sessionId = decodeURIComponent(new URL(request.url, 'http://fixture.local').pathname.slice('/v2/sessions/'.length));
+      response.end(JSON.stringify({ session: createSessionRecordFixture({ id: sessionId,
+        latestTurnStatus: usageLimitIssue ? 'failed' : null, lastRuntimeIssue: usageLimitIssue,
+      }) }));
     } else if (isSettingsRead) {
       response.once('finish', () => server.emit('settings-read'));
       response.end(JSON.stringify(settingsResponse));
@@ -101,7 +107,9 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
   await once(server, 'listening');
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Missing Home loopback address');
-  return { url: `http://127.0.0.1:${address.port}`, requests, settingsResponse, settingsRead, server };
+  return { url: `http://127.0.0.1:${address.port}`, requests, settingsResponse, settingsRead, server,
+    setUsageLimitIssue: (issue: SessionRuntimeIssueV1 | null) => { usageLimitIssue = issue; },
+  };
 }
 
 describe('Session RPC owner Home Settings custody', () => {
@@ -235,10 +243,20 @@ describe('Session RPC owner Home Settings custody', () => {
         expect(owner.requests).toContainEqual({ method: 'GET', path: '/v1/machines/usage-owner-machine',
           authorization: `Bearer ${ownerCredentials.token}` });
         expect(focused.requests.filter(request => request.path?.startsWith('/v1/machines/'))).toEqual([]);
+        owner.setUsageLimitIssue(SessionRuntimeIssueV1Schema.parse({
+          v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit',
+          agentId: 'claude', agentTurnId: 'new-turn', occurredAt: 2_000,
+          usageLimit: { v: 1, resetAtMs: 8_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+        }));
+        await expect(check()).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_session_runtime_method' });
+        expect(owner.requests.filter(request => request.path?.startsWith('/v1/machines/'))).toHaveLength(1);
+        expect(owner.requests).toContainEqual({ method: 'GET', path: `/v2/sessions/${sessionId}`,
+          authorization: `Bearer ${ownerCredentials.token}` });
+        expect(focused.requests.filter(request => request.path?.startsWith('/v2/sessions/'))).toEqual([]);
         const ownerRequestCount = owner.requests.length;
         credentialsCurrent = false;
         await expect(check()).resolves.toMatchObject({ ok: false,
-          errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' });
+          errorCode: 'session_usage_limit_recovery_control_session_unavailable' });
         expect(owner.requests).toHaveLength(ownerRequestCount);
       });
     } finally { await registration.dispose(); }

@@ -13,6 +13,7 @@ import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1 } from '@happier-dev/protocol
 import {
   SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
   SessionUsageLimitRecoveryV1Schema,
+  SessionRuntimeIssueV1Schema,
 } from '@happier-dev/protocol';
 import { registerSessionHandlers } from './registerSessionHandlers';
 
@@ -38,6 +39,44 @@ function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcH
 }
 
 describe('registerSessionHandlers session controls', () => {
+  it.each(['current', 'new', 'no_issue', 'unavailable'] as const)(
+    'qualifies a live Check Now against the action-time public issue (%s)', async (observation) => {
+      const { registerSessionControlHandlers } = await import('./sessionControls');
+      const { handlers, registrar } = createRegistrar();
+      const checkRuntimeAuthUsageLimitRecovery = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+      const checkUsageLimitRecoveryNow = vi.fn(async () => ({ ok: true, status: 'ready' }));
+      registerSessionControlHandlers(registrar, {
+        isUsageLimitRecoveryEnabled: () => true,
+        getSessionMetadata: () => ({ path: '/repo', host: 'test-host', machineId: 'machine-1',
+          homeDir: '/tmp', happyHomeDir: '/tmp/.happier', happyLibDir: '/tmp/.happier/lib', happyToolsDir: '/tmp/.happier/tools',
+          sessionUsageLimitRecoveryV1: SessionUsageLimitRecoveryV1Schema.parse({
+            v: 1, status: 'waiting', issueFingerprint: 'usage-limit:codex:turn-1:1000:5000',
+            armedAtMs: 1_000, resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0,
+            maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+            runtimeAuthRecoveryAttemptId: 'old-attempt',
+          }),
+        }),
+        // This callback is the authenticated relay read boundary; routing below it stays real.
+        readCurrentUsageLimitRecoveryIssue: async () => {
+          if (observation === 'unavailable') throw new Error('relay unavailable');
+          if (observation === 'no_issue') return null;
+          return SessionRuntimeIssueV1Schema.parse({
+            v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit',
+            agentId: 'codex', agentTurnId: 'turn-1', occurredAt: observation === 'new' ? 2_000 : 1_000,
+            usageLimit: { v: 1, resetAtMs: 5_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+          });
+        },
+        sessionRuntimeControls: { checkUsageLimitRecoveryNow }, checkRuntimeAuthUsageLimitRecovery,
+      });
+      const result = await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({ sessionId: 'session-1' });
+      expect(result).toMatchObject(observation === 'unavailable'
+        ? { ok: false, status: 'session_unreachable' }
+        : { ok: true, status: observation === 'new' ? 'ready' : 'waiting' });
+      expect(checkRuntimeAuthUsageLimitRecovery.mock.calls.length).toBe(observation === 'current' || observation === 'no_issue' ? 1 : 0);
+      expect(checkUsageLimitRecoveryNow.mock.calls.length).toBe(observation === 'new' ? 1 : 0);
+    },
+  );
+
   it('routes a daemon-owned live check through daemon custody before native Agent recovery', async () => {
     const { registerSessionControlHandlers } = await import('./sessionControls');
     const { handlers, registrar } = createRegistrar();

@@ -1,3 +1,4 @@
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { isForegroundTurnRuntimeTranscriptEvent, isSessionScopedRuntimeTranscriptEvent } from '../events/runtimeTranscriptScope';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { resolveRuntimeCheckpointToolProtocol } from '@happier-dev/agents/session/controls/checkpoints';
@@ -615,12 +616,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         });
       }
     },
-    onAcceptedTurnFailure: async (event) => {
+    onAcceptedTurnFailure: async (event, issue) => {
       const details = event.diagnostic.details;
-      const classification = sanitizeConnectedServiceRuntimeFailureClassification(
+      const parsed = sanitizeConnectedServiceRuntimeFailureClassification(
         isRecord(details) ? details.runtimeAuthClassification : undefined,
       );
-      if (!classification || classification.connectedServiceRecovery === 'unavailable') return;
+      if (!parsed || parsed.connectedServiceRecovery === 'unavailable') return;
+      const classification = { ...parsed, runtimeIssueFingerprint: buildUsageLimitIssueFingerprint(issue) };
       try {
         const report = await reportConnectedServiceRuntimeAuthFailureToDaemon({
           sessionId: params.session.sessionId,

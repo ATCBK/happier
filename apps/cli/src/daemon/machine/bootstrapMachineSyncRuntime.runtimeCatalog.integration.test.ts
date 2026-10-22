@@ -71,7 +71,7 @@ import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient'
 import { createDeferred } from '@/testkit/async/deferred';
 import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { buildUsageLimitIssueFingerprint } from '@/session/usageLimitRecoveryControls/buildUsageLimitIssueFingerprint';
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';

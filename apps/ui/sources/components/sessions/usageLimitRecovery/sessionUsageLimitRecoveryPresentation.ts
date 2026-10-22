@@ -4,7 +4,11 @@ import type {
     SessionRuntimeIssueV1,
     SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
-import { SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import {
+    SessionUsageLimitRecoveryV1Schema,
+    buildUsageLimitIssueFingerprint,
+    isSessionUsageLimitRecoveryForIssue,
+} from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 import type { AgentInputStatusBadge, AgentInputStatusBadgeTone } from '@/components/sessions/agentInput/agentInputContracts';
 import { summarizeConnectedServiceQuotaRecoveryCredits } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
@@ -161,11 +165,6 @@ export function readSessionUsageLimitRecoveryFromMetadata(metadata: unknown): Se
     return parsed.success ? parsed.data : null;
 }
 
-function buildIssueFingerprint(issue: SessionRuntimeIssueV1): string {
-    const seq = typeof issue.sessionSeq === 'number' ? issue.sessionSeq : issue.occurredAt;
-    return `usage-limit:${issue.agentId ?? 'agent'}:${seq}`;
-}
-
 function resolveBadgeTone(waiting: boolean): AgentInputStatusBadgeTone {
     return waiting ? 'active' : 'warning';
 }
@@ -313,7 +312,7 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
             : recovery?.status === 'exhausted' ? 'session.usageLimitRecovery.overloadExhausted'
             : 'session.usageLimitRecovery.overloadStopped');
         return {
-            issueFingerprint: recovery?.issueFingerprint ?? buildIssueFingerprint(lastRuntimeIssue),
+            issueFingerprint: recovery?.issueFingerprint ?? buildUsageLimitIssueFingerprint(lastRuntimeIssue),
             armedAtMs: recovery?.armedAtMs ?? lastRuntimeIssue.occurredAt,
             waiting: active,
             banner: {
@@ -330,6 +329,10 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
                 testID: 'session-usageLimit-status-badge', tone: active && !offline ? 'active' : 'warning' },
         };
     }
+    if (params.recoveryState && !isSessionUsageLimitRecoveryForIssue(lastRuntimeIssue, params.recoveryState)) {
+        params = { ...params, recoveryState: null };
+    }
+    if (params.recoveryState?.status === 'cancelled') return null;
     // The failed turn may append its own terminal limit notice after the runtime issue. That
     // activity is part of the same failure, not proof that a later turn recovered.
     if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus !== 'failed') return null;
@@ -349,7 +352,7 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
         params.recoveryCredits ?? params.recoveryState?.recoveryCredits ?? null,
         typeof params.nowMs === 'number' && Number.isFinite(params.nowMs) ? params.nowMs : Date.now(),
     );
-    const issueFingerprint = params.recoveryState?.issueFingerprint ?? buildIssueFingerprint(lastRuntimeIssue);
+    const issueFingerprint = params.recoveryState?.issueFingerprint ?? buildUsageLimitIssueFingerprint(lastRuntimeIssue);
     const mode = resolvePrimaryAction({
         issue: lastRuntimeIssue,
         recoveryState: params.recoveryState,

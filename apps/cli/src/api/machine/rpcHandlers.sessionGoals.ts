@@ -1,3 +1,4 @@
+import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
 import { DaemonSessionGoalClearRequestV1Schema, DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV1Schema, SessionUsageLimitCheckNowRequestV1Schema, SessionUsageLimitConsumeResetCreditRequestV1Schema, DaemonSessionSkillCatalogListRequestV1Schema, SessionUsageLimitWaitResumeCancelRequestV1Schema, SessionUsageLimitWaitResumeEnableRequestV1Schema, DaemonSessionVendorPluginCatalogListRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 import { SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
@@ -197,7 +198,7 @@ async function resolveLocalUsageLimitContext(params: Readonly<{
     accountEncryptionMode: transport.accountEncryptionCurrentness.mode,
     rawSession: transport.rawSession,
   });
-  const daemonOwnedCheck = params.operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata) !== null;
+  const daemonOwnedCheck = params.operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata, readLatestUsageLimitFailureIssue(transport.rawSession)) !== null;
   if (transport.rawSession.active === true && !daemonOwnedCheck) {
     return {
       ok: false,

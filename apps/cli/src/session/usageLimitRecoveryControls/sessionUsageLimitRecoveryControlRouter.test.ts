@@ -4,6 +4,7 @@ import type { Credentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY } from '@happier-dev/protocol';
 import { buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptor } from '@/testkit/runtimeDescriptorFixtures';
+import { createBackoffSessionUsageLimitRecoveryControlAdapter } from './createBackoffSessionUsageLimitRecoveryControlAdapter';
 
 const stageUsageLimitRecoveryMutation = vi.fn(async () => undefined);
 
@@ -98,6 +99,33 @@ function createTemporaryThrottleIssue() {
 }
 
 describe('sessionUsageLimitRecoveryControlRouter', () => {
+  it('checks the current issue through its real adapter instead of an unrelated old runtime attempt', async () => {
+    const result = await routeSessionUsageLimitRecoveryCheckNow({
+      token: 'token', credentials: createCredentials(), sessionId: 'sess_issue_after_old_attempt',
+      rawSession: createRawSession({ id: 'sess_issue_after_old_attempt', latestTurnStatus: 'failed',
+        lastRuntimeIssue: createUsageLimitIssue({ resetAtMs: 1_700_000_160_000 }),
+      }),
+      metadata: createMetadata({ sessionUsageLimitRecoveryV1: {
+        v: 1, status: 'cancelled', issueFingerprint: 'old-attempt', runtimeAuthRecoveryAttemptId: 'old-attempt',
+        armedAtMs: 1_000, resetAtMs: 2_000, nextCheckAtMs: null, attemptCount: 0, maxAttempts: 5,
+        lastProbeError: null, selectedAuth: { kind: 'native' },
+      } }),
+      currentMachineId: 'machine-local', ctx: null, mode: 'plain', stageUsageLimitRecoveryMutation,
+      callLiveSessionRpc: async () => undefined,
+      resolveAdapter: async () => createBackoffSessionUsageLimitRecoveryControlAdapter({
+        providerId: 'codex', fallbackBackoffEnvKey: 'HAPPIER_TEST_FALLBACK_BACKOFF_MS',
+        maxAttemptsEnvKey: 'HAPPIER_TEST_MAX_ATTEMPTS', nowMs: () => 1_700_000_120_000, processEnv: {},
+      }),
+    });
+    expect(result).toMatchObject({ ok: true, status: 'waiting' });
+    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledWith(expect.objectContaining({
+      op: { kind: 'set', value: expect.objectContaining({
+        issueFingerprint: 'usage-limit:codex:turn-1:1700000000000:1700000160000',
+        resetAtMs: 1_700_000_160_000,
+      }) },
+    }));
+  });
+
   beforeEach(() => {
     stageUsageLimitRecoveryMutation.mockClear();
     mocks.fetchAccountMachineReplacements.mockReset();

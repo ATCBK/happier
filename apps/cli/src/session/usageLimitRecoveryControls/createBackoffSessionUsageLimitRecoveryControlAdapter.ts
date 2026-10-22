@@ -1,8 +1,8 @@
-import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, readSessionUsageLimitRecoveryForIssue } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import type { ConnectedAccountServiceKey, SessionRuntimeIssueV1, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 
 import { deriveUsageLimitRecoveryTiming } from './deriveUsageLimitRecoveryTiming';
-import { buildUsageLimitIssueFingerprint } from './buildUsageLimitIssueFingerprint';
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { resolveUsageLimitRecoverySelectedAuthFromIssue } from './usageLimitRecoverySelectedAuth';
 import { readLatestUsageLimitFailureIssue } from './readLatestUsageLimitFailureIssue';
 import type {
@@ -36,11 +36,6 @@ function readNonNegativeIntegerFromEnv(
   const raw = key && typeof env[key] === 'string' ? env[key]?.trim() : '';
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : defaultValue;
-}
-
-function readRecoveryIntent(metadata: MetadataRecord): SessionUsageLimitRecoveryV1 | null {
-  const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
-  return parsed.success ? parsed.data : null;
 }
 
 function isPendingRecoveryIntentStatus(status: SessionUsageLimitRecoveryV1['status']): boolean {
@@ -239,7 +234,9 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Se
         params,
         issueProviderFilter: options.issueProviderFilter ?? null,
       });
-      const persistedIntent = normalizePersistedNativeSelection(readRecoveryIntent(params.metadata), latestIssue, params.metadata);
+      const persistedIntent = normalizePersistedNativeSelection(readSessionUsageLimitRecoveryForIssue(
+        params.metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY], latestIssue, options.providerId,
+      ), latestIssue, params.metadata);
       if (isPersistedIntentSupersededByTurnCompletion({
         intent: persistedIntent,
         latestTurnStatus: params.rawSession.latestTurnStatus,

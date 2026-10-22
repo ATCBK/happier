@@ -13,6 +13,14 @@ const intent = {
 } satisfies RuntimeAuthRecoveryIntent;
 
 describe('daemon recovery intent metadata projection', () => {
+  it('projects the actual failure fingerprint separately from its runtime attempt', () => {
+    expect(buildRuntimeAuthUsageLimitRecoveryProjection({
+      ...intent, classification: { ...intent.classification, runtimeIssueFingerprint: 'usage-limit:codex:turn-b:2000:5000' },
+    })).toMatchObject({
+      issueFingerprint: 'usage-limit:codex:turn-b:2000:5000', runtimeAuthRecoveryAttemptId: 'attempt-1',
+    });
+  });
+
   it.each(['standard', 'custom', 'off'] as const)('preserves the scheduler prompt mode %s and exact wait timing', (resumePromptMode) => {
     expect(buildRuntimeAuthUsageLimitRecoveryProjection({ ...intent, resumePromptMode })).toMatchObject({
         status: 'waiting', nextCheckAtMs: 61000, resetAtMs: null,

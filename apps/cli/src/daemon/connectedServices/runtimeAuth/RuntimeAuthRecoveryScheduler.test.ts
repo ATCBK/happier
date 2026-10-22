@@ -159,6 +159,39 @@ function applyFailedResult(errorCode: string, diagnostics?: unknown): unknown {
 }
 
 describe('RuntimeAuthRecoveryScheduler', () => {
+  it.each([undefined, 'usage-limit:old'])('replaces an in-flight %s issue with freshly accepted evidence', async (previousFingerprint) => {
+    const { RuntimeAuthRecoveryScheduler } = await loadModule();
+    let release: () => void = () => {};
+    let started: () => void = () => {};
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const scheduler = new RuntimeAuthRecoveryScheduler({ nowMs: () => 1000,
+      recover: async () => { started(); await blocked; return { status: 'credential_refreshed' }; } });
+    let wake: Promise<unknown> | undefined;
+    try {
+      const older = await scheduler.beginClassifiedFailure({ reportId: 'runtime-auth-report:old', sessionId: 'issue-epoch', switchesThisTurn: 0,
+        classification: { ...usageLimitClassification(), ...(previousFingerprint ? { runtimeIssueFingerprint: previousFingerprint } : {}) } });
+      wake = scheduler.wake({ sessionId: 'issue-epoch', reason: 'manual' });
+      await running;
+      const newer = await scheduler.beginClassifiedFailure({ reportId: 'runtime-auth-report:new', sessionId: 'issue-epoch', switchesThisTurn: 0,
+        classification: { ...usageLimitClassification(), runtimeIssueFingerprint: 'usage-limit:new' } });
+      expect(newer.attemptId).not.toBe(older.attemptId);
+      release(); await wake;
+      expect(scheduler.read('issue-epoch')).toMatchObject({ attemptId: newer.attemptId, classification: { runtimeIssueFingerprint: 'usage-limit:new' } });
+    } finally { release(); await wake; scheduler.dispose(); }
+  });
+
+  it('retains accepted issue association when legacy observers repeat otherwise identical evidence', async () => {
+    const { RuntimeAuthRecoveryScheduler } = await loadModule();
+    const scheduler = new RuntimeAuthRecoveryScheduler({ nowMs: () => 1000, recover: async () => ({}) });
+    try {
+      const first = await scheduler.beginClassifiedFailure({ reportId: 'runtime-auth-report:first', sessionId: 'legacy-issue', switchesThisTurn: 0,
+        classification: { ...usageLimitClassification(), runtimeIssueFingerprint: 'usage-limit:current' } });
+      await scheduler.beginClassifiedFailure({ sessionId: 'legacy-issue', switchesThisTurn: 0, classification: usageLimitClassification() });
+      expect(scheduler.read('legacy-issue')).toMatchObject({ attemptId: first.attemptId, classification: { runtimeIssueFingerprint: 'usage-limit:current' } });
+    } finally { scheduler.dispose(); }
+  });
+
   it.each([
     { runtime: 'unchanged incumbent', targetRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa', staleRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb', adoptedRevision: null, timerProofWait: false },
     { runtime: 'fresh activation', targetRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb', staleRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa', adoptedRevision: null, timerProofWait: false },

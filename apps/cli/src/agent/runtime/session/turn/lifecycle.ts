@@ -24,7 +24,7 @@ type SessionTurnLifecycleParams = Readonly<{
     /** Exact native start cause, not the mutable active input of a later steer. */
     readStartingInput?: (turnId: string) => Readonly<{ inputId: string; turnId: string }> | null;
     onTurnFactsChanged?: (input: Readonly<{ turnId: string; facts: SessionTurnFactsV1 | null }>) => void;
-    onAcceptedTurnFailure?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>) => Promise<void>;
+    onAcceptedTurnFailure?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>, issue: SessionRuntimeIssueV1) => Promise<void>;
     onAcceptedTurnLifecycle?: (input: Readonly<{
         event: 'task_started' | 'assistant_message_end' | 'turn_cancelled';
         turnId: string;
@@ -135,7 +135,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                     // Mutation persistence is best-effort; runtime lifecycle observation must keep progressing.
                     return;
                 }
-                if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
+                if (failedEvent && mutation.action === 'fail') await params.onAcceptedTurnFailure?.(failedEvent, mutation.issue);
             });
             return;
         }
@@ -177,7 +177,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                 // A failed terminal clear safely retains the exact marker. Observed exit
                 // settlement can then close the stale turn idempotently.
             }
-            if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
+            if (failedEvent && mutation.action === 'fail') await params.onAcceptedTurnFailure?.(failedEvent, mutation.issue);
         });
     }
 
