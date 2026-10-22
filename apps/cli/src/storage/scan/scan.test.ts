@@ -60,6 +60,55 @@ describe('resident streamed disk index', () => {
             expect(MachineStorageScanGetResultV1Schema.parse(await runner.get()).state?.progress.usedBytes).toBe(2_000_000);
         } finally { await runner.dispose(); }
     });
+    it('keeps finished folders visible after abrupt cancellation, reopens them, and resumes only unfinished folders', async () => {
+        const volume = join(scratch, 'cancel-volume'); const root = join(volume, 'selected'); const finished = join(root, 'finished');
+        await mkdir(finished, { recursive: true }); await writeFile(join(finished, 'data'), Buffer.alloc(8192));
+        // Enough streamed metadata to cross stdout chunks; the priority folder
+        // completes while the rest is still being delivered by the real helper.
+        for (let directory = 0; directory < 128; directory++) {
+            const path = join(root, `pending-${directory}`); await mkdir(path);
+            for (let file = 0; file < 16; file++) await writeFile(join(path, `file-${file}`), 'data');
+        }
+        const activeServerDir = join(scratch, 'cancel-state');
+        const volumes = [{ id: 'cancel', mountPath: volume, usedBytes: 0 }];
+        const index = createStorageScanIndex({ activeServerDir });
+        let cancelling: Promise<unknown> | undefined; let requested = false;
+        const runner = createStorageScanRunner({ index, readVolumes: () => volumes, readEnabled: () => true,
+            readScanHints: () => ({ priorityHints: [finished] }),
+            fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }),
+            onChange: () => {
+                if (requested || !index.readNode(root)?.materialized || !index.readNode(finished)?.complete) return;
+                requested = true;
+                // Cancel between committed stdout batches, as a real RPC does.
+                // Cancelling from inside a batch would intentionally roll it back.
+                queueMicrotask(() => { cancelling = runner.cancel(index.state()!.scanId); });
+            } });
+        let reopenedRunner: ReturnType<typeof createStorageScanRunner> | undefined;
+        try {
+            await runner.initialize(); const first = await runner.start({ target: { folderPath: root } }); await runner.wait(first.scanId); await cancelling;
+            expect(requested).toBe(true);
+            const page = MachineStorageScanGetResultV1Schema.parse(await runner.get({ scanId: first.scanId, view: { tab: 'folders', depth: 1 } }));
+            const retained = index.readNode(finished)!;
+            expect(page.state?.status).toBe('cancelled');
+            expect(page.nodes.find(node => node.nodeId === finished)).toMatchObject({ size: { allocatedBytes: retained.node.size.allocatedBytes, atLeast: false } });
+            expect(retained).toMatchObject({ complete: true });
+            expect(retained.node.size.allocatedBytes).toBe((await measureNativeDisk({ paths: [finished] })).totalAllocatedBytes);
+            expect(page.root?.flags.atLeast).toBe(true);
+            expect(index.frontier('cancel')).not.toContain(root); expect(index.frontier('cancel')).not.toContain(finished);
+            await runner.dispose();
+            const reopened = createStorageScanIndex({ activeServerDir });
+            reopenedRunner = createStorageScanRunner({ index: reopened, readVolumes: () => volumes, readEnabled: () => true,
+                fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }) });
+            await reopenedRunner.initialize();
+            const restored = MachineStorageScanGetResultV1Schema.parse(await reopenedRunner.get({ scanId: first.scanId, view: { tab: 'folders', depth: 1 } }));
+            expect(restored.nodes.find(node => node.nodeId === finished)).toEqual(page.nodes.find(node => node.nodeId === finished));
+            const resumed = await reopenedRunner.start({ target: first.target, resume: true }); await reopenedRunner.wait(resumed.scanId);
+            expect(resumed.scanId).toBe(first.scanId); expect(reopened.state()?.status).toBe('complete');
+            expect(reopened.readNode(finished)?.scannedAt).toBe(retained.scannedAt);
+            expect(reopened.readNode(root)?.node.size.allocatedBytes).toBe((await measureNativeDisk({ paths: [root] })).totalAllocatedBytes);
+            expect(reopened.readNode(root)).toMatchObject({ complete: true, node: { flags: { atLeast: false } } });
+        } finally { await runner.dispose(); await reopenedRunner?.dispose(); }
+    });
     it.each(['open', 'close'] as const)('removes prior-projection scratch and ownership after a filesystem %s failure', async phase => {
         const root = join(scratch, `projection-${phase}`); const volumeId = `projection-${phase}`;
         const index = createStorageScanIndex({ activeServerDir: join(scratch, `projection-${phase}-state`) });

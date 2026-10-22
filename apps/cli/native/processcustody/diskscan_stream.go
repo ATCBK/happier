@@ -290,6 +290,9 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			return nil
 		}
 		record.Type = "dir-start"
+		// Until its subtree finishes this is a lower bound, even when the
+		// directory's own metadata was readable.
+		record.Flags.AtLeast = true
 		if err := emit(struct {
 			diskDirRecord
 			RelistOnly bool `json:"relistOnly"`
@@ -525,13 +528,23 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			if err != nil {
 				return err
 			}
-			visible := node.AllocatedBytes >= threshold || node.Kind == "mount" || node.Kind == "cloud-only" || node.Kind == "symlink"
+			// Keep folder navigation available while sizes are still arriving.
+			// The completed parent applies the ordinary fold threshold once its
+			// total is known; atomic/package descendants remain hidden below.
+			visible := directory.pending > 0 && (node.Kind == "folder" || node.Kind == "package") || node.AllocatedBytes >= threshold || node.Kind == "mount" || node.Kind == "cloud-only" || node.Kind == "symlink"
 			if !visible {
 				record.Folded.Items += node.Items
 				record.Folded.AllocatedBytes += node.AllocatedBytes
 				record.Folded.LogicalBytes += node.LogicalBytes
 			}
 			if publish && (record.atomicParent == "" && record.meta.kind != "package" && !record.Summarized || node.Kind == "file") {
+				if node.Kind == "folder" || node.Kind == "package" {
+					child, err := getDirectory(node.rawPath)
+					if err != nil {
+						return err
+					}
+					node.Flags.AtLeast = node.Flags.AtLeast || node.retained == nil && (child == nil || !child.record.Complete)
+				}
 				node.AllocationFacts = nil
 				return emit(diskEntryRecord{1, "dir-entry", record.ID, node, visible && record.atomicParent == "" && !record.Summarized && record.meta.kind != "package", node.retained != nil, false})
 			}
@@ -546,7 +559,9 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			return err
 		}
 		if publish && record.atomicParent == "" {
-			return emit(*record)
+			projected := *record
+			projected.Flags.AtLeast = projected.Flags.AtLeast || !projected.Complete
+			return emit(projected)
 		}
 		return nil
 	}
@@ -705,6 +720,14 @@ walk:
 				if err := directories.set(directory); err != nil {
 					return err
 				}
+				// Direct enumeration is useful before the last child finishes:
+				// persist its names and unfinished-child frontier now, so an abrupt
+				// cancellation keeps completed siblings and resumes only pending work.
+				if directory.pending > 0 {
+					if err := project(directory, true); err != nil {
+						return err
+					}
+				}
 				if err := finish(directory); err != nil {
 					return err
 				}
@@ -773,7 +796,11 @@ walk:
 				// coverage and chart records stay outside the summary boundary.
 				out := node
 				out.AllocationFacts = nil
-				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, out, false, node.retained != nil, node.retained == nil}); err != nil {
+				visible := isDirectory && !skip && !entry.meta.cloudOnly && record.atomicParent == "" && record.meta.kind != "package" && !record.Summarized
+				if visible && node.retained == nil {
+					out.Flags.AtLeast = true
+				}
+				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, out, visible, node.retained != nil, node.retained == nil}); err != nil {
 					return err
 				}
 				if err := observe(entry.path, node.AllocationFacts); err != nil {

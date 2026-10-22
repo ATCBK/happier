@@ -309,15 +309,27 @@ UPDATE nodes SET data=json_set(data,'$.size.allocatedBytes',allocated) WHERE kin
 DROP TABLE component_charges; DROP TABLE subtree_allocations; DROP TABLE subtree_metadata;`);
     });
 }
-function propagateIncompleteCoverage(db: SqliteDatabaseSync) {
+function reconcileCoverage(db: SqliteDatabaseSync, now: number) {
     transaction(db, () => {
         db.exec('CREATE TEMP TABLE incomplete_nodes(id TEXT PRIMARY KEY)');
         db.prepare(`INSERT INTO incomplete_nodes WITH RECURSIVE incomplete(id) AS (
-            SELECT n.id FROM nodes n WHERE n.kind='folder' AND NOT (${directoryEvidence('nodes', 'dirs', 'n.id', 'complete')})
+            SELECT n.id FROM nodes n LEFT JOIN dirs d ON d.id=n.id WHERE n.kind='folder' AND
+                CASE WHEN d.id IS NOT NULL THEN d.enumerated=0 OR (d.materialized=0 AND d.complete=0)
+                ELSE NOT (${directoryEvidence('nodes', 'dirs', 'n.id', 'complete')}) END
             UNION SELECT id FROM nodes WHERE kind NOT IN ('folder','small-items','hidden-space','reserved') AND json_extract(data,'$.flags.atLeast')=1
-            UNION SELECT ? WHERE ?<>'' AND NOT EXISTS(SELECT 1 FROM dirs WHERE id=? AND complete=1)
+            UNION SELECT parent FROM nodes WHERE retained=1 AND parent IS NOT NULL
+            UNION SELECT ? WHERE ?<>'' AND NOT EXISTS(SELECT 1 FROM nodes WHERE id=?)
             UNION SELECT n.parent FROM nodes n JOIN incomplete c ON c.id=n.id WHERE n.parent IS NOT NULL)
             SELECT id FROM incomplete`).run(metadata(db, 'rootParent') ?? '', metadata(db, 'rootParent') ?? '', metadata(db, 'root') ?? '');
+        // Resuming a child frontier does not re-enumerate its finished parents.
+        // Their persisted direct enumeration plus completed children now proves
+        // coverage; retained relists and incomplete atomic summaries do not.
+        db.prepare(`UPDATE dirs SET complete=1,scanned=? WHERE complete=0 AND enumerated=1 AND materialized>0
+            AND id NOT IN (SELECT id FROM incomplete_nodes)`).run(now);
+        db.exec(`UPDATE coverage SET complete=1,scanned=(SELECT scanned FROM dirs WHERE id=coverage.path)
+                WHERE complete=0 AND path IN (SELECT id FROM dirs WHERE complete=1);
+            UPDATE nodes SET data=json_set(data,'$.flags.atLeast',json('false'),'$.size.atLeast',json('false'))
+                WHERE kind='folder' AND id IN (SELECT id FROM dirs WHERE complete=1 AND id NOT IN (SELECT id FROM incomplete_nodes));`);
         db.exec(`UPDATE dirs SET complete=0 WHERE id IN (SELECT id FROM incomplete_nodes);
             UPDATE coverage SET complete=0 WHERE path IN (SELECT id FROM incomplete_nodes);
             UPDATE nodes SET data=json_set(data,'$.flags.atLeast',json('true'),'$.size.atLeast',json('true')) WHERE kind='folder' AND id IN (SELECT id FROM incomplete_nodes);
@@ -455,7 +467,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
         finish(volumeId: string, summary: NativeDiskScanSummary | DiskScanStateV1['status']) {
             const db = dbFor(volumeId); const state = readState(db); if (!state) return;
             reaggregate(db, now());
-            propagateIncompleteCoverage(db);
+            reconcileCoverage(db, now());
             state.status = typeof summary === 'string' ? summary : summary.termination === 'completed' ? 'complete' : summary.termination;
             state.finishedAt = now(); delete state.progress.currentPath; delete state.progress.stuckSinceMs;
             if (typeof summary !== 'string') {

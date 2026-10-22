@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,6 +75,65 @@ func (dir diskProgressBatchDirectory) entryBatches(ctx context.Context, visit fu
 	}
 	<-ctx.Done()
 	return backend, ctx.Err()
+}
+
+func TestDiskScanPublishesFinishedFoldersBeforeParentCompletes(t *testing.T) {
+	root := storageRenameTestRoot(t)
+	finished, blocked := filepath.Join(root, "finished"), filepath.Join(root, "blocked")
+	for _, path := range []string{finished, blocked} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(finished, "data"), bytes.Repeat([]byte("x"), 8192), 0600); err != nil {
+		t.Fatal(err)
+	}
+	originalOpen := diskOpenDirectoryForScan
+	release := make(chan struct{})
+	diskOpenDirectoryForScan = func(path string) (diskDirectory, error) {
+		dir, err := diskOpenRoot(path)
+		if err == nil && path == blocked {
+			return diskProgressBatchDirectory{dir, release}, nil
+		}
+		return dir, err
+	}
+	defer func() { diskOpenDirectoryForScan = originalOpen }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Stop accepting output after the useful folder completes. Like SIGKILL,
+	// this forbids a terminal replay from repairing
+	// an otherwise invisible completed folder after the cancellation boundary.
+	stopped := errors.New("fixture transport closed")
+	visible, enumerated, completed := false, false, false
+	err := diskScanStream(ctx, &diskControl{skipped: map[string]bool{}, changed: make(chan struct{}, 1)},
+		diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t), DrawableNodes: 203}, func(value any) error {
+			switch record := value.(type) {
+			case diskEntryRecord:
+				if record.Parent == diskPathID(root) && record.Node.ID == diskPathID(finished) {
+					visible = record.Visible
+				}
+			case diskDirRecord:
+				if record.ID == diskPathID(root) && record.Enumerated && !record.Complete {
+					enumerated = true
+					if !record.Flags.AtLeast {
+						t.Error("partial root size is not marked at least")
+					}
+				}
+				if record.ID == diskPathID(finished) && record.Complete {
+					completed = true
+					if record.AllocatedBytes < 8192 || record.Flags.AtLeast {
+						t.Errorf("finished size is not usable: %#v", record)
+					}
+				}
+			}
+			if _, progress := value.(diskProgress); progress && completed {
+				return stopped
+			}
+			return nil
+		})
+	if !errors.Is(err, stopped) || !visible || !enumerated || !completed {
+		t.Fatalf("finished folder unavailable before parent completion: visible=%v enumerated=%v completed=%v err=%v", visible, enumerated, completed, err)
+	}
 }
 
 func TestDiskScanProgressClearsStallOnCompletedMetadataBatch(t *testing.T) {
