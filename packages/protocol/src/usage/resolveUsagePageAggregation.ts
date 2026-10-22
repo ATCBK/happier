@@ -19,6 +19,7 @@ import { repriceUsageAnalyticsResponse } from './usageCost.js';
 import type { UsageModelPriceOverridesV1 } from './usageModelPriceCatalog.js';
 import { projectUsagePlanInsights, UsagePlanInsightsSchema } from './usagePlanInsights.js';
 import { hasSameUsageQueryWorkEvidenceMembership } from './usageWorkEvidence.js';
+import { projectUsageAgentAccountingCalendar, type UsageAgentAccountingCalendar } from './usageAgentCalendar.js';
 export type { UsagePlanInsights } from './usagePlanInsights.js';
 
 /** Source transport currentness is separate from accounting completeness. */
@@ -254,6 +255,8 @@ export type UsageAccountingSourceSnapshot = Readonly<{
     costBasis: UsageQuery['costBasis'];
     value: UsageAnalyticsQueryResponse;
   }>;
+  /** Accounting-only calendar for this admitted response and numeric query basis; never serialized. */
+  agentCalendarAccounting?: UsageAgentAccountingCalendar;
 }>;
 
 /** Reconcile one retained accounting snapshot at its existing owner, before independent source publications. */
@@ -275,6 +278,30 @@ export function projectUsageAccountingSnapshotPrices(snapshot: UsageAccountingSo
   }
   return { ...snapshot, priceProjection: { input: value, overrides, costBasis: snapshot.query.costBasis,
     value: repriceUsageAnalyticsResponse(value, value.priceCatalog, overrides, snapshot.query.costBasis) } };
+}
+
+/** Carry the admitted accounting reduction through this read's independent source publications. */
+export function projectUsageAccountingSnapshotCalendar(snapshot: UsageAccountingSourceSnapshot,
+  siblings?: Iterable<UsageAccountingSourceSnapshot>,
+  witnessedPeriod?: Readonly<{ startMs: number; endMs: number }>): UsageAccountingSourceSnapshot {
+  const query = snapshot.query;
+  const value = snapshot.priceProjection && snapshot.priceProjection.input === snapshot.value
+    && snapshot.priceProjection.costBasis === query.costBasis ? snapshot.priceProjection.value : snapshot.value;
+  const range = witnessedPeriod ?? ('relative' in query.period ? readBoundedAccountingPeriod(value) ?? snapshot.period : snapshot.period ?? query.period);
+  if (!value || !query.includeAccounting || !query.includeActivity && !query.includeModelTimeline
+    || !canRetainUsageReadFailure(snapshot.errorCode) || range?.endMs === undefined) return snapshot.agentCalendarAccounting
+    ? { ...snapshot, agentCalendarAccounting: undefined } : snapshot;
+  const period = { startMs: range.startMs ?? 0, endMs: range.endMs };
+  if (period.endMs < period.startMs) return snapshot.agentCalendarAccounting ? { ...snapshot, agentCalendarAccounting: undefined } : snapshot;
+  const matches = (projection: UsageAgentAccountingCalendar | undefined) => projection?.accounting === value
+    && projection.period.startMs === period.startMs && projection.period.endMs === period.endMs
+    && projection.timeZoneOffsetMinutes === query.timeZoneOffsetMinutes && projection.costMode === query.costBasis;
+  if (matches(snapshot.agentCalendarAccounting)) return snapshot;
+  for (const sibling of siblings ?? []) {
+    if (matches(sibling.agentCalendarAccounting)) return { ...snapshot, agentCalendarAccounting: sibling.agentCalendarAccounting };
+  }
+  return { ...snapshot, agentCalendarAccounting: projectUsageAgentAccountingCalendar({ accounting: value, period,
+    timeZoneOffsetMinutes: query.timeZoneOffsetMinutes, costMode: query.costBasis }) };
 }
 
 /** A successful read retains producer observation time, never the adapter's clock. */
@@ -505,9 +532,15 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     // relabelled as a different bounded query or filled forward to this clock.
     const startMs = period.startMs ?? 0;
     const endMs = period.endMs ?? detailSnapshot?.asOfMs;
+    const calendarSnapshot = snapshot && endMs !== undefined && endMs >= startMs
+      ? projectUsageAccountingSnapshotCalendar(snapshot, accounting.values(), { startMs, endMs }) : undefined;
+    const currentSnapshot = accounting.get(key);
+    if (calendarSnapshot && currentSnapshot && currentSnapshot.value === observed?.value) accounting.set(key,
+      { ...currentSnapshot, agentCalendarAccounting: calendarSnapshot.agentCalendarAccounting });
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
       accounting: snapshot?.value, detail: observedDetail,
+      accountingCalendar: calendarSnapshot?.agentCalendarAccounting,
       includeSteering: query.includeTranscriptEvidence,
       includeAgentCalendar: query.includeActivity || query.includeModelTimeline,
       costMode: query.costBasis,

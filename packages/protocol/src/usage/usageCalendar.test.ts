@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { UsageAnalyticsContribution, UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
-import { projectUsageAgentCalendar, UsageAgentCalendarSchema } from './usageAgentCalendar.js';
+import { projectUsageAgentAccountingCalendar, projectUsageAgentCalendar, UsageAgentCalendarSchema } from './usageAgentCalendar.js';
 import { projectUsageWorkIntervals } from './usageWorkIntervals.js';
+import { aggregateUsageContributionCosts, resolveUsageContributionCosts } from './usageAggregation.js';
+import { resolveUsageCostBasis } from './usageCostFacts.js';
 
 const ms = (value: string) => Date.parse(value);
 const period = { startMs: ms('2026-10-18T21:30Z'), endMs: ms('2026-10-20T23:00Z') };
@@ -20,6 +22,99 @@ function accounting(contributions: UsageAnalyticsContribution[]): UsageAnalytics
 }
 
 describe('projectUsageAgentCalendar', () => {
+    it('keeps carried and direct projections identical across source coverage, cost modes and refused private evidence', () => {
+        const intervals = projectUsageWorkIntervals({ period, timeZoneOffsetMinutes: 120, facts: [
+            { workId: 'shared', agentId: 'a', machineId: null, evidenceId: 'busy', kind: 'busy',
+                startMs: period.startMs, endMs: period.startMs + 3_600_000 },
+            { workId: 'disjoint', agentId: null, machineId: null, evidenceId: 'busy', kind: 'busy',
+                startMs: period.startMs + 300_000, endMs: period.startMs + 1_800_000 },
+            { workId: 'wait', agentId: 'wait-only', machineId: null, evidenceId: 'wait', kind: 'permission_wait',
+                startMs: period.startMs, endMs: period.endMs },
+        ] });
+        for (const costMode of ['auto', 'reported', 'estimated', 'api_equivalent'] as const) {
+            const left = row('first', 'a', 3, '2026-10-18T21:45Z');
+            const right = row('second', 'b', 3, '2026-10-20T00:00Z');
+            right.cost = { reportedUsd: 1, estimatedUsd: 2, apiEquivalentUsd: 3, currency: 'EUR', costSource: 'provider_reported' };
+            const complete = accounting([left, right]);
+            complete.activity = { weekdayHourBuckets: [{ weekday: 1, hour: 0, eventCount: 3 }] };
+            const partial = { ...complete, coverage: { ...complete.coverage!, range: { complete: false } } };
+            for (const data of [complete, partial, accounting([]), undefined]) {
+                const accountingCalendar = projectUsageAgentAccountingCalendar({ period, timeZoneOffsetMinutes: 120, accounting: data, costMode });
+                for (const detailStatus of ['available', 'partial', 'unknown'] as const) {
+                    const input = { period, timeZoneOffsetMinutes: 120, accounting: data, costMode, detailStatus, intervals,
+                        steering: { inputsObserved: true, coverage: 'partial' as const, hourly: [
+                            { agentId: 'steer-only', date: '2026-10-19', weekday: 1, hour: 0, steeringCount: null },
+                        ] }, nightHours: { startHour: 0, endHour: 6 } };
+                    expect(projectUsageAgentCalendar({ ...input, accountingCalendar })).toEqual(projectUsageAgentCalendar(input));
+                    const mismatched = { ...input, intervals: { ...intervals, period: { ...period, endMs: period.endMs + 1 } } };
+                    expect(projectUsageAgentCalendar({ ...mismatched, accountingCalendar })).toEqual(projectUsageAgentCalendar(mismatched));
+                }
+            }
+        }
+    });
+    it('reuses a carried accounting projection while composing distinct private lanes and configured night windows', () => {
+        let costReads = 0;
+        const value = row('one', 'a', 5);
+        const cost = value.cost;
+        Object.defineProperty(value, 'cost', { enumerable: true, get() { costReads++; return cost; } });
+        const data = accounting([value]);
+        data.activity = { weekdayHourBuckets: [{ weekday: 1, hour: 0, eventCount: 1 }, { weekday: 1, hour: 12, eventCount: 3 }] };
+        expect(projectUsageAgentAccountingCalendar).toBeTypeOf('function');
+        const accountingCalendar = projectUsageAgentAccountingCalendar({ period, timeZoneOffsetMinutes: 0, accounting: data, costMode: 'auto' });
+        const afterPreparation = costReads;
+        expect(projectUsageAgentCalendar({ period, timeZoneOffsetMinutes: 0, accounting: data, accountingCalendar })).toBe(accountingCalendar.projection);
+        const intervals = projectUsageWorkIntervals({ period, timeZoneOffsetMinutes: 0, facts: [
+            { workId: 'busy-b', agentId: 'b', machineId: null, evidenceId: 'busy', kind: 'busy',
+                startMs: ms('2026-10-19T01:00Z'), endMs: ms('2026-10-19T02:00Z') },
+        ] });
+        const input = { period, timeZoneOffsetMinutes: 0, accounting: data, intervals, detailStatus: 'available' as const,
+            nightHours: { startHour: 0, endHour: 1 }, steering: { inputsObserved: true, coverage: 'complete_for_supplied_facts' as const,
+                hourly: [{ agentId: null, date: '2026-10-19', weekday: 1, hour: 1, steeringCount: 2 }] } };
+        const composed = projectUsageAgentCalendar({ ...input, accountingCalendar });
+        expect(costReads).toBe(afterPreparation);
+        expect(composed).toEqual(projectUsageAgentCalendar(input));
+        expect(composed.periodSummary.agents.map(agent => agent.agentId)).toEqual([null, 'a', 'b']);
+        expect(composed.dayNightActivity?.nightShare).toBe(0.25);
+        const otherWindow = projectUsageAgentCalendar({ ...input, accountingCalendar, nightHours: { startHour: 12, endHour: 13 } });
+        expect(otherWindow.dayNightActivity?.nightShare).toBe(0.75);
+        const changed = accounting([row('new', 'c', 9)]);
+        expect(projectUsageAgentCalendar({ period, timeZoneOffsetMinutes: 0, accounting: changed, accountingCalendar }).periodSummary.totals.tokens).toBe(9);
+    });
+    it('resolves monetary overlap once for the full population instead of repeating it for each calendar partition', () => {
+        let scopeReads = 0;
+        const rows = Array.from({ length: 240 }, (_, index) => {
+            const value = row(String(index), index % 2 ? 'a' : 'b', 1,
+                new Date(period.startMs + index * 600_000).toISOString());
+            Object.defineProperty(value.cost, 'reportedTotalContributionIds', { enumerable: true, get() { scopeReads++; return undefined; } });
+            return value;
+        });
+        const result = projectUsageAgentCalendar({ period, timeZoneOffsetMinutes: 120, accounting: accounting(rows) });
+        expect(result.periodSummary.totals.cost?.amountUsd).toBeCloseTo(24);
+        // The overlap owner reads each row's scope once during the full-population
+        // selection. Calendar partitioning must not repeat that owner operation.
+        expect(scopeReads).toBeLessThanOrEqual(rows.length * 2);
+    });
+    it.each(['auto', 'reported', 'estimated', 'api_equivalent'] as const)('preserves %s monetary selection, overlap and provenance in every calendar grouping', costMode => {
+        const covered = row('covered', 'a', 2, '2026-10-18T23:30Z');
+        covered.cost = { reportedUsd: 0, estimatedUsd: 2, apiEquivalentUsd: 3, pricingSource: 'catalog:test',
+            costSource: 'pricing_estimate', currency: 'USD', reportedTotalId: 'report' };
+        const report = row('report', 'a', 0, '2026-10-19T00:30Z');
+        report.cost = { reportedUsd: 7, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported', reportedTotalContributionIds: ['covered'] };
+        const other = row('other', null, 3, '2026-10-19T00:45Z');
+        other.cost = { reportedUsd: 0, estimatedUsd: 1, apiEquivalentUsd: 4, pricingSource: 'catalog:test', currency: 'USD', costSource: 'pricing_estimate' };
+        const rows = [covered, report, other];
+        const costs = resolveUsageContributionCosts(rows, costMode);
+        const resolved = rows.map((value, index) => ({ ...value, cost: costs[index]! }));
+        const expected = (selected: typeof rows) => selected.length ? resolveUsageCostBasis(aggregateUsageContributionCosts(selected, costMode), costMode) : null;
+        const result = projectUsageAgentCalendar({ period, timeZoneOffsetMinutes: 0, accounting: accounting(rows), costMode });
+        for (const bucket of [...result.days, ...result.weeks, ...result.hours]) {
+            const selected = resolved.filter(value => value.observedAtMs >= bucket.startMs && value.observedAtMs < bucket.endMs);
+            expect(bucket.totals.cost).toEqual(expected(selected));
+            for (const agent of bucket.agents) expect(agent.metrics.cost).toEqual(expected(selected.filter(value => value.agentId === agent.agentId)));
+        }
+        expect(result.periodSummary.totals.cost).toEqual(expected(resolved));
+        for (const cell of result.hourOfDayBuckets) expect(cell.totals.cost).toEqual(expected(resolved.filter(value => new Date(value.observedAtMs).getUTCHours() === cell.hour)));
+    });
     it('projects full-period distinct facts and Agent shares over complete accounting including unknown attribution', () => {
         const range = { startMs: ms('2026-10-19T00:00Z'), endMs: ms('2026-10-21T00:00Z') };
         const rows = [row('a-one', 'a', 6, '2026-10-19T00:30Z'), row('a-two', 'a', 6, '2026-10-20T00:30Z'),

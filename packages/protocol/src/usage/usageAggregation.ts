@@ -31,6 +31,38 @@ export type AggregatedUsageCost = UsageObservationCost & { [usageCostAggregation
     mode: UsageCostMode; available: boolean; selected?: UsageSelectedCostBasis; covered?: boolean;
 } };
 
+/** Selected monetary state, after population-level overlap has been resolved.
+ * Available with no selection is the empty/covered identity; unavailable is sticky.
+ */
+export interface UsageSelectedCostAccumulator {
+    available: boolean;
+    selected: UsageSelectedCostBasis | null;
+}
+
+export function createEmptyUsageSelectedCost(): UsageSelectedCostAccumulator {
+    return { available: true, selected: null };
+}
+
+export function selectResolvedUsageCost(cost: UsageObservationCost, mode: UsageCostMode): UsageSelectedCostAccumulator {
+    if ((cost as AggregatedUsageCost)[usageCostAggregationBasis]?.covered) return createEmptyUsageSelectedCost();
+    const selected = resolveUsageCostBasis(cost, mode);
+    return { available: selected !== null, selected };
+}
+
+/** Merge already-selected partitions without re-reading raw facts or resolving overlap. */
+export function mergeUsageSelectedCosts(left: UsageSelectedCostAccumulator, right: UsageSelectedCostAccumulator,
+    mode: UsageCostMode): UsageSelectedCostAccumulator {
+    if (!left.available || !right.available) return { available: false, selected: null };
+    if (!left.selected) return right;
+    if (!right.selected) return left;
+    const a = left.selected;
+    const b = right.selected;
+    if (a.currency !== b.currency || mode !== 'auto' && a.kind !== b.kind) return { available: false, selected: null };
+    return { available: true, selected: { kind: a.kind === b.kind ? a.kind : 'mixed', currency: a.currency,
+        amountUsd: a.amountUsd + b.amountUsd,
+        source: a.kind === b.kind && a.source === b.source ? a.source : 'best_available' } };
+}
+
 /** Resolve whole-total overlap only within the actual selected population, including bucket/Work subsets. */
 export function resolveUsageContributionCosts(rows: readonly { id?: string; cost: UsageObservationCost }[], mode: UsageCostMode): UsageObservationCost[] {
     if (mode === 'estimated') return rows.map(row => {
@@ -79,21 +111,15 @@ export function addUsageCostForMode(left: UsageObservationCost, right: UsageObse
         apiEquivalentUsd, pricingSource: leftEmpty ? right.pricingSource
             : left.pricingSource === right.pricingSource ? left.pricingSource : 'effective_model_prices',
     } : {}) };
-    if ((right as AggregatedUsageCost)[usageCostAggregationBasis]?.covered) return { ...combined,
-        ...(leftBasis ? { effectiveUsd: leftBasis.amountUsd } : {}),
-        [usageCostAggregationBasis]: { mode, available: leftEmpty || leftBasis !== null,
-            ...(leftBasis ? { selected: leftBasis } : {}) } };
-    if (leftEmpty && rightBasis) return { ...combined, currency: right.currency,
-        costSource: noApiPopulation ? right.costSource : combined.costSource,
-        effectiveUsd: rightBasis.amountUsd, [usageCostAggregationBasis]: { mode, available: true, selected: rightBasis } };
-    if (leftBasis && rightBasis && (mode === 'auto' || leftBasis.kind === rightBasis.kind) && leftBasis.currency === rightBasis.currency) {
-        const selected: UsageSelectedCostBasis = { kind: leftBasis.kind === rightBasis.kind ? leftBasis.kind : 'mixed',
-            currency: leftBasis.currency, amountUsd: leftBasis.amountUsd + rightBasis.amountUsd,
-            source: leftBasis.kind === rightBasis.kind && leftBasis.source === rightBasis.source ? leftBasis.source : 'best_available' };
-        return { ...combined, effectiveUsd: selected.amountUsd,
-            [usageCostAggregationBasis]: { mode, available: true, selected } };
-    }
-    return { ...combined, costSource: 'none', [usageCostAggregationBasis]: { mode, available: false } };
+    const rightCovered = (right as AggregatedUsageCost)[usageCostAggregationBasis]?.covered === true;
+    const merged = mergeUsageSelectedCosts({ available: leftEmpty || leftBasis !== null, selected: leftBasis },
+        { available: rightCovered || rightBasis !== null, selected: rightCovered ? null : rightBasis }, mode);
+    return { ...combined,
+        ...(leftEmpty && rightBasis && !rightCovered ? { currency: right.currency,
+            costSource: noApiPopulation ? right.costSource : combined.costSource } : {}),
+        ...(!merged.available ? { costSource: 'none' as const } : {}),
+        ...(merged.selected ? { effectiveUsd: merged.selected.amountUsd } : {}),
+        [usageCostAggregationBasis]: { mode, available: merged.available, ...(merged.selected ? { selected: merged.selected } : {}) } };
 }
 
 export function withEffectiveUsageCost(cost: UsageObservationCost, mode: UsageCostMode): UsageObservationCost {

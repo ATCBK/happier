@@ -60,6 +60,7 @@ import { evaluateUsageCoach } from '@happier-dev/protocol/usage/coach/evaluateUs
 import { UsageMcpBindingUsageSchema } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { USAGE_COACH_DETECTOR_IDS } from '@happier-dev/protocol/usage/coach/coachFinding';
 
 const scmTransport = vi.hoisted(() => vi.fn());
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -140,6 +141,75 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('publishes accounting calendars through the live Resource while sibling private evidence is held and refused', async () => {
+    const session = createDeferred<Response>();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json({ ...value, contributions: [workContribution] });
+      if (request.path === '/v2/sessions/work-session') return session.promise;
+      return undefined;
+    });
+    const summary = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeActivity: true,
+      includeWorkEvidence: false, includeSessionEvidence: false, includeTranscriptEvidence: false });
+    const detail = normalizeUsageQuery({ ...summary, includeSessionEvidence: true });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
+      input: projectNativeJsonValueForTransport({ queries: [summary, detail] }) });
+    const release = entry.subscribe(() => {}, false);
+    const slice = (query: typeof summary) => {
+      const content = entry.getSnapshot().value;
+      return content ? decodeUsageQueryResource(content).results.find(row => row.key === getUsageQueryKey(query)) : undefined;
+    };
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path === '/v2/sessions/work-session')).toBe(true);
+      await expect.poll(() => slice(summary)?.howYouWork?.agentCalendar?.periodSummary.totals.tokens).toBe(15);
+      expect(slice(summary)?.pending).toBe(false);
+      expect(slice(detail)?.pending).toBe(true);
+      session.resolve(Response.json({ error: 'denied' }, { status: 403 }));
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(slice(summary)?.howYouWork?.agentCalendar?.periodSummary.totals.tokens).toBe(15);
+      expect(slice(detail)?.howYouWork?.agentCalendar?.periodSummary.totals.busyMs).toBeNull();
+      expect(slice(detail)?.pending).toBe(false);
+      expect(entry.getSnapshot().error).toBeUndefined();
+    } finally { session.resolve(Response.json({ error: 'denied' }, { status: 403 })); release(); }
+  });
+
+  it('keeps the accounting calendar stable while a sibling private read progresses and is refused', async () => {
+    const session = createDeferred<Response>();
+    const settings = settingsParse({ usageCoachPreferencesV1: { disabledChecks: [...USAGE_COACH_DETECTOR_IDS] } });
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json({ ...value, contributions: [workContribution] });
+      if (request.path === '/v2/sessions/work-session') return session.promise;
+      return undefined;
+    }, undefined, settings);
+    saveAccountSettings(captured.accountLifetime.scope, settings, 1);
+    storage.setState({ settingsScope: captured.accountLifetime.scope, settings });
+    const summary = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeActivity: true,
+      includeWorkEvidence: false, includeSessionEvidence: false, includeTranscriptEvidence: false });
+    const detail = normalizeUsageQuery({ ...summary, includeSessionEvidence: true });
+    const publications: Awaited<ReturnType<typeof readUiUsageQueryBatch>>[] = [];
+    const reading = readUiUsageQueryBatch(captured, { queries: [summary, detail] }, undefined, undefined,
+      { onProgress: batch => { publications.push(batch); } });
+    let initial: NonNullable<Awaited<ReturnType<typeof readUiUsageQueryBatch>>['results'][number]['howYouWork']>['agentCalendar'];
+    let observationReads = 0;
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path === '/v2/sessions/work-session')).toBe(true);
+      await expect.poll(() => publications.some(batch => batch.results.find(slice => slice.key === getUsageQueryKey(summary))
+        ?.howYouWork?.agentCalendar?.periodSummary.totals.tokens === 15)).toBe(true);
+      initial = publications.find(batch => batch.results.find(slice => slice.key === getUsageQueryKey(summary))
+        ?.howYouWork?.agentCalendar?.periodSummary.totals.tokens === 15)!.results.find(slice => slice.key === getUsageQueryKey(summary))!.howYouWork!.agentCalendar;
+      const admitted = publications.at(-1)!.results.find(slice => slice.key === getUsageQueryKey(summary))!.accounting!.contributions![0]!;
+      Object.defineProperty(admitted, 'observedAtMs', { enumerable: true, get: () => { observationReads++; return 500; } });
+    } finally { session.resolve(Response.json({ error: 'denied' }, { status: 403 })); }
+    const final = await reading;
+    const summarySlice = final.results.find(slice => slice.key === getUsageQueryKey(summary))!;
+    const detailSlice = final.results.find(slice => slice.key === getUsageQueryKey(detail))!;
+    expect(summarySlice.howYouWork!.agentCalendar).toBe(initial);
+    expect(observationReads, 'private-source progress must not fold the admitted accounting population again').toBe(0);
+    expect(detailSlice.howYouWork!.agentCalendar!.periodSummary.totals.tokens).toBe(15);
+    expect(detailSlice.howYouWork!.agentCalendar!.periodSummary.totals.busyMs).toBeNull();
+    expect(summarySlice.pending).toBe(false);
+    expect(UsageQueryBatchResultSchema.safeParse(final).success).toBe(true);
+  });
+
   it('retains Work after repeated HTTP failures while real SCM failure normalization still quarantines denial', async () => {
     let status = 200;
     let hasEvidence = true;

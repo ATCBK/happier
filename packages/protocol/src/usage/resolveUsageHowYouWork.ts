@@ -8,7 +8,7 @@ import { isUsageNightHour, projectUsageWorkIntervals, selectUsageWorkPermissions
     type UsageWorkPermissionFact, type UsageWorkIntervalsInput } from './usageWorkIntervals.js';
 import { projectUsageSteering, UsageSteeringSummarySchema } from './usageSteering.js';
 import { resolveUsageCollaboration, UsageCollaborationSummarySchema, type UsageCollaborationFact } from './usageCollaboration.js';
-import { projectUsageAgentCalendar, UsageAgentCalendarSchema } from './usageAgentCalendar.js';
+import { projectUsageAgentCalendar, UsageAgentCalendarSchema, type UsageAgentAccountingCalendar } from './usageAgentCalendar.js';
 import type { UsageCostMode } from './usageCostFacts.js';
 import type { UsageCoachReadEvidence } from './coach/coachFinding.js';
 
@@ -97,6 +97,7 @@ export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 export function resolveUsageHowYouWork(input: Readonly<{
     period: UsageWorkIntervalsInput['period']; timeZoneOffsetMinutes: number; nowMs?: number;
     accounting?: UsageAnalyticsQueryResponse; detail?: UsageHowYouWorkDetailInput; nightHours?: UsageWorkIntervalsInput['nightHours'];
+    accountingCalendar?: UsageAgentAccountingCalendar;
     /** The query's existing transcript demand; interval-only charts do not shape intervention grids. */
     includeSteering?: boolean;
     /** Existing accounting Activity/timeline demand, not another query or cache. */
@@ -209,6 +210,7 @@ export function resolveUsageHowYouWork(input: Readonly<{
     }
     if (input.includeAgentCalendar !== false) result.agentCalendar = projectUsageAgentCalendar({
         period: input.period, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, accounting: input.accounting,
+        accountingCalendar: input.accountingCalendar,
         intervals, detailStatus: result.detailStatus, steering: result.steering, nightHours, costMode: input.costMode,
     });
     return result;

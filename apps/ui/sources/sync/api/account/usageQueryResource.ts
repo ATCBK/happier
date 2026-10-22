@@ -3,7 +3,7 @@ import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/pl
 import { createCanonicalJsonSigningInput } from '@happier-dev/plugin-sdk';
 import { getUsageQueryBatchKey, getUsageQueryKey, normalizeUsageQueryBatchInput, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest, type UsageQuery, type UsageQueryBatchInput } from '@happier-dev/protocol/inputs/usageQuery';
 import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
-import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, canRetainUsageReadFailure, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, projectUsageAccountingSnapshotCalendar, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, canRetainUsageReadFailure, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { ConnectedServicePoolSelectionGetRequestV1Schema, type ConnectedServicePoolSelectionGetRequestV1, type ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
@@ -783,6 +783,8 @@ export async function readUiUsageQueryBatch(
 ): Promise<UsageQueryBatchResult> {
     requireCurrent(context, signal);
     const { queries } = normalizeUsageQueryBatchInput(input);
+    const calendarQueryKeys = new Set(queries.filter(query => query.includeAccounting && (query.includeActivity || query.includeModelTimeline))
+        .map(query => getUsageQueryKey(query)));
     const accountingNowMs = Date.now();
     const reads = resolveUsagePageAccountingReads(queries, accountingNowMs);
     const requests = reads.map(read => read.query);
@@ -844,10 +846,12 @@ export async function readUiUsageQueryBatch(
         const settingsState = readRegisteredStorageState();
         const accountSettings = readAccountSettingsForScope({ scope: context.accountLifetime.scope,
             focusedScope: settingsState?.settingsScope, focusedSettings: settingsState?.settings ?? settingsDefaults });
-        // Price belongs to the admitted A response, not each quota/selection publication.
-        // Keep its derived value in this read's existing per-query snapshot map.
-        for (const [key, snapshot] of accounting) accounting.set(key,
-            projectUsageAccountingSnapshotPrices(snapshot, accountSettings.usageModelPriceOverridesV1, accounting.values()));
+        // Accounting reductions belong to the admitted A response, not each quota/selection publication.
+        // Keep derived values in this read's existing per-query snapshot map.
+        for (const [key, snapshot] of accounting) {
+            const priced = projectUsageAccountingSnapshotPrices(snapshot, accountSettings.usageModelPriceOverridesV1, accounting.values());
+            accounting.set(key, calendarQueryKeys.has(key) ? projectUsageAccountingSnapshotCalendar(priced, accounting.values()) : priced);
+        }
         const sourceLocations = Object.values(readOpenedQuotaScope(context)?.state.machines ?? {}).flatMap(machine => {
             const displayLocation = readMachineName(machine);
             return displayLocation ? [{ machineId: machine.id, displayLocation }] : [];

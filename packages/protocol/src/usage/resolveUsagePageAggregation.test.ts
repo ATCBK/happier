@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery, resolveUsageQueryPeriod } from '../inputs/usageQuery.js';
 import { UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
-import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, projectUsageAccountingSnapshotPrices, retainUsageQueryResultReferences, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
+import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, projectUsageAccountingSnapshotPrices, projectUsageAccountingSnapshotCalendar, retainUsageQueryResultReferences, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
 import type { UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsagePrimitives.js';
 import { ConnectedServiceQuotaGetResultV1Schema } from '../connect/providerAccountUsageHistorySchemasV1.js';
@@ -17,6 +17,59 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('shares an accounting-only calendar across sibling presentation and evidence flags without reusing private detail', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 1_000 }, includeActivity: true,
+      includeModelTimeline: false, includeWorkEvidence: false, includeSessionEvidence: false, includeTranscriptEvidence: false });
+    const sibling = normalizeUsageQuery({ ...query, metric: 'cost', includeModelTimeline: true });
+    const detailed = normalizeUsageQuery({ ...query, includeSessionEvidence: true });
+    const refused = normalizeUsageQuery({ ...detailed, includeTranscriptEvidence: true });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: [{ id: 'one', observedAtMs: 150,
+      sessionId: 'session', turnId: 'turn', agentId: 'claude', modelId: null, machineId: null,
+      projectKey: null, workspaceId: null, source: 'runtime', tokens, cost: accounting.totals.cost }] });
+    const result = resolveUsagePageAggregation({ queries: [query, sibling, detailed, refused],
+      accounting: [query, sibling, detailed, refused].map(query => ({ query, value, status: 'available' as const })),
+      howYouWork: [{ query: detailed, detail: { status: 'available', facts: [{ workId: 'work', evidenceId: 'turn',
+        agentId: 'claude', machineId: null, kind: 'busy', startMs: 110, endMs: 160 }] } },
+      { query: refused, detail: { status: 'unknown' }, errorCode: 'permission_denied' }],
+    });
+    const calendar = result.results[0]!.howYouWork!.agentCalendar!;
+    expect(result.results[1]!.howYouWork!.agentCalendar).toBe(calendar);
+    expect(result.results[2]!.howYouWork!.agentCalendar!.periodSummary.totals.busyMs).toBe(50);
+    expect(result.results[2]!.howYouWork!.agentCalendar).not.toBe(calendar);
+    expect(result.results[3]!.howYouWork!.agentCalendar!.periodSummary.totals.busyMs).toBeNull();
+    expect(result.results[3]!.howYouWork!.agentCalendar!.periodSummary.totals.tokens).toBe(16);
+    expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('carries one accounting calendar in the existing read snapshot and invalidates its exact numeric basis', () => {
+    const project = projectUsageAccountingSnapshotCalendar;
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeActivity: true });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: [{ id: 'one', observedAtMs: 150,
+      sessionId: 'session', turnId: 'turn', agentId: 'claude', modelId: null, machineId: null,
+      projectKey: null, workspaceId: null, source: 'runtime', tokens, cost: accounting.totals.cost }] });
+    const row = value.contributions![0]!;
+    let reads = 0;
+    Object.defineProperty(row, 'observedAtMs', { get: () => { reads++; return 150; }, enumerable: true });
+    const snapshot = { query, value, status: 'available' as const };
+    const first = project(snapshot);
+    expect(first.agentCalendarAccounting!.projection.periodSummary.totals.tokens).toBe(16);
+    expect(reads).toBeGreaterThan(0);
+    reads = 0;
+    expect(project(first)).toBe(first);
+    const sibling = project({ ...snapshot, query: normalizeUsageQuery({ ...query, includeModelTimeline: true }) }, [first]);
+    expect(sibling.agentCalendarAccounting).toBe(first.agentCalendarAccounting);
+    expect(reads).toBe(0);
+    for (const changed of [
+      { ...snapshot, query: normalizeUsageQuery({ ...query, costBasis: 'estimated' }) },
+      { ...snapshot, query: normalizeUsageQuery({ ...query, timeZoneOffsetMinutes: 120 }) },
+      { ...snapshot, query: normalizeUsageQuery({ ...query, period: { startMs: 151, endMs: 200 } }) },
+      { ...snapshot, value: { ...value } },
+    ]) expect(project(changed, [first]).agentCalendarAccounting).not.toBe(first.agentCalendarAccounting);
+    expect(project({ ...first, value: undefined, status: 'error', errorCode: 'permission_denied' }).agentCalendarAccounting).toBeUndefined();
+    expect(project({ ...first, query: normalizeUsageQuery({ ...query, includeActivity: false, includeModelTimeline: false }) })
+      .agentCalendarAccounting).toBeUndefined();
+  });
+
   it('withdraws retained public detail when its admitted accounting turns change without changing ordinary retention', () => {
     for (const population of ['all_personal_history', 'public_eligible_personal'] as const) {
       const query = normalizeUsageQuery({ population, period: { startMs: 100, endMs: 1_000 } });

@@ -1,9 +1,10 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { UsageAnalyticsContribution, UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
-import { aggregateUsageContributionCosts, resolveUsageContributionCosts } from './usageAggregation.js';
+import { createEmptyUsageSelectedCost, mergeUsageSelectedCosts, resolveUsageContributionCosts, selectResolvedUsageCost,
+    type UsageSelectedCostAccumulator } from './usageAggregation.js';
 import { resolveUsageBucketBounds, resolveUsageCalendarDateStart, resolveUsageCalendarInstant } from './usageCalendar.js';
-import { resolveUsageCostBasis, type UsageCostMode } from './usageCostFacts.js';
+import type { UsageCostMode } from './usageCostFacts.js';
 import { isUsageNightHour, summarizeUsageConcurrency, UsageNightHoursV1Schema,
     type UsageWorkIntervalSegment, type UsageWorkIntervalsInput, type UsageWorkIntervalsProjection } from './usageWorkIntervals.js';
 
@@ -79,14 +80,36 @@ export interface UsageAgentCalendarInput {
     nightHours?: UsageWorkIntervalsInput['nightHours'];
     /** Canonical Human-loop projection; this owner never reinterprets or deduplicates accepted inputs. */
     steering?: Readonly<{ inputsObserved: boolean; coverage: 'complete_for_supplied_facts' | 'partial'; hourly: readonly CalendarSteeringHour[] }> | null;
+    /** Explicit derived value carried by the admitted read/batch, never a separate cache. */
+    accountingCalendar?: UsageAgentAccountingCalendar;
+}
+
+export interface UsageAgentAccountingCalendar {
+    accounting: UsageAnalyticsQueryResponse | undefined;
+    period: UsageWorkIntervalsInput['period'];
+    timeZoneOffsetMinutes: number;
+    costMode: UsageCostMode;
+    projection: UsageAgentCalendar;
+}
+
+export function projectUsageAgentAccountingCalendar(input: Pick<UsageAgentCalendarInput,
+    'accounting' | 'period' | 'timeZoneOffsetMinutes' | 'costMode'>): UsageAgentAccountingCalendar {
+    return { accounting: input.accounting, period: { ...input.period }, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes,
+        costMode: input.costMode ?? 'auto', projection: projectUsageAgentCalendarPopulation({ accounting: input.accounting,
+            period: input.period, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, costMode: input.costMode }) };
 }
 
 type BucketPopulation = { rows: UsageAnalyticsContribution[];
-    busy: Map<string | null, UsageWorkIntervalSegment[]>; steering: Map<string | null, Array<number | null>> };
+    busy: Map<string | null, UsageWorkIntervalSegment[]>; steering: Map<string | null, Array<number | null>>;
+    costs: Map<string | null, UsageSelectedCostAccumulator> };
 type BucketFacts = BucketPopulation & { startMs: number; endMs: number };
 const compareAgent = (left: string | null, right: string | null) => (left ?? '').localeCompare(right ?? '');
 
-function appendBucketPopulation(target: BucketPopulation, source: BucketPopulation): void {
+function createBucketPopulation(): BucketPopulation {
+    return { rows: [], busy: new Map(), steering: new Map(), costs: new Map() };
+}
+
+function appendBucketPopulation(target: BucketPopulation, source: BucketPopulation, costMode: UsageCostMode): void {
     for (const row of source.rows) target.rows.push(row);
     for (const [agentId, spans] of source.busy) {
         const combined = target.busy.get(agentId) ?? [];
@@ -98,6 +121,8 @@ function appendBucketPopulation(target: BucketPopulation, source: BucketPopulati
         for (const value of values) combined.push(value);
         target.steering.set(agentId, combined);
     }
+    for (const [agentId, cost] of source.costs) target.costs.set(agentId,
+        mergeUsageSelectedCosts(target.costs.get(agentId) ?? createEmptyUsageSelectedCost(), cost, costMode));
 }
 
 type CoverageSource = NonNullable<UsageAnalyticsQueryResponse['coverage']>['sources'][number];
@@ -143,19 +168,105 @@ function leading(agents: CalendarBucket['agents'], metric: keyof CalendarMetrics
     return { status: winners.length > 1 ? 'tied' : includesUnknown ? 'unattributed' : 'leading', agentIds, includesUnknown };
 }
 
-/** Complete reconciled accounting and already-clipped witnessed lanes are the only populations. */
+function projectDayNightActivity(input: Pick<UsageAgentCalendarInput, 'accounting' | 'nightHours'>): UsageAgentCalendar['dayNightActivity'] {
+    const activityBuckets = input.accounting?.activity?.weekdayHourBuckets;
+    const activityTotal = activityBuckets?.reduce((sum, row) => sum + row.eventCount, 0) ?? 0;
+    if (!input.nightHours || !activityBuckets || activityTotal === 0) return null;
+    const nightCount = activityBuckets.reduce((sum, row) => sum + (isUsageNightHour(row.hour, input.nightHours!) ? row.eventCount : 0), 0);
+    return { basis: 'recorded_activity', window: input.nightHours, dayShare: (activityTotal - nightCount) / activityTotal,
+        nightShare: nightCount / activityTotal,
+        coverage: input.accounting?.coverage?.status === 'complete' && input.accounting.coverage.range.complete ? 'complete_for_supplied_facts' : 'partial' };
+}
+
+function projectActiveDays(days: UsageAgentCalendar['days'], accounting: ReadonlyMap<string | null, CalendarCoverage>,
+    busyAgents: ReadonlySet<string | null>, busyCoverage: CalendarCoverage): UsageAgentCalendar['agentActiveDays'] {
+    const membership = new Map<string | null, Set<string>>();
+    for (const day of days) for (const agent of day.agents) {
+        if ((agent.metrics.tokens ?? 0) <= 0 && (agent.metrics.eventCount ?? 0) <= 0 && (agent.metrics.busyMs ?? 0) <= 0) continue;
+        const active = membership.get(agent.agentId) ?? new Set<string>();
+        active.add(day.date);
+        membership.set(agent.agentId, active);
+    }
+    return [...membership.entries()].sort(([left], [right]) => compareAgent(left, right)).map(([agentId, active]) => {
+        const observedBusy = busyAgents.has(agentId);
+        let coverage = accounting.get(agentId) ?? (observedBusy ? busyCoverage : 'unavailable');
+        if (observedBusy && busyCoverage !== 'complete_for_supplied_facts' && coverage === 'complete_for_supplied_facts') coverage = 'partial';
+        return { agentId, days: active.size, coverage };
+    });
+}
+
+/** Compose private evidence onto a read-owned accounting reduction without folding its rows again. */
 export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): UsageAgentCalendar {
+    const carried = input.accountingCalendar;
+    if (!carried || carried.accounting !== input.accounting || carried.period.startMs !== input.period.startMs
+        || carried.period.endMs !== input.period.endMs || carried.timeZoneOffsetMinutes !== input.timeZoneOffsetMinutes
+        || carried.costMode !== (input.costMode ?? 'auto')) return projectUsageAgentCalendarPopulation(input);
+    const accounting = carried.projection;
+    if (!input.intervals && !input.steering || input.detailStatus === 'unknown') return input.nightHours
+        ? { ...accounting, dayNightActivity: projectDayNightActivity(input) } : accounting;
+    const detail = projectUsageAgentCalendarPopulation({ ...input, accounting: undefined, accountingCalendar: undefined });
+    const defaultAccounting = (): CalendarMetrics => ({ tokens: accounting.coverage.accounting === 'complete_for_supplied_facts' ? 0 : null,
+        eventCount: accounting.coverage.accounting === 'complete_for_supplied_facts' ? 0 : null,
+        sessions: accounting.coverage.accounting === 'complete_for_supplied_facts' ? 0 : null, cost: null,
+        busyMs: null, peakParallel: null, steeringCount: null });
+    const defaultPrivate = (): CalendarMetrics => ({ tokens: null, eventCount: null, sessions: null, cost: null,
+        busyMs: detail.coverage.busy === 'complete_for_supplied_facts' ? 0 : null,
+        peakParallel: detail.coverage.busy === 'complete_for_supplied_facts' ? 0 : null,
+        steeringCount: detail.coverage.steering === 'complete_for_supplied_facts' ? 0 : null });
+    const combineMetrics = (a: CalendarMetrics, b: CalendarMetrics): CalendarMetrics => ({
+        tokens: a.tokens, eventCount: a.eventCount, sessions: a.sessions, cost: a.cost,
+        busyMs: b.busyMs, peakParallel: b.peakParallel, steeringCount: b.steeringCount,
+    });
+    const combineFigures = (a: z.infer<typeof Figures> | undefined, b: z.infer<typeof Figures> | undefined): z.infer<typeof Figures> => {
+        const accountingAgents = new Map(a?.agents.map(agent => [agent.agentId, agent]));
+        const privateAgents = new Map(b?.agents.map(agent => [agent.agentId, agent]));
+        const agents = [...new Set([...accountingAgents.keys(), ...privateAgents.keys()])].sort(compareAgent).map(agentId => {
+            const aa = accountingAgents.get(agentId);
+            const bb = privateAgents.get(agentId);
+            return { agentId, metrics: combineMetrics(aa?.metrics ?? defaultAccounting(), bb?.metrics ?? defaultPrivate()),
+                coverage: { accounting: aa?.coverage.accounting ?? (input.accounting?.contributions === undefined ? 'unavailable' as const : 'unknown' as const),
+                    busy: detail.coverage.busy, steering: detail.coverage.steering } };
+        });
+        const totals = combineMetrics(a?.totals ?? defaultAccounting(), b?.totals ?? defaultPrivate());
+        return { totals, agents, leaders: { tokens: leading(agents, 'tokens', totals), eventCount: leading(agents, 'eventCount', totals),
+            sessions: leading(agents, 'sessions', totals), cost: leading(agents, 'cost', totals), busyMs: leading(agents, 'busyMs', totals),
+            steeringCount: leading(agents, 'steeringCount', totals), peakParallel: leading(agents, 'peakParallel', totals) } };
+    };
+    const combineGroups = <T extends z.infer<typeof Figures>>(a: readonly T[], b: readonly T[], key: (row: T) => string): T[] => {
+        const groups = new Map<string, { accounting?: T; detail?: T }>();
+        for (const row of a) groups.set(key(row), { accounting: row });
+        for (const row of b) { const group = groups.get(key(row)) ?? {}; group.detail = row; groups.set(key(row), group); }
+        return [...groups.values()].map(group => ({ ...(group.accounting ?? group.detail!), ...combineFigures(group.accounting, group.detail) }));
+    };
+    const days = combineGroups(accounting.days, detail.days, row => row.date).sort((a, b) => a.startMs - b.startMs);
+    const weeks = combineGroups(accounting.weeks, detail.weeks, row => String(row.startMs)).sort((a, b) => a.startMs - b.startMs);
+    const hours = combineGroups(accounting.hours, detail.hours, row => String(row.startMs)).sort((a, b) => a.startMs - b.startMs);
+    const weekdayHourBuckets = combineGroups(accounting.weekdayHourBuckets, detail.weekdayHourBuckets, row => `${row.weekday}:${row.hour}`)
+        .sort((a, b) => a.weekday - b.weekday || a.hour - b.hour);
+    const hourOfDayBuckets = combineGroups(accounting.hourOfDayBuckets, detail.hourOfDayBuckets, row => String(row.hour)).sort((a, b) => a.hour - b.hour);
+    const figures = combineFigures(accounting.periodSummary, detail.periodSummary);
+    const accountingAgents = new Map(accounting.periodSummary.agents.map(agent => [agent.agentId, agent]));
+    const periodSummary: UsageAgentCalendar['periodSummary'] = { ...figures, agents: figures.agents.map(agent => ({ ...agent,
+        shares: accountingAgents.get(agent.agentId)?.shares ?? { tokens: null, cost: null } })) };
+    const agentActiveDays = projectActiveDays(days, new Map(accounting.periodSummary.agents.map(agent => [agent.agentId, agent.coverage.accounting])),
+        new Set(detail.periodSummary.agents.filter(agent => (agent.metrics.busyMs ?? 0) > 0).map(agent => agent.agentId)), detail.coverage.busy);
+    return { ...accounting, coverage: { accounting: accounting.coverage.accounting, busy: detail.coverage.busy, steering: detail.coverage.steering },
+        days, weeks, hours, weekdayHourBuckets, hourOfDayBuckets, periodSummary, agentActiveDays,
+        weeklyPeakParallel: detail.weeklyPeakParallel, dayNightActivity: projectDayNightActivity(input) };
+}
+
+/** Complete reconciled accounting and already-clipped witnessed lanes are the only populations. */
+function projectUsageAgentCalendarPopulation(input: UsageAgentCalendarInput): UsageAgentCalendar {
     const { period, timeZoneOffsetMinutes } = input;
     if (!Number.isSafeInteger(period.startMs) || !Number.isSafeInteger(period.endMs) || period.endMs < period.startMs
         || !Number.isInteger(timeZoneOffsetMinutes) || Math.abs(timeZoneOffsetMinutes) > 840) throw new RangeError('Invalid usage calendar period or offset');
     const costMode = input.costMode ?? 'auto';
-    const nightHours = input.nightHours;
     const suppliedRows = input.accounting?.contributions;
     const rows = suppliedRows?.filter(row => row.observedAtMs >= period.startMs && row.observedAtMs < period.endMs);
     // Resolve overlap against the whole selected query before partitioning; the report's
     // covered earlier estimates cannot become another charge in an earlier calendar bucket.
     const resolvedCosts = rows === undefined ? [] : resolveUsageContributionCosts(rows, costMode);
-    const selectedRows = rows?.map((row, index) => ({ ...row, cost: resolvedCosts[index]! }));
+    const selectedRows = rows;
     const intervals = input.detailStatus !== 'unknown' && input.intervals?.period.startMs === period.startMs
         && input.intervals.period.endMs === period.endMs && input.intervals.timeZoneOffsetMinutes === timeZoneOffsetMinutes ? input.intervals : null;
     const busyCoverage: CalendarCoverage = intervals === null ? 'unavailable'
@@ -165,7 +276,8 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
     const sourceIndex = createCoverageSourceLookup(input.accounting);
     const coverage: UsageAgentCalendar['coverage'] = { accounting: accountingCoverage(rows, input.accounting, sourceIndex), busy: busyCoverage, steering: steeringCoverage };
 
-    const metrics = (rows: readonly UsageAnalyticsContribution[], busy: readonly UsageWorkIntervalSegment[], steers: readonly (number | null)[]): CalendarMetrics => {
+    const metrics = (rows: readonly UsageAnalyticsContribution[], busy: readonly UsageWorkIntervalSegment[], steers: readonly (number | null)[],
+        cost: UsageSelectedCostAccumulator): CalendarMetrics => {
         const hasAccounting = selectedRows !== undefined && (rows.length > 0 || coverage.accounting === 'complete_for_supplied_facts');
         const hasBusy = intervals !== null && (busy.length > 0 || busyCoverage === 'complete_for_supplied_facts');
         const hasSteers = steering?.inputsObserved === true && (steers.length > 0 || steeringCoverage === 'complete_for_supplied_facts');
@@ -173,7 +285,7 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
         return { tokens: hasAccounting ? rows.reduce((sum, row) => sum + row.tokens.total, 0) : null,
             eventCount: hasAccounting && rows.every(row => row.eventCount !== undefined) ? rows.reduce((sum, row) => sum + row.eventCount!, 0) : null,
             sessions: hasAccounting && sessions.every(row => row.sessionId !== null) ? new Set(sessions.map(row => row.sessionId)).size : null,
-            cost: rows.length > 0 ? resolveUsageCostBasis(aggregateUsageContributionCosts(rows, costMode), costMode) : null,
+            cost: cost.available ? cost.selected : null,
             busyMs: hasBusy ? busy.reduce((sum, span) => sum + span.endMs - span.startMs, 0) : null,
             steeringCount: hasSteers && steers.every(value => value !== null) ? steers.reduce<number>((sum, value) => sum + value!, 0) : null,
             peakParallel: hasBusy ? summarizeUsageConcurrency(busy).maxParallel : null };
@@ -188,22 +300,24 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
         const members = [...new Set([...rowsByAgent.keys(), ...population.busy.keys(), ...population.steering.keys()])].sort(compareAgent);
         const agents = members.map(agentId => {
             const rows = rowsByAgent.get(agentId) ?? [];
-            return { agentId, metrics: metrics(rows, population.busy.get(agentId) ?? [], population.steering.get(agentId) ?? []),
+            return { agentId, metrics: metrics(rows, population.busy.get(agentId) ?? [], population.steering.get(agentId) ?? [],
+                population.costs.get(agentId) ?? createEmptyUsageSelectedCost()),
                 coverage: { accounting: rows.length > 0 ? accountingCoverage(rows, input.accounting, sourceIndex) : selectedRows === undefined ? 'unavailable' as const : 'unknown' as const,
                     busy: busyCoverage, steering: steeringCoverage } };
         });
-        const totals = metrics(population.rows, [...population.busy.values()].flat(), [...population.steering.values()].flat());
+        const totalCost = [...population.costs.values()].reduce((total, cost) => mergeUsageSelectedCosts(total, cost, costMode), createEmptyUsageSelectedCost());
+        const totals = metrics(population.rows, [...population.busy.values()].flat(), [...population.steering.values()].flat(), totalCost);
         return { totals, agents,
             leaders: { tokens: leading(agents, 'tokens', totals), eventCount: leading(agents, 'eventCount', totals),
                 sessions: leading(agents, 'sessions', totals), cost: leading(agents, 'cost', totals), busyMs: leading(agents, 'busyMs', totals),
                 steeringCount: leading(agents, 'steeringCount', totals), peakParallel: leading(agents, 'peakParallel', totals) } };
     };
-    const projectBuckets = (granularity: 'day' | 'week' | 'hour'): { facts: BucketFacts[]; buckets: CalendarBucket[] } => {
+    const projectBuckets = (granularity: 'day' | 'week' | 'hour', hours?: readonly BucketFacts[]): { facts: BucketFacts[]; buckets: CalendarBucket[] } => {
         const buckets = new Map<number, BucketFacts>();
         for (let cursor = period.startMs; granularity !== 'hour' && cursor < period.endMs;) {
             const bounds = resolveUsageBucketBounds(granularity, cursor, timeZoneOffsetMinutes);
             const endMs = Math.min(period.endMs, bounds.bucketEndMs);
-            buckets.set(bounds.bucketStartMs, { startMs: cursor, endMs, rows: [], busy: new Map(), steering: new Map() });
+            buckets.set(bounds.bucketStartMs, { startMs: cursor, endMs, ...createBucketPopulation() });
             cursor = endMs;
         }
         const bucketAt = (instant: number) => {
@@ -211,12 +325,19 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
             let bucket = buckets.get(bounds.bucketStartMs);
             if (!bucket && granularity === 'hour' && instant >= period.startMs && instant < period.endMs) {
                 bucket = { startMs: Math.max(period.startMs, bounds.bucketStartMs), endMs: Math.min(period.endMs, bounds.bucketEndMs),
-                    rows: [], busy: new Map(), steering: new Map() };
+                    ...createBucketPopulation() };
                 buckets.set(bounds.bucketStartMs, bucket);
             }
             return bucket;
         };
-        for (const row of selectedRows ?? []) bucketAt(row.observedAtMs)?.rows.push(row);
+        if (hours) for (const hour of hours) appendBucketPopulation(bucketAt(hour.startMs)!, hour, costMode);
+        else {
+        for (const [index, row] of (selectedRows ?? []).entries()) {
+            const bucket = bucketAt(row.observedAtMs)!;
+            bucket.rows.push(row);
+            bucket.costs.set(row.agentId, mergeUsageSelectedCosts(bucket.costs.get(row.agentId) ?? createEmptyUsageSelectedCost(),
+                selectResolvedUsageCost(resolvedCosts[index]!, costMode), costMode));
+        }
         for (const lane of intervals?.lanes ?? []) for (const span of lane.busy) {
             for (let cursor = Math.max(span.startMs, period.startMs); cursor < Math.min(span.endMs, period.endMs);) {
                 const bucket = bucketAt(cursor)!;
@@ -237,6 +358,7 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
             values.push(row.steeringCount);
             bucket.steering.set(row.agentId, values);
         }
+        }
         const facts = [...buckets.values()].sort((left, right) => left.startMs - right.startMs);
         return { facts, buckets: facts.map(bucket => {
             const calendar = resolveUsageCalendarInstant(bucket.startMs, timeZoneOffsetMinutes);
@@ -244,24 +366,24 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
                 hour: granularity === 'hour' ? calendar.hour : null, ...projectFigures(bucket) };
         }) };
     };
-    const days = projectBuckets('day').buckets;
-    const weeks = projectBuckets('week').buckets;
     const hourProjection = projectBuckets('hour');
+    const days = projectBuckets('day', hourProjection.facts).buckets;
+    const weeks = projectBuckets('week', hourProjection.facts).buckets;
     const hours = hourProjection.buckets;
-    const periodPopulation: BucketPopulation = { rows: [], busy: new Map(), steering: new Map() };
+    const periodPopulation = createBucketPopulation();
     const weekdayHours = new Map<string, BucketPopulation & { weekday: number; hour: number }>();
     const hoursOfDay = new Map<number, BucketPopulation & { hour: number }>();
     for (const facts of hourProjection.facts) {
-        appendBucketPopulation(periodPopulation, facts);
+        appendBucketPopulation(periodPopulation, facts, costMode);
         const { weekday, hour } = resolveUsageCalendarInstant(facts.startMs, timeZoneOffsetMinutes);
         const key = `${weekday}:${hour}`;
         const cell: BucketPopulation & { weekday: number; hour: number } = weekdayHours.get(key)
-            ?? { weekday, hour, rows: [], busy: new Map(), steering: new Map() };
-        appendBucketPopulation(cell, facts);
+            ?? { weekday, hour, ...createBucketPopulation() };
+        appendBucketPopulation(cell, facts, costMode);
         weekdayHours.set(key, cell);
         const dayCell: BucketPopulation & { hour: number } = hoursOfDay.get(hour)
-            ?? { hour, rows: [], busy: new Map(), steering: new Map() };
-        appendBucketPopulation(dayCell, facts);
+            ?? { hour, ...createBucketPopulation() };
+        appendBucketPopulation(dayCell, facts, costMode);
         hoursOfDay.set(hour, dayCell);
     }
     // A witnessed wait or unknown-ended lane still establishes Agent membership,
@@ -283,35 +405,12 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
         .map(cell => ({ weekday: cell.weekday, hour: cell.hour, ...projectFigures(cell) }));
     const hourOfDayBuckets = [...hoursOfDay.values()].sort((left, right) => left.hour - right.hour)
         .map(cell => ({ hour: cell.hour, ...projectFigures(cell) }));
-    const membership = new Map<string | null, Set<string>>();
-    for (const day of days) for (const agent of day.agents) {
-        if ((agent.metrics.tokens ?? 0) <= 0 && (agent.metrics.eventCount ?? 0) <= 0 && (agent.metrics.busyMs ?? 0) <= 0) continue;
-        const active = membership.get(agent.agentId) ?? new Set<string>();
-        active.add(day.date);
-        membership.set(agent.agentId, active);
-    }
-    const activityBuckets = input.accounting?.activity?.weekdayHourBuckets;
-    const activityTotal = activityBuckets?.reduce((sum, row) => sum + row.eventCount, 0) ?? 0;
-    const nightCount = nightHours ? activityBuckets?.reduce((sum, row) => sum + (isUsageNightHour(row.hour, nightHours) ? row.eventCount : 0), 0) ?? 0 : 0;
-    const dayNightActivity: UsageAgentCalendar['dayNightActivity'] = nightHours && activityBuckets && activityTotal > 0
-        ? { basis: 'recorded_activity', window: nightHours, dayShare: (activityTotal - nightCount) / activityTotal, nightShare: nightCount / activityTotal,
-            coverage: input.accounting?.coverage?.status === 'complete' && input.accounting.coverage.range.complete ? 'complete_for_supplied_facts' : 'partial' } : null;
-    const rowsByAgent = new Map<string | null, UsageAnalyticsContribution[]>();
-    for (const row of rows ?? []) {
-        const group = rowsByAgent.get(row.agentId) ?? [];
-        group.push(row);
-        rowsByAgent.set(row.agentId, group);
-    }
+    const dayNightActivity = projectDayNightActivity(input);
     const busyAgents = new Set(intervals?.lanes.filter(lane => lane.busy.length > 0).map(lane => lane.agentId));
+    const accountingAgents = new Set(periodPopulation.rows.map(row => row.agentId));
     const result: UsageAgentCalendar = { period, timeZoneOffsetMinutes, costMode, coverage, periodSummary, days, weeks, hours, weekdayHourBuckets, hourOfDayBuckets,
-        agentActiveDays: [...membership.entries()].sort(([left], [right]) => compareAgent(left, right)).map(([agentId, active]) => {
-            const agentRows = rowsByAgent.get(agentId);
-            const observedBusy = busyAgents.has(agentId);
-            const accounting = accountingCoverage(agentRows, input.accounting, sourceIndex);
-            let dayCoverage = agentRows?.length ? accounting : observedBusy ? busyCoverage : accounting;
-            if (observedBusy && busyCoverage !== 'complete_for_supplied_facts' && dayCoverage === 'complete_for_supplied_facts') dayCoverage = 'partial';
-            return { agentId, days: active.size, coverage: dayCoverage };
-        }),
+        agentActiveDays: projectActiveDays(days, new Map(periodFigures.agents.filter(agent => accountingAgents.has(agent.agentId))
+            .map(agent => [agent.agentId, agent.coverage.accounting])), busyAgents, busyCoverage),
         weeklyAgentMix: weeks.filter(week => week.totals.tokens !== null).map(week => ({ startMs: week.startMs, endMs: week.endMs,
             mix: week.totals.tokens! > 0 ? week.agents.filter(agent => (agent.metrics.tokens ?? 0) > 0).map(agent => ({ agentId: agent.agentId,
                 share: agent.metrics.tokens! / week.totals.tokens!, coverage: agent.coverage.accounting })) : [] })),
