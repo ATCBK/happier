@@ -965,8 +965,9 @@ const viewerChoiceStylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s10,
         paddingVertical: theme.space.s6,
     },
+    // One band height: a choice without an attribution line stands as tall as its neighbours.
     choices: {
-        alignItems: 'center',
+        alignItems: 'stretch',
         gap: theme.space.s8,
         paddingRight: theme.space.s10,
     },

@@ -23,6 +23,7 @@ import { FileEditorPanel } from '@/components/workspaces/files/file/editor/FileE
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { FilePageHeader } from '@/components/workspaces/files/file/FilePageHeader';
+import { PluginDetailsViewerChoiceChrome } from '@/components/appShell/panes/details/surfaces/pluginDetailsDestination';
 import { ScmCommitDetailsHeader } from '@/components/workspaces/scm/history/ScmCommitDetailsHeader';
 import { ScmStashDetailsCore } from '@/components/workspaces/scm/stash/ScmStashDetailsCore';
 import type { ScmStashDetailsAdapter } from '@/components/workspaces/scm/stash/scmStashAdapter';
@@ -352,7 +353,29 @@ function ReviewFrame(props: Readonly<{ open?: boolean }>) {
     );
 }
 
+/** The installed-viewer chooser with many matching viewers (FINAL-PE-01): every choice keeps its target and the band scrolls. */
+const SPECIMEN_VIEWERS = ['Built-in', 'Diagram', 'Mermaid', 'Draw.io', 'Excalidraw', 'PlantUML', 'Graphviz', 'Vega chart', 'Kroki', 'Bpmn', 'Structurizr', 'D2']
+    .map((label, index) => ({ id: index === 0 ? 'builtin' : `openableContentViewer:com.example.v${index}:svg`, label,
+        ...(index === 0 ? {} : { detail: `com.example.v${index}` }), selected: index === 0 }));
+function ViewerChooserFrame() {
+    const [selected, setSelected] = React.useState('builtin');
+    const model = React.useMemo(() => ({
+        candidates: SPECIMEN_VIEWERS.map((candidate) => ({ ...candidate, selected: candidate.id === selected })),
+        selectCandidate: async (id: string) => { setSelected(id); },
+    }), [selected]);
+    return (
+        <View style={{ flex: 1, minHeight: 0 }}>
+            <PluginDetailsViewerChoiceChrome model={model} />
+        </View>
+    );
+}
+
 const FRAMES: ReadonlyArray<Readonly<{ id: string; title: string; render: () => React.ReactNode }>> = [
+    {
+        id: 'VC',
+        title: 'VC · viewer chooser, twelve viewers',
+        render: () => <ViewerChooserFrame />,
+    },
 
     {
         id: 'F1',

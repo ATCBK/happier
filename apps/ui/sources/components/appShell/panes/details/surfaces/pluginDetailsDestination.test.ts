@@ -932,7 +932,7 @@ describe('pluginDetailsDestination', () => {
         expect(markdown?.props.accessibilityState).toEqual({ selected: false, disabled: false });
         expect(unavailable?.props.accessibilityState).toEqual({ selected: false, disabled: true });
         expect(markdown?.props.style({ pressed: false, focused: false })).toEqual(expect.arrayContaining([
-            expect.objectContaining({ minHeight: 44 }),
+            expect.objectContaining({ minHeight: resolveMinimumInteractiveTargetSize((await import('react-native')).Platform.OS) }),
         ]));
 
         await act(async () => {
@@ -962,9 +962,9 @@ describe('pluginDetailsDestination', () => {
 
             expect(typeof ViewerChoiceChrome).toBe('function');
             if (typeof ViewerChoiceChrome !== 'function') return;
+            // A finger gets the platform floor; a precise web pointer keeps the dense pointer floor (owner contract).
             expect(resolveMinimumInteractiveTargetSize('android')).toBe(48);
             expect(resolveMinimumInteractiveTargetSize('ios')).toBe(44);
-            expect(resolveMinimumInteractiveTargetSize('web')).toBe(44);
 
             for (const platform of ['android', 'ios', 'web'] as const) {
                 (Platform as { OS: string }).OS = platform;
