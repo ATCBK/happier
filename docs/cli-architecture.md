@@ -267,6 +267,26 @@ No Settings secret writer or separate CLI secret store is introduced. See
 
 ### Connected Agent homes (0.3 development)
 
+Codex native startup admission is owned by the plugin's `nativeStartupLock.ts`.
+For an explicit, resolvable SQLite root it pins launch `sqlite_home` to that
+canonical root. A fresh database or a different Codex version takes the existing
+OS-user startup lock through native readiness; a successful start records the
+version at the SQLite root. Warm resolved starts with the same version bypass the lock. Failed
+starts never publish a successful version. The pinned native contract has no
+separate public migrations-complete signal, so first-start history backfill
+may remain inside this exclusion.
+
+Native managed requirements can replace even a command-line SQLite pin, and
+cloud requirements can depend on credentials. Starts whose effective root
+cannot be established before launch retain the predecessor OS-user lock for
+that start, without recording a root version. Sharing this single lock with
+resolved cold starts prevents the two paths initializing the same DB concurrently.
+The current resolver takes this
+conservative path for authenticated homes, uninspected config layers and
+non-Linux platforms. A contended start logs the holder PID and lock age once;
+waiting has no separate timeout. This describes development source and requires
+a daemon/runner reload before existing managed stacks consume it.
+
 `daemon/connectedServices/materialize/materializeConnectedServicesForSpawn.ts`
 owns home materialization for launch and credential reapplication. Agents opting
 into a durable native home reuse the existing account/group home resolver and
@@ -275,6 +295,34 @@ declaration may instead select its active member's account home. Refresh, failed
 launch and cancellation must not replace or recursively remove that durable
 home. Other materializers and discovery probes retain their temporary/staged
 lifecycle; probes do not import into durable or shared history.
+
+Codex's descriptor declares `CODEX_SQLITE_HOME` as its state-root environment
+key for materialized homes. The canonical descriptor application selects
+the native source's configured SQLite root in shared mode, falling back
+to its native `CODEX_HOME`. Isolated, probe and degraded launches select their
+own materialized home. Complete `sessions`
+and `archived_sessions` trees remain linked in shared mode; live SQLite files
+and their WAL/SHM companions are never copied or linked. This matches 0.2's
+native shared-home contract and avoids rebuilding the same history index for
+each pool home. Sharing includes native pending inputs, global memories and
+Account-tagged diagnostic rows across the machine user's connected accounts;
+credentials remain in each isolated authentication home. Pool rotation may
+continue a thread's pending input under the next selected account.
+
+That same descriptor application emits both the launch environment and the
+selected state-root environment in the existing home sharing manifest. Private
+roots are stored as `.` so staged-home promotion preserves their meaning. The
+SDK exposes only a read-only affinity projection of that manifest; the remaining
+history-entry, import and lifecycle contract stays host-owned. Codex's single
+runtime-home environment owner consumes this projection for native transcript
+and candidate reads, hooks, handoff, takeover launches, index reads and resume
+reconciliation.
+Predecessor shared manifests without the new affinity fact retain native
+configured/default SQLite selection; isolated and uninitialized connected homes
+do not inherit ambient SQLite state. Malformed root projections fail with
+`connected_service_state_sharing_manifest_invalid` before use. Existing private
+pool databases are retained without merging their pending queues into the
+shared root.
 
 The serialized native-home preparation (private directory, declared state,
 requested history import and sharing manifest) is one filesystem effect with
