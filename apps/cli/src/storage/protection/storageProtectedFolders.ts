@@ -17,7 +17,7 @@ export function createStorageProtectedFolders(deps: StorageProtectedFoldersDeps)
     if (actor.accountId !== actor.custodianAccountId || actor.sessionIds !== undefined) {
       throw Object.assign(new Error('Storage policy access denied'), { code: 'unauthorized' });
     }
-    await actor.assertCurrentAuthority();
+    await actor.assertCurrent();
     const resourcesPolicy = deps.resourcesPolicy;
     if (!resourcesPolicy) return { status: 'unavailable', reason: 'policy_unavailable' };
     const facts = await deps.readProtectionFacts();
@@ -42,7 +42,7 @@ export function createStorageProtectedFolders(deps: StorageProtectedFoldersDeps)
           builtIn = await physicalPathWithoutFollowingLeaf(rule.path);
         }
         if (identity(builtIn) === identity(path)) {
-          await actor.assertCurrentAuthority();
+          await actor.assertCurrent();
           return { status: 'unsupported', reason: 'built_in_protection' };
         }
       }
@@ -54,11 +54,11 @@ export function createStorageProtectedFolders(deps: StorageProtectedFoldersDeps)
     const matching = normalized.map(value => identity(value) === identity(path));
     const protectedFolders = mode === 'add' ? matching.some(Boolean) ? previous : [...previous, { path, addedAt: Date.now() }]
       : previous.filter((_value, index) => !matching[index]);
-    await actor.assertCurrentAuthority();
+    await actor.assertCurrent();
     const answer = await resourcesPolicy.set({ expectedRevision: snapshot.revision, patch: { storage: { protectedFolders } } }, {
       ...(signal ? { signal } : {}), verifyCurrent: async () => { await actor.assertCurrentAuthority(); return true; },
     });
-    await actor.assertCurrentAuthority();
+    await actor.assertCurrent();
     return answer;
   }
   return {

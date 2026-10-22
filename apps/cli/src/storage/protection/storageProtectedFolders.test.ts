@@ -21,7 +21,7 @@ describe('storage protected-folder policy owner', () => {
         metadata = input.metadata; version++; return { status: 'applied', metadata, metadataVersion: version };
       },
     } });
-    const actor: StorageOperationActor = { accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrentAuthority: async () => {} };
+    const actor: StorageOperationActor = { accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
     const owner = createStorageProtectedFolders({ resourcesPolicy: policy, readProtectionFacts: () => ({ homeDir: home }) });
     try {
       await policy.reload();
@@ -46,7 +46,7 @@ describe('storage protected-folder policy owner', () => {
       const home = join(root, 'home'); const folder = join(home, 'personal'); await mkdir(folder, { recursive: true });
       const alias = join(home, 'alias'); await symlink(folder, alias, 'junction');
       await runtime.reload();
-      const actor: StorageOperationActor = { accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrentAuthority: async () => {
+      const actor: StorageOperationActor = { accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrent: async () => {}, assertCurrentAuthority: async () => {
         if (!authorized) throw Object.assign(new Error('revoked'), { code: 'unauthorized' });
       } };
       const owner = createStorageProtectedFolders({ resourcesPolicy: runtime, readProtectionFacts: () => ({ homeDir: home }) });
@@ -57,7 +57,9 @@ describe('storage protected-folder policy owner', () => {
       expect(metadata.neighbor).toBe('retained');
       expect(await owner.remove({ path: join(home, 'Documents') }, { actor })).toEqual({ status: 'unsupported', reason: 'built_in_protection' });
       onRead = () => { authorized = false; };
-      await expect(owner.remove({ path: folder }, { actor })).rejects.toMatchObject({ code: 'unauthorized' });
+      // The policy writer projects a denied CAS as unavailable. The RPC owner
+      // separately verifies authority before disclosing this service result.
+      expect(await owner.remove({ path: folder }, { actor })).toMatchObject({ status: 'unavailable' });
       onRead = undefined; authorized = true;
       expect(runtime.read()).toMatchObject({ policy: { storage: { protectedFolders: [{ path: folder }], logRetentionDays: 30 } } });
       expect(await owner.remove({ path: alias }, { actor })).toMatchObject({ status: 'applied', policy: { storage: { protectedFolders: [] } } });

@@ -38,6 +38,9 @@ export async function removeStoragePath(path: string, input: Readonly<{
     }
     await assertStoragePathIdentity(physical, input.expectedIdentity);
     await input.beforeEffect?.();
+    // Authority can wait on Home. Keep its returned permission bound to the
+    // original filesystem object if the path was replaced during that wait.
+    await assertStoragePathIdentity(physical, input.expectedIdentity);
     try { await rm(storagePathToFs(physical), { recursive: true, force: true }); }
     catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -46,6 +49,7 @@ export async function removeStoragePath(path: string, input: Readonly<{
         await restoreOwnerPermissions(physical, input.beforeEffect);
         await assertStoragePathIdentity(physical, input.expectedIdentity);
         await input.beforeEffect?.();
+        await assertStoragePathIdentity(physical, input.expectedIdentity);
         await rm(storagePathToFs(physical), { recursive: true, force: true });
     }
     try { await lstat(storagePathToFs(physical)); }

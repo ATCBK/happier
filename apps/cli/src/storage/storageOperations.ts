@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import {
     MachineStoragePolicyV1Schema,
     type MachineStoragePileSetInputV1, type MachineStoragePileResultV1, type MachineStorageTrashMoveInputV1,
@@ -8,7 +9,7 @@ import {
     type DiskNodeV1, type StorageItemRefV1, type PileReviewV1, type TrashEntryV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import { storagePathsEqual as canonicalAbsolutePathsEqual, storagePathContains,
-    physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowingLeaf } from './storagePath';
+    physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowingLeaf, createStoragePathComparator } from './storagePath';
 import type { StorageOperationActor, StorageServiceDeps } from './storageService';
 import type { createStorageCategoryCatalog, StorageCategoryItem } from './categoryCatalog';
 import { foldStorageDescendantVerdicts, publicStorageItem } from './categoryCatalog';
@@ -61,7 +62,11 @@ export function createStorageOperations(input: Readonly<{
         return children.filter(child => !children.some(parent => parent !== child && parent.retirementKind === 'main'
             && contains(parent.path, child.path)));
     }
-    async function assertActor(actor: StorageOperationActor) { assertActive(); await actor.assertCurrentAuthority(); assertActive(); }
+    async function assertActor(actor: StorageOperationActor) { assertActive(); await actor.assertCurrent(); assertActive(); }
+    async function assertEffectActor(actor: StorageOperationActor, item?: StorageCleanupItem) {
+        assertActive(); await actor.assertCurrentAuthority(); assertActive();
+        if (item && !permitted(item, actor)) throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
+    }
     async function protectionSnapshot(paths: readonly string[] = [], current?: readonly StorageCategoryItem[]) {
         const [projects, use, discovered, environment] = await Promise.all([
             deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(paths, current), deps.readStorageProtectionFacts?.(),
@@ -72,7 +77,7 @@ export function createStorageOperations(input: Readonly<{
             installPaths: deps.catalog.installDir ? [deps.catalog.installDir] : [],
             volumeRoots: deps.readVolumes().map(volume => volume.mount), trashRoots,
             mainCheckouts: projects?.projects?.map(project => project.repositoryRoot) ?? [],
-            inUsePaths: use?.paths ?? [], inUseSessions: use?.sessions ?? [], userProtectedFolders: policy().protectedFolders.map(folder => folder.path),
+            inUsePaths: [...new Set(use?.paths ?? [])], inUseSessions: use?.sessions ?? [], userProtectedFolders: policy().protectedFolders.map(folder => folder.path),
             agentHomes: discovered.filter(item => item.categoryId === 'agentHomes' && item.verdict === 'keep').map(item => item.path),
             cloudSyncedFolders: [...(environment?.cloudSyncedFolders ?? []), process.env.OneDrive, process.env.OneDriveConsumer, process.env.OneDriveCommercial]
                 .filter((path): path is string => !!path),
@@ -180,7 +185,7 @@ export function createStorageOperations(input: Readonly<{
         };
     }
     async function pileProjection(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
-        const state = await pile.get(actor.accountId);
+        const state = await pile.get(actor.accountId, () => assertEffectActor(actor));
         if (state.droppedSinceLastView.length) input.invalidate();
         const snapshot = readSnapshot ?? (state.items.length
             ? await protectionSnapshot(actor.sessionIds === undefined ? state.items.map(ref => ref.path) : []) : undefined);
@@ -224,7 +229,7 @@ export function createStorageOperations(input: Readonly<{
             isDeclined: actor ? async item => pile.isDeclined(actor.accountId, { ref: {
                 itemId: item.itemId, path: await physicalPathWithoutFollowingLeaf(item.path), identity: await readStoragePathIdentity(item.path),
                 collectedAt: deps.nowMs?.() ?? Date.now(), collectedBy: { accountId: actor.accountId, kind: actor.kind },
-            }, size: item.size, lastChangedAt: item.lastChangedAt }) : undefined,
+            }, size: item.size, lastChangedAt: item.lastChangedAt }, () => assertEffectActor(actor)) : undefined,
         });
         return owner.list({ callerKind: actor?.kind ?? 'person', ...request });
     }
@@ -239,12 +244,12 @@ export function createStorageOperations(input: Readonly<{
     function entryAuthority(actor: StorageOperationActor) {
         return async (entry: TrashEntryV1, ownerData?: JsonValue) => {
             await assertActor(actor);
-            if (actor.sessionIds === undefined) return;
+            if (actor.sessionIds === undefined) { await assertEffectActor(actor); return; }
             if (entry.categoryId !== 'sessionFolders' || ownerData === undefined || entry.movedBy.accountId !== actor.accountId) {
                 throw Object.assign(new Error('Storage entry is not owned by this Account'), { code: 'unauthorized' });
             }
             const sessionId = await entrySessionId(entry, ownerData);
-            await assertActor(actor);
+            await assertEffectActor(actor);
             if (!permittedEntry(entry, sessionId, actor)) {
                 throw Object.assign(new Error('Session folder is not owned by this Account'), { code: 'unauthorized' });
             }
@@ -253,36 +258,59 @@ export function createStorageOperations(input: Readonly<{
     return {
         /** Only the returned index page is projected; the scan never acquires per-file TS identities. */
         async projectDiskNodes(nodes: readonly DiskNodeV1[]): Promise<DiskNodeV1[]> {
-            const paths = await Promise.all(nodes.filter(node => node.kind === 'folder' || node.kind === 'package')
-                .map(node => physicalPathWithoutFollowingLeaf(node.nodeId)));
-            const { facts, discovered } = await protectionSnapshot(paths);
-            return Promise.all(nodes.map(async node => {
+            const paths = await Promise.all(nodes.map(node => {
                 const virtual = node.kind === 'small-items' || node.kind === 'hidden-space' || node.kind === 'reserved';
                 const source = virtual ? node.parentId : node.nodeId;
-                if (!source) return node;
                 // A synthetic ID is presentation only; only its producer-bound parent supplies path facts.
-                const path = await physicalPathWithoutFollowingLeaf(source);
-                const owner = discovered.find(item => canonicalAbsolutePathsEqual(item.path, path));
-                const classification = await classifyPath(path, { ...facts,
-                    ...(owner ? { managedItemPath: owner.path } : {}) });
-                const enclosing = discovered.filter(item => item.categoryId === 'worktrees' && item.retirementKind !== 'main' && contains(item.path, path));
+                return source ? physicalPathWithoutFollowingLeaf(source) : undefined;
+            }));
+            const { facts, discovered } = await protectionSnapshot(paths.filter((path, index): path is string => path !== undefined
+                && (nodes[index].kind === 'folder' || nodes[index].kind === 'package')));
+            const comparison = createStoragePathComparator();
+            const page = [];
+            for (const [index, node] of nodes.entries()) {
+                const path = paths[index];
+                if (path === undefined) continue;
+                // Projection can join hundreds of catalog/process facts per
+                // row. Let ready Cancel/socket work run between those rows.
+                await yieldToEventLoop();
+                const owner = discovered.find(item => comparison.equal(item.path, path));
+                page.push({ node, path, owner,
+                    enclosing: discovered.filter(item => item.categoryId === 'worktrees' && item.retirementKind !== 'main' && comparison.contains(item.path, path)),
+                    children: discovered.filter(item => !comparison.equal(path, item.path) && comparison.contains(path, item.path)) });
+            }
+            const descendants = [...new Set(page.flatMap(item => item.children))];
+            // One page shares one fresh physical rule set, including catalog
+            // descendants contained by more than one returned folder.
+            const classifications = await classifyPaths([
+                ...page.map(item => ({ path: item.path, managedItemPath: item.owner?.path })),
+                ...descendants.map(item => ({ path: item.path, managedItemPath: item.categoryId === undefined ? undefined : item.path })),
+            ], facts);
+            const byDescendant = new Map(descendants.map((item, index) => [item,
+                { ...item, ...classifiedItemVerdict(item, classifications[page.length + index]) }]));
+            const dataRoots = catalog.dataRoots();
+            const projectedNodes = new Map<DiskNodeV1, DiskNodeV1>();
+            for (const [index, item] of page.entries()) {
+                await yieldToEventLoop();
+                const { node, path, owner, enclosing } = item;
+                const classification = classifications[index];
                 const losses = [...(owner?.loses ?? []), ...enclosing.flatMap(item => item.loses ?? []), ...(classification.loses ?? [])];
-                const children = await Promise.all(discovered.filter(item => !canonicalAbsolutePathsEqual(path, item.path) && contains(path, item.path))
-                    .map(async item => ({ ...item, ...await classifyItem(item, item.path, facts) })));
+                const children = item.children.map(child => byDescendant.get(child)!);
                 const projected = foldStorageDescendantVerdicts({ verdict: classification.tier ?? owner?.verdict
                     ?? (enclosing.some(item => item.verdict === 'keep') ? 'keep' : 'caution'),
                     reason: classification.reason ?? owner?.reason ?? { code: 'not_rebuildable' }, collectable: true, loses: losses }, children);
                 const forbidden = node.flags.protection === 'forbidden' || projected.verdict === 'forbidden';
                 const keep = projected.verdict === 'keep';
-                return { ...node,
+                projectedNodes.set(node, { ...node,
                     ...(classification.reason || owner || children.length ? { reason: projected.reason } : {}),
                     ...(projected.loses?.length ? { loses: projected.loses } : {}), flags: { ...node.flags,
-                    happier: catalog.dataRoots().some(root => contains(root, path))
-                        || discovered.some(item => contains(item.path, path) || contains(path, item.path)),
+                    happier: dataRoots.some(root => comparison.contains(root, path))
+                        || discovered.some(item => comparison.contains(item.path, path) || comparison.contains(path, item.path)),
                     protection: forbidden ? 'forbidden' : keep ? 'keep' : 'none',
-                    inUse: (facts.inUsePaths ?? []).some(live => contains(live, path) || contains(path, live)),
-                } };
-            }));
+                    inUse: (facts.inUsePaths ?? []).some(live => comparison.contains(live, path) || comparison.contains(path, live)),
+                } });
+            }
+            return nodes.map(node => projectedNodes.get(node) ?? node);
         },
         async projectCatalogItems<T extends StorageCategoryItem>(items: readonly T[]): Promise<readonly (Omit<T, keyof StorageCategoryVerdict> & StorageCategoryVerdict)[]> {
             const { facts } = await protectionSnapshot([], items);
@@ -297,13 +325,19 @@ export function createStorageOperations(input: Readonly<{
             // proof before any caller-supplied path can trigger SCM inspection.
             const snapshot = request.add?.length
                 ? await protectionSnapshot(actor.sessionIds === undefined ? request.add.map(ref => ref.path) : []) : undefined;
+            const additions: StorageCleanupItem[] = [];
             for (const ref of request.add ?? []) {
                 const resolved = await resolveRef(ref, actor, snapshot);
                 if (!resolved || !(await classifyItem(resolved.item, resolved.item.path, snapshot?.facts)).collectable) {
                     throw Object.assign(new Error('Storage item cannot be collected'), { code: 'storage_item_not_collectable' });
                 }
+                additions.push(resolved.item);
             }
-            await pile.set(actor.accountId, request, { accountId: actor.accountId, kind: actor.kind }, async ref => (await resolveRef(ref, actor, snapshot))?.fingerprint);
+            await pile.set(actor.accountId, request, { accountId: actor.accountId, kind: actor.kind }, async ref => (await resolveRef(ref, actor, snapshot))?.fingerprint,
+                async () => {
+                    await assertEffectActor(actor);
+                    if (additions.some(item => !permitted(item, actor))) throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
+                });
             await assertActor(actor); input.invalidate(); return pileResult(actor, snapshot);
         },
         async itemsCheck(refs: readonly StorageItemRefV1[], { actor }: ActorOptions) {
@@ -335,15 +369,19 @@ export function createStorageOperations(input: Readonly<{
         async trashMove(request: MachineStorageTrashMoveInputV1, { actor }: ActorOptions) {
             await assertActor(actor);
             const result = await applyPile({ items: request.items, mode: 'trash', actor: { accountId: actor.accountId, kind: actor.kind },
-                custodianAccountId: actor.custodianAccountId, emptyAfter: request.emptyAfter, assertCurrentAuthority: () => assertActor(actor) },
-                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter, removeActed: pile.removeActed });
+                custodianAccountId: actor.custodianAccountId, emptyAfter: request.emptyAfter,
+                assertCurrent: () => assertActor(actor), assertCurrentAuthority: item => assertEffectActor(actor, item) },
+                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter,
+                    removeActed: (accountId, ids) => pile.removeActed(accountId, ids, () => assertEffectActor(actor)) });
             input.invalidate(); return result;
         },
         async deleteNow(request: MachineStorageDeleteNowInputV1, { actor }: ActorOptions) {
             await assertActor(actor);
             const result = await applyPile({ items: request.items, mode: 'delete', actor: { accountId: actor.accountId, kind: actor.kind },
-                custodianAccountId: actor.custodianAccountId, assertCurrentAuthority: () => assertActor(actor) },
-                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter, removeActed: pile.removeActed });
+                custodianAccountId: actor.custodianAccountId,
+                assertCurrent: () => assertActor(actor), assertCurrentAuthority: item => assertEffectActor(actor, item) },
+                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter,
+                    removeActed: (accountId, ids) => pile.removeActed(accountId, ids, () => assertEffectActor(actor)) });
             input.invalidate(); return result;
         },
         async trashEmpty(request: MachineStorageTrashEmptyInputV1, { actor }: ActorOptions) {
@@ -382,7 +420,7 @@ export function createStorageOperations(input: Readonly<{
             } });
             await pile.decline(actor.accountId, reviewed.items.filter(item => request.items.some(chosen => chosen.ref.itemId === item.ref.itemId
                 && chosen.expect === item.expect)).map(item => ({ ref: item.ref, size: item.size,
-                lastChangedAt: changedAt.get(item.ref.path) })));
+                lastChangedAt: changedAt.get(item.ref.path) })), () => assertEffectActor(actor));
             await assertActor(actor); input.invalidate();
             return { revision: input.revision(), declinedCount: (await suggestions({ ...actor, kind: 'agent' })).declinedCount };
         },

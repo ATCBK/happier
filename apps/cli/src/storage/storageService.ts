@@ -34,6 +34,8 @@ export type StorageOperationActor = Readonly<{
     kind: 'person' | 'agent';
     custodianAccountId: string;
     sessionIds?: ReadonlySet<string>;
+    /** Target/lifetime checks and current Session custody, without Machine admission verification. */
+    assertCurrent(): Promise<void>;
     assertCurrentAuthority(): Promise<void>;
 }>;
 
@@ -204,10 +206,15 @@ export function createStorageService(deps: StorageServiceDeps) {
         return owner;
     }
     async function assertScanActor(actor: StorageOperationActor, signal?: AbortSignal) {
-        assertActive(signal); await actor.assertCurrentAuthority(); assertActive(signal);
+        assertActive(signal); await actor.assertCurrent(); assertActive(signal);
         if (actor.accountId !== actor.custodianAccountId || actor.sessionIds !== undefined) {
             throw Object.assign(new Error('Storage scan access denied'), { code: 'unauthorized' });
         }
+    }
+    async function assertScanAuthority(actor: StorageOperationActor, signal?: AbortSignal) {
+        await assertScanActor(actor, signal);
+        await actor.assertCurrentAuthority();
+        assertActive(signal);
     }
     const emptySize = (): StorageSizeV1 => ({ allocatedBytes: 0, freesBytes: 0, sharedBytes: 0,
         sharedExtentsUnmeasured: false, atLeast: false });
@@ -414,12 +421,12 @@ export function createStorageService(deps: StorageServiceDeps) {
             if (readWholeDiskEnabled() !== true) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'storage_whole_disk_disabled' });
             const owner = await scans();
             await assertScanActor(options.actor, options.signal);
-            return owner.runner.start(request, { beforeEffect: () => assertScanActor(options.actor, options.signal) });
+            return owner.runner.start(request, { beforeEffect: () => assertScanAuthority(options.actor, options.signal) });
         },
         async scanGet(request: MachineStorageScanGetInputV1, options: Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>) {
             await assertScanActor(options.actor, options.signal);
             const owner = await scans();
-            const result = await owner.runner.get(request, { beforeEffect: () => assertScanActor(options.actor, options.signal) });
+            const result = await owner.runner.get(request, { beforeEffect: () => assertScanAuthority(options.actor, options.signal) });
             const pageNodes = [...(result.root ? [result.root] : []), ...result.nodes, ...(result.insights ? [
                 ...result.insights.largestDistinct, ...result.insights.changes.grew,
                 ...result.insights.changes.shrank, ...result.insights.changes.appeared,
@@ -449,7 +456,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         async scanCancel(request: MachineStorageScanCancelInputV1, options: Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>) {
             await assertScanActor(options.actor, options.signal);
             const owner = await scans();
-            await assertScanActor(options.actor, options.signal);
+            await assertScanAuthority(options.actor, options.signal);
             const result = await owner.runner.cancel(request.scanId);
             if (!result) throw Object.assign(new Error('Scan unavailable'), { code: 'storage_scan_unavailable' });
             return result;
@@ -457,7 +464,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         async scanSkip(request: MachineStorageScanSkipInputV1, options: Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>) {
             await assertScanActor(options.actor, options.signal);
             const owner = await scans();
-            await assertScanActor(options.actor, options.signal);
+            await assertScanAuthority(options.actor, options.signal);
             const result = await owner.runner.skip(request.scanId, request.path);
             if (!result) throw Object.assign(new Error('Scan unavailable'), { code: 'storage_scan_unavailable' });
             return result;
@@ -466,7 +473,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         summary,
         async categoryList(categoryId: HappierStorageCategoryIdV1, options: Readonly<{
             actor?: StorageOperationActor; signal?: AbortSignal; cursor?: string; sessionIds?: ReadonlySet<string>;
-            assertCurrentAuthority?: () => Promise<void>;
+            assertCurrent?: () => Promise<void>;
         }> = {}): Promise<MachineStorageCategoryListResultV1> {
             if (options.cursor) throw Object.assign(new Error('Unknown storage cursor'), { code: 'invalid_storage_cursor' });
             if (categoryId === 'trash') {
@@ -475,7 +482,7 @@ export function createStorageService(deps: StorageServiceDeps) {
                 // the payload. Reading its current entries needs no catalog scan.
                 const trashEntries = await operations.trashEntries(options.actor);
                 assertActive(options.signal);
-                if (!options.actor) await options.assertCurrentAuthority?.();
+                if (!options.actor) await options.assertCurrent?.();
                 assertActive(options.signal);
                 return MachineStorageCategoryListResultV1Schema.parse({ categoryId, revision, sizedAt: now(),
                     trashEntries, items: trashEntries.map(entry => ({ itemId: entry.entryId, kind: 'category-item', categoryId: 'trash',
@@ -485,7 +492,7 @@ export function createStorageService(deps: StorageServiceDeps) {
             const current = await summary({ signal: options.signal });
             // Refresh the caller's readonly Session scope after measurement, before
             // projection strips the private binding used to enforce that scope.
-            await options.assertCurrentAuthority?.();
+            await options.assertCurrent?.();
             const visible = items.filter(item => item.categoryId === categoryId && (options.sessionIds === undefined
                 || item.sessionId !== undefined && options.sessionIds.has(item.sessionId)));
             const groups = new Map<StorageCategoryGroupV1['id'], StorageCategoryGroupV1>();
@@ -500,6 +507,8 @@ export function createStorageService(deps: StorageServiceDeps) {
                 ...(groups.size ? { groups: [...groups.values()].sort((left, right) => order.indexOf(left.id) - order.indexOf(right.id)) } : {}) });
         },
         async refresh(options: Readonly<{ categoryId?: HappierStorageCategoryIdV1; signal?: AbortSignal; actor?: StorageOperationActor }> = {}) {
+            assertActive(options.signal);
+            await options.actor?.assertCurrentAuthority();
             assertActive(options.signal);
             // Rebuild the native union: a changed category can share inodes with any other category.
             const current = await join(begin(), options.signal);

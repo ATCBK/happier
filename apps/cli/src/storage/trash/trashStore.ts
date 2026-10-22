@@ -327,9 +327,9 @@ export function createTrashStore(deps: TrashStoreDeps) {
                                 const days = deps.readEmptyAfterDays();
                                 if (days === null || entry.movedAt + days * 86_400_000 > now()) throw Object.assign(new Error('Trash retention changed'), { code: 'unauthorized' });
                             }
+                            await assertEligible();
                             await input.assertCurrentAuthority?.();
                             await input.assertEntryAuthority?.(entry, record.manifest.ownerData);
-                            await assertEligible();
                         };
                         if (adapter) await adapter.discard({ payloadPath: record.payloadPath, beforeEffect });
                         else await removeStoragePath(record.payloadPath, { allowedRoot: record.directory, expectedIdentity: record.manifest.identity, beforeEffect });

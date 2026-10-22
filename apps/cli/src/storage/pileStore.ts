@@ -59,14 +59,14 @@ export function createPileStore(deps: Readonly<{ activeServerDir: string; now?: 
         item.size.allocatedBytes, item.lastChangedAt === undefined ? null : Math.floor(item.lastChangedAt / 86_400_000),
     ]));
     return {
-        get(accountId: string): Promise<PileStoredView> { return serial(accountId, async () => {
+        get(accountId: string, beforeEffect?: () => Promise<void>): Promise<PileStoredView> { return serial(accountId, async () => {
             const state = await read(accountId); const previous = JSON.stringify(state);
             await prune(state); const result = view(state);
-            if (JSON.stringify(state) !== previous) await save(accountId, state);
+            if (JSON.stringify(state) !== previous) { await beforeEffect?.(); await save(accountId, state); }
             return result;
         }); },
         set(accountId: string, delta: PileDelta, actor: StorageActorV1,
-            resolveFingerprint?: (ref: StorageItemRefV1) => Promise<string | undefined>): Promise<PileStoredView> {
+            resolveFingerprint?: (ref: StorageItemRefV1) => Promise<string | undefined>, beforeEffect?: () => Promise<void>): Promise<PileStoredView> {
             return serial(accountId, async () => {
                 if (actor.accountId !== accountId) throw Object.assign(new Error('Pile actor mismatch'), { code: 'unauthorized' });
                 const state = await read(accountId); await prune(state);
@@ -81,28 +81,29 @@ export function createPileStore(deps: Readonly<{ activeServerDir: string; now?: 
                     state.items = state.items.filter(child => !pilePathContains(path, child.path));
                     state.items.push(item);
                 }
-                const result = view(state); await save(accountId, state); return result;
+                const result = view(state); await beforeEffect?.(); await save(accountId, state); return result;
             });
         },
-        removeActed(accountId: string, itemIds: readonly string[]): Promise<void> { return serial(accountId, async () => {
-            const state = await read(accountId); state.items = state.items.filter(item => !itemIds.includes(item.itemId)); await save(accountId, state);
+        removeActed(accountId: string, itemIds: readonly string[], beforeEffect?: () => Promise<void>): Promise<void> { return serial(accountId, async () => {
+            const state = await read(accountId); state.items = state.items.filter(item => !itemIds.includes(item.itemId));
+            await beforeEffect?.(); await save(accountId, state);
         }); },
-        decline(accountId: string, items: readonly DeclinedStorageItem[]): Promise<void> { return serial(accountId, async () => {
+        decline(accountId: string, items: readonly DeclinedStorageItem[], beforeEffect?: () => Promise<void>): Promise<void> { return serial(accountId, async () => {
             const state = await read(accountId);
             for (const item of items) {
                 if (!identityMatches(item.ref, await readStoragePathIdentity(item.ref.path))) continue;
                 state.declined[item.ref.itemId] = { path: item.ref.path, fingerprint: declinedFingerprint(item) };
             }
-            await save(accountId, state);
+            await beforeEffect?.(); await save(accountId, state);
         }); },
-        isDeclined(accountId: string, item: DeclinedStorageItem): Promise<boolean> { return serial(accountId, async () => {
+        isDeclined(accountId: string, item: DeclinedStorageItem, beforeEffect?: () => Promise<void>): Promise<boolean> { return serial(accountId, async () => {
             const state = await read(accountId); const declined = state.declined[item.ref.itemId];
             if (!declined) return false;
             let unchanged = false;
             try { unchanged = identityMatches(item.ref, await readStoragePathIdentity(item.ref.path)); }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
             if (unchanged && declined.fingerprint === declinedFingerprint(item)) return true;
-            delete state.declined[item.ref.itemId]; await save(accountId, state); return false;
+            delete state.declined[item.ref.itemId]; await beforeEffect?.(); await save(accountId, state); return false;
         }); },
     };
 }

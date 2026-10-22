@@ -186,7 +186,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             service.invalidate();
             const fresh = await readPhase('actor-fresh', rpcSummary);
             const refreshed = await readPhase('actor-refresh', () => service.refresh({ actor: {
-                accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrentAuthority: async () => {},
+                accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrent: async () => {}, assertCurrentAuthority: async () => {},
             } }));
             expect(retained.categories).toEqual(raw.categories);
             expect(retained.suggestionsTop).toEqual(raw.suggestionsTop);
@@ -249,7 +249,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
             historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const service = createStorageService({ machineId: 'machine', homeDir: scratch,
             activityLog: await createActivityLog({ activeServerDir: server, resourceSummary }),
             catalog: { happyHomeDir: home, activeServerDir: server, tempRoot: join(scratch, 'acp-no-temp'),
@@ -489,7 +489,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             for (const path of [finished, join(finished, 'nested')]) retainedDates.set(path, seed.readNode(path)!.scannedAt);
             if (termination === 'cancelled') seed.finish(volumes[0].id, 'cancelled');
         } finally { seed.close(); }
-        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const openService = () => {
             const policy = createMachineResourcesPolicyRuntime({ port: {
                 read: async () => availability === 'ready' ? { status: 'ready', metadata, metadataVersion: 1 } : { status: availability },
@@ -567,7 +567,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         }
         let policy = MachineStoragePolicyV1Schema.parse({});
         let changed = () => {};
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
             historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
@@ -692,7 +692,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         for (const path of paths) { await mkdir(path); await writeFile(join(path, 'content'), path); }
         let sessions = [{ path: paths[1]!, sessionId: 'original-session' },
             { path: paths[2]!, sessionId: 'stable-session-a' }, { path: paths[2]!, sessionId: 'stable-session-b' }];
-        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
         const service = createStorageService({ machineId: 'machine', homeDir: home, activityLog,
             readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true,
@@ -739,7 +739,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error;
         });
         let retired = false;
-        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
         const service = createStorageService({ machineId: 'machine', homeDir: home, activityLog,
             readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
@@ -796,7 +796,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
             historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         let inspectionPhase = 'scan';
         const inspectionCounts = new Map<string, number>();
         const service = createStorageService({ machineId: 'machine', homeDir: home, scmRegistry: registry,
@@ -847,12 +847,12 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect((await execute('git', ['-C', worktree, 'rev-parse', '--is-inside-work-tree'])).stdout.trim()).toBe('true');
             inspectionPhase = 'summary';
             await service.summary();
-            // Each read shares one inspection. Apply retains fresh admission,
-            // Trash commit and adapter-effect checks; exact SCM also binds its owner.
+            // Each read shares one inspection. Apply checks initial facts and
+            // the adapter effect; exact SCM also binds its owner.
             expect(Object.fromEntries(['contents.collect', 'contents.review', 'contents.apply', 'exact.collect', 'exact.review', 'exact.apply', 'summary']
                 .map(phase => [phase, inspectionCounts.get(phase) ?? 0]))).toEqual({
-                'contents.collect': 1, 'contents.review': 1, 'contents.apply': 3,
-                'exact.collect': 1, 'exact.review': 1, 'exact.apply': 4, summary: 1,
+                'contents.collect': 1, 'contents.review': 1, 'contents.apply': 2,
+                'exact.collect': 1, 'exact.review': 1, 'exact.apply': 3, summary: 1,
             });
         } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
@@ -877,7 +877,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) })]);
         const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
         let systemPaths: string[] = [];
-        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const service = createStorageService({ machineId: 'machine', homeDir: home, scmRegistry: registry, activityLog,
             readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
             readStorageProtectionFacts: () => ({ systemPaths }),
@@ -989,7 +989,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const firstPath = join(firstRoot, '.dev', 'worktree', 'first');
         const secondPath = join(secondRoot, '.dev', 'worktree', 'second');
         await Promise.all([home, firstPath, secondPath].map(path => mkdir(path, { recursive: true })));
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home,
             tempRoot: join(scratch, 'project-filter-no-temp'),
             readProjects: () => ({ status: 'ready', projects: [{ projectId: 'first', repositoryRoot: firstRoot },
@@ -1058,7 +1058,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const partial = await assertTotals(entries.map(entry => entry.size.allocatedBytes), 2);
             expect(partial.size).toMatchObject({ atLeast: true,
                 freesUpToBytes: freesUpToBytes + entries[1]!.size.freesBytes });
-            const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+            const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
             const emptied = await service.trashEmpty({ machineId: 'machine', batchId: 'totals' }, { actor });
             expect(emptied.outcomes).toHaveLength(2);
             expect(emptied.outcomes).toEqual(entries.map(entry => ({ entryId: entry.entryId, status: 'deleted' })));
@@ -1084,7 +1084,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const serviceDeps = { catalog: { happyHomeDir: home, activeServerDir: server,
             tempRoot: join(scratch, 'cleanup-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
             readInUsePaths: () => ({ reliable: true, paths: [cache] }) },
@@ -1154,7 +1154,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
                 expect(receipt.revision).toBe(cold.revision());
                 const cancelled = new AbortController(); cancelled.abort();
                 await expect(cold.categoryList('trash', { signal: cancelled.signal })).rejects.toMatchObject({ name: 'AbortError' });
-                await expect(cold.categoryList('trash', { assertCurrentAuthority: async () => {
+                await expect(cold.categoryList('trash', { assertCurrent: async () => {
                     throw Object.assign(new Error('Authority changed'), { code: 'unauthorized' });
                 } })).rejects.toMatchObject({ code: 'unauthorized' });
             } finally { cold.dispose(); }
@@ -1169,7 +1169,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server, installDir: executable,
             tempRoot: join(scratch, 'forbidden-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
             readInUsePaths: () => ({ reliable: true, paths: [] }) }, homeDir: scratch, machineId: 'machine', activityLog,
@@ -1198,7 +1198,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server,
             tempRoot: join(scratch, 'decline-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
             readInUsePaths: () => ({ reliable: true, paths: [] }) }, activityLog, machineId: 'machine', homeDir: scratch,
@@ -1230,7 +1230,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         await execute('git', ['init', repo]);
         await writeFile(join(repo, 'package.json'), '{}'); await writeFile(join(repo, '.gitignore'), 'dist/\n');
         for (const name of ['dist', 'build']) { await mkdir(join(repo, name)); await writeFile(join(repo, name, 'bytes'), Buffer.alloc(4096, 1)); }
-        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const registration = createGitScmBackendRuntimeRegistration();
         const scmRegistry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
             qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,

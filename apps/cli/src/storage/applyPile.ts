@@ -11,7 +11,8 @@ import { pilePathContains } from './pileStore';
 export type PileApplyInput = Readonly<{
     items: readonly Readonly<{ ref: PileItemRefV1; expect: string }>[];
     mode: 'trash' | 'delete'; actor: StorageActorV1; custodianAccountId: string; emptyAfter?: boolean;
-    assertCurrentAuthority(): Promise<void>;
+    assertCurrent?(): Promise<void>;
+    assertCurrentAuthority(item: StorageCleanupItem): Promise<void>;
 }>;
 export type PileApplyDeps = PileReviewDeps & Readonly<{
     trashStore: Pick<ReturnType<typeof createTrashStore>, 'prepare' | 'empty'>;
@@ -20,7 +21,7 @@ export type PileApplyDeps = PileReviewDeps & Readonly<{
 }>;
 export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Promise<PileApplyResultV1> {
     const result: PileApplyResultV1 = { batchId: randomUUID(), mode: input.mode, outcomes: [], inTrashBytes: 0, freedBytes: 0 };
-    const movedEntries: { entryId: string; itemId: string; payloadPath: string; bytes: number }[] = [];
+    const movedEntries: { entryId: string; itemId: string; payloadPath: string; bytes: number; item: StorageCleanupItem }[] = [];
     const emptiedEntries = new Set<string>();
     const acted: string[] = [];
     const completedChildren = new Set<string>();
@@ -29,12 +30,12 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
         && (!canonicalAbsolutePathsEqual(parent.ref.path, item.ref.path) || parentIndex < index)));
     async function execute(checked: PileApplyInput['items'][number], ancestorBeforeEffect?: () => Promise<void>): Promise<boolean> {
         try {
-            await input.assertCurrentAuthority();
+            await input.assertCurrent?.();
             const reviewedFacts = await readPileFacts(checked.ref, deps);
             if (reviewedFacts.classification.verdict === 'forbidden') throw new PileFactError('storage_forbidden', reviewedFacts.classification.reason);
             if (reviewedFacts.expect !== checked.expect) throw new PileFactError('changed_since_review');
             const recheck = async () => {
-                await input.assertCurrentAuthority();
+                await input.assertCurrent?.();
                 const facts = await readPileFacts(checked.ref, deps);
                 // Only our successful owned-child effects are an expected change.
                 // A new/recreated child remains in current facts and fails comparison.
@@ -64,20 +65,26 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
             const measurement = measured.perPath.find(value => canonicalAbsolutePathsEqual(value.path, facts.ref.path));
             if (!measurement) throw new PileFactError('facts_unavailable');
             const size = storageSizeFromMeasurement(measurement);
-            const beforeEffect = async () => { await ancestorBeforeEffect?.(); await recheck(); };
+            const beforeEffect = async () => {
+                await ancestorBeforeEffect?.();
+                const current = await recheck();
+                await input.assertCurrentAuthority(current.item);
+            };
             if (input.mode === 'trash') {
                 const prepared = await deps.trashStore.prepare({ path: facts.ref.path, batchId: result.batchId, title: facts.item.title,
                     categoryId: facts.item.categoryId, identity: facts.identity, size, movedBy: input.actor, ownerData: adapter.ownerData,
-                    restorable: adapter.restorable, assertCurrentAuthority: input.assertCurrentAuthority });
+                    restorable: adapter.restorable, assertCurrentAuthority: input.assertCurrent });
                 const entry = await prepared.commit(async ({ payloadPath, beforeEffect: trashBeforeEffect }) => {
                     const composedBeforeEffect = async () => { await trashBeforeEffect?.(); await beforeEffect(); };
-                    await composedBeforeEffect(); await adapter.retire({ payloadPath, beforeEffect: composedBeforeEffect });
+                    await input.assertCurrent?.();
+                    await adapter.retire({ payloadPath, beforeEffect: composedBeforeEffect });
                 });
-                movedEntries.push({ entryId: entry.entryId, itemId: checked.ref.itemId, payloadPath: prepared.payloadPath, bytes: entry.size.allocatedBytes });
+                movedEntries.push({ entryId: entry.entryId, itemId: checked.ref.itemId, payloadPath: prepared.payloadPath,
+                    bytes: entry.size.allocatedBytes, item: facts.item });
                 result.inTrashBytes += entry.size.allocatedBytes;
                 result.outcomes.push({ itemId: checked.ref.itemId, status: 'moved' });
             } else {
-                await beforeEffect(); await adapter.discard({ beforeEffect });
+                await input.assertCurrent?.(); await adapter.discard({ beforeEffect });
                 try { await readStoragePathIdentity(facts.ref.path); throw new Error('Storage owner left the removed path behind'); }
                 catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
                 result.freedBytes += measured.totalExclusiveBytes;
@@ -109,9 +116,16 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
     }
     if (input.mode === 'trash' && input.emptyAfter && movedEntries.length) {
         try {
-            await input.assertCurrentAuthority();
+            await input.assertCurrent?.();
             const empty = await deps.trashStore.empty({ entryIds: movedEntries.map(entry => entry.entryId) }, {
-                actorAccountId: input.actor.accountId, custodianAccountId: input.custodianAccountId, assertCurrentAuthority: input.assertCurrentAuthority,
+                actorAccountId: input.actor.accountId, custodianAccountId: input.custodianAccountId, assertCurrentAuthority: input.assertCurrent,
+                assertEntryAuthority: async entry => {
+                    const moved = movedEntries.find(moved => moved.entryId === entry.entryId);
+                    if (!moved) throw new PileFactError('facts_unavailable');
+                    // Keep the moved item's Session binding through the second
+                    // effect; refreshed Machine admission alone does not prove it.
+                    await input.assertCurrentAuthority(moved.item);
+                },
             });
             result.freedBytes += empty.freedBytes;
             for (const outcome of empty.outcomes) {

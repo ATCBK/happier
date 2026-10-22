@@ -1,6 +1,6 @@
 import { appendFile, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import type { PileItemRefV1, StorageActorV1, StorageSizeV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -11,8 +11,9 @@ import { reviewPile, type PileReviewDeps } from './reviewPile';
 import { applyPile } from './applyPile';
 import { measureNativeDisk } from './measure/nativeDiskMeasure';
 import { createTrashStore } from './trash/trashStore';
-import { readStoragePathIdentity, removeStoragePath } from './trash/removeStoragePath';
+import { readStoragePathIdentity } from './trash/removeStoragePath';
 import { createActivityLog } from '@/daemon/guard/activityLog';
+import { bindFilesystemItem, filesystemAdapterForEntry } from './categories/filesystemAdapters';
 
 let disposeNative: (() => Promise<void>) | undefined;
 const actor: StorageActorV1 = { accountId: 'owner', kind: 'agent' };
@@ -69,11 +70,7 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
             readVolumes: () => [{ id: 'fixture', mount: scratch }],
             activityLog,
             attributionFor: () => ({ kind: 'unknown' }), classifyRestorePath: async () => null, readEmptyAfterDays: () => null,
-            resolveOwnerAdapter: async () => ({
-                reinstate: async ({ payloadPath, restorePath, beforeEffect }) => { await beforeEffect?.(); await rename(payloadPath, restorePath); },
-                discard: async ({ payloadPath, beforeEffect }) => { await beforeEffect?.(); await removeStoragePath(payloadPath,
-                    { allowedRoot: resolve(payloadPath, '..'), expectedIdentity: await readStoragePathIdentity(payloadPath) }); },
-            }) });
+            resolveOwnerAdapter: async (_categoryId, data) => filesystemAdapterForEntry(data) });
         const deps: PileReviewDeps = {
             resolve: async supplied => ({ item: { itemId: supplied.itemId, path: supplied.path, categoryId: 'logs',
                 kind: 'category-item', title: supplied.itemId, evidence: [], verdict: verdicts.get(supplied.itemId) ?? 'safe',
@@ -81,10 +78,7 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
             classify: async (_physical, item) => ({ verdict: verdicts.get(item.itemId) ?? 'safe', reason: { code: verdicts.get(item.itemId) === 'forbidden' ? 'system' : 'old' } }),
             measure: measureNativeDisk, trashAvailability: trash.availability,
         };
-        const adapter = async (item: StorageCleanupItem): Promise<StorageCategoryAdapter> => ({ ownerData: null, restorable: true,
-            retire: async ({ payloadPath, beforeEffect }) => { await beforeEffect?.(); await rename(item.path, payloadPath); },
-            reinstate: async ({ payloadPath, restorePath, beforeEffect }) => { await beforeEffect?.(); await rename(payloadPath, restorePath); },
-            discard: async ({ beforeEffect }) => { await beforeEffect?.(); await removeStoragePath(item.path, { allowedRoot: candidates, expectedIdentity: await readStoragePathIdentity(item.path) }); } });
+        const adapter = async (item: StorageCleanupItem): Promise<StorageCategoryAdapter> => bindFilesystemItem(item);
         return { candidates, deps, trash, adapter, fingerprints, verdicts, activityLog };
     }
 
@@ -175,14 +169,16 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
         for (const path of paths) await writeFile(path, Buffer.alloc(8192, 3));
         const checked = await reviewPile(await Promise.all(paths.map(ref)), f.deps);
         let remainingId: string | undefined;
+        let remainingPath: string | undefined;
         // Replace one payload only after both moves commit, at the real pre-empty authority boundary.
         // The actual Trash owner must refuse its changed identity while emptying the other entry.
-        const assertCurrentAuthority = async () => {
+        const assertCurrentAuthority = async (item: StorageCleanupItem) => {
             if (remainingId) return;
             const entries = await f.trash.list();
             if (entries.length !== 2) return;
-            const entry = entries.find(value => value.originalPath === paths[1])!;
+            const entry = entries.find(value => value.originalPath === item.path)!;
             remainingId = entry.entryId;
+            remainingPath = entry.originalPath;
             const root = (await f.trash.roots()).find(value => value.volumeId === entry.volumeId)!;
             const payload = join(root.path, entry.entryId, 'payload');
             await rename(payload, `${payload}-retained`);
@@ -198,10 +194,8 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
             expect.objectContaining({ freedBytes: result.freedBytes }),
         ]);
         expect(result.freedBytes).toBeGreaterThan(0);
-        expect(result.outcomes).toEqual([
-            { itemId: paths[0], status: 'moved' },
-            { itemId: paths[1], status: 'moved', reason: { code: 'changed_since_review' } },
-        ]);
+        expect(result.outcomes).toEqual(paths.map(itemId => ({ itemId, status: 'moved',
+            ...(itemId === remainingPath ? { reason: { code: 'changed_since_review' } } : {}) })));
     });
 
     it('checks changed facts and revoked authority after an owner wait immediately before effect', async () => {

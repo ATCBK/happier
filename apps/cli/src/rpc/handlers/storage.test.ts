@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
-import { MachineStorageCategoryListResultV1Schema, MachineStoragePileResultV1Schema, PileReviewV1Schema, PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageCategoryListResultV1Schema, MachineStoragePileResultV1Schema, PileReviewV1Schema, PileApplyResultV1Schema, MachineStoragePolicyV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
@@ -87,7 +87,9 @@ describe('lazy storage Machine RPC', () => {
                 await expect(read(input, { ...context(), verifyMachineAdmissionCurrent: async () => false })).rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
                 await expect(read(input, { ...context(), machineAdmission: { ...context().machineAdmission!, installationId: 'old-install' } }))
                     .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
-                expect(constructions()).toBe(0);
+                // Bare registrar calls omit the dispatcher's initial verification.
+                // The handler verifies revocation before disclosing this owner's result.
+                expect(constructions()).toBe(1);
                 expect(await read(input, context())).toMatchObject({ volumes: [], wholeDisk: { enabled: false } });
                 expect(await handlers.get(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST)!({ ...input, categoryId: 'logs' }, context()))
                     .toMatchObject({ items: [] });
@@ -161,25 +163,28 @@ describe('lazy storage Machine RPC', () => {
                 .toMatchObject({ status: 'applied', policy: { storage: { protectedFolders: [] } } });
         } finally { routes.dispose(); policy.stop(); }
     });
-    it('refuses missing or revoked exact Machine admission before accessing storage', async () => {
-        const { handlers, constructions } = setup();
+    it('refuses missing or stale local admission before storage and revoked Home admission before disclosure', async () => {
+        const { handlers, constructions, routes } = setup();
         const read = handlers.get(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET)!;
         await expect(read({ machineId: 'machine' })).rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
         await expect(read({ machineId: 'other' }, context())).rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
+        expect(constructions()).toBe(0);
         await expect(read({ machineId: 'machine' }, { ...context(), verifyMachineAdmissionCurrent: async () => false }))
             .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
-        expect(constructions()).toBe(0);
+        expect(constructions()).toBe(1);
+        routes.dispose();
     });
-    it('refuses revoked cleanup authority before lazy storage, including empty reads and all-entry emptying', async () => {
-        const { handlers, constructions } = setup();
+    it('refuses revoked cleanup authority before effects or disclosure, including empty reads and all-entry emptying', async () => {
+        const { handlers, constructions, routes } = setup();
         for (const [method, args] of [[RPC_METHODS.DAEMON_STORAGE_PILE_GET, {}], [RPC_METHODS.DAEMON_STORAGE_PILE_SET, { clear: true }],
             [RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK, { refs: [] }], [RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY, {}],
             [RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE, { batchId: 'batch' }]] as const) {
             await expect(handlers.get(method)!({ machineId: 'machine', ...args },
-                { ...context(), verifyMachineAdmissionCurrent: async () => false }))
+                { ...context(), verifyMachineAdmissionCurrent: async () => false, verifyMachineAuthorityCurrent: async () => false }))
                 .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
         }
-        expect(constructions()).toBe(0);
+        expect(constructions()).toBe(1);
+        routes.dispose();
     });
     it('exposes only shared capacity totals to recipients and keeps private categories custodian-only', async () => {
         const { handlers, routes } = setup();
@@ -228,26 +233,31 @@ describe('lazy storage Machine RPC', () => {
         valid = false;
         releaseProof(new Set(['own-session']));
         await ownRejected;
-        expect(next.constructions()).toBe(0);
+        expect(next.constructions()).toBe(1);
         next.routes.dispose();
     });
     it('uses the same cache for revision-edge watch and releases a cancelled request', async () => {
         const { handlers, routes } = setup();
+        let verifications = 0;
+        const watchContext = { ...context('recipient', 'use'), verifyMachineAdmissionCurrent: async () => { verifications += 1; return true; } };
         try {
             const service = await routes.getService(identity);
             const first = await service.summary();
-            const changed = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: first.revision }, context('recipient', 'use'));
+            const changed = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: first.revision }, watchContext);
             await new Promise<void>(resolve => setImmediate(resolve));
+            expect(verifications).toBe(0);
             service.invalidate();
             expect(await changed).toMatchObject({ changed: true, summary: { categories: [], revision: expect.any(Number) } });
+            expect(verifications).toBe(1);
             const controller = new AbortController();
             const latest = await service.summary();
             const cancelled = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: latest.revision },
-                { ...context('recipient', 'use'), signal: controller.signal });
+                { ...watchContext, signal: controller.signal });
             const rejected = expect(cancelled).rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
             await new Promise<void>(resolve => setImmediate(resolve));
             controller.abort();
             await rejected;
+            expect(verifications).toBe(1);
             expect((await service.summary()).revision).toBe(latest.revision);
         } finally { routes.dispose(); }
     });
@@ -294,6 +304,9 @@ describe('lazy storage Machine RPC', () => {
             catalog: { happyHomeDir: admittedTarget.serverId === identity.serverId ? directory : join(directory, 'replacement'),
                 activeServerDir: admittedTarget.serverId === identity.serverId ? activeServerDir : join(directory, 'replacement', 'server'), tempRoot: join(directory, 'tmp') },
             readVolumes: () => [{ id: volume.id, mount: volume.mountPath, label: 'Fixture', totalBytes: 1000, availableBytes: 1000 }],
+            // A loaded opt-in reaches real index initialization. Unknown policy
+            // deliberately preserves retained indexes without opening them.
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: admittedTarget.serverId === identity.serverId }),
             subscribeChanges: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
         }) });
         const pending = routes.getService(identity);
@@ -379,6 +392,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
         let recipientSessionIds = new Set(['own-session']);
+        let revokeAfterMove = false;
         const { handlers, routes } = setup({ deps: () => ({ catalog: { happyHomeDir: home, activeServerDir: server,
             managedSessionDirectories: directories, tempRoot: join(scratch, 'recipient-trash-no-temp'),
             readProjects: () => ({ status: 'ready', projects: [] }),
@@ -389,10 +403,19 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             readOwnSessionIds: account => account === 'recipient' ? recipientSessionIds : new Set(account === 'foreign' ? ['foreign-session'] : []),
         });
         const invoke = (method: string, input: object, account = 'recipient', role: 'use' | 'manage' = 'use') =>
-            handlers.get(method)!({ machineId: 'machine', ...input }, context(account, role));
+            handlers.get(method)!({ machineId: 'machine', ...input }, { ...context(account, role),
+                verifyMachineAuthorityCurrent: async () => {
+                    // Home authority stays current, but Session custody can end
+                    // between the committed move and its requested early empty.
+                    if (revokeAfterMove && account === 'recipient') {
+                        try { await readFile(join(own.directory, 'own.txt')); }
+                        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; recipientSessionIds = new Set(); }
+                    }
+                    return true;
+                } });
         const listTrash = async (account = 'recipient', role: 'use' | 'manage' = 'use') =>
             MachineStorageCategoryListResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'trash' }, account, role));
-        const move = async (account: string) => {
+        const move = async (account: string, emptyAfter = false) => {
             const folders = MachineStorageCategoryListResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST,
                 { categoryId: 'sessionFolders' }, account));
             const pile = MachineStoragePileResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_SET,
@@ -405,8 +428,9 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const checked = PileReviewV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK,
                 { refs: pile.items.map(({ itemId, path }) => ({ itemId, path })) }, account));
             const result = PileApplyResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE,
-                { items: checked.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }, account));
-            expect(result.outcomes).toEqual([{ itemId: pile.items[0]!.itemId, status: 'moved' }]);
+                { items: checked.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })), emptyAfter }, account));
+            expect(result.outcomes).toEqual([{ itemId: pile.items[0]!.itemId, status: 'moved',
+                ...(revokeAfterMove ? { reason: { code: 'unauthorized' } } : {}) }]);
             return result;
         };
         try {
@@ -436,6 +460,13 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE, { batchId: ownMoved.batchId }))
                 .toMatchObject({ outcomes: [{ status: 'restored', path: own.directory }] });
             expect(await readFile(join(own.directory, 'own.txt'), 'utf8')).toBe('owned attachment');
+            revokeAfterMove = true;
+            const held = await move('recipient', true);
+            expect(held.inTrashBytes).toBeGreaterThan(0);
+            expect(held.freedBytes).toBe(0);
+            revokeAfterMove = false; recipientSessionIds = new Set(['own-session']);
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE, { batchId: held.batchId }))
+                .toMatchObject({ outcomes: [{ status: 'restored', path: own.directory }] });
             const again = await move('recipient');
             const emptied = await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY, { batchId: again.batchId });
             expect(emptied, JSON.stringify(emptied))

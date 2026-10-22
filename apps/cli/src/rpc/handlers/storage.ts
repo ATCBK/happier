@@ -107,7 +107,7 @@ function projectSummary(summary: HappierStorageSummaryV1, custodian: boolean): H
         wholeDisk: { enabled: false, scans: [] } };
 }
 
-async function callStorageOwner<T>(invoke: () => Promise<T>): Promise<T> {
+async function callStorageOwner<T>(invoke: () => Promise<T>, beforeDisclosure: () => Promise<void>): Promise<T> {
     try { return await invoke(); }
     catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'unauthorized') {
@@ -118,6 +118,7 @@ async function callStorageOwner<T>(invoke: () => Promise<T>): Promise<T> {
         }
         throw error;
     }
+    finally { await beforeDisclosure(); }
 }
 
 export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, options: DaemonStorageRoutes): void {
@@ -140,6 +141,12 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
             return true;
         };
         const assertCurrent = async () => {
+            if (!await matches() || !await matches()) throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
+        };
+        const assertLocalAuthority = async () => {
+            if (!await matches(true) || !await matches(true)) throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
+        };
+        const verifyCurrent = async () => {
             const verified = async () => context?.verifyMachineAdmissionCurrent && await context.verifyMachineAdmissionCurrent()
                 || deny('machine_currentness');
             if (!await matches() || !await verified() || !await matches()) {
@@ -153,27 +160,34 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
                 throw new RpcError('Machine access denied', RPC_ERROR_CODES.FORBIDDEN);
             }
         };
-        return { target, custodian, accountId: admitted?.actorAccountId ?? '', assertCurrent, assertCurrentAuthority };
+        return { target, custodian, accountId: admitted?.actorAccountId ?? '', assertCurrent, assertLocalAuthority, verifyCurrent, assertCurrentAuthority };
     };
     async function readActor(access: ReturnType<typeof admission>, context?: RpcHandlerContext, effect = false): Promise<StorageOperationActor> {
         const sessionIds = access.custodian ? undefined : new Set(await options.readOwnSessionIds(access.accountId));
         await access.assertCurrent();
-        const assertAuthority = effect ? access.assertCurrentAuthority : access.assertCurrent;
-        const assertCurrentAuthority = async () => {
-            await assertAuthority();
+        const assertLocal = effect ? access.assertLocalAuthority : access.assertCurrent;
+        const refreshSessionCustody = async () => {
+            await assertLocal();
             if (sessionIds) {
                 const current = await options.readOwnSessionIds(access.accountId);
-                await assertAuthority();
+                await assertLocal();
                 // Keep the owner's readonly view, but refresh Session custody
                 // at the same authority boundary immediately before effects.
                 sessionIds.clear();
                 for (const sessionId of current) sessionIds.add(sessionId);
             }
         };
+        const assertCurrentAuthority = async () => {
+            // Session custody may await the requester owner. Verify Home authority
+            // once, after that await, at the service's actual effect boundary.
+            await refreshSessionCustody();
+            await (effect ? access.assertCurrentAuthority() : access.verifyCurrent());
+        };
         return { accountId: access.accountId,
             kind: context?.callerAuthority === 'present_user' && !context.sessionActionOrigin ? 'person' : 'agent',
             custodianAccountId: access.target!.custodianAccountId,
             ...(sessionIds ? { sessionIds } : {}),
+            assertCurrent: refreshSessionCustody,
             assertCurrentAuthority,
         };
     }
@@ -181,54 +195,58 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
         const request = MachineStorageSummaryGetInputV1Schema.parse(raw);
         const access = admission(request, context);
         await access.assertCurrent();
-        const actor = await readActor(access, context);
-        const service = await options.getService(access.target!);
-        await access.assertCurrent();
-        const summary = await callStorageOwner(() => service.summary({ actor, signal: context?.signal }));
-        await access.assertCurrent();
+        const summary = await callStorageOwner(async () => {
+            const actor = await readActor(access, context);
+            const service = await options.getService(access.target!);
+            await access.assertCurrent();
+            return service.summary({ actor, signal: context?.signal });
+        }, access.verifyCurrent);
         return HappierStorageSummaryV1Schema.parse(projectSummary(summary, access.custodian));
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, async (raw: unknown, context) => {
         const request = MachineStorageCategoryListInputV1Schema.parse(raw);
         const access = admission(request, context, request.categoryId !== 'sessionFolders' && request.categoryId !== 'trash');
         await access.assertCurrent();
-        const actor = await readActor(access, context);
-        const service = await options.getService(access.target!);
-        await access.assertCurrent();
-        const result = await callStorageOwner(() => service.categoryList(request.categoryId, { actor, signal: context?.signal, cursor: request.cursor,
-            assertCurrentAuthority: actor.assertCurrentAuthority, ...(actor.sessionIds ? { sessionIds: actor.sessionIds } : {}) }));
-        await access.assertCurrent();
+        const result = await callStorageOwner(async () => {
+            const actor = await readActor(access, context);
+            const service = await options.getService(access.target!);
+            await access.assertCurrent();
+            return service.categoryList(request.categoryId, { actor, signal: context?.signal, cursor: request.cursor,
+                assertCurrent: actor.assertCurrent, ...(actor.sessionIds ? { sessionIds: actor.sessionIds } : {}) });
+        }, access.verifyCurrent);
         return MachineStorageCategoryListResultV1Schema.parse(result);
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH, async (raw: unknown, context) => {
         const request = MachineStorageSizeRefreshInputV1Schema.parse(raw);
         const access = admission(request, context, true);
         await access.assertCurrent();
-        const actor = await readActor(access, context);
-        const service = await options.getService(access.target!);
-        await access.assertCurrent();
-        const summary = await callStorageOwner(() => service.refresh({ actor, categoryId: request.categoryId, signal: context?.signal }));
-        await access.assertCurrent();
+        const summary = await callStorageOwner(async () => {
+            const actor = await readActor(access, context);
+            const service = await options.getService(access.target!);
+            await access.assertCurrent();
+            return service.refresh({ actor, categoryId: request.categoryId, signal: context?.signal });
+        }, access.verifyCurrent);
         return HappierStorageSummaryV1Schema.parse(summary);
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_WATCH, async (raw: unknown, context) => {
         const request = MachineStorageWatchInputV1Schema.parse(raw);
         const access = admission(request, context);
         await access.assertCurrent();
-        const actor = await readActor(access, context);
-        const service = await options.getService(access.target!);
-        await access.assertCurrent();
-        // First demand warms the same owner cache; parking never starts a sizing timer.
-        const first = await callStorageOwner(() => service.summary({ actor, signal: context?.signal }));
-        await access.assertCurrent();
-        const cursor = request.sinceRevision ?? first.revision;
-        const parked = await parkWatch({ isNewer: () => service.revision() !== cursor,
-            read: () => callStorageOwner(() => service.summary({ actor, signal: context?.signal })), subscribe: service.subscribe,
-            signal: context?.signal, windowMs: MACHINE_WATCH_WINDOW_MS });
-        const summary = parked.changed ? await parked.snapshot : undefined;
-        await access.assertCurrent();
-        return MachineStorageWatchResultV1Schema.parse(summary
-            ? { changed: true, summary: projectSummary(summary, access.custodian) } : { changed: false });
+        return callStorageOwner(async () => {
+            const actor = await readActor(access, context);
+            const service = await options.getService(access.target!);
+            await access.assertCurrent();
+            // First demand warms the same owner cache; parking never starts a sizing timer.
+            const first = await service.summary({ actor, signal: context?.signal });
+            await access.assertCurrent();
+            const cursor = request.sinceRevision ?? first.revision;
+            const parked = await parkWatch({ isNewer: () => service.revision() !== cursor,
+                read: () => service.summary({ actor, signal: context?.signal }), subscribe: service.subscribe,
+                signal: context?.signal, windowMs: MACHINE_WATCH_WINDOW_MS });
+            const summary = parked.changed ? await parked.snapshot : undefined;
+            return MachineStorageWatchResultV1Schema.parse(summary
+                ? { changed: true, summary: projectSummary(summary, access.custodian) } : { changed: false });
+        }, access.verifyCurrent);
     });
     function registerOperation<I extends Readonly<{ serverId?: string; machineId: string }>, O>(
         method: string, requestSchema: Readonly<{ parse(raw: unknown): I }>, responseSchema: Readonly<{ parse(raw: unknown): O }>,
@@ -239,14 +257,15 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
             const request = requestSchema.parse(raw);
             const access = admission(request, context, custodianOnly);
             await access.assertCurrent();
-            const actor = await readActor(access, context, effect);
-            const service = await options.getService(access.target!);
-            await access.assertCurrent();
-            // This dispatch accepts the daemon operation. Closing a sheet or transport
-            // cannot cancel an accepted cleanup; live authority remains rechecked by its owner.
-            if (effect) await access.assertCurrentAuthority();
-            const result = await callStorageOwner(() => invoke(service, request, { actor, ...(effect ? {} : { signal: context?.signal }) }));
-            await (effect ? access.assertCurrentAuthority() : access.assertCurrent());
+            const result = await callStorageOwner(async () => {
+                const actor = await readActor(access, context, effect);
+                const service = await options.getService(access.target!);
+                await access.assertCurrent();
+                // This dispatch accepts the daemon operation. Closing a sheet or transport
+                // cannot cancel an accepted cleanup; live authority remains rechecked by its owner.
+                if (effect) await access.assertLocalAuthority();
+                return invoke(service, request, { actor, ...(effect ? {} : { signal: context?.signal }) });
+            }, effect ? access.assertCurrentAuthority : access.verifyCurrent);
             return responseSchema.parse(result);
         });
     }
