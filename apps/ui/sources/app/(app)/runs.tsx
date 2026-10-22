@@ -156,6 +156,25 @@ export default function RunsScreen() {
     return entries;
   }, [inventory, requestedMachineId, requestedServerId]);
 
+  const nextReadTargets = serverEntries.flatMap(([serverId, machines]) => {
+    const binding = machineScopeBindings.get(serverId);
+    const snapshot = inventory.find(snapshot => snapshot.kind === 'resolved' && snapshot.serverIdentityId === serverId);
+    if (!binding?.isCurrent() || snapshot?.kind !== 'resolved' || snapshot.observation !== 'live'
+      || snapshot.accountId !== binding.scope.accountId) return [];
+    return machines.flatMap(machine => {
+      const machineId = machine.id.trim();
+      return machineId && isMachineVisibleForLaunchSelection(machine) && machine.availability?.kind !== 'locked'
+        ? [{ serverId, machineId, accountId: binding.scope.accountId,
+          automatic: requestedRunId !== null || isMachineReachable(binding.scope, machine) }]
+        : [];
+    });
+  });
+  // Presence timestamps and display metadata do not change a Run read's target
+  // or authority. Keep the admitted read alive while those projections refresh.
+  const readTargetsKey = JSON.stringify([requestedRunId, nextReadTargets]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const readTargets = React.useMemo(() => nextReadTargets, [readTargetsKey]);
+
   const load = React.useCallback(async (intent?: 'retry') => {
     loadControllerRef.current?.abort();
     const controller = new AbortController();
@@ -167,26 +186,18 @@ export default function RunsScreen() {
 
     try {
       await Promise.all(
-        serverEntries.flatMap(([serverId, machines]) => {
+        readTargets.map(async ({ serverId, machineId, accountId, automatic }) => {
           const binding = machineScopeBindings.get(serverId);
-          const snapshot = inventory.find(snapshot => snapshot.kind === 'resolved' && snapshot.serverIdentityId === serverId);
-          if (!binding?.isCurrent() || snapshot?.kind !== 'resolved' || snapshot.observation !== 'live'
-            || snapshot.accountId !== binding.scope.accountId) return [];
-          return machines.map(async (machine) => {
-            const machineId = String(machine?.id ?? '').trim();
-            if (!machineId) return;
-            if (!isMachineVisibleForLaunchSelection(machine) || machine.availability?.kind === 'locked') return;
-            // Opening one exact Run is a user-requested read, like Refresh.
-            // A previous request failure must not turn that navigation into an empty list.
-            if (intent !== 'retry' && requestedRunId === null && !isMachineReachable(binding.scope, machine)) return;
+          if (!binding?.isCurrent() || binding.scope.accountId !== accountId) return;
+          // Opening one exact Run is a user-requested read, like Refresh.
+          // A previous request failure must not turn that navigation into an empty list.
+          if (intent !== 'retry' && !automatic) return;
 
-            const res = await machineExecutionRunsList(machineId, { serverId, accountId: binding.scope.accountId,
-              signal: controller.signal });
-            if (!res.ok) throw new Error(res.error || t('runs.failedToLoad'));
-            if (res.ok && !controller.signal.aborted && binding.isCurrent()) {
-              runsByMachineAddressKey[executionRunMachineAddressKey(serverId, machineId)] = res.runs;
-            }
-          });
+          const res = await machineExecutionRunsList(machineId, { serverId, accountId, signal: controller.signal });
+          if (!res.ok) throw new Error(res.error || t('runs.failedToLoad'));
+          if (!controller.signal.aborted && binding.isCurrent()) {
+            runsByMachineAddressKey[executionRunMachineAddressKey(serverId, machineId)] = res.runs;
+          }
         }),
       );
 
@@ -196,7 +207,7 @@ export default function RunsScreen() {
     } finally {
       for (const retirement of retirements) retirement.dispose();
     }
-  }, [inventory, machineScopeBindings, requestedRunId, serverEntries]);
+  }, [machineScopeBindings, readTargets]);
 
   React.useEffect(() => {
     void load();
