@@ -2,14 +2,16 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol';
-import { createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createRenderCommitCounter, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup, useRenderCommitCounter } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { storage } from '@/sync/domains/state/storageStore';
-import { getProviderAccountUsageCacheState, subscribeProviderAccountUsageCache } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
+import { getProviderAccountUsageCacheState, subscribeProviderAccountUsageCache, updateProviderAccountUsageCacheEntries } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
+import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import { computeConnectedServiceQuotaErrorBackoffMs } from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
@@ -69,6 +71,39 @@ describe('useProviderAccountUsageSnapshots', () => {
         vi.useRealTimers(); vi.restoreAllMocks();
     });
 
+    it('subscribes only to requested records while still delivering changes to those records', async () => {
+        const first = makeUsageSnapshot('selected'), second = makeUsageSnapshot('other');
+        const counter = createRenderCommitCounter();
+        const hook = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            return useProviderAccountUsageSnapshots([first.recordId], { fetchPolicy: 'cache_only' });
+        }, { wrapper: Wrapper });
+        await renderHook(() => useProviderAccountUsageSnapshots([second.recordId], { fetchPolicy: 'cache_only' }), { wrapper: Wrapper });
+        const scope = buildProviderAccountUsageScopeKey({ ...getActiveServerSnapshot(),
+            credentialScope: resolveAuthCredentialsScopeKey(boundary.account.credentials) });
+        const entry = (snapshot: typeof first) => ({ snapshot, loading: false, hadError: false,
+            nextFetchAtMs: Number.POSITIVE_INFINITY, consecutiveErrors: 0 });
+        await act(async () => updateProviderAccountUsageCacheEntries(scope, () => ({
+            [first.recordId]: entry(first), [second.recordId]: entry(second),
+        })));
+        counter.reset();
+        const before = hook.getCurrent();
+        for (let index = 0; index < 5; index++) {
+            await act(async () => updateProviderAccountUsageCacheEntries(scope, entries => ({ ...entries,
+                [second.recordId]: entry({ ...second, meters: [{ ...second.meters[0]!, used: index }] }),
+            })));
+        }
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        expect(hook.getCurrent()).toBe(before);
+        const fresh = { ...first, meters: [{ ...first.meters[0]!, used: 51 }] };
+        await act(async () => updateProviderAccountUsageCacheEntries(scope, entries => ({ ...entries,
+            [first.recordId]: entry(fresh),
+        })));
+        expect(hook.getCurrent().snapshotsByRecordId[first.recordId]).toEqual(fresh);
+        expect(counter.read().commits).toBeGreaterThan(0);
+        expect(boundary.usageRead).not.toHaveBeenCalled();
+    });
+
     it('parks background readers and immediately refreshes retained data on foreground return', async () => {
         vi.useFakeTimers(); runtime.active = false;
         const snapshot = makeUsageSnapshot();
@@ -89,6 +124,64 @@ describe('useProviderAccountUsageSnapshots', () => {
         await active(false); await active(true);
         await act(async () => { wake(); await vi.advanceTimersByTimeAsync(120_000); });
         expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+    });
+
+    it('reopens with retained facts and shares exactly one revalidation until the last visible reader leaves', async () => {
+        const snapshot = makeUsageSnapshot();
+        boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(snapshot)));
+        const first = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        await first.unmount();
+        expect(Object.values(getProviderAccountUsageCacheState().entriesByCredentialScope)
+            .some(entries => entries[snapshot.recordId]?.snapshot?.recordId === snapshot.recordId)).toBe(true);
+        let finish!: (response: Response) => void;
+        boundary.usageRead.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+        const reopen = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        const sibling = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopen.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(snapshot);
+        expect(reopen.getCurrent().loadingByRecordId[snapshot.recordId]).toBe(true);
+        expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+        const next = { ...snapshot, fetchedAtMs: snapshot.fetchedAtMs + 1 };
+        await act(async () => { finish(Response.json(quotaTestProviderUsageResponse(next))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopen.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(next);
+        expect(sibling.getCurrent().snapshotsByRecordId[snapshot.recordId]).toBe(reopen.getCurrent().snapshotsByRecordId[snapshot.recordId]);
+        await reopen.unmount(); await sibling.unmount();
+        await act(async () => { wake(); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+    });
+
+    it('settles cancelled refresh activity across close and reopen without publishing its late response', async () => {
+        const snapshot = makeUsageSnapshot();
+        boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(snapshot)));
+        const first = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        let finishOld!: (response: Response) => void;
+        boundary.usageRead.mockImplementationOnce(() => new Promise<Response>(resolve => { finishOld = resolve; }));
+        await act(async () => { wake(); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(first.getCurrent().loadingByRecordId[snapshot.recordId]).toBe(true);
+        await first.unmount();
+        const cached = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId], { fetchPolicy: 'cache_only' }), { wrapper: Wrapper });
+        expect(cached.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(snapshot);
+        expect(cached.getCurrent().loadingByRecordId[snapshot.recordId]).toBe(false);
+        let finishNew!: (response: Response) => void;
+        boundary.usageRead.mockImplementationOnce(() => new Promise<Response>(resolve => { finishNew = resolve; }));
+        const reopened = await renderHook(() => useProviderAccountUsageSnapshots([snapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).toHaveBeenCalledTimes(3);
+        const retired = { ...snapshot, meters: [{ ...snapshot.meters[0]!, used: 90 }] };
+        await act(async () => { finishOld(Response.json(quotaTestProviderUsageResponse(retired))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopened.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(snapshot);
+        expect(reopened.getCurrent().loadingByRecordId[snapshot.recordId]).toBe(true);
+        const fresh = { ...snapshot, meters: [{ ...snapshot.meters[0]!, used: 50 }] };
+        await act(async () => { finishNew(Response.json(quotaTestProviderUsageResponse(fresh))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopened.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(fresh);
+        expect(reopened.getCurrent().loadingByRecordId[snapshot.recordId]).toBe(false);
     });
 
     it('loads canonical usage by record id without exposing connected-service quota projections', async () => {
@@ -191,7 +284,9 @@ describe('useProviderAccountUsageSnapshots', () => {
         await sibling.unmount(); await act(async () => { wake(); }); await flushHookEffects({ cycles: 8, turns: 8 });
         expect(boundary.usageRead).toHaveBeenCalledTimes(2);
         expect(cached.getCurrent().snapshotsByRecordId[snapshot.recordId]).toEqual(snapshot);
-        await cached.unmount(); expect(getProviderAccountUsageCacheState().entriesByCredentialScope).toEqual({});
+        await cached.unmount();
+        expect(Object.values(getProviderAccountUsageCacheState().entriesByCredentialScope)
+            .some(entries => entries[snapshot.recordId]?.snapshot?.recordId === snapshot.recordId)).toBe(true);
     });
 
     it('batches records settled in the same turn into one cache publication', async () => {

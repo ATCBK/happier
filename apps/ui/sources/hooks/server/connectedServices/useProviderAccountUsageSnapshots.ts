@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { getCurrentAuth, useAuth } from '@/auth/context/AuthContext';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
@@ -14,6 +15,7 @@ import {
     subscribeProviderAccountUsageCache,
     updateProviderAccountUsageCacheEntries,
     type ProviderAccountUsageCacheEntry,
+    type ProviderAccountUsageCacheState,
 } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
 import { openProviderAccountUsageSnapshot } from '@/sync/domains/connectedServices/accountUsage/openProviderAccountUsageSnapshot';
 import { getUsageProjectionNextReadAtMs, observeUsageProjection } from '@/sync/api/account/usageQueryInvalidation';
@@ -195,14 +197,20 @@ export function useProviderAccountUsageSnapshots(
     const fetchPolicy = options.fetchPolicy ?? 'poll';
     const activeCredentialScopeRef = React.useRef(credentialScope);
     activeCredentialScopeRef.current = credentialScope;
-    const cacheState = React.useSyncExternalStore(
-        subscribeProviderAccountUsageCache,
-        getProviderAccountUsageCacheState,
-        getProviderAccountUsageCacheState,
-    );
-    const cacheByRecordId = credentialScope ? cacheState.entriesByCredentialScope[credentialScope] ?? {} : {};
     const recordIdsSignature = React.useMemo(() => buildRecordIdsSignature(recordIds), [recordIds]);
     const normalizedRecordIds = React.useMemo(() => normalizeProviderAccountUsageRecordIds(recordIds), [recordIdsSignature]);
+    const selectEntries = useShallow((state: ProviderAccountUsageCacheState) => {
+        const entries = state.entriesByCredentialScope[credentialScope];
+        const selected: Record<string, ProviderAccountUsageCacheEntry | undefined> = {};
+        for (const recordId of normalizedRecordIds) selected[recordId] = entries?.[recordId];
+        return selected;
+    });
+    const readSelectedEntries = () => selectEntries(getProviderAccountUsageCacheState());
+    const cacheByRecordId = React.useSyncExternalStore(
+        subscribeProviderAccountUsageCache,
+        readSelectedEntries,
+        readSelectedEntries,
+    );
     const resolveAccountMode = useCredentialScopedAccountModeResolver({ credentials, credentialScope });
 
     // Presentation retention survives changing acquisition policy or its observer.
