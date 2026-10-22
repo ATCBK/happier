@@ -240,6 +240,7 @@ import {
   readDaemonRestartVerifyTimeoutMs,
 } from './startupWaitDefaults';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { DaemonPluginChangeOwner } from '@/plugins/daemon/changeService';
 import { createDaemonPluginRuntimeOwner, createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';

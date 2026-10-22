@@ -196,7 +196,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
         }
         case 'scm.commit.resolveOutcome': {
             const request = params.input as scm.ScmCommitResolveOutcomeRequest;
-            const response = await runScmRoute({ request, ...routeBase,
+            const response = await runScmRoute<scm.ScmCommitResolveOutcomeRequest, scm.ScmCommitResolveOutcomeResponse>({ request, ...routeBase,
                 onNonRepository: () => ({ ...notRepositoryResponse<scm.ScmCommitResolveOutcomeResponse>(),
                     publication: { state: 'unknown' as const, candidateOid: request.candidateOid, expectedHeadOid: request.expectedHeadOid,
                         expectedRef: request.expectedRef, indexReconciliation: 'pending' as const } }),

@@ -7,6 +7,7 @@ import {
 import { ScmHostingProviderRefSchema } from '@happier-dev/protocol/scm/pullRequests';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { createHostScmHostingProviderRuntimeServices } from './runtimeServices';
+import type { HostingProviderResolvedRegistry } from '@happier-dev/plugin-sdk/scm/hosting';
 import type { ResolvedScmHostingProviderRegistry } from './registry';
 
 /** Registry routing and the contributed getRepository own identity and visibility. */
@@ -18,7 +19,7 @@ export async function readScmHostingRepository(input: Readonly<{
     const selector = ScmCredentialFreeRepositorySelectorV1Schema.parse(input.selector);
     const current = () => input.signal?.throwIfAborted();
     current();
-    const read = async (registry: ResolvedScmHostingProviderRegistry): Promise<ScmHostingRepositoryGetResponseV1> => {
+    const read = async (registry: Pick<HostingProviderResolvedRegistry, 'getRepositoryPublishing' | 'detectRemote'>): Promise<ScmHostingRepositoryGetResponseV1> => {
         current();
         const capability = registry.getRepositoryPublishing(selector.provider.id);
         if (!capability) return { success: true, kind: 'unsupported' };

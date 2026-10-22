@@ -1,5 +1,5 @@
 import type {
-  ConnectedServiceId,
+  ConnectedAccountServiceKey,
   ConnectedServiceQuotaSnapshotV1,
 } from '@happier-dev/protocol';
 import { compareConnectedServiceQuotaObservationRecency } from '@happier-dev/protocol/connect/quotaObservationTime';
@@ -9,14 +9,14 @@ import { buildConnectedServiceAuthGroupRuntimeStateFromMeters } from './projecti
 import type { ConnectedServiceAuthGroupMemberRuntimeState } from '../selection/selectConnectedServiceAuthGroupCandidate';
 
 type SnapshotKeyInput = Readonly<{
-  serviceId: ConnectedServiceId;
+  serviceId: ConnectedAccountServiceKey;
   groupId: string;
   profileId: string;
   groupGeneration?: number | null;
 }>;
 
 type ProfileSnapshotKeyInput = Readonly<{
-  serviceId: ConnectedServiceId;
+  serviceId: ConnectedAccountServiceKey;
   profileId: string;
 }>;
 
@@ -288,7 +288,7 @@ export class ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore {
   }
 
   buildMemberStates(input: Readonly<{
-    serviceId: ConnectedServiceId;
+    serviceId: ConnectedAccountServiceKey;
     groupId: string;
     capturedAtMs: number;
   }>): Map<string, ConnectedServiceAuthGroupMemberRuntimeState> {

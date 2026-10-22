@@ -73,7 +73,7 @@ export function isProviderAccountUsageIdentityMatch(
     observed: Pick<ProviderAccountUsageRecordKeyV1, 'providerId' | 'accountSubjectId' | 'subjectKind' | 'quotaScope' | 'quotaScopeId'>
         | Pick<ConnectedServiceQuotaSnapshotV1, 'providerId' | 'activeAccountId' | 'providerOrganizationId'>,
     current: ProviderAccountUsageOrganizationContext | null,
-    usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'],
+    usageIdentity?: PluginConnectedAccountDescriptorContributionV2['usageIdentity'] | null,
 ): boolean {
     if (usageIdentity?.providerId !== undefined && observed.providerId !== undefined
         && observed.providerId !== usageIdentity.providerId) return false;

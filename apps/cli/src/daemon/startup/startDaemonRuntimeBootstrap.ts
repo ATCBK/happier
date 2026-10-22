@@ -406,7 +406,7 @@ export async function startDaemonConnectedServiceRuntime(
     | 'listQualifiedConnectedAccountGroupQuotaTargets' | 'listScheduledQualifiedConnectedAccounts' | 'subscribeConnectedAccountInvalidations'
     | 'onQualifiedConnectedAccountCredentialUpdated' | 'qualifiedConnectedAccountEstablishedRuntimeOwner'
     | 'resolveConnectedServiceQualifiedPurposeBindingSnapshot' | 'resolveQualifiedConnectedAccountPeerClass'
-    | 'resolveQualifiedConnectedAccountPeerOperationTransport' | 'activatePurposeBindings'> & Readonly<{
+    | 'resolveQualifiedConnectedAccountPeerOperationTransport' | 'resolveConnectedAccountUsageIdentity' | 'activatePurposeBindings'> & Readonly<{
     accountSettingsSnapshot?: () => import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null;
     connectedServicesMaterializationBaseDir?: string;
     isAccountRuntimeCurrent?: () => Promise<boolean>;

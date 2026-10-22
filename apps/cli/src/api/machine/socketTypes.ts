@@ -22,6 +22,8 @@ import type { PendingActivationRequestedEphemeralV1 } from '@happier-dev/protoco
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, type SessionMessageReplyMachineMutationV1,
   type SessionMessageReplyMutationResultV1, type SessionMessageReplyPendingHintV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
+import { DISCUSSION_AGENT_POST_EVENT_V1, type DiscussionAgentApprovedReplayPublicationV1, type DiscussionAgentApprovedReplayResponseV1 } from '@happier-dev/protocol/discussions/api';
+
 export interface ServerToDaemonEvents {
   ephemeral: (data: PendingActivationRequestedEphemeralV1 | SessionMessageReplyPendingHintV1) => void;
   update: (data: Update) => void;
@@ -40,6 +42,8 @@ export interface ServerToDaemonEvents {
 }
 
 export interface DaemonToServerEvents {
+  [DISCUSSION_AGENT_POST_EVENT_V1]: (data: DiscussionAgentApprovedReplayPublicationV1,
+    cb: (answer: DiscussionAgentApprovedReplayResponseV1) => void) => void;
   [SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1]: (data: SessionMessageReplyMachineMutationV1,
     cb: (answer: SessionMessageReplyMutationResultV1) => void) => void;
   [SESSION_PENDING_RESET_START_RELEASE_EVENT_V1]: (data: PendingResetStartReleaseRequestV1, cb: (answer: PendingResetStartReleaseResponseV1) => void) => void;

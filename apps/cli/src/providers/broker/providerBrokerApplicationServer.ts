@@ -1,4 +1,4 @@
-import fastify, { errorCodes, type FastifyInstance, type FastifyReply } from 'fastify';
+import fastify, { errorCodes, type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
 import { constants } from 'node:os';
 import { AxiosError } from 'axios';
@@ -163,7 +163,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
             ...(errorCode ? { errorCode } : {}),
         });
     });
-    app.setErrorHandler((error, _request, reply) => {
+    app.setErrorHandler((error: FastifyError, _request, reply) => {
         // Preserve Fastify's parser/size refusals. Unexpected application
         // failures use the same closed refusal as other broker unavailability,
         // so neither its default 500 body nor Provider exception text escapes.

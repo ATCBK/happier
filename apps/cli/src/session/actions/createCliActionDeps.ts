@@ -1754,7 +1754,7 @@ export function createCliActionDeps(params: Readonly<{
     serverId?: string;
     method: string;
     request: unknown;
-    authorization?: ActionExecutorContext['rpcSessionAuthorization'];
+    authorization?: Parameters<typeof callMachineRpc>[0]['authorization'];
     signal?: AbortSignal;
     timeoutMs?: number | null;
     waitForResultOnCancel?: boolean;
@@ -8139,7 +8139,7 @@ export function createCliActionDeps(params: Readonly<{
           request: request.request, requestId: request.requestId, timeoutMs: request.timeoutMs,
           ...(request.authorization ? { authorization: request.authorization } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
-          ...(context ? { context, authority: context.authority, serverId: context.serverId } : {}),
+          ...(context ? { context, authority: context.authority, serverId: context.serverId ?? undefined } : {}),
           effectActionId: 'session.stop',
         }),
         ...(signal ? { signal } : {}),

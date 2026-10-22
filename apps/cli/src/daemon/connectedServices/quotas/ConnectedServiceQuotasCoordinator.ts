@@ -1566,7 +1566,7 @@ export class ConnectedServiceQuotasCoordinator {
   }
 
   public recordRuntimeProfileSnapshot(input: Readonly<{
-    serviceId: ConnectedServiceId;
+    serviceId: ConnectedAccountServiceKey;
     profileId: string;
     snapshot: ConnectedServiceQuotaSnapshotV1;
     verifiedCredentialFingerprint?: string | null;

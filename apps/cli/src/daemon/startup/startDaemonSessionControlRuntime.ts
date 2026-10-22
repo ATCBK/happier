@@ -2861,7 +2861,7 @@ export async function startDaemonSessionControlRuntime(
     ): ReturnType<typeof readTrackedSessionMaterializedStateObservationBinding>;
     providerAccountUsageStore: Pick<
       ProviderAccountUsageStore,
-      'recordSnapshot' | 'resolveRecordId' | 'resolveBySource'
+      'recordSnapshot' | 'resolveRecordId' | 'resolveBySource' | 'retainSourcesForProfile'
     >;
     /** Resubmits provider account-usage material the persistence scheduler paused. */
     flushProviderAccountUsagePersistence: (timeoutMs: number) => Promise<void>;
@@ -17656,15 +17656,15 @@ export async function startDaemonSessionControlRuntime(
                 const result = await withSessionAccountHome(requester, () => openTeamBinding({
                   sessionId,
                   teamId: binding.teamId,
-                  resourceId: request.operation.resourceId,
+                  resourceId: operation.resourceId,
                   expectedResourceRevision:
-                    request.operation.expectedResourceRevision,
+                    operation.expectedResourceRevision,
                   deliveryMode: binding.deliveryMode,
                   agentId: consumerAgentId,
-                  agentTargetKey: request.operation.agentTargetKey,
-                  modelId: request.operation.modelId,
-                  ...(request.operation.consumer
-                    ? { consumer: request.operation.consumer }
+                  agentTargetKey: operation.agentTargetKey,
+                  modelId: operation.modelId,
+                  ...(operation.consumer
+                    ? { consumer: operation.consumer }
                     : {}),
                   ...(requester ? { providerSettingsOperationContext: requester.bootstrap.savedSecretOperationContext } : {}),
                   signal,
@@ -19403,7 +19403,7 @@ export async function startDaemonSessionControlRuntime(
         try {
           await assertSessionAccountCurrent(input.sessionId, accountContext);
           return await withSessionAccountHome(accountContext, async () => {
-            let claimedSource = input.source;
+            let claimedSource: typeof input.source | null = input.source;
             if (
               input.sourceProviderAccountId === undefined &&
               claimedSource?.bindingKind === 'group_member' &&
@@ -19678,7 +19678,7 @@ export async function startDaemonSessionControlRuntime(
                       coordinator.recordRuntimeProfileSnapshot({
                         serviceId: serviceId.data,
                         profileId: source.profileId,
-                        snapshot: { ...projected, serviceId: serviceId.data },
+                        snapshot: { ...projected, serviceId: legacyServiceId },
                         verifiedCredentialFingerprint: credentialFingerprint,
                       });
                     }
