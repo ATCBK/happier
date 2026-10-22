@@ -10,7 +10,7 @@ import { readMachineIrohEndpointAuthorityV1, MachineOperationProtocolCapabilitie
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import type { MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
+import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { inTx, type Tx } from '@/storage/inTx';
 import { signRouteGrantPayload } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
 import { admitProviderBrokerConsumerInTx, type ProviderBrokerConsumerCurrentness } from './brokerConsumerAdmission';
@@ -26,7 +26,7 @@ type Common = Readonly<{
 }>;
 
 async function readMachine(tx: Tx, accountId: string, machineId: string, presence: MachineDaemonPresenceInventory) {
-    if (presence.state !== 'known' || !presence.machineIds.has(machineId)) return null;
+    if (classifyMachineDaemonPresence(presence, machineId) !== 'connected') return null;
     const machine = await tx.machine.findFirst({ where: { id: machineId, accountId }, select: {
         id: true, kind: true, revokedAt: true, replacedByMachineId: true,
         operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true,

@@ -14,7 +14,7 @@ import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/proto
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import type { MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
+import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
@@ -445,10 +445,7 @@ async function readCurrentInitiatorEndpointInTx(
     tx: Tx,
     input: Readonly<{ accountId: string; machineId: string; presence?: MachineDaemonPresenceInventory }>,
 ) {
-    if (input.presence && (
-        input.presence.state !== 'known'
-        || !input.presence.machineIds.has(input.machineId)
-    )) return null;
+    if (input.presence && classifyMachineDaemonPresence(input.presence, input.machineId) !== 'connected') return null;
     const machine = await tx.machine.findFirst({
         where: { id: input.machineId, accountId: input.accountId },
         select: {

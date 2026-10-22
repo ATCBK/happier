@@ -322,7 +322,7 @@ export async function resolveTeamCredentialBrokerPlacementInTx(
             poolId: placement.poolId,
             presence: input.presence,
         });
-        if (!snapshot.ok || snapshot.value.presenceState !== "known") {
+        if (!snapshot.ok || snapshot.value.presenceState === 'unavailable') {
             return { ok: false, error: "broker_unavailable" };
         }
         poolSnapshot = snapshot.value;

@@ -1,7 +1,7 @@
 import { MachineKindFromLegacyProjectionSchema, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { readMachineIrohEndpointAuthorityV1, supportsMachineOperationProtocolCapabilityV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
-import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
+import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import type { Tx } from "@/storage/inTx";
 
@@ -93,7 +93,7 @@ export async function resolveTeamCredentialBrokerMachinePresentInTx(
 }> | TeamCredentialBrokerMachineEligibilityError> {
     const eligible = await readEligibleBrokerMachineInTx(tx, params);
     if (!eligible.ok) return eligible;
-    if (params.presence.state !== "known" || !params.presence.machineIds.has(eligible.machine.id)) {
+    if (classifyMachineDaemonPresence(params.presence, eligible.machine.id) !== 'connected') {
         return { ok: false, error: "broker_unavailable" };
     }
     return {

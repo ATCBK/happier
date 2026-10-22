@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { ClusterAdapter, MessageType, type ClusterMessage } from "socket.io-adapter";
+import { io as connect } from "socket.io-client";
 
 import {
     TEAM_CREDENTIAL_MANUAL_CONNECTED_ACCOUNT_DIRECT_CONTRACT_V1,
@@ -25,6 +27,8 @@ import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
+import { startRedisAdapterRecoveryCluster } from "@/testkit/redisAdapterRecoveryCluster";
+import { getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import { logger } from "@/utils/logging/log";
 
 import { registerTeamCredentialResourceRoutes } from "./registerTeamCredentialResourceRoutes";
@@ -788,6 +792,154 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(denied.statusCode, denied.body).toBe(403);
         expect(denied.json()).toEqual({ error: "resource_forbidden" });
         expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it.each(["machine", "machine_pool"] as const)("uses positive partial presence for %s request-policy support and save preflights", async (placementKind) => {
+        const owner = await createAccount();
+        const team = await db.team.create({ data: { name: "Partial request-policy census" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        const machines = await Promise.all(["observed", "unobserved"].map(label => db.machine.create({ data: {
+            id: `${label}-policy-broker-${owner.id}`, accountId: owner.id, metadata: "{}", kind: "persistent",
+            operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1,
+        } })));
+        const [broker, unobserved] = machines;
+        const pool = await db.machinePool.create({ data: {
+            id: crypto.randomUUID(), accountId: owner.id, name: "Partially observed brokers",
+            members: { create: [
+                { machineId: unobserved.id, priorityTier: 0, enabled: true },
+                { machineId: broker.id, priorityTier: 1, enabled: true },
+            ] },
+        } });
+        const placement = placementKind === "machine"
+            ? { kind: "machine" as const, machineId: broker.id }
+            : { kind: "machine_pool" as const, poolId: pool.id };
+        const source = {
+            v: 1, kind: "provider_connection", connectionId: "partial-policy-connection",
+            connectionSecurityFingerprint: `connection-security:v1:${"p".repeat(43)}`, credentialSlotId: "apiKey",
+        } as const;
+        const application = {
+            agentTargetKey: "agent:happier.agent.codex/codex",
+            implementationIdentity: { pluginId: "happier.provider.openai", localId: "openai" },
+            endpointTemplateId: "responses", protocol: "openai-responses",
+        } as const;
+        // Real room discovery and Redis adapters; only the unrelated peer's external
+        // transport ingress is held, exactly as in the discovery recovery harness.
+        const cluster = await startRedisAdapterRecoveryCluster({ nodeCount: 3 });
+        const previousPresence = app.machineDaemonPresence;
+        const previousRpc = app.forwardRpcForUser;
+        const client = connect(`http://127.0.0.1:${cluster.nodes[1].port}`, {
+            path: "/v1/updates", transports: ["websocket"], reconnection: false, autoConnect: false,
+        });
+        try {
+            const joined = new Promise<void>(resolve => cluster.nodes[1].io.once("connection", socket => {
+                socket.data = { clientType: "machine-scoped", userId: owner.id, machineId: broker.id };
+                void socket.join(getUserMachinesSocketRoom(owner.id));
+                resolve();
+            }));
+            client.connect();
+            await joined;
+            const adapter = cluster.nodes[2]!.io.of("/").adapter;
+            if (!(adapter instanceof ClusterAdapter)) throw new Error("Expected real ClusterAdapter");
+            const receiver = adapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+            const onMessage = receiver.onMessage.bind(receiver);
+            vi.spyOn(receiver, "onMessage").mockImplementation((message, offset) => {
+                if (message.type === MessageType.FETCH_SOCKETS || message.type === MessageType.SERVER_SIDE_EMIT) return;
+                onMessage(message, offset);
+            });
+            app.machineDaemonPresence = cluster.nodes[0].io;
+            expect(await getMachineDaemonPresenceInventory({ accountId: owner.id, io: cluster.nodes[0].io }))
+                .toEqual({ state: "partial", machineIds: new Set([broker.id]) });
+            // The daemon RPC is the external boundary; projection, policy admission,
+            // source currentness, Pool selection and SQLite persistence stay real.
+            const rpc = vi.fn(async (_input: unknown): Promise<{ ok: true; result: unknown }> => ({ ok: true, result: {
+                status: "success", models: [{
+                    descriptor: { id: "gpt-5", name: "GPT-5" }, application, sourceRevision: "partial-source-revision",
+                    protocolKind: "openai_responses", model: { canonicalId: "gpt-5", aliases: [] },
+                    reasoningEffort: { supported: false },
+                }],
+            } }));
+            app.forwardRpcForUser = rpc;
+            const support = await post("/v1/teams/credential-resources/request-policy-support/get", owner.id, {
+                scope: "source_draft", teamId: team.id, source, brokerPlacement: placement,
+            });
+            expect(support.statusCode, support.body).toBe(200);
+            expect(support.json()).toEqual({ status: "available", models: [{
+                descriptor: { id: "gpt-5", name: "GPT-5" }, application, sourceRevision: "partial-source-revision",
+                allowedProtocolKinds: ["openai_responses"], reasoningEffort: null,
+            }] });
+            expect(rpc).toHaveBeenLastCalledWith(expect.objectContaining({
+                method: `${broker.id}:daemon.providers.teamCredentialRequestPolicy.support`,
+                params: { machineId: broker.id, source, ...(placementKind === "machine_pool" ? { refreshPolicy: "current_only" } : {}) },
+            }));
+            const requestPolicy = { allowedProtocolKinds: ["openai_responses"], allowedModelIds: ["gpt-5"], reasoningEffort: null };
+            const draft = {
+                teamId: team.id, source, brokerPlacement: placement, displayName: "Partial census policy",
+                disclosureCeiling: "brokered_only", sessionUsePolicy: "personal_allowed", requestPolicy,
+                allMembersDeliveryMode: null, groupGrants: [], memberGrants: [], usageLimits: [],
+            };
+            const rejectedId = `unsupported-partial-policy-${owner.id}`;
+            const rejected = await post("/v1/teams/credential-resources/create", owner.id, {
+                ...draft, resourceId: rejectedId, requestPolicy: { ...requestPolicy, allowedModelIds: ["unobserved-model"] },
+            });
+            expect(rejected.statusCode, rejected.body).toBe(400);
+            expect(rejected.json()).toEqual({ error: "update_required" });
+            expect(await db.teamCredentialResource.findUnique({ where: { id: rejectedId } })).toBeNull();
+            const resourceId = `supported-partial-policy-${owner.id}`;
+            const created = await post("/v1/teams/credential-resources/create", owner.id, { ...draft, resourceId });
+            expect(created.statusCode, created.body).toBe(200);
+            const updatedPolicy = { ...requestPolicy, allowedModelIds: null };
+            const replacement = {
+                enabled: true, displayName: "Updated partial policy", sessionUsePolicy: "personal_allowed",
+                requestPolicy: updatedPolicy, allMembersDeliveryMode: null, groupGrants: [], memberGrants: [],
+                usageLimitDelta: { upserts: [], deleteIds: [] },
+            };
+            const updated = await post("/v1/teams/credential-resources/update", owner.id, {
+                resourceId, expectedRevision: 0, replacement,
+            });
+            expect(updated.statusCode, updated.body).toBe(200);
+            expect(updated.json()).toEqual({ resourceId, revision: 1 });
+            expect(await db.teamCredentialResource.findUniqueOrThrow({ where: { id: resourceId } })).toMatchObject({
+                revision: 1, requestPolicyJson: JSON.stringify(updatedPolicy),
+            });
+            expect(rpc.mock.calls.every(([input]) => (
+                typeof input === "object" && input !== null && "method" in input
+                && String(input.method).startsWith(`${broker.id}:`)
+            ))).toBe(true);
+
+            rpc.mockResolvedValueOnce({ ok: true, result: { status: "unavailable", reason: "application_unavailable" } });
+            const unsupportedApplication = await post("/v1/teams/credential-resources/request-policy-support/get", owner.id, {
+                scope: "source_draft", teamId: team.id, source, brokerPlacement: placement,
+            });
+            expect(unsupportedApplication.json()).toEqual({ status: "unavailable", reason: "unsupported_application" });
+
+            rpc.mockClear();
+            if (placementKind === "machine_pool") {
+                await db.machinePoolMember.updateMany({ where: { poolId: pool.id, machineId: broker.id }, data: { enabled: false } });
+            }
+            const missingPlacement = placementKind === "machine"
+                ? { kind: "machine", machineId: unobserved.id }
+                : placement;
+            const unavailable = await post("/v1/teams/credential-resources/request-policy-support/get", owner.id, {
+                scope: "source_draft", teamId: team.id, source, brokerPlacement: missingPlacement,
+            });
+            expect(unavailable.statusCode, unavailable.body).toBe(200);
+            expect(unavailable.json()).toEqual({ status: "unavailable", reason: "broker_unavailable" });
+            const missingId = `unobserved-partial-policy-${owner.id}`;
+            const missing = await post("/v1/teams/credential-resources/create", owner.id, {
+                ...draft, resourceId: missingId, brokerPlacement: missingPlacement,
+            });
+            expect(missing.statusCode, missing.body).toBe(400);
+            expect(missing.json()).toEqual({ error: "broker_unavailable" });
+            expect(await db.teamCredentialResource.findUnique({ where: { id: missingId } })).toBeNull();
+            expect(rpc).not.toHaveBeenCalled();
+        } finally {
+            app.machineDaemonPresence = previousPresence;
+            app.forwardRpcForUser = previousRpc;
+            client.disconnect();
+            vi.restoreAllMocks();
+            await cluster.close();
+        }
     });
 
     async function enrollEmailPassword(accountId: string) {

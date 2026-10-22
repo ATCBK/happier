@@ -15,6 +15,8 @@ import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, readPostgresTransactionSqlState, type Tx } from "@/storage/inTx";
 import { registerTeamRoutes } from "./registerTeamRoutes";
 import { registerTeamMemberRoutes } from "./memberships/registerTeamMemberRoutes";
+import { readWebLatencyRequestId } from "@/utils/webLatencyTrace";
+import { enableMonitoring } from "@/app/api/utils/enableMonitoring";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Team write contention (PostgreSQL)", () => {
     const accountIds: string[] = [];
@@ -49,6 +51,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
             update: { teamCreationPolicy: "self_service" },
         });
         app = createAuthenticatedTestApp();
+        enableMonitoring(app);
         registerTeamRoutes(app);
         registerTeamMemberRoutes(app);
         await app.ready();
@@ -338,6 +341,53 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         } finally {
             db.$transaction = original;
             if (competitorOutcome) await competitorOutcome;
+        }
+    });
+
+    it.each(["restore", "resource_delete"] as const)("attributes the real %s route's idle Account holder", async kind => {
+        const input = await fixture(kind);
+        let requestId: string | undefined;
+        const previousTrace = process.env.HAPPIER_WEB_LATENCY_TRACE;
+        process.env.HAPPIER_WEB_LATENCY_TRACE = "1";
+        const original = db.$transaction;
+        const names: { application_name: string; state: string }[] = [];
+        // Observe the real SQL transport after Account admission, keeping the
+        // registered HTTP route, domain mutation, and inTx composition intact.
+        db.$transaction = new Proxy(original, { apply(target, thisArg, args) {
+            const callback = args[0] as (tx: Tx) => Promise<unknown>;
+            return Reflect.apply(target, thisArg, [async (tx: Tx) => callback(new Proxy(tx, {
+                get(owner, property) {
+                    if (property === "$queryRawUnsafe") return async (sql: string, ...values: unknown[]) => {
+                        const rows = await owner.$queryRawUnsafe(sql, ...values);
+                        if (names.length === 0 && /FROM "Account".*FOR (?:KEY SHARE|NO KEY UPDATE|UPDATE)/u.test(sql)) {
+                            requestId = readWebLatencyRequestId();
+                            const [{ pid }] = await owner.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                            const [holder] = await db.$queryRaw<Array<{ application_name: string; state: string }>>`
+                                SELECT application_name, state FROM pg_stat_activity WHERE pid = ${pid}
+                            `;
+                            names.push(holder);
+                        }
+                        return rows;
+                    };
+                    return Reflect.get(owner, property, owner);
+                },
+            })), ...args.slice(1)]);
+        } });
+        try {
+            const response = await app.inject({
+                method: "POST", url: input.url, headers: { "x-test-user-id": input.owner.id }, payload: input.payload,
+            });
+            expect(response.statusCode, response.body).toBe(200);
+            await input.verify(response.json());
+            expect(requestId).toMatch(/^[0-9a-f-]{36}$/u);
+            expect(names).toEqual([{
+                application_name: `${kind === "restore" ? "teams.restore" : "teams.credentials.delete"}:${requestId}`,
+                state: "idle in transaction",
+            }]);
+        } finally {
+            db.$transaction = original;
+            if (previousTrace === undefined) delete process.env.HAPPIER_WEB_LATENCY_TRACE;
+            else process.env.HAPPIER_WEB_LATENCY_TRACE = previousTrace;
         }
     });
 

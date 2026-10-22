@@ -211,7 +211,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "ReadCommitted" /* Restore uses the same exclusive Account admission, Team lock and audience rechecks as archive. */ });
+        }), { transactionClass: "teams.restore", isolationLevel: "ReadCommitted" /* Restore uses the same exclusive Account admission, Team lock and audience rechecks as archive. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });

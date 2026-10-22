@@ -204,8 +204,8 @@ async function createBrokerFixture(
         operationProtocolCapabilitiesRevision: 1,
     } });
     const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
-    const workerPresence = { state: 'known' as const, machineIds: new Set([worker.id]) };
-    const brokerPresence = { state: 'known' as const, machineIds: new Set([broker.id]) };
+    const workerPresence = { state: 'partial' as const, machineIds: new Set([worker.id]) };
+    const brokerPresence = { state: 'partial' as const, machineIds: new Set([broker.id]) };
     type FixtureResource = Readonly<{ id: string; revision: number; sourceBindingJson: string }>;
     const connectionIdOf = (resource: FixtureResource) =>
         (JSON.parse(resource.sourceBindingJson) as { connectionId?: string }).connectionId ?? 'connected-source-projection';
@@ -466,7 +466,7 @@ describe('Team credential Provider broker admission', () => {
             slot: { kind: 'provider_model' }, deliveryMode: 'brokered' }))).toMatchObject({ resourceRevision: resource.revision });
     });
 
-    it('admits a personal connection without Team authority and withdraws it when the exact hub capability disappears', async () => {
+    it('admits a personal connection with positive partial presence and withdraws it when the exact hub capability disappears', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const createMachine = async (id: string, endpointId: string, ingress: readonly number[]) => await db.machine.create({ data: {
             id: `${id}-${account.id}`, accountId: account.id, metadata: '{}', kind: 'persistent', active: true,
@@ -482,7 +482,7 @@ describe('Team credential Provider broker admission', () => {
         const verifyAuthority = (authority: unknown) => verifyProviderBrokerRouteGrantSignatureV2({ authority, nowMs: 100,
             signingCapability: { keyId: 'personal-home', publicKey: Buffer.from(key.publicKey).toString('base64url'), expiresAt: null } });
         const common = { homeId: 'personal-home', actorAccountId: account.id,
-            presence: { state: 'known' as const, machineIds: new Set([worker.id, hub.id]) },
+            presence: { state: 'partial' as const, machineIds: new Set([worker.id, hub.id]) },
             resolveExecutionRunCurrentness: async () => ({ ok: false as const, reasonCode: 'execution_run_not_found' as const }) };
         const opened = await openAccountConnectionProviderBroker({ ...common, nowMs: 100, grantId: 'personal-grant', tokenEpoch: 0,
             signingKey: { keyId: 'personal-home', secretKey: key.secretKey }, verifyRefreshAuthority: verifyAuthority,
@@ -497,6 +497,9 @@ describe('Team credential Provider broker admission', () => {
         expect(verifyAuthority(opened.authority)).toBe(true);
         await expect(admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
             request: { v: 2, authority: opened.authority } })).resolves.toEqual({ ok: true });
+        await expect(admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
+            presence: { state: 'partial', machineIds: new Set([worker.id]) },
+            request: { v: 2, authority: opened.authority } })).resolves.toMatchObject({ ok: false });
         await db.machine.update({ where: { id: hub.id }, data: { operationProtocolCapabilities: {
             irohMachineEndpoint: { protocolVersions: [1], endpointId: 'b'.repeat(64) }, providerBrokerIngress: { protocolVersions: [1] },
         }, operationProtocolCapabilitiesRevision: 2 } });

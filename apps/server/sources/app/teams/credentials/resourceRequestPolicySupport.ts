@@ -7,7 +7,7 @@ import { DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema } from
 
 import type { Tx } from "@/storage/inTx";
 import type { Fastify } from "@/app/api/types";
-import { getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
+import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import { getMachinePoolCandidateSnapshot } from "@/app/machines/pools/machinePoolService";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -240,9 +240,6 @@ export async function resolveTeamCredentialRequestPolicySupport(
         accountId: prepared.custodianAccountId,
         io: app.machineDaemonPresence,
     });
-    if (presence.state !== "known") {
-        return { status: "unavailable", reason: "broker_unavailable" };
-    }
     const poolSnapshot = prepared.brokerPlacement.kind === "machine_pool"
         ? await getMachinePoolCandidateSnapshot({
             accountId: prepared.custodianAccountId,
@@ -251,7 +248,7 @@ export async function resolveTeamCredentialRequestPolicySupport(
         })
         : null;
     const machineIds = prepared.brokerPlacement.kind === "machine"
-        ? presence.machineIds.has(prepared.brokerPlacement.machineId)
+        ? classifyMachineDaemonPresence(presence, prepared.brokerPlacement.machineId) === "connected"
             ? [prepared.brokerPlacement.machineId]
             : []
         : poolSnapshot?.ok

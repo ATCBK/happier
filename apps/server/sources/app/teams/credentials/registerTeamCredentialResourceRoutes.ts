@@ -21,7 +21,7 @@ import { readHomeEffectiveEnv, resolveServerFeaturesForGating } from "@/app/feat
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { readTeamOperationAuthenticationFromRequest } from "../actorContext";
 import { publishTeamChangedInTx } from "../teamChanges";
-import { getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
+import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import {
     getMachinePoolCandidateSnapshot,
     getMachinePoolCandidateSnapshots,
@@ -328,8 +328,7 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         if (!presence) return;
         const onlineMachineIds = resource.brokerPresentation.eligibleTargets.flatMap(target => (
             target.availability !== 'update_required'
-            && presence.state === 'known'
-            && presence.machineIds.has(target.machineId)
+            && classifyMachineDaemonPresence(presence, target.machineId) === 'connected'
                 ? [target.machineId]
                 : []
         ));
@@ -355,7 +354,7 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         }>[]>();
         await Promise.all(resource.brokerPresentation.eligiblePools.map(async pool => {
             const snapshot = await readPoolSnapshot(resource, pool.poolId);
-            if (!snapshot.ok || snapshot.value.presenceState !== 'known') {
+            if (!snapshot.ok || snapshot.value.presenceState === 'unavailable') {
                 availability.set(pool.poolId, {
                     availability: 'not_verified',
                     availableMachineCount: null,
@@ -378,8 +377,9 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
             }
             const availableMachineCount = candidates.filter(result => result.eligibility?.status === 'eligible').length;
             availability.set(pool.poolId, {
-                availability: availableMachineCount > 0 ? 'available' : 'unavailable',
-                availableMachineCount,
+                availability: availableMachineCount > 0 ? 'available'
+                    : snapshot.value.presenceState === 'known' ? 'unavailable' : 'not_verified',
+                availableMachineCount: snapshot.value.presenceState === 'known' ? availableMachineCount : null,
             });
         }));
         const eligiblePools = resource.brokerPresentation.eligiblePools.map(pool => ({
@@ -404,7 +404,7 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         }
         if (resource.brokerPlacement?.kind === 'machine_pool') {
             const selectedSnapshot = await readPoolSnapshot(resource, resource.brokerPlacement.poolId);
-            candidateMachineIds = selectedSnapshot.ok && selectedSnapshot.value.presenceState === 'known'
+            candidateMachineIds = selectedSnapshot.ok && selectedSnapshot.value.presenceState !== 'unavailable'
                 ? selectedSnapshot.value.members.flatMap(member => (
                     member.enabled && selectedSnapshot.value.availableMachineIds.has(member.machineId)
                         ? [member.machineId]
@@ -1153,7 +1153,7 @@ export function registerTeamCredentialResourceRoutes(
             const machineIds = projectionRequest.deliveryMode === 'direct'
                 ? await (async () => {
                     const presence = await getPresence(projectionRequest.custodianAccountId);
-                    return presence.state === "known" ? [...presence.machineIds] : [];
+                    return presence.state !== 'unavailable' ? [...presence.machineIds] : [];
                 })()
                 : projectionRequest.brokerMachineId
                     ? [projectionRequest.brokerMachineId]
@@ -1633,7 +1633,7 @@ export function registerTeamCredentialResourceRoutes(
                 authentication: readTeamOperationAuthenticationFromRequest(request),
             });
             return deleted.ok ? { ok: true as const, result: { resourceId: body.data.resourceId, revision: body.data.expectedRevision } } : deleted;
-        }, { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes Team/resource locks and currentness reads. */ });
+        }, { transactionClass: "teams.credentials.delete", isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes Team/resource locks and currentness reads. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.result);
     });
