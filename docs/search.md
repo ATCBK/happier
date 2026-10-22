@@ -383,15 +383,28 @@ opt-in. Selected Agents must actually supply usable readers.
 The native traversal owns one ordered work list. Observation-driven refreshes
 share its existing allowance with initial backfill, so active conversations
 cannot starve initial history and completed conversations need not wait behind
-the whole initial backlog. An observation with native ids prioritizes those
-conversations; a file notification without ids refreshes completed peers in
+the whole initial backlog. An admitted multi-page history continues before
+another unstarted conversation; it does not wait for every first page in the
+corpus before receiving its next older page. An observation with native ids
+prioritizes those conversations; a file notification without ids refreshes completed peers in
 that source. A replacement retains refresh priority through all of its new
 pages, rather than returning its unfinished replacement to the initial backlog.
 Structural changes during a crawl alternate a fresh discovery continuation with
 the retained initial-coverage continuation, within the same page allowance.
 Fresh discovery can admit new siblings without restarting initial history; only
-an uninterrupted complete inventory proves absence. The configured tick allowance and interval remain unchanged;
+an uninterrupted complete inventory proves absence. A directory-delivered named
+write outside a demand's known files requests topology discovery for that demand,
+including when its creation notification was missed. Known files keep the
+incremental path. The configured tick allowance and interval remain unchanged;
 large windows can require substantially longer than thirty minutes.
+
+The deep database's internal `coverageComplete` bit records retained coverage
+(no budget eviction), not exhausted initial history. Readiness additionally
+requires the native page frontier to have reached its tail. A retained older-page
+cursor with that bit set still means indexing. Source keys remain independent
+index partitions: a user home and a connected-account home can expose the same
+native conversation. Exact-source searches retain that scope; unified results
+deduplicate those aliases at `mergeConversationSearchHits`.
 
 Memory requests native identities and activity without optional title enrichment.
 Claude and Codex apply the requested activity cutoff before transcript enrichment
