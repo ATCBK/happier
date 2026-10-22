@@ -118,7 +118,9 @@ export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPr
 
         poolByStyle[style] = created;
         poolThemeKeyByStyle[style] = themeKey;
-        void created.initialize().catch((error: unknown) => failWorkerPool(style, error));
+        void created.initialize().then(() => {
+            for (const listener of poolListenersByStyle[style]) listener();
+        }).catch((error: unknown) => failWorkerPool(style, error));
         return created;
     } catch (error) {
         failWorkerPool(style, error);

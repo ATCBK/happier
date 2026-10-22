@@ -77,6 +77,7 @@ export function usePierreInitialPresentation(params: Readonly<{
     parsedPatch: FileDiffMetadata | null;
     pool: WorkerPoolManager | null;
     virtualized: boolean;
+    renderingHappier: boolean;
 }>): boolean {
     const readiness = useInitialPresentationReadiness();
     const presentationPending = readiness?.presentationPending === true;
@@ -94,7 +95,7 @@ export function usePierreInitialPresentation(params: Readonly<{
         };
 
     React.useLayoutEffect(() => {
-        if (!presentationPending || params.parsedPatch == null) return undefined;
+        if (!presentationPending || params.parsedPatch == null || params.renderingHappier) return undefined;
         if (!params.pool) {
             setObservation({
                 cacheKey: params.cacheKey,
@@ -167,12 +168,14 @@ export function usePierreInitialPresentation(params: Readonly<{
         params.fileDiff,
         params.parsedPatch,
         params.pool,
+        params.renderingHappier,
         params.virtualized,
         presentationPending,
     ]);
 
     const terminal =
         params.parsedPatch == null ||
+        params.renderingHappier ||
         effectiveObservation.forceFallback ||
         effectiveObservation.terminal;
     useInitialPresentationProducer({

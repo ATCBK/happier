@@ -35,6 +35,15 @@ function applySvgIconColor(svgXml: string, color: string): string {
     );
 }
 
+/**
+ * The agent's mark as a `data:` SVG in one colour, for surfaces painted by CSS (the web diff's agent caret);
+ * null when the agent's mark is not an SVG.
+ */
+export function resolveAgentIconSvgDataUri(agentId: string, theme: Parameters<typeof getAgentIconSvgXml>[1], color: string): string | null {
+    const svgXml = getAgentIconSvgXml(agentId, theme);
+    return svgXml ? `data:image/svg+xml;utf8,${encodeURIComponent(applySvgIconColor(svgXml, color))}` : null;
+}
+
 export const AgentIcon = React.memo(function AgentIcon(props: AgentIconProps) {
     const { agentId, size, color, style, testID } = props;
     const { theme, rt } = useUnistyles();

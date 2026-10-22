@@ -2,6 +2,7 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
+import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
@@ -21,6 +22,7 @@ import type { DiffViewerProps } from '../diffViewerTypes';
 
 const fileDiffSpy = vi.fn();
 const virtualizerSpy = vi.fn();
+const realDomRenderer = vi.hoisted(() => ({ enabled: false }));
 
 function resetSettingValues() {
     storage.setState({ settings: { ...storage.getState().settings,
@@ -49,6 +51,7 @@ vi.mock('@pierre/diffs/react', async () => {
         },
         FileDiff: (props: any) => {
             fileDiffSpy(props);
+            if (realDomRenderer.enabled) return React.createElement(actual.FileDiff, props);
             return React.createElement('FileDiff', props);
         },
     };
@@ -90,11 +93,134 @@ async function findPierreHoverUtilityButtonProps(utility: any): Promise<any> {
     return props;
 }
 
+function attachPierreClickCapture(screen: Awaited<ReturnType<typeof renderScreen>>, host: HTMLElement) {
+    const wrapper = document.createElement('div');
+    wrapper.append(host); document.body.append(wrapper);
+    // React's DOM capture boundary; Pierre's body, event path and interaction manager remain real.
+    wrapper.addEventListener('click', event => {
+        const view = screen.findByTestId('pierre-diff-viewer');
+        if (!view) throw new Error('Expected the mounted Pierre wrapper');
+        view.props.onClickCapture?.({ nativeEvent: event });
+    }, true);
+    return () => wrapper.remove();
+}
+
 // Load the real runtime graph after installing its boundaries, before behavior deadlines begin.
 await import('./PierreDiffViewer.web');
 const { FileContentPanel } = await import('@/components/workspaces/files/file/FileContentPanel');
 
 describe('PierreDiffViewer (web)', () => {
+    it('keeps the actual syntax token mounted through a focus-driven compatibility mousedown repaint and consumes current callbacks', async () => {
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const activate = vi.fn(() => true), beforeFocus = vi.fn(), afterFocus = vi.fn();
+        function FocusedChanges({ name = 'target', note = true }: { name?: string; note?: boolean }) {
+            const [focused, setFocused] = React.useState(false);
+            return <div onMouseDownCapture={() => setFocused(true)}><PierreDiffViewer mode="unified" virtualized={false}
+                unifiedDiff={`--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before();\n+${name}();\n`}
+                interactionMode="commitSelection" onPressLine={focused ? afterFocus : beforeFocus} onPressLineRange={() => {}}
+                renderAfterLine={line => note && line.kind === 'add' ? <button onClick={event => {
+                    event.stopPropagation(); (focused ? afterFocus : beforeFocus)('annotation');
+                }}>{focused ? 'current note' : 'initial note'}</button> : null}
+                intelligence={{ onPointerToken: () => {}, onActivateToken: activate }} /></div>;
+        }
+        const host = document.createElement('div'); document.body.append(host);
+        const root = createRoot(host);
+        const replaceSync = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, 'replaceSync');
+        const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
+        Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        realDomRenderer.enabled = true;
+        try {
+            await React.act(async () => root.render(<FocusedChanges />));
+            await vi.waitFor(() => expect([...host.querySelector('diffs-container')?.shadowRoot?.querySelectorAll('[data-line-type="change-addition"] span') ?? []].some(span => span.textContent === 'target')).toBe(true));
+            const body = host.querySelector('diffs-container')!;
+            const token = [...body.shadowRoot!.querySelectorAll('[data-line-type="change-addition"] span')].find(span => span.textContent === 'target')!;
+            Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: token.firstChild, offset: 3 }) });
+            const pointer = (type: string) => {
+                const event = new MouseEvent(type, { bubbles: true, composed: true, clientX: 42, clientY: 22 });
+                Object.defineProperty(event, 'pointerType', { value: 'touch' }); token.dispatchEvent(event);
+            };
+            await React.act(async () => { pointer('pointerdown'); pointer('pointerup'); });
+            await React.act(async () => { token.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true })); });
+            // A browser cannot synthesize the click after this target is removed between mousedown/up.
+            expect(token.isConnected).toBe(true);
+            expect(body.textContent).toContain('current note');
+            await React.act(async () => { token.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, composed: true })); token.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true })); });
+            expect(activate).toHaveBeenCalledExactlyOnceWith(expect.any(String), 3, expect.objectContaining({ via: 'touch' }), 1);
+            expect(beforeFocus).not.toHaveBeenCalled(); expect(afterFocus).not.toHaveBeenCalled();
+            await React.act(async () => { token.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true })); });
+            expect(afterFocus).toHaveBeenCalledTimes(1); expect(beforeFocus).not.toHaveBeenCalled();
+            await React.act(async () => { body.querySelector('button')!.click(); });
+            expect(afterFocus).toHaveBeenLastCalledWith('annotation'); expect(beforeFocus).not.toHaveBeenCalled();
+            await React.act(async () => root.render(<FocusedChanges name="updatedName" />));
+            await vi.waitFor(() => expect(host.querySelector('diffs-container')!.shadowRoot!.textContent).toContain('updatedName'));
+            expect(token.isConnected).toBe(false);
+            await React.act(async () => root.render(<FocusedChanges name="updatedName" note={false} />));
+            expect(host.textContent).not.toContain('current note');
+        } finally {
+            await React.act(async () => root.unmount()); host.remove(); realDomRenderer.enabled = false;
+            if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
+            else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
+            if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
+            else Reflect.deleteProperty(document, 'caretPositionFromPoint');
+        }
+    });
+    it('commits a real shadow-row touch on click before line selection, while gutter and cancelled selection gestures remain owned by Pierre', async () => {
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const { FileDiff } = await import('@pierre/diffs');
+        const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before();\n+target();\n';
+        const activate = vi.fn(() => true), select = vi.fn(), range = vi.fn();
+        const screen = await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
+            onPressLine={select} onPressLineRange={range} intelligence={{ onPointerToken: vi.fn(), onActivateToken: activate }} />);
+        const body = screen.findAllByType('FileDiff')[0]!;
+        const instance = new FileDiff<React.ReactNode, undefined>({ ...body.props.options, theme: 'pierre-light', unsafeCSS: undefined });
+        const replaceSync = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, 'replaceSync');
+        Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        const host = document.createElement('diffs-container');
+        const detach = attachPierreClickCapture(screen, host);
+        const shadow = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
+        const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
+        const dispatch = (type: string, target: Element) => {
+            const event = new MouseEvent(type, { bubbles: true, composed: true, cancelable: true, clientX: 42, clientY: 22 });
+            Object.defineProperties(event, { pointerType: { value: 'touch' }, pointerId: { value: 1 } });
+            target.dispatchEvent(event);
+        };
+        try {
+            instance.hydrate({ fileDiff: body.props.fileDiff, fileContainer: host });
+            await vi.waitFor(() => expect(shadow.querySelector('[data-line="1"][data-line-type="change-addition"] span')).not.toBeNull());
+            const code = shadow.querySelector('[data-line="1"][data-line-type="change-addition"]')!;
+            const token = [...code.querySelectorAll('span')].find(span => span.textContent === 'target')!;
+            Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: token.firstChild, offset: 3 }) });
+            await renderer.act(async () => { dispatch('pointerdown', token); dispatch('pointerup', token); });
+            expect(activate).not.toHaveBeenCalled();
+            // A cold language-server publication repaints the same body before the compatibility click.
+            await screen.update(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
+                onPressLine={select} onPressLineRange={range} intelligence={{ onPointerToken: vi.fn(), onActivateToken: activate }} />);
+            await renderer.act(async () => { dispatch('click', token); });
+            expect(activate).toHaveBeenCalledExactlyOnceWith(expect.any(String), 3, expect.objectContaining({ via: 'touch' }), 1);
+            expect(select).not.toHaveBeenCalled();
+            expect(range).not.toHaveBeenCalled();
+            activate.mockReturnValue(false);
+            await renderer.act(async () => { dispatch('pointerdown', token); dispatch('pointerup', token); dispatch('click', token); });
+            expect(select).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ newLine: 1 }));
+            select.mockClear(); activate.mockReturnValue(true);
+            activate.mockClear();
+            // A platform text-selection cancellation must never turn its later release/click into a name tap.
+            await renderer.act(async () => { dispatch('pointerdown', token); dispatch('contextmenu', token); dispatch('pointerup', token); dispatch('click', token); });
+            expect(activate).not.toHaveBeenCalled();
+            const gutter = shadow.querySelector('[data-column-number="1"][data-line-type="change-addition"]')!;
+            await renderer.act(async () => { dispatch('pointerdown', gutter); dispatch('pointerup', gutter); dispatch('click', gutter); });
+            expect(activate).not.toHaveBeenCalled();
+            expect(range.mock.calls.some(([lines]) => lines.some((line: { newLine: number | null }) => line.newLine === 1))).toBe(true);
+        } finally {
+            await screen.unmount(); instance.cleanUp(); detach();
+            if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
+            else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
+            if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
+            else Reflect.deleteProperty(document, 'caretPositionFromPoint');
+        }
+    });
     it('keeps real Changes identifier selection through subscribed parent repaints and definition navigation', async () => {
         storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
         const source = ['export function delayFor() {}', '', '', '', '', '', '', 'delayFor(1);'].join('\n');
@@ -112,7 +238,7 @@ describe('PierreDiffViewer (web)', () => {
             lineSelectionEnabled={false} onToggleLine={() => {}} intelligence={{
                 onPointer: (line, character, anchor) => controller.inspect({ line: line - 1, character, ...(anchor ? { anchor } : {}) }),
                 onPointerAway: () => controller.inspect(null),
-                onActivate: (line, character) => { void controller.definition({ line: line - 1, character }); },
+                onActivate: (line, character) => { void controller.definition({ line: line - 1, character }); return true; },
                 getDiagnosticsByLine: () => undefined, subscribeDiagnostics: controller.subscribe,
             }} />);
         await vi.dynamicImportSettled();
@@ -146,7 +272,7 @@ describe('PierreDiffViewer (web)', () => {
         Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
         vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
         const host = document.createElement('diffs-container');
-        document.body.append(host);
+        const detach = attachPierreClickCapture(webScreen, host);
         const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
         const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
         try {
@@ -175,7 +301,7 @@ describe('PierreDiffViewer (web)', () => {
             await screen.unmount();
             controller.dispose();
             instance.cleanUp();
-            host.remove();
+            detach();
             if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
             else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
             if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
@@ -187,11 +313,12 @@ describe('PierreDiffViewer (web)', () => {
         const { FileDiff } = await import('@pierre/diffs');
         const newText = 'expandedName\ncontext\ncontext\ncontext\nafter\n';
         const expectedLine = buildCodeLinesFromFile({ text: newText })[0]!;
-        const activate = vi.fn();
+        const activate = vi.fn(() => true);
         const screen = await renderScreen(<PierreDiffViewer mode="text" contextLines={1}
             oldText={newText.replace('after', 'before')} newText={newText}
             intelligence={{ onPointerToken: () => {}, onActivateToken: activate }} />);
         const host = document.createElement('div');
+        const detach = attachPierreClickCapture(screen, host);
         const root = host.attachShadow({ mode: 'open' });
         root.innerHTML = '<code data-code data-unified><div data-line-type="context-expanded" data-line="1"><span>expandedName</span></div></code>';
         const text = root.querySelector('span')!.firstChild!;
@@ -200,10 +327,11 @@ describe('PierreDiffViewer (web)', () => {
         const instance = new FileDiff<React.ReactNode, undefined>();
         try {
             await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
-            text.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true, clientX: 10, clientY: 10 }));
+            text.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, metaKey: true, clientX: 10, clientY: 10 }));
             expect(activate).toHaveBeenCalledExactlyOnceWith(expectedLine.id, 3, { via: 'modifier', rect: { x: 10, y: 0, width: 1, height: 0 } }, 1);
         } finally {
             await screen.unmount();
+            detach();
             instance.cleanUp();
             if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
             else Reflect.deleteProperty(document, 'caretPositionFromPoint');
@@ -214,7 +342,7 @@ describe('PierreDiffViewer (web)', () => {
         vi.stubGlobal('CSS', { highlights });
         vi.stubGlobal('Highlight', class extends Set<Range> {});
         const pointer = vi.fn();
-        const activate = vi.fn();
+        const activate = vi.fn(() => true);
         const away = vi.fn();
         const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -4,2 +9,2 @@\n abc😀name\n-before\n+after\n';
         const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true });
@@ -224,6 +352,7 @@ describe('PierreDiffViewer (web)', () => {
             diagnosticsByNewLine: new Map([[9, [{ start: 5, end: 9, severity: 'error' as const }]]]) };
         const screen = await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} intelligence={intelligence} />);
         const host = document.createElement('div');
+        const detach = attachPierreClickCapture(screen, host);
         const root = host.attachShadow({ mode: 'open' });
         root.innerHTML = '<code data-code data-deletions><div data-line-type="context" data-line="4">abc😀name</div><div data-line-type="change-deletion" data-line="5">before</div></code><code data-code data-additions><div data-line-type="context" data-line="9"><span>abc😀</span><span>name</span></div><div data-line-type="change-addition" data-line="10">after</div></code>';
         const code = root.querySelector('[data-additions] [data-line="9"]')!;
@@ -241,16 +370,16 @@ describe('PierreDiffViewer (web)', () => {
             token.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 22 }));
             expect(pointer).toHaveBeenLastCalledWith(context.id, 7, { x: 42, y: 20, width: 1, height: 24 }, 9);
             expect(caret).toHaveBeenLastCalledWith(42, 22, { shadowRoots: [root] });
-            token.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true, button: 2, clientX: 42, clientY: 22 }));
+            token.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, ctrlKey: true, button: 2, clientX: 42, clientY: 22 }));
             expect(activate).not.toHaveBeenCalled();
-            const click = new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true, button: 0, clientX: 42, clientY: 22 });
+            const click = new MouseEvent('click', { bubbles: true, composed: true, cancelable: true, ctrlKey: true, button: 0, clientX: 42, clientY: 22 });
             token.dispatchEvent(click);
             expect(click.defaultPrevented).toBe(true);
             expect(activate).toHaveBeenCalledExactlyOnceWith(context.id, 7, { via: 'modifier', rect: { x: 42, y: 20, width: 1, height: 24 } }, 9);
             const old = root.querySelector('[data-deletions] [data-line="4"]')!;
             old.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 22 }));
-            old.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true, clientX: 42, clientY: 22 }));
-            root.querySelector('[data-line-type="change-deletion"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true, clientX: 42, clientY: 22 }));
+            old.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, ctrlKey: true, clientX: 42, clientY: 22 }));
+            root.querySelector('[data-line-type="change-deletion"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, ctrlKey: true, clientX: 42, clientY: 22 }));
             expect(pointer).toHaveBeenCalledTimes(1);
             expect(activate).toHaveBeenCalledTimes(1);
             expect(away).toHaveBeenCalled();
@@ -266,6 +395,7 @@ describe('PierreDiffViewer (web)', () => {
             token.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 42, clientY: 22 }));
             expect(pointer).toHaveBeenCalledTimes(1);
             await second.unmount();
+            detach();
             expect(highlights.size).toBe(0);
             instance.cleanUp();
         } finally {
@@ -370,6 +500,42 @@ describe('PierreDiffViewer (web)', () => {
         scroller.remove();
         instance.cleanUp();
         virtualizer.cleanUp();
+    });
+    it('leaves the reader in control once the annotation is mounted even when its code line is virtualized away', async () => {
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { VirtualizerContext } = await import('@pierre/diffs/react');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'remove')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        // The mounted annotation is taller than the viewport; its following code is not mounted.
+        // Geometry and scroll are browser/third-party ports, with the real adapter below them.
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        let scrollTop = 0;
+        vi.spyOn(virtualizer, 'scrollTo').mockImplementation(({ top }) => { scrollTop = top; });
+        const screen = await renderScreen(<VirtualizerContext.Provider value={virtualizer}>
+            <PierreDiffViewer mode="unified" unifiedDiff={patch} hunks={{}} scrollToLineId={target.id}
+                renderAfterLine={line => line.renderIsHeaderLine ? <div>Change</div> : null} />
+        </VirtualizerContext.Provider>);
+        const host = document.createElement('div');
+        host.attachShadow({ mode: 'open' });
+        const annotation = document.createElement('div');
+        annotation.slot = instance.getAnnotationSlotName({ side: 'additions', lineNumber: 0 });
+        host.append(annotation); document.body.append(host);
+        vi.spyOn(host, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 300, 1000));
+        vi.spyOn(annotation, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 300, 330));
+        const paint = () => renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
+        try {
+            await paint();
+            expect(scrollTop).toBe(120);
+            scrollTop = 300;
+            await paint();
+            expect(scrollTop).toBe(300);
+        } finally {
+            await screen.unmount(); host.remove(); instance.cleanUp(); virtualizer.cleanUp();
+        }
     });
     it('maps a reversed cross-side range through the same row selection as the Happier renderer', async () => {
         fileDiffSpy.mockClear();
