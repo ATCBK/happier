@@ -157,6 +157,7 @@ function MachineStorageWidgetBody(
       ? { kind: 'stale', at: tabView.summary.sizedAt }
       : { kind: 'live' };
   useMachineWidgetFreshness(freshness, props.testID);
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (tabView.kind === 'not_reported')
     return (
       <MachineWidgetState
@@ -175,7 +176,7 @@ function MachineStorageWidgetBody(
       />
     );
   // A machine that is offline says so, as Vitals and Guard do, rather than "couldn't read" with a Retry that cannot work.
-  if (tabView.kind === 'error' && !facts.online)
+  if (tabView.kind === 'error' && facts.online === false)
     return (
       <MachineWidgetState
         kind="offline"

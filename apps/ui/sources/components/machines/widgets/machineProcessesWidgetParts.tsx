@@ -47,9 +47,10 @@ export function readMachineProcessesWidgetAnswer(
 /** Freshness only when not live: offline, or a retained answer whose refresh failed ("As of …"). */
 export function readMachineProcessesWidgetFreshness(
   processes: MachineProcessesWidgetState,
-  online: boolean,
+  online: boolean | null,
 ): MachineWidgetFreshness {
-  if (!online) return { kind: 'offline' };
+  if (online === false) return { kind: 'offline' };
+  if (online === null) return { kind: 'live' };
   const answer = readMachineProcessesWidgetAnswer(processes);
   return answer && processes.status === 'error'
     ? { kind: 'stale', at: answer.capturedAtMs }
@@ -70,8 +71,9 @@ export function MachineProcessesWidgetGate(
   }>,
 ): React.ReactElement | null {
   const { processes, facts } = props;
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (readMachineProcessesWidgetAnswer(processes)) return null;
-  if (!facts.online)
+  if (facts.online === false)
     return (
       <MachineWidgetState
         kind="offline"
@@ -104,15 +106,6 @@ export function MachineProcessesWidgetGate(
             ? t('machineProcesses.states.helperMissing')
             : t('machineProcesses.states.errorBody')
         }
-        testID={props.testID}
-      />
-    );
-  if (processes.status === 'error' && !facts.online)
-    return (
-      <MachineWidgetState
-        kind="offline"
-        machineName={facts.name}
-        lastSeenAt={facts.lastSeenAt}
         testID={props.testID}
       />
     );

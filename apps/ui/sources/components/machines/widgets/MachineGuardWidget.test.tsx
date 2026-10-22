@@ -8,7 +8,7 @@ import { MachineGuardActivityRowV1Schema, type MachineGuardActivityRowV1 } from 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
-import { createDeferred, renderScreen } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -34,6 +34,9 @@ const { machineGuardStore } =
   await import('@/sync/domains/machines/guard/machineGuardStore');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { MachineGuardWidget, guardHeaderStateText } = await import('./MachineGuardWidget');
+const { withdrawMachinePresenceForScope, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { useGuardFreshness, useGuardActivityFreshness } = await import('../guard/useGuardFreshness');
+const { useMachineGuardActivity } = await import('@/sync/domains/machines/guard/useMachineGuardView');
 
 const GiB = 1024 ** 3;
 
@@ -146,12 +149,28 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   standardCleanup();
+  clearMachineRequestReachabilityForTest();
   machineGuardStore.reset();
   storage.setState(before);
   await home.reset();
 });
 
 describe('MachineGuardWidget', () => {
+  it('does not call a withdrawn unknown Machine offline or claim its held Guard state is current', async () => {
+    const { screen, serverId } = await mount();
+    await vi.waitFor(() => expect(screen.findByTestId('guard-widget.state')).not.toBeNull());
+    const freshness = await renderHook(() => {
+      const scope = { serverId, machineId: 'machine' };
+      const activity = useMachineGuardActivity({ ...scope, range: '7d', filter: 'all' });
+      return { guard: useGuardFreshness(scope), activity: useGuardActivityFreshness(activity, scope) };
+    });
+    await vi.waitFor(() => expect(freshness.getCurrent()).toMatchObject({ guard: { kind: 'live' }, activity: { kind: 'live' } }));
+    await act(async () => { withdrawMachinePresenceForScope({ serverId, accountId: 'owner' }); });
+    expect(freshness.getCurrent()).toEqual({ guard: { kind: 'none' }, activity: { kind: 'none' } });
+    expect(screen.findByTestId('guard-widget.offline')).toBeNull();
+    expect(screen.findByTestId('guard-widget.state')).toBeNull();
+    expect(screen.findByTestId('guard-widget.unavailable')).not.toBeNull();
+  });
   it.each(['medium', 'wide', 'full', 'tall', 'large'] as const)('reads yesterday-only Last action and Recent from the default Activity history at %s size', async size => {
     const yesterday = MachineGuardActivityRowV1Schema.parse({ v: 1, id: 'yesterday', at: Date.now() - 86_400_000,
       kind: 'stopped_session', rule: 'idle_sessions', subject: { kind: 'session', sessionId: 'old-session', title: 'Yesterday build' },

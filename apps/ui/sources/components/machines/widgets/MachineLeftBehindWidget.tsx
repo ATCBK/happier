@@ -93,7 +93,7 @@ function LeftBehindBody(
     machineId: target.machineId,
     scope: 'happier',
     view: 'owners',
-    enabled: facts.online,
+    enabled: facts.online === true,
   });
   useMachineWidgetFreshness(
     readMachineProcessesWidgetFreshness(processes, facts.online),

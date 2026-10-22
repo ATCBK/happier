@@ -163,7 +163,7 @@ function TopConsumersBody(
     machineId: target.machineId,
     scope: 'happier',
     view: 'owners',
-    enabled: facts.online,
+    enabled: facts.online === true,
   });
   useMachineWidgetFreshness(
     readMachineProcessesWidgetFreshness(processes, facts.online),
@@ -188,7 +188,7 @@ function TopConsumersBody(
     [binding],
   );
   const stale = answer !== null && processes.status === 'error';
-  const unavailableReason = !facts.online
+  const unavailableReason = facts.online === null ? t('common.unknown') : facts.online === false
     ? t('machineProcesses.states.offlineTitle', { machine: facts.name })
     : stale
       ? t('machineProcesses.menu.unavailable', { machine: facts.name })

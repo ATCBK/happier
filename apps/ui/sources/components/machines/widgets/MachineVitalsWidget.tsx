@@ -106,13 +106,15 @@ function VitalsBody(
   // A mounted widget is demand on the summary transport; offscreen or unmounted, it releases it.
   useMachineResourceLiveDemand(demand, {
     detail: 'summary',
-    enabled: facts.online,
+    enabled: facts.online === true,
   });
   const availability = useMachineResourceSummary(props.target);
   const retry = React.useCallback(() => retryMachineResourceSummaries([props.target]), [props.target]);
   const freshness = resolveSummaryFreshness(availability, facts);
   useMachineWidgetFreshness(freshness, props.testID);
   const open = useOpenMachinePage(props.target);
+
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
 
   if (!facts.machine)
     return (
@@ -133,7 +135,7 @@ function VitalsBody(
   const summary =
     availability?.kind === 'reporting' ? availability.summary : null;
   if (!summary) {
-    if (!facts.online)
+    if (facts.online === false)
       return (
         <MachineWidgetState
           kind="offline"
@@ -162,7 +164,7 @@ function resolveSummaryFreshness(
   availability: MachineResourceAvailability | null,
   facts: MachineWidgetMachineFacts,
 ): MachineWidgetFreshness {
-  if (!facts.online) {
+  if (facts.online === false) {
     // Values this app still holds are shown with their age, not as if they were read now.
     const heldAt = availability?.kind === 'reporting' ? availability.summary?.sampledAt : undefined;
     return heldAt === undefined ? { kind: 'offline' } : { kind: 'offline', heldAt };
@@ -574,7 +576,7 @@ function VitalsDetail(
     machineId: props.target.machineId,
     serverId: props.target.serverId,
     online: props.facts.online,
-    enabled: props.facts.online && sample !== null,
+    enabled: props.facts.online === true && sample !== null,
     sample,
   });
   if (vitals.view.kind === 'loading')
@@ -594,7 +596,7 @@ function VitalsDetail(
       machineName={props.facts.name}
       processes={attribution.processes.answer}
       processesStatus={attribution.processes.status}
-      offline={!props.facts.online}
+      offline={false}
       sample={sample}
       logicalCores={vitals.published?.host?.logicalCores ?? null}
       onOpenProcesses={openProcesses}

@@ -124,6 +124,7 @@ function MetricBody(
     () => open(metricTab(props.config)),
     [open, props.config],
   );
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (!facts.machine)
     return (
       <MachineWidgetState
@@ -168,7 +169,7 @@ function MetricSmall(
   );
   useMachineResourceLiveDemand(demand, {
     detail: 'summary',
-    enabled: props.facts.online,
+    enabled: props.facts.online === true,
   });
   const machineAvailability = useMachineResourceSummary(props.target);
   // The summary transport already retains the full sample. Selection is a passive projection of
@@ -204,7 +205,7 @@ function MetricSmall(
     }
     return { ...machineAvailability, summary };
   }, [machineAvailability, props.config.metric, props.config.volume, props.config.warnAbove, state.snapshot]);
-  const freshness: MachineWidgetFreshness = !props.facts.online
+  const freshness: MachineWidgetFreshness = props.facts.online === false
     ? { kind: 'offline' }
     : availability?.kind === 'reporting' &&
         availability.freshness === 'stale' &&
@@ -221,7 +222,7 @@ function MetricSmall(
       />
     );
   if (
-    !props.facts.online &&
+    props.facts.online === false &&
     !(availability?.kind === 'reporting' && availability.summary)
   ) {
     return (
@@ -276,7 +277,7 @@ function MetricTile(
       ? { kind: 'offline' }
       : view.kind === 'ready' && view.freshness === 'stale'
         ? { kind: 'stale', at: view.sample.sampledAt }
-        : !props.facts.online
+        : props.facts.online === false
           ? { kind: 'offline' }
           : { kind: 'live' };
   useMachineWidgetFreshness(freshness, props.testID);
@@ -309,7 +310,7 @@ function MetricTile(
         testID={props.testID}
       />
     );
-  if (view.kind === 'unavailable' && view.reason === 'request_failed' && !props.facts.online)
+  if (view.kind === 'unavailable' && view.reason === 'request_failed' && props.facts.online === false)
     return (
       <MachineWidgetState
         kind="offline"

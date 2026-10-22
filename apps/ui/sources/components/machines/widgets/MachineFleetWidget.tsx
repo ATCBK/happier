@@ -64,7 +64,7 @@ import { buildRemoteMachineUpdateFacts } from '@/updates/remoteCliUpdateItems';
 import { useThisComputerCliUpdate } from '@/updates/useThisComputerCliUpdate';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
@@ -86,7 +86,7 @@ export type FleetMachine = Readonly<{
   serverId: string;
   machine: Machine;
   name: string;
-  online: boolean;
+  online: boolean | null;
   thisComputer: boolean;
 }>;
 
@@ -168,8 +168,11 @@ export function useMachineFleetModel() {
     // A replaced identity (the same computer before a reinstall) is not a machine to show or count.
     const visible = allMachines.filter((machine) => !isMachineReplaced(machine) && isMachineVisibleForLaunchSelection(machine));
     const names = resolveMachineDisplayNames(visible);
-    return orderFleetMachines(visible.map((machine) => ({ key: JSON.stringify([serverId, machine.id]), serverId, machine,
-      name: names.get(machine.id) ?? machine.id, online: isMachineReachable(accountScope, machine, nowMs), thisComputer: machine.id === thisComputerMachineId })));
+    return orderFleetMachines(visible.map((machine) => {
+      const reachability = resolveMachineReachability(accountScope, machine, nowMs);
+      return { key: JSON.stringify([serverId, machine.id]), serverId, machine,
+        name: names.get(machine.id) ?? machine.id, online: reachability === 'unknown' ? null : reachability === 'reachable', thisComputer: machine.id === thisComputerMachineId };
+    }));
   }, [accountScope, allMachines, nowMs, reachabilityRevision, serverId, thisComputerMachineId]);
   const attention = React.useMemo(() => collectMachineAttention([{ serverId, accountScope, serverName: '', status,
     machines: fleet.map((entry) => entry.machine) }], nowMs), [accountScope, fleet, nowMs, serverId, status]);
@@ -223,7 +226,8 @@ function FleetBody(props: MachineWidgetBodyProps) {
   const byKey = new Map(fleet.map((entry) => [entry.key, entry]));
   const ordered = order.flatMap((key) => (byKey.get(key) ? [byKey.get(key)!] : []));
   const calm = ordered.filter((entry) => entry.online && !needsByKey.has(entry.key));
-  const offline = ordered.filter((entry) => !entry.online);
+  const offline = ordered.filter((entry) => entry.online === false);
+  const unknown = ordered.filter((entry) => entry.online === null);
   const row = (entry: FleetMachine, compact: boolean) => (
     <FleetMachineRow key={entry.key} entry={entry} need={needsByKey.get(entry.key) ?? null} compact={compact} style={style}
       metrics={compact ? [] : metrics} onOpen={openMachine} testID={`${props.testID}.machine.${entry.machine.id}`} />
@@ -233,7 +237,7 @@ function FleetBody(props: MachineWidgetBodyProps) {
   );
   if (size === 'small' || size === 'wide') {
     // Small sizes list only who needs the person (in a word); calm and offline collapse into one line.
-    const shown = needs.length > 0 ? ordered.filter((entry) => needsByKey.has(entry.key)) : calm.slice(0, 2);
+    const shown = needs.length > 0 ? ordered.filter((entry) => needsByKey.has(entry.key)) : [...calm, ...unknown].slice(0, 2);
     const rest = describeRest(needs.length > 0 ? calm : calm.slice(2), offline, needs.length);
     // Wide has two columns of room: the blocks stand side by side, as the card's two halves (lab FL Wide).
     const half = Math.ceil(shown.length / 2);
@@ -250,7 +254,7 @@ function FleetBody(props: MachineWidgetBodyProps) {
   }
   // Medium and up: every online machine in one held order; a machine that needs the person opens its block in
   // place, and when it recovers the block folds back into its calm row (lab rw FL "Order", MO).
-  const online = ordered.filter((entry) => entry.online);
+  const online = ordered.filter((entry) => entry.online !== false);
   const offlineRows = offline.length > 0 ? (
     <>
       <Text style={styles.label}>{t('machines.widgets.body.fleet.offlineGroup', { count: offline.length })}</Text>
@@ -311,7 +315,7 @@ const FleetMachineRow = React.memo(function FleetMachineRow(props: Readonly<{
   const reason = need ? selectHeadlineReason(need.attention) : null;
   const tone = reason ? resolveMachineAttentionWordColor(theme.colors) : null;
   const word = reason ? describeMachineAttentionWord(reason) : null;
-  const subtitle = !entry.online
+  const subtitle = entry.online === null ? t('common.unknown') : !entry.online
     ? t('settingsOverview.machineLastSeen', { lastSeen: formatLastSeen(entry.machine.activeAt ?? 0) })
     : working > 0 ? t('machineDetailPage.work.working', { count: working }) : t('machineDetailPage.work.none');
   const strip = entry.online && props.metrics.length > 0 && availability?.kind !== 'not_reported'
@@ -454,7 +458,7 @@ const FleetMachineCard = React.memo(function FleetMachineCard(
     serverId: entry.serverId,
     machineId: entry.machine.id,
   });
-  const line = entry.online
+  const line = entry.online === null ? t('common.unknown') : entry.online
     ? t('systemStatus.machine.online')
     : t('settingsOverview.machineLastSeen', {
         lastSeen: formatLastSeen(entry.machine.activeAt ?? 0),
@@ -470,7 +474,7 @@ const FleetMachineCard = React.memo(function FleetMachineCard(
       />
     ) : (
       <Text numberOfLines={2} style={styles.cardQuiet}>
-        {entry.online
+        {entry.online === null ? t('common.unknown') : entry.online
           ? t('machineSummary.olderHappier')
           : t('machines.widgets.body.common.offline')}
       </Text>

@@ -159,10 +159,10 @@ function GuardBody(
   // A held view remains last-known truth after a failed refresh. With no view, loading,
   // error and not-reported all remain unknown rather than inheriting default Off.
   const on = guard.on;
-  const offline = guard.offline || !facts.online;
+  const offline = guard.offline || facts.online === false;
   const metaText = guardHeaderStateText({
     offline,
-    on,
+    on: facts.online === null ? null : on,
   });
   const meta = React.useMemo(
     () =>
@@ -175,6 +175,8 @@ function GuardBody(
     [metaText, props.testID],
   );
   useWidgetFrameBodyMeta(meta);
+
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
 
   if (guard.status === 'not_reported')
     return (

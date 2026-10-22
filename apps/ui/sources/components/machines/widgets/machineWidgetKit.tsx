@@ -81,14 +81,14 @@ export function isWideWidgetSize(size: WidgetSizeV1): boolean {
 export type MachineWidgetMachineFacts = Readonly<{
   machine: Machine | null;
   name: string;
-  online: boolean;
+  online: boolean | null;
   /** The person only uses this machine (sync proves custody with `isShared === false`). */
   recipient: boolean;
   daemonStateVersion: number | null;
   lastSeenAt: number | null;
 }>;
 
-/** The bound machine as the machine list owner knows it; an unknown machine is offline, never "calm". */
+/** The bound machine's canonical presence; null is unobserved and never admits a read. */
 export function useMachineWidgetMachine(
   target: MachineWidgetTarget | null,
 ): MachineWidgetMachineFacts {
@@ -121,7 +121,7 @@ export function useMachineWidgetMachine(
       name: machine && !isMachineDisplayHydrating(machine)
         ? getMachineDisplayName(machine, inventory ?? undefined)
         : t('machines.widgets.body.common.unknownMachine'),
-      online: machine ? presence.reachability === 'reachable' : false,
+      online: presence.reachability === 'unknown' ? null : presence.reachability === 'reachable',
       recipient: machine ? machine.isShared !== false : false,
       daemonStateVersion: machine?.daemonStateVersion ?? null,
       lastSeenAt:

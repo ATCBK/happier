@@ -121,6 +121,7 @@ function MachineWorktreesWidgetBody(
       projects: new Set(all.map((item) => repositoryOf(item.path))).size,
     };
   }, [items]);
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (!page) {
     if (list.status === 'not_reported')
       return (

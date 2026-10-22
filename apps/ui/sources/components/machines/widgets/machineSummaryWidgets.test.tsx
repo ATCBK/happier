@@ -75,6 +75,7 @@ await import('@/sync/domains/machines/resources/machineRpc');
 const { useMachineWidgetMachine } =
   await import('@/components/machines/widgets/machineWidgetKit');
 const { storage } = await import('@/sync/domains/state/storageStore');
+const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { machineResourceStore } =
   await import('@/sync/domains/machines/resources/machineResourceStore');
 const { WidgetFrameBodyMetaContext } =
@@ -146,6 +147,7 @@ const sample = (sampledAt: number) => ({
 });
 
 afterEach(async () => {
+  clearMachineRequestReachabilityForTest();
   machineResourceStore.reset();
   boundary.rpc.mockReset();
   storage.setState({
@@ -762,6 +764,26 @@ describe('Vitals attention block', () => {
 });
 
 describe('Machines widget presentation', () => {
+  it('keeps withdrawn Machine rows visible without adding them to the offline group', async () => {
+    const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } =
+      await import('@/sync/domains/machines/reachability/machineReachability');
+    const serverId = getActiveServerSnapshot().serverId;
+    const machines = [createMachineFixture({ id: 'edge', activeAt: Date.now() }), createMachineFixture({ id: 'studio', activeAt: Date.now() })];
+    storage.getState().applyMachines(machines, true, { sourceServerId: serverId });
+    const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'medium', footprint: getWidgetSizeFootprintV1('home', 'medium')! }}>
+      <MachineFleetWidget input={{ metrics: [] }} serverId={serverId} testID="fleet" />
+    </WidgetPresentationProvider>);
+    const scope = { serverId, accountId: 'owner' };
+    await act(async () => withdrawMachinePresenceForScope(scope));
+    expect(screen.findByTestId('fleet.machine.edge')).not.toBeNull();
+    expect(screen.findByTestId('fleet.machine.studio')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('common.unknown');
+    expect(screen.getTextContent()).not.toContain('machines.widgets.body.fleet.offlineGroup');
+    await act(async () => captureMachinePresenceObservation(scope)(machines.map(machine => machine.id)));
+    expect(screen.getTextContent()).not.toContain('common.unknown');
+    await screen.unmount();
+  });
+
   it('ends a failed cold read with recovery and retains machines when a refresh fails', async () => {
     const home = getActiveServerSnapshot().serverId;
     storage.setState({

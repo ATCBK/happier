@@ -45,7 +45,7 @@ export function useMachineWidgetVitalsView(
     machineId: input.target.machineId,
     daemonStateVersion: input.facts.daemonStateVersion,
     range: input.range,
-    enabled: input.enabled !== false && input.facts.online,
+    enabled: input.enabled !== false && input.facts.online === true,
   });
   const daemonState: unknown = input.facts.machine?.daemonState;
   const published = React.useMemo(

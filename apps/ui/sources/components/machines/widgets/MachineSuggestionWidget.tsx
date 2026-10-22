@@ -200,7 +200,7 @@ function MachineProposalSuggestion(
   const [deciding, setDeciding] = React.useState(false);
   const stale = controller?.display.kind === 'ask' && controller.display.stale;
   useMachineWidgetFreshness(
-    !facts.online
+    facts.online === false
       ? { kind: 'offline' }
       : stale && controller?.check.kind === 'ready'
         ? { kind: 'stale', at: controller.check.checkedAt }
@@ -227,6 +227,7 @@ function MachineProposalSuggestion(
     },
     [artifact.id, controller, decide, deciding, props],
   );
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (!controller)
     return (
       <MachineSuggestionFallback target={props.target} testID={props.testID} />
@@ -251,7 +252,7 @@ function MachineProposalSuggestion(
     (controller.check.kind === 'checking' &&
       controller.check.previous !== null);
   const changed = controller.rows.filter((row) => row.facts?.changed).length;
-  const offline = !facts.online;
+  const offline = facts.online === false;
   const hero = (
     <View testID={`${props.testID}.hero`} style={styles.hero}>
       <View style={styles.valueRow}>
@@ -584,6 +585,7 @@ function MachineSuggestionFallback(
     () => items.filter((item) => item.verdict === 'safe' && item.collectable),
     [items],
   );
+  if (facts.online === null) return <MachineWidgetState kind="unavailable" title={t('common.unknown')} testID={props.testID} />;
   if (!storage.summary) {
     if (storage.status === 'not_reported')
       return (
