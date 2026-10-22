@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema,
@@ -1330,7 +1331,12 @@ export class ApiMachineClient {
                     if (!requesterAccountId) return {
                         ok: false, errorCode: 'workspace_file_replace_requester_unavailable', error: 'The verified workspace replacement requester is unavailable',
                     };
-                    return await owner.executor.execute(actionId, input, { ...context, serverId: owner.currentServerId,
+                    // The owner admits signed-root Actions only; a human-secret or internal Action id is refused here.
+                    const signedRootActionId = SignedRootActionIdSchema.safeParse(actionId);
+                    if (!signedRootActionId.success) return {
+                        ok: false, errorCode: 'workspace_action_not_admitted', error: 'The Action is not admitted on this Machine',
+                    };
+                    return await owner.executor.execute(signedRootActionId.data, input, { ...context, serverId: owner.currentServerId,
                         externalActionTarget: { kind: 'machine', machineId: this.machine.id }, runtimeAccountId: requesterAccountId });
                 },
             } : null;
