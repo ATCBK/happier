@@ -38,6 +38,7 @@ it.each([
             return Response.json({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: patch.sharedMetadata.expectedVersion + 1 },
                 agentState: { version: patch.agentState.expectedVersion + 1 } });
         }
+        if (path === '/v1/sessions/session-1/turns') return Response.json({ v: 1, sessionId: 'session-1', updatedAt: 1, turns: [] });
         return path === '/v2/sessions/session-1'
             ? Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'session-1',
                 metadata: { path: '/repo', host: 'tester.local', machineId: 'machine-1' } }) }) : null;
