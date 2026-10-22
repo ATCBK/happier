@@ -1,16 +1,9 @@
 import * as React from 'react';
 
-import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
-import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
-import { warmMachineResourceSummaries } from '@/sync/domains/machines/resources/warmMachineResourceSummaries';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
-import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
-import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
-import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { SidebarFooterPopoverButton, type SidebarFooterPopoverContentProps, type SidebarFooterPopoverTrigger } from '../sidebarFooter/SidebarFooterPopoverButton';
 import { SidebarMachinesPopoverContent } from '../sidebarFooter/SidebarMachinesPopoverContent';
@@ -18,21 +11,6 @@ import { RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX, RAIL_POPOVER_WIDE_WIDTH_PX } from '.
 import { AppRailBadge, AppRailMenuCount } from './AppRailBadge';
 import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
 import { buildMachinesRailSeen, forgetRecoveredMachinesRailReasons, useMachinesRailSignal } from './useMachinesRailSignal';
-
-/**
- * Pointer-enter / keyboard focus on the icon: one one-shot summary read per online machine this app
- * session has not read yet, so the popover's first frame already holds values (MPG-19). No watch, nothing
- * to release when the pointer leaves; only the opened popover starts live demand.
- */
-function warmUnreadMachineSummaries(): void {
-    const serverId = getActiveServerId();
-    const state = storage.getState();
-    const scope = selectActiveServerAccountScopeForServer(state.profileScope, serverId);
-    const keys = Object.values(state.machines)
-        .filter(machine => isMachineVisibleForLaunchSelection(machine) && isMachineSelectableForFleet(scope, machine))
-        .map(machine => ({ serverId, machineId: machine.id, daemonStateVersion: machine.daemonStateVersion }));
-    if (keys.length > 0) fireAndForget(warmMachineResourceSummaries(keys), { tag: 'AppRailMachines.warm' });
-}
 
 /**
  * The rail's Machines icon (lab `rm` I). Closed, it reads only the string-keyed fleet attention, what this
@@ -92,7 +70,6 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
                 selected={props.selected}
                 hoverPreview
                 onOpenIntent={recordSeen}
-                onWarmIntent={warmUnreadMachineSummaries}
             />
             {signal && !props.renderTrigger ? <AppRailBadge testID="app-rail-machines-badge" signal={signal} /> : null}
         </>

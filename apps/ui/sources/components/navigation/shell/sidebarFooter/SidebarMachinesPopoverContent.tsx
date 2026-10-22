@@ -34,7 +34,8 @@ import { useMachineSummarySettingValue } from '@/components/machines/summary/use
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
-import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
+import { useMachineResourceRefreshing, useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type { MachineResourceKey } from '@/sync/domains/machines/resources/machineRpc';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
@@ -120,6 +121,7 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
         .filter(row => row.online && row.kind === 'machine')
         .map(row => ({ serverId: row.serverId, machineId: row.kind === 'machine' ? row.machineId : '' })), [collection.sections]);
     useMachineResourceLiveDemand(demandKeys, { detail: 'summary', enabled: summary.metrics.length > 0 || needsYouKeys.size > 0 });
+    const refreshing = useMachineResourceRefreshing(demandKeys);
     const [customizing, setCustomizing] = React.useState(false);
 
     const latest = React.useRef(props.close);
@@ -196,6 +198,8 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
             maxHeight={props.maxHeight}
             title={describeFleetTitle({ subjects: attention.entries, reportingCount: attention.reportingCount }) ?? t('settings.machines')}
             summary={(
+                <View style={styles.counts}>
+                {refreshing ? <ActivitySpinner testID="sidebar-machines-refreshing" size="small" /> : null}
                 <PageHeaderMenu
                     testID="sidebar-machines-menu"
                     actions={[
@@ -205,6 +209,7 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
                             onSelect: () => open(SETTINGS_ROUTES.appearance, 'SidebarMachines.appearance') } satisfies PageHeaderMenuAction,
                     ]}
                 />
+                </View>
             )}
             subheader={(
                 <>

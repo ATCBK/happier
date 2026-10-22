@@ -3341,7 +3341,6 @@
     "sources/sync/domains/machines/resources/retryMachineResourceSummaries.ts",
     "sources/sync/domains/machines/resources/useMachineOfflineAlert.ts",
     "sources/sync/domains/machines/resources/useMachineResourceFleetAttention.ts",
-    "sources/sync/domains/machines/resources/warmMachineResourceSummaries.ts",
     "sources/sync/domains/machines/storage/useMachineStorageCategory.ts",
     "sources/sync/domains/machines/storage/useMachineStorageScan.ts",
     "sources/sync/domains/memory/getDaemonMemoryEmbeddingsStatusTranslationKey.ts",

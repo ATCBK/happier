@@ -143,7 +143,7 @@ describe('AppRailMachines', () => {
         }
     });
 
-    it('warms only executable fleet machines on pointer intent', async () => {
+    it('does not request machine resources before the popover opens', async () => {
         const serverId = servedHome!.homes.rail!.id;
         const failed = machine('warm-failed');
         const ready = machine('warm-ready');
@@ -155,11 +155,10 @@ describe('AppRailMachines', () => {
         const screen = await renderScreen(<AppRailMachines />);
         await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent?.());
         await flushHookEffects();
-        await vi.waitFor(() => expect(vitalsRpc).toHaveBeenCalled());
-        expect(vitalsRpc.mock.calls.map(([call]) => call.machineId)).toEqual(['warm-ready']);
+        expect(vitalsRpc).not.toHaveBeenCalled();
         await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent?.());
         await flushHookEffects();
-        expect(vitalsRpc.mock.calls.map(([call]) => call.machineId)).toEqual(['warm-ready']);
+        expect(vitalsRpc).not.toHaveBeenCalled();
     });
     it('names the counts on the closed icon, draws no badge for machines that are merely offline, and stays still on heartbeats', async () => {
         const previousState = storage.getState();

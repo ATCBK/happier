@@ -20,7 +20,7 @@ function Content(props: Readonly<{ close: () => void }>) {
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-async function renderButton(hoverPreview = false, intents: Readonly<{ onOpenIntent?: () => void; onWarmIntent?: () => void }> = {}) {
+async function renderButton(hoverPreview = false, intents: Readonly<{ onOpenIntent?: () => void }> = {}) {
     await act(async () => {
         root.render(
             <SidebarFooterPopoverButton
@@ -115,14 +115,13 @@ describe('SidebarFooterPopoverButton', () => {
         expect(popover()).toBeNull();
     });
 
-    it('records a hover preview as one opening intent, warms on pointer-enter, and a later press does not record again', async () => {
+    it('records demand only once the hover preview opens, and a later press does not record again', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         const onOpenIntent = vi.fn();
-        const onWarmIntent = vi.fn();
-        const button = await renderButton(true, { onOpenIntent, onWarmIntent });
+        const button = await renderButton(true, { onOpenIntent });
 
         await act(async () => { pointerEnter(button); });
-        expect(onWarmIntent).toHaveBeenCalledTimes(1);
+        expect(popover()).toBeNull();
         expect(onOpenIntent).not.toHaveBeenCalled();
         await act(async () => { vi.advanceTimersByTime(motionTokens.overlay.popover.hoverOpenDelayMs + 10); });
         expect(popover()).not.toBeNull();

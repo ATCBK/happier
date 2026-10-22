@@ -62,8 +62,6 @@ export function SidebarFooterPopoverButton(props: Readonly<{
     selected?: boolean;
     /** The person asked to open it (a press, Enter/Space, an app-wide opener, or a hover preview that opened): user intent, never a mount effect. */
     onOpenIntent?: () => void;
-    /** The pointer rests on it or keyboard focus reaches it: a chance to warm what the popover's first frame shows. */
-    onWarmIntent?: () => void;
 }>) {
     const { theme } = useUnistyles();
     const popoverWidthPx = props.popoverWidthPx ?? POPOVER_WIDTH_PX;
@@ -74,8 +72,8 @@ export function SidebarFooterPopoverButton(props: Readonly<{
     const focusReturnRef = React.useRef<FocusReturnTarget>(null);
     const { mode, toggle, close, open, hoverProps } = useHoverPreviewPopover({ enabled: hoverPreview });
     const { registerOpener } = props;
-    const intents = React.useRef({ open: props.onOpenIntent, warm: props.onWarmIntent });
-    intents.current = { open: props.onOpenIntent, warm: props.onWarmIntent };
+    const intents = React.useRef({ open: props.onOpenIntent });
+    intents.current = { open: props.onOpenIntent };
     React.useEffect(() => registerOpener?.(() => {
         focusReturnRef.current = null;
         intents.current.open?.();
@@ -94,18 +92,8 @@ export function SidebarFooterPopoverButton(props: Readonly<{
         if (mode === 'closed') intents.current.open?.();
         toggle();
     }, [mode, toggle]);
-    const warmProps = React.useMemo(() => props.onWarmIntent ? {
-        onPointerEnter: () => {
-            intents.current.warm?.();
-            hoverProps?.onPointerEnter();
-        },
-    } : null, [hoverProps, props.onWarmIntent !== undefined]);
-    const onFocusChange = React.useCallback((focused: boolean) => {
-        if (focused) intents.current.warm?.();
-    }, []);
-
     return (
-        <View ref={anchorRef} collapsable={false} style={styles.anchor} {...hoverProps} {...warmProps}>
+        <View ref={anchorRef} collapsable={false} style={styles.anchor} {...hoverProps}>
             {props.renderTrigger ? props.renderTrigger({ onPress, open: mode !== 'closed' }) : <IconButton
                 testID={props.testID}
                 variant="plain"
@@ -119,7 +107,6 @@ export function SidebarFooterPopoverButton(props: Readonly<{
                 selected={props.selected === true || mode !== 'closed'}
                 icon={props.renderIcon?.(mode !== 'closed') ?? <Icon name={props.iconName} size={props.iconSizePx ?? SIDEBAR_FOOTER_ICON_GLYPH_SIZE_PX} color={theme.colors.text.secondary} />}
                 onPress={onPress}
-                {...(props.onWarmIntent ? { onFocusChange } : {})}
             />}
             {mode !== 'closed' ? (
                 <Popover

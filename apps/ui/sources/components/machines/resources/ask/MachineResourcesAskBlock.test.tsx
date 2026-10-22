@@ -90,7 +90,6 @@ const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineResourceStore } = await import('@/sync/domains/machines/resources/machineResourceStore');
 const { machineStorageStore } = await import('@/sync/domains/machines/storage/machineStorageStore');
 const { machineProcessesStore } = await import('@/sync/domains/machines/processes/machineProcessesStore');
-const { warmMachineResourceSummaries } = await import('@/sync/domains/machines/resources/warmMachineResourceSummaries');
 const { MachineResourcesAskBlock } = await import('./MachineResourcesAskBlock');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { NewSessionEmbeddedHostProvider } = await import('@/components/sessions/new/navigation/newSessionHost');
@@ -145,7 +144,7 @@ it('keeps the presented Ask launch model quiet across unrelated resource publica
     const accountId = captureActiveServerAccountScopeLifetime()!.scope.accountId;
     const storageKey = { serverId, machineId: machine.id, expectedAccountId: accountId };
     const processKey = { serverId, machineId: machine.id, accountId, scope: 'happier' as const, view: 'tree' as const };
-    await warmMachineResourceSummaries([{ serverId, machineId: machine.id }]);
+    await machineResourceStore.read({ ...storageKey, view: 'summary' });
     await machineStorageStore.read(storageKey);
     await machineProcessesStore.read(processKey);
     const modelModule = await import('@/components/sessions/new/hooks/useNewSessionScreenModel');
@@ -397,7 +396,7 @@ it('mounts Ask with a real warmed summary and reads calm from canonical attentio
         memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
         disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 },
     }, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, attention: { level: 'calm', reasons: [] } });
-    await warmMachineResourceSummaries([{ serverId, machineId: 'machine-a' }]);
+    await machineResourceStore.read({ serverId, machineId: 'machine-a', expectedAccountId: captureActiveServerAccountScopeLifetime()!.scope.accountId, view: 'summary' });
     const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId="machine-a" machineName="Laptop" />);
     const overviewReason = () => {
         // The one suggestions surface the block mounts; its list is the derivation's output.
