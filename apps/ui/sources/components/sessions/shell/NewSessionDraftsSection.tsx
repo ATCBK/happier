@@ -35,10 +35,7 @@ import { restoreFocusToBestTarget, type FocusReturnTarget, useFocusReturnFallbac
 import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import type { SessionRowDensity } from '@/components/sessions/shell/row/resolveSessionRowPresentation';
 import {
-    resolveSessionListDensityViewState,
-    resolveSessionListItemDensity,
     resolveSessionListRowIdentityMetrics,
-    resolveSessionListRowTitleTextMetrics,
     resolveSessionListRowStatusTextMetrics,
 } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { useIsTablet } from '@/utils/platform/responsive';
@@ -60,7 +57,7 @@ import {
 import { homeDisplayName } from '@/components/settings/home/governance/homeGovernanceLabels';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionListViewContext } from './search/sessionListViewFilters';
-import { SessionListGroup } from './SessionListGroup';
+import { resolveSessionListGroupRowGeometry, SessionListGroup, SessionListGroupMoreRow } from './SessionListGroup';
 import { runWithSessionDraftRepositoryScopedRuntime } from '@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 export { buildNewSessionDraftContinueRoute } from '@/components/sessions/drafts/newSessionDraftNavigation';
@@ -185,7 +182,7 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
         : activationStatusKey ?? presentation.statusKey;
     const status = statusKey ? t(statusKey) : null;
     const minimal = props.density === 'minimal';
-    const { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics } = resolveDraftRowGeometry(
+    const { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics } = resolveSessionListGroupRowGeometry(
         props.density, { isTablet, windowWidth },
     );
     const identityMetrics = resolveSessionListRowIdentityMetrics({
@@ -278,47 +275,6 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
             )}
             rightElementOutsidePressable
             pressableRef={pressableRef}
-        />
-    );
-});
-
-/** One geometry for every row of the drafts group: the draft rows and their "Show all" row. */
-function resolveDraftRowGeometry(density: SessionRowDensity, window: Readonly<{ isTablet: boolean; windowWidth: number }>) {
-    const itemDensity = resolveSessionListItemDensity(density);
-    const densityViewState = resolveSessionListDensityViewState(
-        density === 'minimal' ? 'narrow' : density === 'compact' ? 'cozy' : 'comfortable',
-        { isTablet: window.isTablet, platform: Platform.OS, windowWidth: window.windowWidth },
-    );
-    const readableNativePhoneMinimal = density === 'minimal'
-        && densityViewState.rowHeight !== resolveSessionListDensityViewState('narrow').rowHeight;
-    const titleTextMetrics = resolveSessionListRowTitleTextMetrics({ density, readableNativePhoneMinimal });
-    return { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics };
-}
-
-/** The drafts group's last row when it lists only its newest few: a full-height row, quiet, that reveals the rest. */
-const NewSessionDraftsShowAllRow = React.memo(function NewSessionDraftsShowAllRow(props: Readonly<{
-    count: number;
-    density: SessionRowDensity;
-    onPress: () => void;
-}>) {
-    const { theme } = useUnistyles();
-    const isTablet = useIsTablet();
-    const { width: windowWidth } = useWindowDimensions();
-    const { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics } = resolveDraftRowGeometry(props.density, { isTablet, windowWidth });
-    const identityMetrics = resolveSessionListRowIdentityMetrics({ density: props.density, readableNativePhoneMinimal });
-    return (
-        <Item
-            testID="session-drafts-show-all"
-            title={t('sessionDrafts.showAll', { count: props.count })}
-            density={itemDensity}
-            style={{ height: densityViewState.rowHeight, minHeight: densityViewState.rowHeight, paddingVertical: 0 }}
-            titleStyle={[titleTextMetrics, { color: theme.colors.text.secondary }]}
-            // Minimal rows lead with the agent mark; an empty slot of its size keeps this title on theirs.
-            leftElement={props.density === 'minimal' ? (
-                <View style={{ width: identityMetrics.agentLogoSize, height: identityMetrics.agentLogoSize }} />
-            ) : undefined}
-            showChevron={false}
-            onPress={props.onPress}
         />
     );
 });
@@ -418,8 +374,9 @@ export const NewSessionDraftsSectionView = React.memo(function NewSessionDraftsS
                     />
                 ))}
                 {hiddenCount > 0 ? (
-                    <NewSessionDraftsShowAllRow
-                        count={props.drafts.length}
+                    <SessionListGroupMoreRow
+                        testID="session-drafts-show-all"
+                        title={t('sessionDrafts.showAll', { count: props.drafts.length })}
                         density={props.density ?? 'default'}
                         onPress={() => setShowAll(true)}
                     />

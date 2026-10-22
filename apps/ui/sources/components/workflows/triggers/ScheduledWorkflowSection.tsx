@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { SessionListGroup } from '@/components/sessions/shell/SessionListGroup';
+import { SessionListGroup, SessionListGroupMoreRow } from '@/components/sessions/shell/SessionListGroup';
 import {
     resolveSessionListItemDensity, resolveSessionListRowTitleTextMetrics, SESSION_LIST_ROW_IDENTITY_METRICS,
     type SessionListRowDensity,
@@ -129,8 +129,8 @@ export const ScheduledWorkflowGroup = React.memo(function ScheduledWorkflowGroup
         title={t('sessionWork.scheduled.title')} count={read.rows.length}
         footer={<ScheduledWorkflowReadFailure read={read} />}>
         {read.rows.length > 0 ? <ScheduledWorkflowRows read={shown} density={props.density ?? 'default'} /> : null}
-        {hidden > 0 ? <Item testID="workflows-column:group:scheduled-more" title={t('sessionWork.showMore', { count: hidden })}
-            showChevron={false} onPress={() => setExpanded(true)} /> : null}
+        {hidden > 0 ? <SessionListGroupMoreRow testID="workflows-column:group:scheduled-more" title={t('sessionWork.showMore', { count: hidden })}
+            density={props.density ?? 'default'} onPress={() => setExpanded(true)} /> : null}
     </SessionListGroup>;
 });
 
