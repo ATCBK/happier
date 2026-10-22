@@ -161,6 +161,52 @@ function fixture() {
 }
 
 describe('workflow trigger Automation composition', () => {
+  it('replaces a deleted Account destination through durable approval without reading the retired Session', async () => {
+    const f = fixture();
+    const destinationDefinition = (sessionId: string, machineId: string) => WorkflowDefinitionV1Schema.parse({ ...definition,
+      defaults: { ...definition.defaults, conversation: { kind: 'existing_session', sessionId, machineId } },
+      blocks: [{ ...definition.blocks[0], execution: { conversation: { kind: 'existing_session', sessionId, machineId } } }],
+    });
+    const actions = createWorkflowTriggerActions({ ...f.deps, resolveSession: async () => {
+      // The exact-Home HTTP reader's deleted-Session failure carries errorCode/httpStatus, not code.
+      throw Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'not_found', httpStatus: 404 });
+    } });
+    const added = await actions.add({ project, trigger: { ...trigger, enabled: false },
+      target: { kind: 'inline', definition: destinationDefinition('session-a', project.machineId) } });
+    const destination = { machineId: 'machine-c', directory: '/destination-c' };
+    const request = { automationId: added.set.automationId, triggerId: added.triggerId, expectedRevision: added.set.revision,
+      patch: { project: destination, target: { kind: 'inline' as const, definition: destinationDefinition('session-c', destination.machineId) } } };
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home',
+      runtimeAccountId: 'owner', actionRequestId: 'destination-request', actionCaller: { kind: 'host' as const } };
+    // A missing family registration must not produce a receipt or mutate storage.
+    expect(await createActionExecutor({}).execute('workflow.trigger.update', request, {
+      ...context, surface: 'ui', presentUserConfirmation: { actionId: 'workflow.trigger.update' },
+    })).toMatchObject({ ok: false });
+    expect(f.rows.get(added.set.automationId)?.templateVersion).toBe(1);
+    let approval: ApprovalRequest | null = null;
+    const executor = f.executor(actions, {
+      approvalsCreate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { artifactId: 'destination-approval' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home' && origin.accountId === 'owner',
+    });
+    expect(await executor.execute('workflow.trigger.update', request, context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(f.rows.get(added.set.automationId)?.templateVersion).toBe(1);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'destination-approval', decision: 'approve' },
+      { ...context, surface: 'ui' })).toMatchObject({ ok: true });
+    const terminal = ApprovalRequestV2Schema.parse(approval);
+    expect(terminal).toMatchObject({ status: 'executed', execution: { ok: true } });
+    if (!terminal.execution?.ok) throw new Error('Expected approved destination receipt');
+    const receipt = WorkflowTriggerWriteResultV1Schema.parse(terminal.execution.result);
+    expect(receipt.set).toMatchObject({ revision: 2, scopeSessionId: null, project: destination,
+      destinations: { targetSessionIds: ['session-c'] }, triggers: [{ enabled: false }] });
+    expect((await actions.list({ scope: 'account_inline' })).sets).toEqual([receipt.set]);
+    expect(f.rows.get(added.set.automationId)).toMatchObject({ assignments: [{ machineId: destination.machineId }],
+      executionRecipe: { workflow: { v: { inlineDefinition: {
+        defaults: { conversation: { sessionId: 'session-c' } }, blocks: [{ execution: { conversation: { sessionId: 'session-c' } } }],
+      } } } } });
+  });
   it.each(['happier.agent.opencode', 'acme.external-agent'])('keeps Session-B Habit scope independent of its authored A destination and project (%s)', async (pluginId) => {
     const f = fixture();
     const scopeProject = project;
@@ -274,6 +320,33 @@ describe('workflow trigger Automation composition', () => {
     }, { surface: 'ui', authority: 'present_user' });
     expect(result).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
     expect(f.rows.size).toBe(1);
+  });
+  it('keeps approved removal unresolved after a lost private receipt without replaying the committed removal', async () => {
+    const f = fixture();
+    const added = await f.actions.add({ project, trigger, target: { kind: 'inline', definition } });
+    const actions = createWorkflowTriggerActions({ ...f.deps, openContext: async () => {
+      throw Object.assign(new Error('Currentness read timed out'), { code: 'ECONNABORTED' });
+    } });
+    let approval: ApprovalRequest | null = null;
+    const executor = f.executor(actions, {
+      approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'lost-removal-receipt' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = request; return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home' && origin.accountId === 'owner',
+    });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home', runtimeAccountId: 'owner',
+      actionRequestId: 'lost-removal-request', actionCaller: { kind: 'host' as const } };
+    expect(await executor.execute('workflow.trigger.remove', { automationId: added.set.automationId, triggerId: added.triggerId }, context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'lost-removal-receipt', decision: 'approve' },
+      { ...context, surface: 'ui' })).toMatchObject({ ok: true, result: { status: 'failed',
+        execution: { ok: false, effectAttempted: true, errorCode: 'workflow_outcome_unresolved' } } });
+    expect(ApprovalRequestV2Schema.parse(approval)).toMatchObject({ status: 'failed', execution: {
+      ok: false, effectAttempted: true, errorCode: 'workflow_outcome_unresolved',
+    } });
+    expect(f.rows.get(added.set.automationId)?.triggers).toEqual([]);
+    // A fresh authorized read can establish the effect; it does not retroactively prove receipt delivery.
+    expect((await f.actions.list({ scope: 'account_inline' })).sets[0]?.triggers).toEqual([]);
   });
   it('preserves the manual occurrence owner authentication refusal through the Action front door', async () => {
     const f = fixture();

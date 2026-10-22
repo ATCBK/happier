@@ -149,6 +149,18 @@ describe('workflow Action refusal classification', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
   });
   it.each([
+    ['missing Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'not_found', httpStatus: 404 }), 'target_unavailable'],
+    ['forbidden Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'forbidden', httpStatus: 403 }), 'target_unavailable'],
+    ['unavailable Session snapshot', Object.assign(new Error('Session snapshot unavailable'), { name: 'SessionSnapshotReadError', errorCode: 'network_error' }), 'target_unavailable'],
+    ['typed errorCode refusal', Object.assign(new Error('Source unavailable'), { errorCode: 'source_unavailable' }), 'source_unavailable'],
+    ['Artifact owner-only delete refusal', Object.assign(new Error('workflow_definition_delete_forbidden'), { code: 'artifact_access_forbidden' }), 'run_access_denied'],
+    ['Artifact read missing', Object.assign(new Error('artifact_not_found'), { code: 'artifact_not_found' }), 'content_unavailable'],
+    ['Automation stored content refusal', Object.assign(new Error('automation_stored_content_unavailable'), { code: 'automation_stored_content_unavailable' }), 'content_unavailable'],
+    ['Automation template revision conflict', Object.assign(new Error('automation_template_version_conflict'), { code: 'automation_template_version_conflict' }), 'currentness_conflict'],
+    ['Automation trigger revision conflict', Object.assign(new Error('automation_trigger_revision_conflict'), { code: 'automation_trigger_revision_conflict' }), 'currentness_conflict'],
+    ['Automation version mismatch', Object.assign(new Error('version_mismatch'), { code: 'version_mismatch' }), 'currentness_conflict'],
+    ['requester custody refusal', Object.assign(new Error('credential_scope_denied'), { code: 'credential_scope_denied' }), 'run_access_denied'],
+    ['storage transport errorCode', Object.assign(new Error('Storage unreachable'), { errorCode: 'network_error' }), 'storage_unavailable'],
     ['uncoded server failure', new Error('Failed to fetch artifact'), 'storage_unavailable'],
     ['unknown transport code', Object.assign(new Error('Connection reset'), { code: 'ECONNRESET' }), 'storage_unavailable'],
     ['unknown server code', Object.assign(new Error('Transaction acquisition unavailable'), { code: 'P2028' }), 'storage_unavailable'],
@@ -163,6 +175,19 @@ describe('workflow Action refusal classification', () => {
     const actions = createActionExecutor({ workflowAction: executor(false, error) } as unknown as ActionExecutorDeps);
     await expect(actions.execute('workflow.definition.get', { definitionId }, { surface: 'ui' }))
       .resolves.toMatchObject({ ok: false, errorCode });
+  });
+
+  it('projects Session snapshot failures with the existing Session target reason, not storage diagnostics', () => {
+    const events: WorkflowActionFailureDiagnosticV1[] = [];
+    const result = normalizeWorkflowActionThrownError(Object.assign(new Error('Session snapshot unavailable'), {
+      name: 'SessionSnapshotReadError', errorCode: 'not_found', httpStatus: 404,
+    }), { operation: 'session.trigger.add', durationMs: 1, emit: event => events.push(event) });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'target_unavailable',
+      details: { code: 'target_unavailable', reason: 'session_unavailable' } });
+    expect(events).toEqual([]);
+    // An unrelated storage transport may use the same errorCode field.
+    expect(normalizeWorkflowActionThrownError(Object.assign(new Error('Storage unreachable'), { errorCode: 'network_error' })))
+      .toMatchObject({ errorCode: 'storage_unavailable' });
   });
 
   it('preserves the Account role preparation cause in the content-free diagnostic', () => {

@@ -622,7 +622,8 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
       let reviewedProject: WorkflowTriggerAddRequestV1['project'] | undefined;
       if (input.confirmLegacyConversion) {
         const directUser = caller?.authority === 'present_user' && !isWorkflowTriggerAgentCallerV1(caller)
-          && (caller.actionCaller === undefined || caller.actionCaller.kind === 'host');
+          && (caller.actionCaller === undefined || caller.actionCaller.kind === 'host')
+          && caller.bypassApprovals !== true && caller.presentUserApproval === undefined;
         const proof = caller?.presentUserApproval;
         const approvedRequest = caller?.authority === 'present_user' && caller.bypassApprovals === true
           && proof?.actionId === 'workflow.trigger.update' && proof.requestId === caller.actionRequestId
@@ -666,10 +667,17 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
       const target = nextTarget ?? current.target;
       if (!scope && current.target.kind === 'workflow' && nextTarget && (nextTarget.kind !== 'workflow' || nextTarget.ref !== current.target.ref)) refuseInput('workflow_trigger_target_mismatch');
       if (nextProject && reviewedProject === undefined) {
-        const conversation = current.target.kind === 'inline' ? current.target.definition.defaults.conversation : undefined;
-        if (conversation?.kind === 'existing_session' && deps.resolveSession) {
-          reviewedProject = (await deps.resolveSession(conversation.sessionId, caller)).project;
-        } else if (row.assignments.length === 1) reviewedProject = project(row, current.context);
+        // Placement belongs to the stored assignment/context, independently of
+        // the old conversation's availability or current Session location.
+        if (row.assignments.length === 1) reviewedProject = project(row, current.context);
+        else {
+          // Converted predecessor rows can retain a plural placement census.
+          // Their frozen Session address identifies an unchanged reviewed project.
+          const conversation = current.target.kind === 'inline' ? current.target.definition.defaults.conversation : undefined;
+          if (conversation?.kind === 'existing_session') reviewedProject = {
+            machineId: conversation.machineId, ...current.context.workspace,
+          };
+        }
       }
       const targetProject = nextProject ?? project(row, current.context);
       const { machineId: _machineId, ...workspace } = targetProject;

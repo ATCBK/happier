@@ -14,6 +14,7 @@ import {
     validateWorkflowDefinition,
     getActionSpec,
     WorkflowRunStartRequestV1Schema,
+    WorkflowTriggerWriteResultV1Schema,
     SessionTriggerUpdateRequestV1Schema,
     ScmPullRequestListResponseSchema,
     PluginProjectionV2Schema,
@@ -488,7 +489,7 @@ describe('UI Workflow Action front door', () => {
             expect(h.operations).toEqual([]);
         } finally { h.account.dispose(); }
     });
-    it.each(['absent', 'unprojected', 'not_found', 'other_session', 'retired', 'native_owner'] as const)(
+    it.each(['absent', 'unprojected', 'not_found', 'forbidden', 'other_session', 'retired', 'native_owner'] as const)(
         'FIX81 resolves Keep going placement through the exact Home: %s', async cached => {
         const previousState = storage.getState();
         const h = await createHarness();
@@ -508,6 +509,7 @@ describe('UI Workflow Action front door', () => {
                 if (request.path === `/v2/sessions/${sessionId}`) {
                     sessionReads.push(request.url.toString());
                     if (cached === 'not_found') return json({ error: 'Session not found' }, 404);
+                    if (cached === 'forbidden') return json({ error: 'Forbidden' }, 403);
                     if (cached === 'retired') await TokenStorage.setCredentialsForServerUrl(h.home.serverUrl,
                         { serverId: h.account.serverId }, { token: 'replacement-account' });
                     return json({ session: wire });
@@ -529,6 +531,9 @@ describe('UI Workflow Action front door', () => {
             const result = await h.execute('session.trigger.add', input, h.context);
             if (cached !== 'absent' && cached !== 'unprojected') {
                 expect(result).toMatchObject({ ok: false, ...(cached === 'native_owner' ? { errorCode: 'native_goal_owner' } : {}) });
+                if (cached === 'not_found' || cached === 'forbidden') expect(result).toMatchObject({
+                    errorCode: 'target_unavailable', details: { code: 'target_unavailable', reason: 'session_unavailable' },
+                });
                 expect(h.automationWrites).toEqual([]);
                 return;
             }
@@ -720,6 +725,69 @@ describe('UI Workflow Action front door', () => {
             storage.setState(previousState);
             publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
         }
+    });
+    it.each(['plain', 'e2ee'] as const)('saves an Account Habit to C after destination A is deleted through the real %s confirmation path', async mode => {
+        const previousState = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        const h = await createHarness(mode);
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+        try {
+            const request = runtimeFetch.getMockImplementation()!;
+            await loadSyncSingletonForTests();
+            connection = await h.restoreAccount(request);
+            storage.setState({ sessions: {}, profileScope: { serverId: h.account.serverId, accountId } });
+            let deletedA = false;
+            const sessionBoundary = createSessionReadBatchHttpBoundary(request => {
+                if (request.path !== '/v2/sessions/session-a') return undefined;
+                return deletedA ? json({ error: 'Session not found' }, 404) : json({ session:
+                    createPlainSessionCurrentProjectionRecordFixture({ id: 'session-a', active: false,
+                        metadata: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine-a' } }) });
+            });
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                const target = new URL(String(url));
+                return await sessionBoundary.handle({ home: h.account.serverId, accountId, url: target,
+                    path: target.pathname, method: init?.method ?? 'GET', headers: new Headers(init?.headers),
+                    signal: init?.signal, body: init?.body ? JSON.parse(String(init.body)) : undefined }) ?? request(url, init);
+            });
+            const habitDefinition = (sessionId: string, machineId: string) => validateWorkflowDefinition({ ...definition,
+                defaults: { ...definition.defaults, conversation: { kind: 'existing_session', sessionId, machineId } },
+                blocks: definition.blocks.map(block => ({ ...block,
+                    execution: { conversation: { kind: 'existing_session', sessionId, machineId } } })),
+            }).normalizedDefinition!;
+            const added = await h.execute('workflow.trigger.add', { project: { machineId: 'machine-a', directory: '/repo' },
+                target: { kind: 'inline', definition: habitDefinition('session-a', 'machine-a') },
+                trigger: { ...scheduleTrigger, enabled: false } }, h.context);
+            expect(added).toMatchObject({ ok: true });
+            if (!added.ok) throw new Error(added.errorCode);
+            const original = WorkflowTriggerWriteResultV1Schema.parse(added.result);
+            deletedA = true;
+            const destination = { machineId: 'machine-c', directory: '/destination-c' };
+            const update = { automationId: original.set.automationId,
+                triggerId: original.triggerId, expectedRevision: original.set.revision,
+                patch: { project: destination, target: { kind: 'inline' as const, definition: habitDefinition('session-c', 'machine-c') } },
+            };
+            // Mis-wired confirmation must not bypass human cancellation or publish a receipt.
+            const { Modal } = await import('@/modal');
+            vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
+            expect(await h.execute('workflow.trigger.update', update, h.context))
+                .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(h.automationRows.get(original.set.automationId)?.templateVersion).toBe(1);
+            const updated = await h.execute('workflow.trigger.update', update, h.context);
+            expect(updated).toMatchObject({ ok: true });
+            if (!updated.ok) throw new Error(updated.errorCode);
+            const receipt = WorkflowTriggerWriteResultV1Schema.parse(updated.result);
+            expect(receipt.set).toMatchObject({ revision: 2, scopeSessionId: null, project: destination,
+                destinations: { targetSessionIds: ['session-c'] }, triggers: [{ enabled: false }],
+                context: { inlineDefinition: { defaults: { conversation: { sessionId: 'session-c' } },
+                    blocks: [{ execution: { conversation: { sessionId: 'session-c' } } }] } } });
+            const read = await h.execute('workflow.trigger.list', { scope: 'account_inline' }, h.context);
+            expect(read).toMatchObject({ ok: true, result: { sets: [receipt.set] } });
+            expect(h.automationRows.get(original.set.automationId)).toMatchObject({ templateVersion: 2,
+                scopeSessionId: null, assignments: [{ machineId: 'machine-c' }] });
+            expect(h.transport).not.toHaveBeenCalled();
+        } finally { h.account.dispose(); await connection?.dispose(); storage.setState(previousState);
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable); }
     });
     it('mounts a digest suggestion without a write and creates it only through explicit Automation Action consent', async () => {
         const previous = storage.getState();

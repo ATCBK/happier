@@ -169,9 +169,12 @@ describe('0.2 Automation Account trigger host', () => {
     } } });
     expect(f.written()).toMatchObject({ enabled: true, expectedTemplateVersion: 3,
       assignments: [{ machineId: 'machine-one', enabled: true, priority: 2 }] });
+    // Account approval replay is a new present-user invocation. The Artifact
+    // above retains the original Session/MCP/CLI provenance.
     expect(f.observations.filter((entry) => entry.bypassApprovals).at(-1))
-      .toMatchObject({ surface: surface === 'agent' ? 'agent' : 'ui', authority: 'present_user',
-        actionCaller: f.context.actionCaller, actionRequestId: 'conversion-request' });
+      .toMatchObject({ surface: 'ui', authority: 'present_user',
+        actionCaller: { kind: 'host' }, actionRequestId: 'conversion-request',
+        presentUserApproval: { actionId: 'workflow.trigger.update' } });
   });
   it('leaves denied conversion requests unchanged', async () => {
     const f = await conversionApprovalFixture();
@@ -230,12 +233,14 @@ describe('0.2 Automation Account trigger host', () => {
       { input: { ...f.input, expectedRevision: 2 }, code: 'currentness_conflict' },
       { input: { ...f.input, patch: { ...f.input.patch, project: { machineId: 'machine-one', directory: '/different' } } }, code: 'present_user_required' },
       { input: { ...f.input, patch: { ...f.input.patch, enabled: false } }, code: 'present_user_required' },
+      { input: { ...f.input, patch: { ...f.input.patch, executionTarget: { kind: 'detached_run' as const } } }, code: 'present_user_required' },
     ]) {
       await expect(fresh.host.update(input, replay)).rejects.toMatchObject({ code });
     }
     for (const context of [
       { ...replay, actionRequestId: 'another-request' },
       { ...replay, presentUserApproval: { ...replay.presentUserApproval, actionId: 'workflow.trigger.add' as const } },
+      { ...replay, presentUserApproval: undefined },
       { ...replay, authority: 'account_automation' as const },
       { ...replay, bypassApprovals: false },
     ]) {

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
-import { WorkflowActionFailureV1Schema, WorkflowHttpErrorDetailsV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { WorkflowHttpErrorDetailsV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { normalizeWorkflowActionThrownError } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
 import { AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationDefinitionDetailSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDeleteResponseSchema, AutomationV3RunMutationResponseSchema, type AutomationV3RunMutationResponse, type AutomationDeleteResponse } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AutomationDefinitionListResponse, AutomationDefinitionListRequest, AutomationDefinitionDetail, AutomationDefinitionCreateRequest, AutomationDefinitionReconcileRequest } from '@happier-dev/protocol';
 
@@ -36,11 +37,9 @@ function automationHttpError(status: number, body: unknown) {
   const message = `Workflow request failed (HTTP ${status}${code ? `; ${code}` : ''})`;
   // The family already owns these semantic aliases; retain its native input.
   if (code === 'automation_disabled' || code === 'automation_not_found') return createHttpStatusError(status, message, code);
-  const semanticCode = code === 'version_mismatch' || code === 'automation_template_version_conflict'
-    || code === 'automation_trigger_revision_conflict' ? 'currentness_conflict'
-    : code;
-  if (semanticCode && WorkflowActionFailureV1Schema.safeParse({ ok: false, errorCode: semanticCode, error: message }).success) {
-    return createHttpStatusError(status, message, semanticCode);
+  const semanticFailure = code ? normalizeWorkflowActionThrownError(Object.assign(new Error(message), { code })) : null;
+  if (semanticFailure && (semanticFailure.errorCode !== 'storage_unavailable' || code === 'storage_unavailable')) {
+    return createHttpStatusError(status, message, semanticFailure.errorCode);
   }
   return Object.assign(createHttpStatusError(status, message, 'workflow_http_error'), {
     details: WorkflowHttpErrorDetailsV1Schema.parse({ status, ...(code ? { code } : {}) }),

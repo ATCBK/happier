@@ -109,12 +109,17 @@ describe('runAutomationNow', () => {
       .rejects.toMatchObject({ code: 'not_authenticated' });
   });
 
-  it('preserves the canonical V3 revision conflict at the Workflow transport boundary', async () => {
-    request.mockResolvedValue({ status: 409, data: { error: 'automation_template_version_conflict' } });
+  it.each([
+    ['automation_template_version_conflict', 409, 'currentness_conflict'],
+    ['automation_trigger_revision_conflict', 409, 'currentness_conflict'],
+    ['automation_stored_content_unavailable', 409, 'content_unavailable'],
+    ['credential_scope_denied', 403, 'run_access_denied'],
+  ] as const)('preserves canonical %s semantics at the Workflow transport boundary', async (error, status, code) => {
+    request.mockResolvedValue({ status, data: { error } });
     await expect(reconcileAutomationDefinition({ token: 'token-1', automationId: 'automation-1', input: {
       expectedTemplateVersion: 1, name: 'Triggers', description: null, enabled: true,
       assignments: [], triggers: [], removedTriggers: [],
-    } })).rejects.toMatchObject({ code: 'currentness_conflict' });
+    } })).rejects.toMatchObject({ code });
   });
 
   it('uses the authenticated V3 definition-list owner and validates its response', async () => {

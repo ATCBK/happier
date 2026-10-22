@@ -21,8 +21,16 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   durationMs: number;
   emit: (diagnostic: WorkflowActionFailureDiagnosticV1) => void;
 }>, preEffect = false): WorkflowActionFailureV1 {
-  const thrownCode = error !== null && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-    ? error.code : 'storage_unavailable';
+  const thrown = error !== null && typeof error === 'object' ? error : null;
+  // The exact-Home Session reader uses errorCode, not code. Its missing,
+  // inaccessible or unreadable Session is an unavailable execution target.
+  // Recognize that boundary's shape without importing a UI-owned Error class.
+  const sessionSnapshotUnavailable = thrown !== null && 'name' in thrown && thrown.name === 'SessionSnapshotReadError'
+    && 'errorCode' in thrown && typeof thrown.errorCode === 'string';
+  const thrownCode = sessionSnapshotUnavailable ? 'target_unavailable'
+    : thrown && 'code' in thrown && typeof thrown.code === 'string' ? thrown.code
+    : thrown && 'errorCode' in thrown && typeof thrown.errorCode === 'string' ? thrown.errorCode
+    : 'storage_unavailable';
   // An aborted observer cannot prove that an issued write did not commit.
   // Native cancellation is conclusive only during preparation or a read.
   const rawCode = preEffect && (thrownCode === 'ERR_CANCELED'
@@ -32,14 +40,19 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   // trigger owner. At the Action boundary they describe unreadable content,
   // not a failure to reach storage.
   const code = rawCode === 'automation_disabled' ? 'ineligible_state'
-    : rawCode === 'automation_not_found' ? 'content_unavailable'
+    : rawCode === 'automation_not_found' || rawCode === 'artifact_not_found'
+      || rawCode === 'automation_stored_content_unavailable' ? 'content_unavailable'
+    : rawCode === 'artifact_access_forbidden' || rawCode === 'credential_scope_denied' ? 'run_access_denied'
+    : rawCode === 'version_mismatch' || rawCode === 'automation_template_version_conflict'
+      || rawCode === 'automation_trigger_revision_conflict' ? 'currentness_conflict'
     // This is Account-wide preparation, before any role is selected. Keep
     // its specific read failure in content details rather than refusing a role.
     : rawCode === 'account_role_overrides_unavailable' ? 'content_unavailable'
     : rawCode === 'session_key_required' || rawCode === 'encryption_material_unavailable'
     || rawCode === 'encryption_mode_mismatch' || rawCode === 'invalid_template'
     ? 'content_unavailable' : rawCode;
-  const details = rawCode === 'account_role_overrides_unavailable' ? { reason: rawCode }
+  const details = sessionSnapshotUnavailable ? { code: 'target_unavailable', reason: 'session_unavailable' }
+    : rawCode === 'account_role_overrides_unavailable' ? { reason: rawCode }
     : error !== null && typeof error === 'object' && 'details' in error ? error.details : undefined;
   const failure = WorkflowActionFailureV1Schema.safeParse({
     ok: false,
