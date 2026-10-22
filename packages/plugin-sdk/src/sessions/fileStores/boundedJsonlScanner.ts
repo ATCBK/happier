@@ -1,5 +1,6 @@
 /** @moduleRealm daemon */
 import { open, stat as nodeStat } from 'node:fs/promises';
+import { isUtf8 } from 'node:buffer';
 import { readSessionInputPromptUserTextV1 } from '../promptDisplay.js';
 
 import { parseDefaultSessionHeader } from './records.js';
@@ -138,6 +139,9 @@ function decodeSourceLine(buffer: Buffer): Readonly<
   | { ok: true; value: string }
   | { ok: false; malformedOffsetBytes: number }
 > {
+  // Native validation handles valid records without a JavaScript visit per byte.
+  // Only malformed input needs the diagnostic walk for its exact source offset.
+  if (isUtf8(buffer)) return { ok: true, value: buffer.toString('utf8') };
   const malformedOffsetBytes = findMalformedUtf8Offset(buffer);
   return malformedOffsetBytes === null
     ? { ok: true, value: buffer.toString('utf8') }
@@ -492,8 +496,8 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
     bytesReadTotal += chunk.length;
 
     let segmentEndIndex = chunk.length;
-    for (let index = chunk.length - 1; index >= 0 && itemCount < maxItems; index -= 1) {
-      if (chunk[index] !== 0x0a) continue;
+    for (let index = chunk.lastIndexOf(0x0a); index >= 0 && itemCount < maxItems;
+      index = index > 0 ? chunk.lastIndexOf(0x0a, index - 1) : -1) {
       const segmentStartIndex = index + 1;
       const prefix = chunk.subarray(segmentStartIndex, segmentEndIndex);
       const segment = carryLength > 0
@@ -648,8 +652,8 @@ export async function readJsonlFileForwardLines(params: Readonly<{
     const combinedStartOffset = carryStartOffset;
     const combined = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
     let lineStartIndex = 0;
-    for (let index = 0; index < combined.length && itemCount < maxItems; index += 1) {
-      if (combined[index] !== 0x0a) continue;
+    for (let index = combined.indexOf(0x0a); index >= 0 && itemCount < maxItems;
+      index = combined.indexOf(0x0a, index + 1)) {
 
       const line = combined.slice(lineStartIndex, index);
       const decoded = decodeSourceLine(line);

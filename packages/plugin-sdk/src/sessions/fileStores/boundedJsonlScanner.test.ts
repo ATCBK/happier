@@ -105,6 +105,26 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it.each(['forward', 'backward'] as const)(
+    'keeps exact record offsets around leading and consecutive separators in the %s scanner',
+    async (direction) => {
+      const scanner = await loadScanner();
+      const root = await mkdtemp(join(tmpdir(), 'happier-file-store-separators-'));
+      tempDirs.add(root);
+      const filePath = join(root, `${direction}.jsonl`);
+      const first = jsonlLine({ text: 'café 😀' });
+      const body = `\n\r\n${first}\n${jsonlLine({ text: 'last' })}`;
+      await writeFile(filePath, body);
+      const page = direction === 'forward'
+        ? await scanner.readJsonlFileForward({ filePath, offsetBytes: 0, maxBytes: 4096, maxItems: 10 })
+        : await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 4096, maxItems: 10 });
+      expect(page.items).toEqual([
+        { value: { text: 'café 😀' }, startOffsetBytes: 3, endOffsetBytes: 3 + Buffer.byteLength(first) - 1 },
+        { value: { text: 'last' }, startOffsetBytes: 4 + Buffer.byteLength(first), endOffsetBytes: Buffer.byteLength(body) - 1 },
+      ]);
+      expect(page.diagnostics ?? []).toEqual([]);
+    },
+  );
   it('retains complete malformed records for tolerant transcript projection without consuming a partial tail', async () => {
     const scanner = await import('./index.js');
     const root = await mkdtemp(join(tmpdir(), 'happier-malformed-records-'));
