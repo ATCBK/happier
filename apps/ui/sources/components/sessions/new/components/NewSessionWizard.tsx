@@ -40,7 +40,7 @@ import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getRes
 import { InstallableDepInstaller, type InstallableDepInstallerProps } from '@/components/machines/InstallableDepInstaller';
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import {
     resolveDirectoryFavoriteComparisonKey,
@@ -508,7 +508,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     const scopesByServerId = useServerCredentialAccountScopeBindings((machineGroups ?? [{ serverId }]).map(group => group.serverId));
     const selectedMachineIsOffline = React.useMemo(() => {
         if (!selectedMachine) return false;
-        return !isMachineReachable(scope, selectedMachine);
+        return resolveMachineReachability(scope, selectedMachine) === 'unreachable';
     }, [reachabilityRevision, selectedMachine, scope]);
     const selectedMachineHomeDir = selectedMachine?.metadata?.homeDir || '/home';
     const favoriteDirectoryKeys = React.useMemo(() => new Set(

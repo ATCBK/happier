@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { renderScreen } from '@/dev/testkit';
 import { AIBackendProfileSchema } from '@/sync/domains/profiles/profileCompatibility';
@@ -10,6 +11,7 @@ import { createNewSessionWizardTestProps, type NewSessionWizardTestProps } from 
 
 installNewSessionComponentsCommonModuleMocks();
 const runtime = installSessionPaneRuntimeTestHarness();
+afterEach(clearMachineRequestReachabilityForTest);
 const profile = AIBackendProfileSchema.parse({
     id: 'profile-1', name: 'Work', environmentVariables: [], envVarRequirements: [],
     compatibility: {}, compatibilityByTargetKey: {}, defaultPermissionModeByAgent: {},
@@ -35,6 +37,18 @@ async function renderWizard(props: NewSessionWizardTestProps = buildProps(), bou
 }
 
 describe('NewSessionWizard real AgentInput composition', () => {
+    it('does not show an offline warning for withdrawn Machine presence and restores genuinely offline observations', async () => {
+        const props = buildProps();
+        const machine = { ...props.machine.selectedMachine!, active: false, activeAt: Date.now() - 120_000 };
+        props.machine.selectedMachine = machine;
+        const { screen } = await renderWizard(props);
+        expect(screen.getTextContent()).toContain('newSession.machineOfflineInlineTitle');
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(screen.getTextContent()).not.toContain('newSession.machineOfflineInlineTitle');
+        await act(async () => captureMachinePresenceObservation(scope)([machine.id]));
+        expect(screen.getTextContent()).toContain('newSession.machineOfflineInlineTitle');
+    });
     it('uses host-constrained panel height and suppresses duplicate permission status', async () => {
         const { input } = await renderWizard();
         expect(input.panelMaxHeightMode).toBe('host-constrained');

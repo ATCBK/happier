@@ -1870,6 +1870,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         profileAvailabilityById,
         selectedMachineIsWindows,
         selectedMachineOnline,
+        selectedMachineReachability,
         selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
         onWindowsTerminalIntent,
@@ -2351,7 +2352,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             setSelection: setCapabilitySelection,
         },
         machineName: selectedMachineSentenceName ?? '',
-        machineOnline: selectedMachineOnline,
+        machineOnline: selectedMachineReachability === 'unknown' ? null : selectedMachineOnline,
     });
 
     const {

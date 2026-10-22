@@ -45,6 +45,7 @@ describe('useNewSessionPreflightModelsState', () => {
 
     let root!: renderer.ReactTestRenderer;
     root = (await renderScreen(React.createElement(Harness))).tree;
+    await waitForHomeGovernance(() => expect(capabilityRpc).toHaveBeenCalledTimes(1));
     await act(async () => {
       root.unmount();
     });
@@ -75,6 +76,7 @@ describe('useNewSessionPreflightModelsState', () => {
 
     let root!: renderer.ReactTestRenderer;
     root = (await renderScreen(React.createElement(Harness))).tree;
+    await waitForHomeGovernance(() => expect(capabilityRpc).toHaveBeenCalledTimes(1));
     await act(async () => {
       root.unmount();
     });
@@ -107,6 +109,7 @@ describe('useNewSessionPreflightModelsState', () => {
 
     let root!: renderer.ReactTestRenderer;
     root = (await renderScreen(React.createElement(Harness))).tree;
+    await waitForHomeGovernance(() => expect(capabilityRpc).toHaveBeenCalledTimes(1));
     await act(async () => {
       root.unmount();
     });

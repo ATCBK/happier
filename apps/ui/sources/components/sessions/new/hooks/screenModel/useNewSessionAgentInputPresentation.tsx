@@ -20,7 +20,7 @@ import type { NewSessionTranscriptStorage } from '@/components/sessions/new/modu
 import { t } from '@/text';
 import { createNewSessionLinkedFilesActionChip } from '@/components/sessions/agentInput/definitions/createLinkedFilesActionChip';
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
@@ -111,8 +111,8 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     const selectedMachineActiveAt = params.selectedMachine?.activeAt;
     const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
     const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
-    const selectedMachineOnline = React.useMemo(() => (
-        params.selectedMachine ? isMachineReachable(scope, params.selectedMachine) : false
+    const selectedMachineReachability = React.useMemo(() => (
+        params.selectedMachine ? resolveMachineReachability(scope, params.selectedMachine) : 'unknown'
     ), [
         params.selectedMachine?.id,
         selectedMachineActive,
@@ -131,7 +131,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     // `.l12-sr`). A green "Online" beside a blocked-launch badge contradicted it.
     const connectionStatus = React.useMemo(() => {
         if (!params.selectedMachineId) return undefined;
-        if (!params.selectedMachine) {
+        if (!params.selectedMachine || selectedMachineReachability === 'unknown') {
             return {
                 text: t('newSession.machineUnavailableStatus'),
                 color: params.theme.colors.state.danger.foreground,
@@ -147,7 +147,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
                     || selectedMachineReadinessStatus === 'unknown'
                     || selectedMachineReadinessStatus === 'probing'
                 )
-                && selectedMachineOnline
+                && selectedMachineReachability === 'reachable'
             );
 
         if (online) return undefined;
@@ -163,7 +163,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     }, [
         params.selectedMachine?.id,
         params.selectedMachineId,
-        selectedMachineOnline,
+        selectedMachineReachability,
         selectedMachineReadinessStatus,
         selectedMachineLabel,
         params.theme.colors.state.danger.foreground,

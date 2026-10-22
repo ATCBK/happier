@@ -27,7 +27,7 @@ import {
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { resolveWindowsTerminalAvailable } from '@/capabilities/windowsTerminalAvailability';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -191,11 +191,11 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         });
     }, [machineAgentsById]);
 
-    const selectedMachineOnline = React.useMemo(() => {
-        if (!params.selectedMachineId) return false;
+    const selectedMachineReachability = React.useMemo(() => {
+        if (!params.selectedMachineId) return 'unknown';
         const machine = params.selectedMachine;
-        if (!machine) return false;
-        return isMachineReachable(scope, machine);
+        if (!machine) return 'unknown';
+        return resolveMachineReachability(scope, machine);
     }, [
         params.selectedMachineId,
         params.selectedMachine?.active,
@@ -205,6 +205,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         reachabilityRevision,
         scope,
     ]);
+    const selectedMachineOnline = selectedMachineReachability === 'reachable';
 
     const selectedMachineSpawnReadiness = React.useMemo(() => {
         const rpcAvailable =
@@ -238,6 +239,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.selectedMachineId,
         selectedMachineCapabilities.status,
         selectedMachineOnline,
+        selectedMachineReachability,
         scope,
     ]);
 
@@ -306,6 +308,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     return {
         cliAvailability,
         selectedMachineOnline,
+        selectedMachineReachability,
         selectedMachineCapabilities,
         capabilitiesCacheKeySalt: cacheKeySalt,
         selectedMachineCapabilitiesSnapshot,

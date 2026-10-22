@@ -2,7 +2,8 @@ import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, renderScreen, flushHookEffects } from '@/dev/testkit';
+import { renderHook, renderScreen, flushHookEffects, act } from '@/dev/testkit';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import type { Router } from 'expo-router';
@@ -26,6 +27,7 @@ const sessionAgentInputTheme = {
 const network = await installSessionOpsNetworkBoundary();
 const scope = { serverId: 'srv', accountId: 'presentation-account' };
 beforeEach(async () => {
+    clearMachineRequestReachabilityForTest();
     network.resetRequests();
     await network.addHome('https://srv', scope.accountId);
 });
@@ -65,6 +67,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             revokedAt: null,
             metadata: {
                 host: 'host-1',
+                displayName: 'Host one',
                 homeDir: '/home/me',
                 platform: 'darwin',
                 happyHomeDir: '/home/me/.happier',
@@ -148,10 +151,15 @@ describe('useNewSessionAgentInputPresentation', () => {
         // A ready machine is named by its chip; healthy state says nothing above the card.
         expect(hook.getCurrent().connectionStatus).toBeUndefined();
         expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(true);
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent().connectionStatus?.text).toBe('newSession.machineUnavailableStatus');
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(false);
+        await act(async () => captureMachinePresenceObservation(scope)([machine!.id]));
+        expect(hook.getCurrent().connectionStatus).toBeUndefined();
         readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({
-            text: 'machineRequester.keyPending(machine=host-1)', isPulsing: false, recovery: 'machine',
+            text: 'machineRequester.keyPending(machine=Host one)', isPulsing: false, recovery: 'machine',
         });
         expect(canAttemptMachineSpawn({ scope, selectedMachineId: 'm1', machine, spawnReadiness: readiness })).toBe(false);
         // A machine whose details this device cannot read is "this machine" in the sentence, never its raw id.
