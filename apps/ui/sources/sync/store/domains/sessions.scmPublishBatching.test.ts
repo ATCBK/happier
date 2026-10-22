@@ -36,7 +36,7 @@ function createHarness() {
   }));
   let setCount = 0;
   store.subscribe(() => { setCount += 1; });
-  return { get: store.getState, domain: store.getState(), getSetCount: () => setCount };
+  return { get: store.getState, set: store.setState, domain: store.getState(), getSetCount: () => setCount };
 }
 
 function makeSession(id: string) {
@@ -159,7 +159,7 @@ describe('sessions domain: batched project SCM snapshot publish', () => {
   });
 
   it('isolates duplicate Session SCM snapshots, selections and operation locks by Home', () => {
-    const { get, domain } = createHarness();
+    const { get, set, domain } = createHarness();
     const session = makeSession('same');
     get().sessions = { same: { ...session, serverId: 'a' } };
     get().sessionListRowsByServerId = {
@@ -187,7 +187,7 @@ describe('sessions domain: batched project SCM snapshot publish', () => {
     if (!lockA.started || !lockB.started) throw new Error('Expected independent locks');
     expect(domain.finishSessionProjectScmOperation('same', lockA.operation.id, 'b')).toBe(false);
     expect(domain.getSessionProjectScmInFlightOperation('same', 'b')).toEqual(lockB.operation);
-    delete get().sessionListRowsByServerId.b.same;
+    set({ sessionListRowsByServerId: { ...get().sessionListRowsByServerId, b: {} } });
     expect(domain.getSessionProjectScmSnapshot('same', 'b')).toBeNull();
     domain.clearSessionProjectScmCommitSelectionPaths('same', 'b');
     expect(domain.getSessionProjectScmCommitSelectionPaths('same', 'a')).toEqual(['a.ts']);

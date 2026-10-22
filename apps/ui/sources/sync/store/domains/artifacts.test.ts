@@ -26,10 +26,10 @@ function artifact(id: number): Extract<DecryptedArtifact, { isDecrypted: true }>
 describe('createArtifactsDomain', () => {
     it('retains unchanged Artifact slices when exact board or workflow reads hydrate or revise a body', () => {
         const store = createHarness();
-        const head: DecryptedArtifact = { ...artifact(1), storageMode: 'plain', access: 'owner', ownerAccountId: 'owner',
+        const head = { ...artifact(1), storageMode: 'plain', access: 'owner', ownerAccountId: 'owner',
             bodyVersion: 1, header: { title: 'Board', kind: 'work-board.v1', sessions: ['session'] },
             rawHeader: { title: 'Board', kind: 'work-board.v1', sessions: ['session'] }, sessions: ['session'],
-            storageIdentity: { contentKeyEnvelope: 'plain', provenanceKeyEnvelope: null } };
+            storageIdentity: { contentKeyEnvelope: 'plain', provenanceKeyEnvelope: null } } satisfies Extract<DecryptedArtifact, { isDecrypted: true }>;
         store.getState().applyArtifacts([head]);
         store.getState().updateArtifact({ ...structuredClone(head), body: 'Loaded board' });
         const loaded = store.getState().artifacts[head.id];
@@ -44,6 +44,7 @@ describe('createArtifactsDomain', () => {
             store.getState().updateArtifact(structuredClone(loaded));
             expect(store.getState()).toBe(before);
             expect(notify).not.toHaveBeenCalled();
+            if (!loaded.isDecrypted) throw new Error('Expected readable board');
             store.getState().updateArtifact({ ...structuredClone(loaded), bodyVersion: 2, body: 'Revised board' });
             expect(store.getState().artifacts[head.id].header).toBe(head.header);
             expect(store.getState().artifacts[head.id].body).toBe('Revised board');
