@@ -1,16 +1,7 @@
 import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
+import { readSocketRoomSnapshot, type SocketRoomDiscoveryServer, type SocketRoomSnapshot } from '@/app/api/socket/socketRoomDiscovery';
 
-interface MachineDaemonSocketCarrier {
-    readonly data?: unknown;
-}
-
-interface MachineDaemonSocketRoom {
-    fetchSockets(): Promise<readonly MachineDaemonSocketCarrier[]>;
-}
-
-export interface MachineDaemonPresenceSocketServer {
-    in(room: string): MachineDaemonSocketRoom;
-}
+export type MachineDaemonPresenceSocketServer = SocketRoomDiscoveryServer;
 
 export interface MachineDaemonSocketIdentity {
     readonly accountId: string;
@@ -18,8 +9,15 @@ export interface MachineDaemonSocketIdentity {
 }
 
 export type MachineDaemonPresenceInventory =
-    | Readonly<{ state: "known"; machineIds: ReadonlySet<string> }>
+    | Readonly<{ state: "known" | "partial"; machineIds: ReadonlySet<string> }>
     | Readonly<{ state: "unavailable" }>;
+
+export function classifyMachineDaemonPresence(
+    inventory: MachineDaemonPresenceInventory, machineId: string,
+): 'connected' | 'disconnected' | 'unknown' {
+    if (inventory.state !== 'unavailable' && inventory.machineIds.has(machineId)) return 'connected' as const;
+    return inventory.state === 'known' ? 'disconnected' as const : 'unknown' as const;
+}
 
 /**
  * Reads only the ordinary authenticated Machine-scoped socket identity. Reserved server-origin
@@ -45,28 +43,29 @@ export function readMachineDaemonSocketIdentity(socketData: unknown): MachineDae
 }
 
 /**
- * Takes one adapter-aware snapshot of the Account's Machine room. A transport failure is unknown presence,
- * distinct from a successfully observed empty room.
+ * Takes one adapter-aware snapshot of the Account's Machine room. Partial observations prove
+ * only the returned identities; a missing identity remains unknown until the census completes.
  */
 export async function getMachineDaemonPresenceInventory(params: Readonly<{
     accountId: string;
     io: MachineDaemonPresenceSocketServer;
 }>): Promise<MachineDaemonPresenceInventory> {
-    let sockets: readonly MachineDaemonSocketCarrier[];
+    let snapshot: SocketRoomSnapshot;
     try {
         // Ephemeral machine-runtime sockets intentionally do not join this daemon room.
-        sockets = await params.io.in(getUserMachinesSocketRoom(params.accountId)).fetchSockets();
+        snapshot = await readSocketRoomSnapshot({ io: params.io, room: getUserMachinesSocketRoom(params.accountId) });
     } catch {
         return { state: "unavailable" };
     }
 
     const machineIds = new Set<string>();
-    for (const socket of sockets) {
+    for (const socket of snapshot.sockets) {
         const identity = readMachineDaemonSocketIdentity(socket.data);
         if (identity?.accountId === params.accountId) {
             machineIds.add(identity.machineId);
         }
     }
 
-    return { state: "known", machineIds };
+    if (!snapshot.complete && machineIds.size === 0) return { state: 'unavailable' };
+    return { state: snapshot.complete ? 'known' : 'partial', machineIds };
 }

@@ -1,5 +1,6 @@
 import { onShutdown } from "@/utils/process/shutdown";
 import { registerUiFocusSocketEvent } from '@/app/api/socket/registerUiFocusSocketEvent';
+import { registerSocketRoomDiscovery } from '@/app/api/socket/socketRoomDiscovery';
 import { Fastify } from "./types";
 import { buildMachineActivityEphemeral, buildSessionActivityEphemeral, buildUpdateSessionUpdate, ClientConnection, eventRouter } from "@/app/events/eventRouter";
 import { CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT } from "@/app/events/socketRoomEmitter";
@@ -291,6 +292,7 @@ export function startSocket(app: Fastify) {
     });
 
     destroyUnclaimedHttpUpgrades(app.server, SOCKET_IO_PATH);
+    registerSocketRoomDiscovery(io);
     app.machineDaemonPresence = io;
     const resolveCurrentSessionMachine = (input: Readonly<{ accountId: string; sessionId: string }>) => resolveCurrentSessionMachineFromServer({
         ...input, io, presence: sessionPublisherPresence,

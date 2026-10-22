@@ -6,6 +6,7 @@ import { recordSocketClusterFetchSockets } from "@/app/monitoring/metrics/index"
 import { log } from "@/utils/logging/log";
 import { db } from "@/storage/db";
 import { getMachineSocketRoom } from "../../socketRooms";
+import { readLocalSocketRoom, readSocketRoomSnapshot } from '../socketRoomDiscovery';
 
 import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./_types";
 import { buildRpcMethodRoom } from "./rpcMethodRoom";
@@ -39,16 +40,15 @@ export async function readMachineRpcTargetPresence(params: Readonly<{
         });
         if (!machine) return 'unknown';
         if (classifyMachineAvailabilityState(machine) !== 'available') return 'disconnected';
-        const room = params.io.in(getMachineSocketRoom(params.userId, machineId));
-        const targets = typeof params.fetchTimeoutMs === 'number' && params.fetchTimeoutMs > 0
-            ? await room.timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
-            : await room.fetchSockets() as RpcAckResponseEmitter[];
+        const snapshot = await readSocketRoomSnapshot({ io: params.io,
+            room: getMachineSocketRoom(params.userId, machineId), timeoutMs: params.fetchTimeoutMs });
+        const targets = snapshot.sockets as RpcAckResponseEmitter[];
         const daemons = targets.filter(target => target.data?.clientType === 'machine-scoped'
             && target.data.machineId === machineId);
-        if (daemons.length === 0) return 'disconnected';
+        if (daemons.length === 0) return snapshot.complete ? 'disconnected' : 'unknown';
         // A daemon still registering, or a registered handler missing from its method
         // room, does not prove unsupported. Use the existing Home registration owner.
-        return daemons.every(target => {
+        return snapshot.complete && daemons.every(target => {
             const methods = readSocketRegisteredRpcMethods(target);
             return methods !== null && !methods.includes(params.method);
         }) ? 'method-absent' : 'unknown';
@@ -67,6 +67,7 @@ export async function discoverRpcTargets(params: Readonly<{
     excludedSocketId?: string;
     answeringClient?: SocketRpcAnsweringClientV1;
     targetGuard?: RpcForwardTargetGuard;
+    correlation?: Readonly<{ requestId: string; callerSocketId: string }>;
 }>): Promise<Readonly<{ targets: RpcAckResponseEmitter[]; methodRoomEmpty: boolean }> | null> {
     const room = buildRpcMethodRoom({
         userId: params.userId,
@@ -91,23 +92,29 @@ export async function discoverRpcTargets(params: Readonly<{
         // A local room member is positive routing evidence and does not depend on
         // every Redis peer answering. Single-client discovery still needs a global census.
         if (!params.answeringClient?.requireSingle || params.answeringClient.clientId) {
-            const localTargets: RpcAckResponseEmitter[] = [];
-            for (const socketId of params.io.sockets.adapter.rooms.get(room) ?? []) {
-                const socket = params.io.sockets.sockets.get(socketId);
-                if (socket?.connected) localTargets.push(socket);
-            }
+            const localTargets = readLocalSocketRoom(params.io, room);
             const admitted = await admitTargets(localTargets);
             if (selectRpcTarget({ targets: admitted, excludedSocketId: params.excludedSocketId,
                 answeringClient: params.answeringClient }).type === 'target') return { targets: admitted, methodRoomEmpty: false };
         }
-        const targets = typeof params.fetchTimeoutMs === "number" && params.fetchTimeoutMs > 0
-            ? await params.io.in(room).timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
-            : await params.io.in(room).fetchSockets() as RpcAckResponseEmitter[];
+        const canUsePartial = !params.answeringClient?.requireSingle || Boolean(params.answeringClient.clientId);
+        const snapshot = await readSocketRoomSnapshot({ io: params.io, room, timeoutMs: params.fetchTimeoutMs,
+            ...(canUsePartial ? { acceptPartial: async sockets => selectRpcTarget({
+                targets: await admitTargets(sockets as RpcAckResponseEmitter[]),
+                excludedSocketId: params.excludedSocketId, answeringClient: params.answeringClient,
+            }).type === 'target' } : {}),
+        });
+        const targets = snapshot.sockets as RpcAckResponseEmitter[];
+        const admitted = await admitTargets(targets);
+        if (!snapshot.complete && (!canUsePartial || selectRpcTarget({ targets: admitted,
+            excludedSocketId: params.excludedSocketId, answeringClient: params.answeringClient }).type !== 'target')) {
+            throw snapshot.error ?? new Error('Incomplete RPC target census');
+        }
         recordSocketClusterFetchSockets({
             durationMs: Date.now() - startedAt,
             result: "ok",
         });
-        return { targets: await admitTargets(targets), methodRoomEmpty: targets.length === 0 };
+        return { targets: admitted, methodRoomEmpty: snapshot.complete && targets.length === 0 };
     } catch (error) {
         recordSocketClusterFetchSockets({
             durationMs: Date.now() - startedAt,
@@ -115,7 +122,7 @@ export async function discoverRpcTargets(params: Readonly<{
             reason: classifySocketClusterFetchFailureReason(error),
         });
         log(
-            { module: "websocket-rpc", level: "warn", room },
+            { module: "websocket-rpc", level: "warn", room, ...params.correlation },
             `RPC target discovery failed for ${room}: ${error instanceof Error ? error.message : String(error)}`,
         );
         // An unsuccessful census cannot prove that a connected daemon lacks a method.

@@ -2222,6 +2222,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
             if (method && callerRequestId && (machineAdmission || parseMachineScopedRpcMethod(method))) {
                 log({ module: "websocket-rpc", event: "machine-rpc-relay-completed",
                     method, requestId: callerRequestId, targetRequestId: cancellation?.targetRequestId,
+                    callerSocketId: params.socket.id, callerConnected: params.socket.connected === true,
                     targetSocketId: cancellation?.targetSocketId,
                     durationMs: Date.now() - startedAt,
                     admissionMs: (forwardStartedAt ?? Date.now()) - startedAt,

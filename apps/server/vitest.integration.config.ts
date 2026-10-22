@@ -12,6 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const homeIrohRealIntegrationTest = 'sources/app/iroh/homeIrohEndpoint.real.integration.test.ts';
 
 export default defineConfig({
+  server: { fs: { allow: [resolve(__dirname, '../..')] } },
   test: {
     globals: true,
     environment: 'node',

@@ -8,6 +8,7 @@ import { db, isPrismaUniqueConstraintError } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import {
     getMachineDaemonPresenceInventory,
+    classifyMachineDaemonPresence,
     type MachineDaemonPresenceInventory,
     type MachineDaemonPresenceSocketServer,
 } from "../machineDaemonPresence";
@@ -43,7 +44,7 @@ export type MachinePoolCandidateSnapshot = Readonly<{
     revision: number;
     members: readonly Readonly<{ machineId: string; priorityTier: number; enabled: boolean }>[];
     availableMachineIds: ReadonlySet<string>;
-    presenceState: "known" | "unavailable";
+    presenceState: "known" | "partial" | "unavailable";
 }>;
 
 type MachinePoolCandidateSnapshotInput = Readonly<{
@@ -81,8 +82,8 @@ function classifyPoolMemberState(member: StoredPoolMember, inventory: MachineDae
     if (lifecycle === "revoked") return "revoked" as const;
     if (lifecycle === "replaced") return "replaced" as const;
     if (!isPersistentMachine(member.machine)) return "temporary" as const;
-    if (inventory.state === "unavailable") return "unknown" as const;
-    return inventory.machineIds.has(member.machineId) ? "connected" as const : "offline" as const;
+    const presence = classifyMachineDaemonPresence(inventory, member.machineId);
+    return presence === 'disconnected' ? 'offline' as const : presence;
 }
 
 function projectPool(stored: StoredPool, inventory: MachineDaemonPresenceInventory): MachinePoolViewV1 {
@@ -94,7 +95,7 @@ function projectPool(stored: StoredPool, inventory: MachineDaemonPresenceInvento
             enabled: member.enabled,
             state: classifyPoolMemberState(member, inventory),
         }));
-    const availability = inventory.state === "unavailable"
+    const availability = inventory.state !== "known"
         ? { state: "unknown" as const }
         : {
             state: "known" as const,
@@ -456,7 +457,7 @@ export async function resolveMachinePool(params: Readonly<{
     if (!stored.members.some((member) => member.enabled)) {
         return { ok: true, value: { kind: "unavailable", poolId: stored.poolId, reason: "empty" } };
     }
-    if (stored.presenceState === "unavailable") {
+    if (stored.presenceState !== 'known' && stored.availableMachineIds.size === 0) {
         return { ok: true, value: { kind: "unavailable", poolId: stored.poolId, reason: "presence_unavailable" } };
     }
     if (stored.availableMachineIds.size === 0) {

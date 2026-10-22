@@ -19,6 +19,15 @@ import { buildRpcMethodRoom } from "./rpc/rpcMethodRoom";
 const USER_ID = "user-redis-adapter";
 const SOCKET_PATH = "/v1/updates";
 
+function registerTestRpcHandlers(io: Server): void {
+    io.on('connection', socket => {
+        // This transport fixture supplies the identity normally admitted by startSocket.
+        socket.data.authAuthority = 'present_user';
+        socket.data.authTokenAuthenticationEvidence = [];
+        registerSocketRpcHandlers({ userId: USER_ID, socket, io });
+    });
+}
+
 type RedisMemoryInstance = Awaited<ReturnType<typeof resolveRedisAdapterValidationRedisUrl>>["redisMemory"];
 
 type StartedCluster = Readonly<{
@@ -71,12 +80,8 @@ async function startCluster(): Promise<StartedCluster> {
         adapter: createAdapter(redisB, readRedisStreamsAdapterOptionsFromEnv({})),
     });
 
-    ioA.on("connection", (socket) => {
-        registerSocketRpcHandlers({ userId: USER_ID, socket, io: ioA });
-    });
-    ioB.on("connection", (socket) => {
-        registerSocketRpcHandlers({ userId: USER_ID, socket, io: ioB });
-    });
+    registerTestRpcHandlers(ioA);
+    registerTestRpcHandlers(ioB);
 
     const portA = await listen(httpA);
     const portB = await listen(httpB);
@@ -176,8 +181,8 @@ describe("rpcHandler redis adapter integration", () => {
     it.each(["restart", "silent partition"] as const)("recovers remote RPC discovery, calls and no-target after Redis %s", async (failure) => {
         const cluster = await startRedisAdapterRecoveryCluster();
         const [nodeA, nodeB] = cluster.nodes;
-        nodeA.io.on("connection", (socket) => registerSocketRpcHandlers({ userId: USER_ID, socket, io: nodeA.io }));
-        nodeB.io.on("connection", (socket) => registerSocketRpcHandlers({ userId: USER_ID, socket, io: nodeB.io }));
+        registerTestRpcHandlers(nodeA.io);
+        registerTestRpcHandlers(nodeB.io);
         const caller = await connectClient(nodeA.port);
         const listener = await connectClient(nodeB.port);
         try {

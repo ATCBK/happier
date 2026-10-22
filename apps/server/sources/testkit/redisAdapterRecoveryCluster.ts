@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { readRedisStreamsAdapterOptionsFromEnv } from "@/config/socketAdapter";
 import { startSilentPartitionProxy } from "@/testkit/redisSilentPartitionProxy";
 import { resolveRedisAdapterValidationRedisUrl } from "../../scripts/resolveRedisAdapterValidationRedisUrl";
+import { registerSocketRoomDiscovery } from '@/app/api/socket/socketRoomDiscovery';
 
 type ProductRedisOwner = typeof import("@/storage/redis/redis");
 type RecoveryNode = {
@@ -14,7 +15,7 @@ type RecoveryNode = {
     owner: ProductRedisOwner;
 };
 
-export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: string } = {}) {
+export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: string; nodeCount?: 2 | 3 } = {}) {
     // Recovery tests must never stop an ambient operator Redis instance.
     const { redisUrl, redisMemory } = await resolveRedisAdapterValidationRedisUrl({
         env: options.redisUrl ? { REDIS_URL: options.redisUrl } : {},
@@ -39,7 +40,8 @@ export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: str
         return closePromise;
     };
     try {
-        for (let index = 0; index < 2; index++) {
+        const nodeCount = options.nodeCount ?? 2;
+        for (let index = 0; index < nodeCount; index++) {
             const previousUrl = process.env.REDIS_URL;
             let owner: typeof import("@/storage/redis/redis");
             let redis: ReturnType<typeof owner.getRedisSocketClusterClient>;
@@ -61,6 +63,7 @@ export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: str
                 adapter: createAdapter(adapter, readRedisStreamsAdapterOptionsFromEnv({})),
             });
             servers.push(io);
+            registerSocketRoomDiscovery(io);
             await new Promise<void>((resolve, reject) => {
                 httpServer.once("error", reject);
                 httpServer.listen(0, "127.0.0.1", resolve);
@@ -72,7 +75,7 @@ export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: str
         const waitForRecovery = async () => {
             await vi.waitFor(async () => {
                 for (const node of nodes) {
-                    if (node.redis.status !== "ready" || await node.io.of("/").adapter.serverCount() !== 2) {
+                    if (node.redis.status !== "ready" || await node.io.of("/").adapter.serverCount() !== nodeCount) {
                         throw new Error("Waiting for both adapter subscribers");
                     }
                 }
@@ -82,7 +85,7 @@ export async function startRedisAdapterRecoveryCluster(options: { redisUrl?: str
         const [nodeA, nodeB] = nodes;
         if (!nodeA || !nodeB) throw new Error("Recovery cluster requires two nodes");
         return {
-            nodes: [nodeA, nodeB] as const,
+            nodes: [nodeA, nodeB, ...nodes.slice(2)] as const,
             recover: async (failure: "restart" | "silent partition") => {
                 if (failure === "restart") {
                     if (!redisMemory) throw new Error("Caller owns Redis restart");

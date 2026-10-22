@@ -24,11 +24,80 @@ vi.mock('@/app/monitoring/metrics/index', () => ({
     recordSocketClusterFetchSockets: vi.fn(),
 }));
 
+vi.mock('@/utils/logging/log', () => ({ log: vi.fn() }));
+
 
 import { forwardRpcCall } from './forwardRpcCall';
 import { buildRpcMethodRoom } from './rpcMethodRoom';
+import { log } from '@/utils/logging/log';
 
 describe('forwardRpcCall', () => {
+    it.each(['received', 'disconnected'] as const)('joins target lookup, actual submission and %s ACK settlement without logging content', async status => {
+        const io = new Server();
+        const method = 'machine-1:daemon.vitals.get';
+        const controller = new AbortController();
+        let acknowledge!: (value: unknown) => void;
+        let rejectAcknowledgement!: (error: Error) => void;
+        let submitted!: () => void;
+        const issued = new Promise<void>(resolve => { submitted = resolve; });
+        const response = new Promise<unknown>((resolve, reject) => { acknowledge = resolve; rejectAcknowledgement = reject; });
+        const emitWithAck = vi.fn(() => { submitted(); return response; });
+        const target = { id: 'daemon-namespace', connected: true, data: {}, timeout: () => ({ emitWithAck }) };
+        // Only the socket network boundary is synthetic; lookup, selection and forwarding are real.
+        io.sockets.sockets.set(target.id, target as unknown as Socket);
+        io.sockets.adapter.rooms.set(buildRpcMethodRoom({ userId: 'user-1', method }), new Set([target.id]));
+        vi.mocked(log).mockClear();
+        try {
+            const forwarded = forwardRpcCall({ io, targetUserId: 'user-1', method,
+                callerSocketId: 'browser-namespace', callParams: { secret: 'private-request-content' },
+                cancellation: { targetRequestId: 'relay-trace-1', signal: controller.signal, onTargetSelected() {} } });
+            await issued;
+            const events = () => vi.mocked(log).mock.calls.map(([facts]) => facts)
+                .filter(facts => typeof facts === 'object' && facts !== null && 'event' in facts);
+            expect(events()).toEqual([
+                expect.objectContaining({ event: 'rpc-target-lookup', requestId: 'relay-trace-1',
+                    callerSocketId: 'browser-namespace', targetSocketId: 'daemon-namespace', status: 'target' }),
+                expect.objectContaining({ event: 'rpc-target-issued', requestId: 'relay-trace-1',
+                    callerSocketId: 'browser-namespace', targetSocketId: 'daemon-namespace', boundary: 'emitWithAck-returned' }),
+            ]);
+            if (status === 'received') {
+                acknowledge({ secret: 'private-response-content' });
+                await expect(forwarded).resolves.toMatchObject({ ok: true });
+            } else {
+                rejectAcknowledgement(Object.assign(new Error('private-transport-detail'), { code: 'SOCKET_DISCONNECTED' }));
+                await expect(forwarded).resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+            }
+            expect(events()).toHaveLength(3);
+            expect(events()[2]).toMatchObject({ event: 'rpc-target-ack', requestId: 'relay-trace-1',
+                callerSocketId: 'browser-namespace', targetSocketId: 'daemon-namespace',
+                status: status === 'received' ? 'received' : 'failed',
+                ...(status === 'disconnected' ? { failure: 'disconnected' } : {}) });
+            expect(JSON.stringify(events())).not.toContain('private-');
+        } finally { acknowledge?.({}); io.sockets.sockets.clear(); }
+    });
+
+    it('correlates failed discovery without claiming issuance or ACK receipt', async () => {
+        const io = new Server();
+        const fetchSockets = vi.fn().mockRejectedValue(new Error('timeout reached: only 24 responses received out of 25'));
+        vi.spyOn(io, 'in').mockReturnValue({ fetchSockets } as unknown as ReturnType<Server['in']>);
+        vi.mocked(log).mockClear();
+        try {
+            await expect(forwardRpcCall({ io, targetUserId: 'user-1', method: 'unscoped-read', callParams: {},
+                callerSocketId: 'browser-namespace', cancellation: { targetRequestId: 'relay-trace-2',
+                    signal: new AbortController().signal, onTargetSelected() {} } })).resolves.toMatchObject({
+                ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE',
+            });
+            expect(vi.mocked(log).mock.calls).toContainEqual([
+                expect.objectContaining({ requestId: 'relay-trace-2', callerSocketId: 'browser-namespace', level: 'warn' }),
+                expect.any(String),
+            ]);
+            const phases = vi.mocked(log).mock.calls.map(([facts]) => facts)
+                .filter(facts => typeof facts === 'object' && facts !== null && 'event' in facts);
+            expect(phases).toEqual([expect.objectContaining({ event: 'rpc-target-lookup',
+                requestId: 'relay-trace-2', status: 'not-available', discoveryFailed: true })]);
+        } finally { vi.restoreAllMocks(); }
+    });
+
     it('recovers discovery within the existing availability grace before dispatching once', async () => {
         vi.useFakeTimers();
         const io = new Server();

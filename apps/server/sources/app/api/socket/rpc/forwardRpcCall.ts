@@ -49,6 +49,7 @@ import {
     resolveRpcMethodAvailabilityPollMs,
 } from "./rpcMethodAvailability";
 import { discoverRpcTargets, readMachineRpcTargetPresence } from "./rpcTargetDiscovery";
+import { readSocketRoomSnapshot } from '../socketRoomDiscovery';
 import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./_types";
 
 export type RpcForwardResult =
@@ -94,10 +95,11 @@ async function readLatestRpcTargetBySocketId(params: Readonly<{
     try {
         const localTarget = params.io.sockets.sockets.get(params.targetSocketId);
         if (localTarget?.connected) return localTarget;
-        const targetRoom = params.io.in(params.targetSocketId);
-        const targets = typeof params.fetchTimeoutMs === "number" && params.fetchTimeoutMs > 0
-            ? await targetRoom.timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
-            : await targetRoom.fetchSockets() as RpcAckResponseEmitter[];
+        const snapshot = await readSocketRoomSnapshot({ io: params.io, room: params.targetSocketId,
+            timeoutMs: params.fetchTimeoutMs,
+            acceptPartial: async sockets => sockets.some(socket => 'id' in socket && socket.id === params.targetSocketId),
+        });
+        const targets = snapshot.sockets as RpcAckResponseEmitter[];
         const exactTargets = targets.filter((target) => target.id === params.targetSocketId);
         return exactTargets.length === 1 ? exactTargets[0] : null;
     } catch (error) {
@@ -165,6 +167,10 @@ export async function forwardRpcCall(params: Readonly<{
 }>): Promise<RpcForwardResult> {
     const callStartedAt = Date.now();
     const lookupStartedAt = Date.now();
+    const correlation = params.cancellation && params.callerSocketId ? {
+        requestId: params.cancellation.targetRequestId,
+        callerSocketId: params.callerSocketId,
+    } : null;
     let methodRegistrationAbsent = false;
     let discoveryFailed = false;
     const selection = await waitForRpcTargetAvailability({
@@ -182,12 +188,18 @@ export async function forwardRpcCall(params: Readonly<{
                 excludedSocketId: params.callerSocketId,
                 answeringClient: params.answeringClient,
                 targetGuard: params.targetGuard,
+                ...(correlation ? { correlation } : {}),
             });
             discoveryFailed = discovery === null;
             methodRegistrationAbsent = discovery?.methodRoomEmpty === true;
             return discovery?.targets ?? [];
         },
     });
+    if (correlation) log({ module: 'websocket-rpc', event: 'rpc-target-lookup', ...correlation,
+        method: params.method, status: selection.type, discoveryFailed,
+        ...(selection.type === 'target' ? { targetSocketId: selection.target.id } : {}),
+        durationMs: Date.now() - lookupStartedAt,
+    }, 'RPC target lookup completed');
     observeRpcTargetLookup({
         method: params.method,
         durationMs: Date.now() - lookupStartedAt,
@@ -370,7 +382,26 @@ export async function forwardRpcCall(params: Readonly<{
                     } } : {}),
                 } : request,
             );
-            return await response;
+            // An emit invocation is not proof of a wire write or target execution.
+            // Keep its exact target correlation separate from native ACK settlement.
+            if (correlation) log({ module: 'websocket-rpc', event: 'rpc-target-issued', ...correlation,
+                method: params.method, targetSocketId: selection.target.id, boundary: 'emitWithAck-returned',
+            }, 'RPC target emit invoked');
+            try {
+                const value = await response;
+                if (correlation) log({ module: 'websocket-rpc', event: 'rpc-target-ack', ...correlation,
+                    method: params.method, targetSocketId: selection.target.id, status: 'received',
+                }, 'RPC target ACK received');
+                return value;
+            } catch (error) {
+                if (correlation) log({ module: 'websocket-rpc', event: 'rpc-target-ack', ...correlation,
+                    method: params.method, targetSocketId: selection.target.id, status: 'failed',
+                    failure: params.cancellation?.signal.aborted ? 'cancelled'
+                        : error instanceof Error && 'code' in error && error.code === 'SOCKET_DISCONNECTED' ? 'disconnected'
+                        : isSocketIoAckTimeoutError(error) ? 'timeout' : 'request_error',
+                }, 'RPC target ACK failed');
+                throw error;
+            }
         };
         const guarded = params.targetGuard
             ? await params.targetGuard.runOperation({

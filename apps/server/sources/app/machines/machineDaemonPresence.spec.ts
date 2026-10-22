@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
 
-import { getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity } from "./machineDaemonPresence";
+import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity } from "./machineDaemonPresence";
 
 describe("exact Machine socket identity and inventory", () => {
+    it('uses partial presence only for the observed Machine, preserving unknown versus disconnected', () => {
+        const partial = { state: 'partial' as const, machineIds: new Set(['machine-a']) };
+        expect(classifyMachineDaemonPresence(partial, 'machine-a')).toBe('connected');
+        expect(classifyMachineDaemonPresence(partial, 'machine-b')).toBe('unknown');
+        expect(classifyMachineDaemonPresence({ state: 'known', machineIds: partial.machineIds }, 'machine-b'))
+            .toBe('disconnected');
+        expect(classifyMachineDaemonPresence({ state: 'unavailable' }, 'machine-a')).toBe('unknown');
+    });
     it("accepts ordinary machine sockets without reserved installation proof", () => {
         expect(readMachineDaemonSocketIdentity({ userId: "alice", clientType: "machine-scoped", machineId: "machine-a" }))
             .toEqual({ accountId: "alice", machineId: "machine-a" });
