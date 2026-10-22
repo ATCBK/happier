@@ -5,6 +5,55 @@ modes delegate cross-process capture to this Stack-owned directory. The older
 UI stress scenarios remain available through that entry point; both modes use
 the same CDP transport and sync telemetry report owner.
 
+## CI and local regression reporting (0.3 development)
+
+`node scripts/pipeline/run.mjs perf-validate --baseline-ref <ref> --profile pr --out <new-directory>`
+runs the same capture owner against the existing `packages/tests` isolated
+full-compose stress environment and deterministic synthetic Account. The
+candidate driver and comparison checkouts use their own dependencies; they do
+not reuse a live stack's dependency tree, database, credentials or Agent accounts.
+Current/directory bases use the existing runtime authored-input inventory plus
+the stress testkit/fixture inputs for their private source capture. Git-free
+worker mirrors leave source SHA and dirty status unavailable in the comparison; such a
+capture cannot supply a trusted clean exact-SHA baseline artifact. Explicit
+historical Git refs still require an actual Git checkout.
+Private installation is followed by canonical workspace dependency builds for
+the stress driver and CLI before UI export or resource startup; an installed
+workspace link alone does not supply its compiled JavaScript exports.
+The source-web export owner prepares UI once per side. Existing exports may be
+supplied with `--baseline-ui-dir` and `--candidate-ui-dir`. The existing stress
+driver reuses its own environment per side across ordered captures, with a fresh
+browser each time; it never borrows a live stack's dependencies. Stateful journey
+effects remain part of that declared fixed sequence, not a claim of dataset reset.
+
+CI consumes `--baseline-results-dir <directory>` only for a trusted successful
+`dev`/`main` push artifact at the exact PR base SHA. The directory contains the
+same `comparison.json` and relative canonical `runs/.../candidate/bundle.json`
+files, not executable artifact code. Counts/bytes can compare across hosts;
+historical timing is explicitly not a same-host paired ratio. With no exact-base
+artifact, `--candidate-only` records all candidate observations and labels the
+baseline unavailable; it does not rebuild the base or substitute a latest result.
+
+`comparison.json` and `comparison.md` retain available counts, payload bytes,
+timings, post-GC heap slope, backend/process observations and production JS/CSS
+bytes. CI appends that same Markdown to its job summary and retains profiles.
+Unavailable data stays explicitly unavailable, and noisy observations are labeled.
+Scenario observations are informational; they do not fail releases or require
+sign-off. Only owner-level contracts that reject an intentional real regression
+and pass ten unchanged target-runner repeats may gate in the existing test jobs.
+SQL counts and scheduler-sensitive whole-app counts remain diagnostic.
+
+The fixed short PR profile has two counts-only captures: authenticated startup
+and another Session streaming while unrelated content is mounted (four captures
+for a local paired run). Only full-profile J1 startup collects five unperturbed
+timing repetitions per side. The full
+profile also covers cold startup, settled Home, New Session, exact Inbox approval
+and the real Stop control. Docker/composed validation is authorized on nl1;
+successful browser end-to-end execution and completed-step runtime remain
+unverified. The observed unsuccessful cold PR step took 62.26 minutes, dominated
+by UI export, so the five-minute cold target is not met. This documentation does
+not claim CI has executed the new scenario integration.
+
 The orchestrator owns `agent-qa-perf` lifecycle. This tool attaches to the
 browser returned by `dev-targets browser start`; it never launches a browser,
 server, daemon, Expo or Metro. Retain the browser command's TTY handle and send
@@ -78,6 +127,16 @@ are saved. The protocol owns capability-path redaction. A salted per-run digest
 compares full request URLs/bodies without exposing them. A candidate means
 overlapping equal requests, not proof of wasted work; unknown request bodies
 cannot establish equality. Network transfer bytes include protocol overhead.
+
+The same bundle/comparison also includes decoded HTTP chunk bytes from responses
+completed within the window, and sent/received WebSocket message counts and
+decoded payload bytes. These follow the [CDP 1.3 Network contract](https://github.com/ChromeDevTools/devtools-protocol/blob/master/json/browser_protocol.json):
+`dataReceived.dataLength` counts decoded chunk bytes; `loadingFinished` supplies
+encoded transfer bytes. WebSocket payloads use UTF-8 for text and base64 for all
+other opcodes. The socket counts include protocol/control messages; payload bytes
+exclude framing and do not establish compressed wire bytes. Missing older decoded
+counters remain unavailable. All these scenario metrics remain informational
+pending the required regression and unchanged-run calibration.
 
 Server query counts are Prisma operation attempts from existing `db.*` latency
 spans, not PostgreSQL physical-query counts (one Prisma operation may emit
@@ -160,7 +219,7 @@ Round-4 collector details:
   automation overhead. Shared process samples include all clients, not per-lane
   CPU/RSS, peaks or allocated DB backends. Suppressed pings cannot establish
   poll rates; missing operation/constructor counts remain unavailable.
-- Current bundles use schema 4. Comparisons keep schema versions separate as
+- Current bundles use schema 5. Comparisons keep schema versions separate as
   well as journey/cache/UI/instrumentation mode: legacy unbracketed requests,
   terminal-only telemetry and delayed rotating-log reads cannot be silently
   pooled with corrected captures. Fixed/exact Session route-class metrics are
@@ -179,6 +238,99 @@ Round-4 collector details:
   generally be repaired: filtered-out starts and original native walls were not
   retained. Redo the cohort; do not pool it with schema 4. Controller shell
   durations and profile-wide CPU remain distinct from exact-window evidence.
+
+### Backend CPU and event-loop capture
+
+Add `--backend-profile=server,daemon` to the existing journey command, or put
+`"backendProfiles": ["server", "daemon"]` in its JSON definition. Either role can
+also be selected alone. This opt-in development diagnostic uses the existing
+configured, colocated POSIX Node QA host and host-observer control channel.
+It never starts or restarts a backend, changes its environment, or reads the
+database. Windows controllers can use the configured POSIX host; a Windows
+profiling worker is explicitly unsupported because this mode uses SIGUSR1.
+
+The observer verifies each recorded PID, process incarnation, stack binding and
+selected/loaded runtime before signalling it. It refuses an occupied inspector.
+A short loopback CDP connection starts a process-local Node inspector Session
+and a 20 ms `monitorEventLoopDelay` histogram, then releases the TCP inspector;
+both processes can therefore record concurrently without changing debug ports.
+Finalization reconnects to the original process, stops its profiler, removes its
+monitor and disconnects its Session. Control EOF or interruption also finalizes
+owned captures. Runtime changes and failed cleanup produce incomplete evidence.
+The implementation uses Node's [inspector API](https://nodejs.org/api/inspector.html)
+and the existing Stack `summarizeProfile` reducer.
+
+Each bundle includes `backendProfileRoles` and `backendProfiles`, with runtime
+identity, exact backend window, process CPU, event-loop utilization, delay
+percentiles, memory endpoints and cleanup status. Raw profiles and full CPU
+summaries are saved as `server.cpuprofile`, `server-cpu-summary.json` and
+`server-runtime.json`, with corresponding daemon files; `backend-profiles.json`
+references them. Profiles sample the main V8 isolate; process CPU includes
+native threads, and event-loop utilization is elapsed activity rather than CPU.
+Backend windows bracket browser work and include attach/profiling overhead.
+They measure shared processes across all clients, not one journey's exclusive
+CPU. Comparisons separate role sets, and backend-profiled runs do not supply
+unperturbed browser timing percentiles. Keep these artifacts private like other
+CPU profiles; no request bodies, credentials or database rows are collected.
+
+### Opt-in browser attribution and settled Home
+
+Pass `--profiling` (or set `"profiling": true` in the journey) to collect a
+full Chrome trace, Long Animation Frames, React Performance Track measures,
+sampling heap profile, root changed-key notifications and a physical socket
+timeline in the same schema-5 bundle. This extends the existing collector;
+ordinary timing/counts capture does not enable these diagnostic observers.
+`compare` separates profiling-on/off and backend role sets, and never uses
+heavily instrumented runs for timing percentiles.
+
+`trace.json.gz` contains sanitized trace events for `devtools.timeline`,
+`disabled-by-default-devtools.timeline`, `v8.execute`, `blink.user_timing` and
+`disabled-by-default-v8.cpu_profiler`. In-page start/end marks establish the
+renderer window, independently of delayed controller receipts. `profiling.json`
+contains interval-unioned task, style/layout/paint and GC summaries; nested
+durations must not be added. Missing marks or dropped trace data fail closed.
+The 2 GiB diagnostic trace buffer replaces Chrome's observed insufficient
+200 MiB default; it is not a product resource limit.
+
+The pre-document `PerformanceObserver` preserves React's U+200B component
+measures before `webReactPerformanceMeasures.ts` clears them. Only name, timing
+and scalar track/group metadata are retained, never React prop/detail bags.
+`react.json` holds these measures, LoAF script attribution and timestamped
+changed top-level root keys. The canonical storage notification owner supplies
+keys without storing values; missing source registration is unavailable, not
+zero notifications. `socket-timeline.json` contains physical WebSocket events,
+Engine.IO ping/pong and Socket.IO frame kinds with the existing native clock
+mapping. Physical connect events alone do not prove a logical root reconnect;
+request starts are in `network.json` and must be joined by time accordingly.
+LoAF support is recorded rather than assumed on every browser.
+
+`heap.heapprofile` uses 1 MiB allocation sampling, including objects collected
+by major/minor GC. Its mapped function estimates cover the sampling lifecycle
+(including setup/finalization), not retained heap or an exact-window allocation
+rate. CPU summaries normalize signed/out-of-order sampling deltas before
+clipping to the same trace window. Dev React profiling overhead remains part
+of the observed trace: these are attribution captures, not production savings.
+
+Run `journey J13-settled` with the same required attachment/cache/UI/mode
+arguments as J13. It prepares populated, non-loading Home, then measures exactly
+300000 ms without input. Its `bundle.assertions` requires busy time strictly
+below 5%, conservatively zero long tasks, and no empty changed-key notification.
+FAIL or UNAVAILABLE exits 1; ordinary missing evidence still exits 2. A failing
+product assertion does not erase its capture. Missing observations cannot pass.
+This reference-identity check cannot certify semantic remote changes or polling
+intent; those remain owner-level evidence obligations. A no-op notification
+with nonempty keys is not automatically a legitimate change. Use export runs
+for CI regression baselines; dev captures are useful for React track diagnosis.
+
+Sampling allocations do not diagnose retained closure leaks. The X2 research
+recipe (warm-up, stationary repeated interactions, forced GC, V8 closure groups
+by source location, then retainer inspection) is a separate informational
+investigation, not a J13 gate. No retained-closure heuristic or raw heap snapshot
+is enabled here: this live Account has real background inventory/history
+changes, and a stationary no-new-history interaction plus safe snapshot handling
+has not been established. Do not interpret allocation growth as retained growth,
+copy a rounds-based threshold, or save credential-bearing heap strings into
+ordinary performance bundles.
 
 Other lanes add small JSON journey files with `id`, `intent`, `prepare` and
 `steps`. Operations are `open` (optional path), `home`, `idle` (milliseconds),

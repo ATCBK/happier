@@ -6,6 +6,71 @@ import { safeUrl, requestFingerprint, summarizeNetwork, compareRuns } from './an
 import { createSyncPerformanceTelemetry, emitSyncPerformanceSummaryToConsole, installSyncPerformanceTelemetryGlobal } from '../../../ui/sources/sync/runtime/syncPerformanceTelemetry.ts';
 import { summarizeSyncPerformanceSummaries } from '../../../ui/scripts/syncPerformanceTelemetryReport.mjs';
 
+test('diagnostics observe React tracks and LoAFs without a fiber hook, bind late export telemetry, drain and clean up', async () => {
+  const observers = [], listeners = new Map();
+  class Observer {
+    static supportedEntryTypes = ['longtask', 'long-animation-frame', 'measure'];
+    constructor(callback) { this.callback = callback; this.pending = []; observers.push(this); }
+    observe(options) { this.type = options.type; }
+    takeRecords() { return this.pending.splice(0); }
+    disconnect() { this.disconnected = true; }
+  }
+  const storage = { getItem: () => null, setItem() {}, removeItem() {} };
+  let notify, unsubscribed = 0;
+  const api = { isEnabled: () => false, reset() {}, flush() {},
+    storeNotificationsAvailable: () => true,
+    subscribeStoreNotifications(callback) { notify = callback; return () => { unsubscribed++; notify = null; }; } };
+  const context = vm.createContext({ __HAPPIER_PERF_CAPTURE_MODE__: 'timing', __HAPPIER_PERF_DIAGNOSTICS__: true,
+    performance: { now: () => 20, timeOrigin: 1000 }, PerformanceObserver: Observer, URL,
+    localStorage: storage, sessionStorage: storage,
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: name => listeners.delete(name) });
+  vm.runInContext(await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8'), context);
+  assert.equal(context.__REACT_DEVTOOLS_GLOBAL_HOOK__, undefined);
+  context.__HAPPIER_SYNC_PERFORMANCE__ = api;
+  listeners.get('happier:sync-performance-ready')();
+  notify({ atMs: 7, changedKeys: ['machines'] });
+  const measures = observers.find(observer => observer.type === 'measure');
+  measures.callback({ getEntries: () => [
+    { name: '\u200bVisibleRow', startTime: 3, duration: 4, detail: { devtools: { track: 'Components', trackGroup: 'React Components', secret: 'omit' }, props: { secret: 'omit' } } },
+    { name: 'Update', startTime: 8, duration: 2, detail: { devtools: { track: 'Blocking', trackGroup: 'Scheduler' } } },
+    { name: 'unrelated', startTime: 1, duration: 1, detail: { props: 'omit' } },
+  ] });
+  const loaf = observers.find(observer => observer.type === 'long-animation-frame');
+  loaf.pending.push({ startTime: 5, duration: 70, blockingDuration: 20, renderStart: 6, styleAndLayoutStart: 7, firstUIEventTimestamp: 0,
+    scripts: [{ startTime: 5, duration: 60, forcedStyleAndLayoutDuration: 2, invoker: 'Window.requestAnimationFrame', invokerType: 'user-callback', sourceFunctionName: 'render', sourceURL: 'https://user:password@example.com/app.js?key=secret#secret', sourceCharPosition: 12 }] });
+  const collected = context.__happierPerfProbe.collect();
+  const result = JSON.parse(JSON.stringify(collected));
+  assert.equal(result.timeOrigin, 1000);
+  assert.equal(result.diagnostics.timeOrigin, 1000);
+  assert.equal(result.diagnostics.storeNotificationsAvailable, true);
+  assert.deepEqual(result.diagnostics.storeNotifications, [{ atMs: 1007, changedKeys: ['machines'] }]);
+  assert.equal(result.diagnostics.socketEventsAvailable, false);
+  assert.deepEqual(result.diagnostics.reactMeasures, [
+    { name: '\u200bVisibleRow', startTime: 3, duration: 4, track: 'Components', trackGroup: 'React Components' },
+    { name: 'Update', startTime: 8, duration: 2, track: 'Blocking', trackGroup: 'Scheduler' },
+  ]);
+  assert.equal(result.diagnostics.loafs[0].scripts[0].sourceURL, 'https://example.com/app.js');
+  assert.equal(JSON.stringify(result).includes('secret'), false);
+  assert.equal(notify, null, 'collection releases the diagnostic store subscription');
+  measures.callback({ getEntries: () => [{ name: '\u200bLate', startTime: 100, duration: 1 }] });
+  assert.equal(collected.diagnostics.reactMeasures.length, 2);
+  context.__happierPerfProbe.reset();
+  notify({ atMs: 21, changedKeys: [] });
+  assert.equal(context.__happierPerfProbe.collect().diagnostics.storeNotifications.length, 1);
+  context.__happierPerfProbe.stop();
+  assert.equal(unsubscribed, 2);
+  assert.equal(listeners.size, 0);
+  assert.ok(observers.every(observer => observer.disconnected));
+  const priorObservers = observers.length;
+  context.__HAPPIER_PERF_DIAGNOSTICS__ = false;
+  vm.runInContext(await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8'), context);
+  assert.deepEqual(observers.slice(priorObservers).map(observer => observer.type), ['longtask']);
+  assert.equal(listeners.size, 0);
+  assert.equal(context.__happierPerfProbe.collect().diagnostics, undefined);
+  context.__happierPerfProbe.stop();
+});
+
 test('periodic producer summaries and terminal remainder aggregate exactly once even when flushes are identical', async () => {
   const storage = { getItem: () => null, setItem() {}, removeItem() {} };
   const delivered = [];
@@ -46,6 +111,7 @@ test('timing mode never installs a fiber hook and requests disabled store teleme
   const result = context.__happierPerfProbe.collect();
   assert.equal(result.instrumentation.fiberHook, false);
   assert.equal(result.instrumentation.storeTelemetry, false);
+  assert.equal(result.diagnostics, undefined, 'diagnostic observers are opt-in');
   context.__happierPerfProbe.stop();
   const existingHook = { onCommitFiberRoot() {}, renderers: new Map() };
   const reused = vm.createContext({ __HAPPIER_PERF_CAPTURE_MODE__: 'timing', __REACT_DEVTOOLS_GLOBAL_HOOK__: existingHook, performance: { now: () => 1 }, PerformanceObserver: { supportedEntryTypes: [] }, localStorage: storage(local), sessionStorage: storage(session) });

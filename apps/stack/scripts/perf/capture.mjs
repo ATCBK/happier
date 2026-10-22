@@ -1,8 +1,73 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+import { join } from 'node:path';
 import { SourceMap } from 'node:module';
 import { connectPage } from './cdp.mjs';
-import { frameKey, requestFingerprint, safeUrl, summarizeNetwork, summarizeProfile } from './analysis.mjs';
+import { frameKey, normalizeProfileSamples, requestFingerprint, safeUrl, summarizeNetwork, summarizeProfile } from './analysis.mjs';
+import { summarizeHeapProfile, summarizeMainThreadTrace } from './profiling.mjs';
+
+const TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing', 'disabled-by-default-v8.cpu_profiler'];
+const frameProjection = frame => ({ functionName: frame.functionName, scriptId: frame.scriptId,
+  url: safeUrl(frame.url), lineNumber: frame.lineNumber, columnNumber: frame.columnNumber });
+function traceProjection(event) {
+  const row = Object.fromEntries(['name', 'cat', 'ph', 'pid', 'tid', 'ts', 'dur', 'id', 'id2', 'scope', 's', 'tts', 'tdur'].filter(key => event[key] !== undefined).map(key => [key, event[key]]));
+  const data = event.args?.data;
+  if (data && typeof data === 'object') {
+    const safe = Object.fromEntries(['scriptId', 'functionName', 'lineNumber', 'columnNumber', 'timerId', 'type', 'startTime', 'endTime', 'id', 'timeDeltas', 'lines'].filter(key => data[key] !== undefined).map(key => [key, data[key]]));
+    if (typeof data.url === 'string') safe.url = safeUrl(data.url);
+    if (Array.isArray(data.stackTrace)) safe.stackTrace = data.stackTrace.map(frameProjection);
+    if (data.cpuProfile) safe.cpuProfile = { ...data.cpuProfile, nodes: data.cpuProfile.nodes?.map(node => ({ ...node, callFrame: node.callFrame ? frameProjection(node.callFrame) : undefined })) };
+    row.args = { data: safe };
+  }
+  if (['thread_name', 'process_name'].includes(event.name)) row.args = { name: event.args?.name };
+  return row;
+}
+
+function fullTrace(cdp, directory, measurementDurationMs) {
+  let stream, file, completion, acceptComplete, fileDone, count = 0, writeError, started = false, terminal;
+  const summaryEvents = [];
+  cdp.on('Tracing.dataCollected', ({ value }) => {
+    if (!started || writeError) return;
+    for (const event of value) {
+      const safe = traceProjection(event);
+      stream.write(`${count++ ? ',' : ''}${JSON.stringify(safe)}\n`);
+      if (/^(?:happier-perf:|RunTask$|ThreadControllerImpl::RunTask$|MessageLoop::RunTask$|ThreadPool_RunTask$|Layout$|UpdateLayoutTree$|RecalculateStyles$|PrePaint$|Paint|CompositeLayers$|Layerize$|UpdateLayerTree$|TimerFire$|FireAnimationFrame$|EventDispatch$|WebSocket|RunMicrotasks$)|GC|GarbageCollect/.test(event.name)) summaryEvents.push(safe);
+    }
+  });
+  cdp.on('Tracing.tracingComplete', result => acceptComplete?.(result));
+  return {
+    async start() {
+      file = createWriteStream(join(directory, 'trace.json.gz'), { mode: 0o600 });
+      stream = createGzip(); stream.pipe(file);
+      fileDone = new Promise(resolve => { file.once('finish', resolve); file.once('error', error => { writeError = error; resolve(); }); stream.once('error', error => { writeError = error; resolve(); }); });
+      stream.write('{"traceEvents":[\n');
+      completion = new Promise(resolve => { acceptComplete = resolve; });
+      started = true;
+      // The default 200 MiB dropped five-minute traces on the real fleet.
+      // This diagnostic buffer covers the observed volume; dropped traces still
+      // fail closed. It does not bound application work or accepted user data.
+      await cdp.send('Tracing.start', { traceConfig: { recordMode: 'recordAsMuchAsPossible', traceBufferSizeInKb: 2097152, includedCategories: TRACE_CATEGORIES }, transferMode: 'ReportEvents' });
+    },
+    async stop() {
+      if (terminal) return terminal;
+      if (!started) return null;
+      let result;
+      try {
+        await cdp.send('Tracing.end');
+        result = await Promise.race([completion, cdp.disconnected.then(() => { throw new Error('Trace transport disconnected'); })]);
+      } finally { started = false; stream.end(']}'); await fileDone; }
+      if (writeError) throw new Error('Trace artifact unavailable');
+      const start = summaryEvents.find(event => event.name === 'happier-perf:start');
+      const end = summaryEvents.find(event => event.name === 'happier-perf:end');
+      const endUs = Number.isFinite(measurementDurationMs) ? Math.min(end?.ts, start?.ts + measurementDurationMs * 1000) : end?.ts;
+      const summary = summarizeMainThreadTrace(summaryEvents, { startUs: start?.ts, endUs, pid: start?.pid, tid: start?.tid });
+      return terminal = { artifact: 'trace.json.gz', categories: TRACE_CATEGORIES, eventCount: count,
+        dataLossOccurred: result.dataLossOccurred, summary };
+    },
+  };
+}
 
 // Counts-only diagnostic budget: retain at most eight async scheduling hops.
 // This bounds debugger bookkeeping, not user work or the synchronous frames.
@@ -24,6 +89,7 @@ function pageAuthSurface() {
 
 export async function startCapture(options) {
   if (!['timing', 'counts'].includes(options.captureMode)) throw new Error('Explicit captureMode=timing|counts required');
+  if (options.profiling && !options.outputDir) throw new Error('Profiling requires the existing bundle output directory');
   let cdp;
   try { cdp = await connectPage(options.cdp, options.pageId, options.signal); }
   catch {
@@ -32,7 +98,10 @@ export async function startCapture(options) {
     throw error;
   }
   const salt = randomBytes(32).toString('hex');
-  const requests = [], sockets = [], telemetry = [], scripts = new Map(), nativePairs = [];
+  const trace = options.profiling ? fullTrace(cdp, options.outputDir, options.measurementDurationMs) : null;
+  let heapStarted = false;
+  const requests = [], sockets = [], socketLifecycle = [], telemetry = [], scripts = new Map(), nativePairs = [];
+  const socketUrls = new Map();
   const initiatorWork = [];
   let asyncCallStackDepth = null, beginAuthState = null;
   const requestedAsyncDepth = options.captureMode === 'counts' ? COUNTS_ASYNC_STACK_DEPTH : 0;
@@ -78,6 +147,7 @@ export async function startCapture(options) {
       fingerprint: requestFingerprint(event.request, salt),
       bodyUnknown: Boolean(event.request.hasPostData && !event.request.postData),
       requestBodyBytes: event.request.postData === undefined ? null : Buffer.byteLength(event.request.postData),
+      decodedBytes: 0,
       initiator: { type: event.initiator?.type, stack: stackFrames(event.initiator?.stack, requestedAsyncDepth) } };
     requests.push(row); inFlight.set(event.requestId, row);
     if (requestedAsyncDepth) initiatorWork.push(expandStack(event.initiator?.stack)
@@ -104,6 +174,10 @@ export async function startCapture(options) {
     const header = Object.entries(event.response.headers).find(([key]) => key.toLowerCase() === 'x-request-id');
     if (header && /^[a-zA-Z0-9._:-]+$/.test(String(header[1]))) row.serverRequestId = header[1];
   });
+  cdp.on('Network.dataReceived', event => {
+    const row = inFlight.get(event.requestId);
+    if (row) row.decodedBytes += event.dataLength;
+  });
   cdp.on('Network.loadingFinished', event => {
     const row = inFlight.get(event.requestId);
     if (row) { row.endMs = at(event.timestamp, row); row.nativeEndTimestamp = event.timestamp; row.encodedBytes = event.encodedDataLength; inFlight.delete(event.requestId); }
@@ -119,6 +193,11 @@ export async function startCapture(options) {
       inFlight.delete(event.requestId);
     }
   });
+  for (const [method, kind] of [['Created', 'created'], ['WillSendHandshakeRequest', 'handshake-request'], ['HandshakeResponseReceived', 'handshake-response'], ['Closed', 'closed'], ['FrameError', 'frame-error']]) cdp.on(`Network.webSocket${method}`, event => {
+    if (event.url) socketUrls.set(event.requestId, safeUrl(event.url.replace(/^ws/, 'http')));
+    if (recording) socketLifecycle.push({ requestId: event.requestId, kind, nativeTimestamp: event.timestamp ?? null,
+      receiptMs: Date.now(), endpoint: socketUrls.get(event.requestId) ?? null });
+  });
   for (const direction of ['Sent', 'Received']) cdp.on(`Network.webSocketFrame${direction}`, event => {
     if (!recording) return;
     const { payloadData, opcode } = event.response;
@@ -129,8 +208,11 @@ export async function startCapture(options) {
       try { const payload = JSON.parse(payloadData.slice(payloadData.indexOf('['))); const value = payload[1]?.method;
         if (typeof value === 'string' && /^[a-zA-Z0-9_.:/-]+$/.test(value)) rpcMethod = value; } catch {}
     }
-    sockets.push({ nativeTimestamp: event.timestamp, direction: direction.toLowerCase(), opcode,
-      bytes: opcode === 2 ? Buffer.byteLength(payloadData, 'base64') : Buffer.byteLength(payloadData),
+    const kind = opcode !== 1 ? 'binary' : payloadData === '2' ? 'ping' : payloadData === '3' ? 'pong'
+      : payloadData.startsWith('40') ? 'connect' : payloadData.startsWith('41') ? 'disconnect'
+      : payloadData.startsWith('43') ? 'ack' : name ? 'event' : 'protocol';
+    sockets.push({ nativeTimestamp: event.timestamp, requestId: event.requestId, direction: direction.toLowerCase(), opcode, kind,
+      bytes: opcode === 1 ? Buffer.byteLength(payloadData) : Buffer.byteLength(payloadData, 'base64'),
       event: name ?? 'protocol-or-binary', ...(rpcMethod ? { rpcMethod } : {}) });
   });
   cdp.on('Runtime.bindingCalled', event => {
@@ -155,9 +237,11 @@ export async function startCapture(options) {
         await cdp.send('Debugger.setAsyncCallStackDepth', { maxDepth: 0 }); asyncCallStackDepth = 0;
       });
       if (profileStarted) await attempt('cleanup.Profiler.stop', async () => { await cdp.send('Profiler.stop', {}, { timeout: 60000 }); profileStarted = false; });
+      if (heapStarted) await attempt('cleanup.HeapProfiler.stopSampling', async () => { await cdp.send('HeapProfiler.stopSampling'); heapStarted = false; });
+      if (trace) await attempt('cleanup.Tracing.end', () => trace.stop());
       await attempt('cleanup.Network.setCacheDisabled', () => cdp.send('Network.setCacheDisabled', { cacheDisabled: false }));
       if (identifier) await attempt('cleanup.Page.removeScript', () => cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }));
-      await attempt('cleanup.probe.stop', () => evaluate('globalThis.__happierPerfProbe?.stop(); delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__'));
+      await attempt('cleanup.probe.stop', () => evaluate('globalThis.__happierPerfProbe?.stop(); delete globalThis.__HAPPIER_PERF_CAPTURE_MODE__; delete globalThis.__HAPPIER_PERF_DIAGNOSTICS__'));
       await attempt('cleanup.Runtime.removeBinding', () => cdp.send('Runtime.removeBinding', { name: '__happierPerfTelemetry' }));
       if (attestOff) {
         // A counts-mode instance cannot be turned OFF by removing injection:
@@ -189,7 +273,7 @@ export async function startCapture(options) {
       await cdp.send('Debugger.setAsyncCallStackDepth', { maxDepth: requestedAsyncDepth }); asyncCallStackDepth = requestedAsyncDepth;
     });
     await step('setup.Runtime.addBinding', () => cdp.send('Runtime.addBinding', { name: '__happierPerfTelemetry' }));
-    const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
+    const probe = `globalThis.__HAPPIER_PERF_CAPTURE_MODE__ = ${JSON.stringify(options.captureMode)}; globalThis.__HAPPIER_PERF_DIAGNOSTICS__ = ${Boolean(options.profiling)};\n` + await readFile(new URL('./browser-probe.js', import.meta.url), 'utf8');
     ({ identifier } = await step('setup.Page.addScript', () => cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: probe })));
     // Install on an already loaded J13 page too, then reload through the journey
     // preparation so React sees the hook before its renderer initializes.
@@ -200,26 +284,75 @@ export async function startCapture(options) {
         await evaluate('globalThis.__happierPerfProbe.reset()');
         await cdp.send('Network.setCacheDisabled', { cacheDisabled: options.cache === 'cold' });
         if (options.cache === 'cold') await cdp.send('Network.clearBrowserCache');
+        if (options.profiling) {
+          await cdp.send('HeapProfiler.enable');
+          // One MiB allocation sampling retains function attribution without
+          // the oversized CDP serialization observed at finer sampling.
+          await cdp.send('HeapProfiler.startSampling', { samplingInterval: 1048576, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }); heapStarted = true;
+          await cdp.send('Profiler.setSamplingInterval', { interval: 10000 });
+          await trace.start();
+        }
         startMs = Date.now(); recording = true;
         await cdp.send('Profiler.start'); profileStarted = true;
+        if (options.profiling) {
+          const marker = await evaluate(`(() => { const mark = performance.mark('happier-perf:start'); return { epochMs: performance.timeOrigin + mark.startTime, startTime: mark.startTime, timeOrigin: performance.timeOrigin }; })()`);
+          if (!Number.isFinite(marker?.epochMs)) throw new Error('Trace start marker clock unavailable');
+          startMs = marker.epochMs;
+        }
       },
       async finish({ onWindowEnd } = {}) {
         if (finished) return finished;
-        const endMs = Date.now();
+        let endMs = Date.now();
         const errors = [];
         const available = async (name, operation) => {
           try { return await operation(); } catch (error) { errors.push(diagnostic(error, name)); return null; }
         };
+        if (options.profiling) {
+          const marker = await available('finish.trace.end-mark', () => evaluate(`(() => { const mark = performance.mark('happier-perf:end'); return { epochMs: performance.timeOrigin + mark.startTime, startTime: mark.startTime, timeOrigin: performance.timeOrigin }; })()`));
+          if (Number.isFinite(marker?.epochMs)) endMs = Number.isFinite(options.measurementDurationMs) ? Math.min(marker.epochMs, startMs + options.measurementDurationMs) : marker.epochMs;
+          else errors.push({ phase: 'finish.trace.end-mark', kind: 'marker-clock-unavailable' });
+        }
         const probeData = await available('finish.probe.collect', () => evaluate('globalThis.__happierPerfProbe.collect()'));
+        if (probeData?.longTasks) {
+          const origin = probeData.timeOrigin;
+          if (!Number.isFinite(origin)) errors.push({ phase: 'finish.long-tasks', kind: 'performance-time-origin-unavailable' });
+          else probeData.longTasks = probeData.longTasks.filter(row => origin + row.atMs < endMs && origin + row.atMs + row.durationMs > startMs);
+        }
+        if (probeData?.diagnostics) {
+          const diagnostics = probeData.diagnostics, origin = diagnostics.timeOrigin;
+          diagnostics.storeNotifications = diagnostics.storeNotifications.filter(row => row.atMs >= startMs && row.atMs <= endMs);
+          diagnostics.socketEvents = diagnostics.socketEvents.filter(row => row.atMs >= startMs && row.atMs <= endMs);
+          diagnostics.reactMeasures = diagnostics.reactMeasures.filter(row => origin + row.startTime >= startMs && origin + row.startTime <= endMs);
+          diagnostics.loafs = diagnostics.loafs.filter(row => origin + row.startTime < endMs && origin + row.startTime + row.duration > startMs);
+          diagnostics.window = { startMs, endMs };
+        }
         if (probeData?.telemetry) telemetry.push(probeData.telemetry);
         const stopped = profileStarted ? await available('finish.Profiler.stop', () => cdp.send('Profiler.stop', {}, { timeout: 60000 })) : null;
         if (stopped) profileStarted = false;
+        const heap = heapStarted ? await available('finish.HeapProfiler.stopSampling', () => cdp.send('HeapProfiler.stopSampling', {}, { timeout: 120000 })) : null;
+        if (heap) heapStarted = false;
+        const traceResult = trace ? await available('finish.Tracing.end', () => trace.stop()) : null;
+        if (traceResult?.dataLossOccurred !== false || traceResult?.summary.available === false) {
+          if (options.profiling) errors.push({ phase: 'finish.Tracing', kind: traceResult?.dataLossOccurred ? 'trace-data-loss' : 'trace-window-unavailable' });
+        }
         recording = false;
         await available('finish.async-initiators', () => Promise.all(initiatorWork));
         if (requests.some(row => row.initiator.asyncStackUnavailable)) errors.push({ phase: 'finish.async-initiators', kind: 'parent-stack-unavailable' });
         const endAuthState = await available('finish.auth-surface', () => evaluate(`(${pageAuthSurface.toString()})()`));
-        if (probeData?.instrumentation) probeData.instrumentation.asyncCallStackDepth = asyncCallStackDepth;
+        if (probeData?.instrumentation) Object.assign(probeData.instrumentation, { asyncCallStackDepth, profiling: Boolean(options.profiling) });
         const profile = stopped?.profile;
+        let summaryProfile = profile ? normalizeProfileSamples(profile) : null;
+        if (summaryProfile && traceResult?.summary.available) {
+          const { startUs, endUs } = traceResult.summary;
+          let cursor = summaryProfile.startTime;
+          const samples = [], timeDeltas = [];
+          for (let index = 0; index < summaryProfile.samples.length; index++) {
+            const left = cursor; cursor += summaryProfile.timeDeltas[index];
+            const overlap = Math.min(cursor, endUs) - Math.max(left, startUs);
+            if (overlap > 0) { samples.push(summaryProfile.samples[index]); timeDeltas.push(overlap); }
+          }
+          summaryProfile = { ...summaryProfile, startTime: startUs, endTime: endUs, samples, timeDeltas };
+        }
         const pageUrl = await available('finish.page.attest', () => evaluate('location.href'));
         // Read rotating server evidence before potentially large source maps.
         // This callback is outside the capture bracket/profile, not a wait for
@@ -228,8 +361,9 @@ export async function startCapture(options) {
         const symbols = new Map(), sourceMaps = new Map(), mapFailures = [], mapResponses = [];
         // Attribution happens after capture, so reading maps does not inflate
         // journey network or CPU counts. No Metro-only symbolication dependency.
-        for (const node of profile?.nodes ?? []) {
-          const frame = node.callFrame;
+        const heapFrames = [], pendingHeap = heap?.profile?.head ? [heap.profile.head] : [];
+        while (pendingHeap.length) { const node = pendingHeap.pop(); heapFrames.push(node.callFrame); pendingHeap.push(...node.children ?? []); }
+        for (const frame of [...(profile?.nodes ?? []).map(node => node.callFrame), ...heapFrames]) {
           const script = scripts.get(frame.scriptId);
           if (!script?.sourceMapURL) continue;
           if (!sourceMaps.has(frame.scriptId)) {
@@ -252,6 +386,7 @@ export async function startCapture(options) {
             name: mapped.name ?? frame.functionName, line: mapped.originalLine, column: mapped.originalColumn });
         }
         for (const node of profile?.nodes ?? []) node.callFrame.url = safeUrl(node.callFrame.url);
+        for (const frame of heapFrames) frame.url = safeUrl(frame.url);
         // Keys above use original URLs; transfer mappings after URL redaction.
         const cleanSymbols = new Map();
         for (const [key, value] of symbols) { const parts = JSON.parse(key); parts[1] = safeUrl(parts[1]); cleanSymbols.set(JSON.stringify(parts), value); }
@@ -268,13 +403,28 @@ export async function startCapture(options) {
         const unmappedSocketFrames = mappedSockets.filter(row => row.atMs === null).length;
         if (unmappedRequests || unmappedSocketFrames) errors.push({ phase: 'finish.clock', kind: 'native-clock-pair-unavailable' });
         const windowSockets = mappedSockets.filter(row => row.atMs !== null && row.atMs >= startMs && row.atMs <= endMs);
-        return finished = { startMs, endMs, durationMs: endMs - startMs, profile: profile ?? null, cpu: profile ? summarizeProfile(profile, cleanSymbols) : null,
-          network: { ...summarizeNetwork(windowRequests, { startMs, endMs }), records: windowRequests, observedThroughMs: Date.now() }, sockets: windowSockets, telemetry,
+        const lifecycle = socketLifecycle.map(row => {
+          const pair = orderedPairs.findLast(pair => pair.timestamp <= row.nativeTimestamp) ?? orderedPairs[0];
+          return { ...row, atMs: row.nativeTimestamp !== null && pair ? row.nativeTimestamp * 1000 + pair.offsetMs : row.receiptMs,
+            clockBasis: row.nativeTimestamp !== null && pair ? 'native-clock-pair' : 'controller-receipt' };
+        }).filter(row => row.atMs >= startMs && row.atMs <= endMs);
+        if (heap?.profile) await available('finish.heap-artifact', () => writeFile(join(options.outputDir, 'heap.heapprofile'), JSON.stringify(heap.profile) + '\n', { mode: 0o600 }));
+        for (const loaf of probeData?.diagnostics?.loafs ?? []) for (const script of loaf.scripts ?? []) {
+          script.sourceURL = safeUrl(script.sourceURL);
+          if (/^(?:https?:|file:|\/)/.test(script.invoker ?? '')) script.invoker = safeUrl(script.invoker);
+        }
+        const profiling = options.profiling ? { trace: traceResult, heap: { artifact: heap ? 'heap.heapprofile' : null,
+          samplingInterval: 1048576, includesCollectedObjects: true, scope: 'sampling lifecycle includes setup/finalization; estimates are not retained heap',
+          summary: summarizeHeapProfile(heap?.profile, cleanSymbols) } } : undefined;
+        return finished = { startMs, endMs, durationMs: endMs - startMs, profile: profile ?? null, cpu: summaryProfile ? summarizeProfile(summaryProfile, cleanSymbols) : null, profiling,
+          network: { ...summarizeNetwork(windowRequests, { startMs, endMs }), records: windowRequests, observedThroughMs: Date.now() }, sockets: windowSockets,
+          socketTimeline: { source: 'CDP physical WebSocket lifecycle and Engine.IO/Socket.IO frame kinds; physical connects alone do not establish a logical root reconnect',
+            events: [...lifecycle, ...windowSockets].sort((a, b) => a.atMs - b.atMs) }, telemetry,
           react: probeData, authState: { begin: beginAuthState, end: endAuthState }, observedUi: { url: safeUrl(pageUrl), scripts: [...new Set([...scripts.values()].map(script => safeUrl(script.url)).filter(Boolean))] },
           attribution: { sourceMaps: [...sourceMaps.values()].filter(Boolean).length, attemptedSourceMaps: sourceMaps.size,
             mappedFrames: symbols.size, mapResponses, mapFailures },
           clock: { basis: 'Native Network.requestWillBeSent wallTime/timestamp pairs; request-local conversion, preceding pair (first pair for earlier sockets)',
-            rendererRoundTripUsed: false, controllerWindowClock: 'Date.now', nativePairs: [...nativePairs], unmappedRequests, unmappedSocketFrames,
+            rendererRoundTripUsed: false, controllerWindowClock: options.profiling ? 'In-page performance mark timeOrigin + startTime; trace uses the same marks, no controller-receipt calibration' : 'Date.now', nativePairs: [...nativePairs], unmappedRequests, unmappedSocketFrames,
             ...(unmappedSocketFrames ? { unmappedSocketRecords: mappedSockets.filter(row => row.atMs === null) } : {}) },
           collectionErrors: errors, socketEventsPerSecond: windowSockets.length * 1000 / (endMs - startMs) };
       },

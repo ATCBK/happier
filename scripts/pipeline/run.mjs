@@ -1084,6 +1084,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         subcommand !== 'release-prepare-binary-assets' &&
         subcommand !== 'release-publish-manifests' &&
         subcommand !== 'release-contract' &&
+        subcommand !== 'perf-validate' &&
         subcommand !== 'release-validate' &&
         subcommand !== 'release-verify-artifacts' &&
         subcommand !== 'release-analyze' &&
@@ -1127,6 +1128,15 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               ].join('\n'),
             );
           }
+
+        if (subcommand === 'perf-validate') {
+          execFileSync(process.execPath, [path.join(repoRoot, 'scripts/pipeline/perf/validate-perf.mjs'), ...rest], {
+            cwd: repoRoot,
+            env: process.env,
+            stdio: 'inherit',
+          });
+          return;
+        }
 
         if (subcommand === 'release-contract') {
           parseArgs({ args: rest, options: {}, allowPositionals: false });

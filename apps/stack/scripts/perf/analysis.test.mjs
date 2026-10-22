@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { summarizeNetwork, summarizeProfile, summarizeLogs, compareRuns } from './analysis.mjs';
+import * as analysis from './analysis.mjs';
 
 test('duplicate candidates require the same method, full request fingerprint and overlapping lifetime', () => {
   const requests = [
@@ -45,6 +46,31 @@ test('server and daemon logs are windowed, query attempts correlate by request i
   assert.ok(!JSON.stringify(result).includes('secret'));
 });
 
+test('out-of-order CPU samples normalize before window clipping without altering raw evidence', () => {
+  const profile = { startTime: 1000, endTime: 11000, nodes: [
+    { id: 1, callFrame: { scriptId: '1', url: '/work.js', functionName: 'work', lineNumber: 0, columnNumber: 0 } },
+  ], samples: [1, 1, 1, 1], timeDeltas: [8000, -6000, 5000, 5000] };
+  const original = structuredClone(profile);
+  assert.equal(summarizeProfile(profile).sampledMs, 10);
+  const normalized = analysis.normalizeProfileSamples(profile);
+  assert.deepEqual(normalized.timeDeltas, [2000, 5000, 1000, 2000]);
+  assert.ok(normalized.timeDeltas.every(delta => delta >= 0));
+  assert.deepEqual(profile, original);
+  const empty = analysis.normalizeProfileSamples({ ...profile, samples: [], timeDeltas: [] });
+  assert.deepEqual(empty.samples, []);
+});
+
+test('comparison isolates heavy profiling and never certifies it as production timing', () => {
+  const run = profiling => ({ journey: 'J13', cache: 'warm', uiMode: 'export', status: 'CAPTURED',
+    captureMode: 'timing', version: 5, durationMs: 300000,
+    instrumentation: { storeTelemetry: false, fiberHook: false, profiling }, counts: { requests: 2 } });
+  const rows = compareRuns(Array.from({ length: 5 }, () => run(false)), Array.from({ length: 5 }, () => run(true)));
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find(row => row.profiling === false).beforeTiming.p50Ms, 300000);
+  assert.equal(rows.find(row => row.profiling === true).afterTiming, null);
+  assert.ok(rows.every(row => row.counts.requests.delta === null));
+});
+
 test('comparison keeps cold/warm separate and withholds timing percentiles below five repeats', () => {
   const run = (cache, durationMs, requests) => ({ journey: 'J1', cache, uiMode: 'export', status: 'CAPTURED', captureMode: 'timing', instrumentation: { storeTelemetry: false, fiberHook: false }, durationMs, counts: { requests } });
   const before = Array.from({ length: 5 }, (_, i) => run('cold', i + 1, 10));
@@ -61,6 +87,27 @@ test('comparison keeps cold/warm separate and withholds timing percentiles below
   const revised = compareRuns(before.map(run => ({ ...run, version: 2 })), before.map(run => ({ ...run, version: 3 })));
   assert.equal(revised.length, 2, 'changed collector window semantics must not pool legacy and current bundles');
   assert.ok(revised.every(row => row.counts.requests.delta === null));
+});
+
+test('comparison isolates backend profiling roles and withholds unperturbed browser timing', () => {
+  const run = backendProfileRoles => ({ journey: 'J13', cache: 'warm', uiMode: 'export', status: 'CAPTURED',
+    captureMode: 'timing', version: 5, durationMs: 300000, backendProfileRoles,
+    instrumentation: { storeTelemetry: false, fiberHook: false }, counts: { requests: 2 } });
+  const rows = compareRuns(Array.from({ length: 5 }, () => run([])), Array.from({ length: 5 }, () => run(['server', 'daemon'])));
+  assert.equal(rows.length, 2, 'instrumented and uninstrumented backend workloads cannot be pooled');
+  assert.equal(rows.find(row => row.backendProfileRoles.length === 0).beforeTiming.p50Ms, 300000);
+  assert.equal(rows.find(row => row.backendProfileRoles.length === 2).afterTiming, null);
+  const sameRoles = compareRuns([run(['server', 'daemon'])], [run(['daemon', 'server'])]);
+  assert.equal(sameRoles.length, 1, 'role order does not change the workload');
+  assert.equal(sameRoles[0].counts.requests.delta, 0);
+});
+
+test('decoded HTTP totals include only completed in-window responses and preserve unavailable legacy data', () => {
+  const request = (endMs, decodedBytes) => ({ endpoint: 'https://qa.test/data', method: 'GET', startMs: 1, endMs, decodedBytes });
+  const result = summarizeNetwork([request(2, 5632), request(20, 9999)], { startMs: 0, endMs: 10 });
+  assert.equal(result.decodedBytes, 5632);
+  assert.equal(summarizeNetwork([request(2, undefined)]).decodedBytes, null);
+  assert.equal(summarizeNetwork([]).decodedBytes, 0);
 });
 
 test('network aggregation brackets starts and distinguishes failed, canceled, late and unfinished requests', () => {

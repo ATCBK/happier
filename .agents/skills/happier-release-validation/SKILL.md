@@ -36,6 +36,22 @@ commands.
 
 ## Manual certification
 
+To collect the target-owned informational performance report locally:
+
+```bash
+node scripts/pipeline/run.mjs perf-validate --baseline-ref <immutable-release-tag> --candidate-ref <candidate-sha> --out .happier/qa/perf/release --repeats 5 --release
+```
+
+Inspect its comparison and profiles. Only contracts with deliberate-regression
+failure and ten unchanged successful runs may gate in the existing test jobs.
+Scenario counts, timing, heap and bundle measurements are informational until
+then, including releases; they require no acknowledgement or sign-off. Setup
+failure is incomplete evidence. `--dry-run` plans only. Hosted collection runs
+parallel to publication without becoming a release prerequisite, appends the
+canonical comparison Markdown to the job summary, and attaches all profiles.
+The runner and this hook are development source until released; report executed
+checks, unmeasured overhead, and missing evidence honestly.
+
 1. Record the release source SHA and every independently versioned component
    changed by that source. Resolve supported stable/preview baselines to
    immutable tags/artifacts; a rolling tag is discovery only.

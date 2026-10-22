@@ -3,12 +3,32 @@
 (() => {
   if (globalThis.__happierPerfProbe) return;
   const counts = globalThis.__HAPPIER_PERF_CAPTURE_MODE__ !== 'timing';
+  const diagnostics = globalThis.__HAPPIER_PERF_DIAGNOSTICS__ === true;
+  const supportedEntryTypes = typeof PerformanceObserver === 'undefined' ? [] : PerformanceObserver.supportedEntryTypes ?? [];
   const tags = new Set([0, 1, 9, 11, 14, 15]);
   const current = new WeakMap();
   const name = type => typeof type === 'function' ? type.displayName || type.name || 'Anonymous'
     : type && typeof type === 'object' ? type.displayName || name(type.render || type.type) : 'Anonymous';
-  const empty = () => ({ commits: 0, renders: 0, components: Object.create(null), hookMs: 0, longTasks: [] });
+  const empty = () => ({ commits: 0, renders: 0, components: Object.create(null), hookMs: 0, longTasks: [],
+    ...(diagnostics ? { diagnostics: { supportedEntryTypes: [...supportedEntryTypes], loafs: [], reactMeasures: [],
+      storeNotifications: [], storeNotificationsAvailable: false, socketEvents: [], socketEventsAvailable: false,
+      timeOrigin: performance.timeOrigin ?? null } } : {}) });
   let data = empty();
+  let recording = true;
+  let unsubscribeStore;
+  const attachTelemetry = () => {
+    if (!diagnostics || !recording || unsubscribeStore) return;
+    const telemetry = globalThis.__HAPPIER_SYNC_PERFORMANCE__;
+    if (typeof telemetry?.subscribeStoreNotifications !== 'function') return;
+    unsubscribeStore = telemetry.subscribeStoreNotifications(event => {
+      // The producer uses performance.now(); capture windows use epoch time.
+      if (recording) data.diagnostics.storeNotifications.push({ atMs: performance.timeOrigin + event.atMs, changedKeys: [...event.changedKeys] });
+    });
+  };
+  if (diagnostics) {
+    globalThis.addEventListener?.('happier:sync-performance-ready', attachTelemetry);
+    attachTelemetry();
+  }
   // Use the emitter's existing native hook path: production removes console.info.
   // One binding delivery per emitted event; do not also collect console echoes.
   const previousLoggingHook = globalThis.nativeLoggingHook;
@@ -45,13 +65,61 @@
     data.hookMs += performance.now() - started;
   };
   if (counts && !previous) Object.defineProperty(globalThis, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: hook, configurable: true });
-  let observer;
-  if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
-    observer = new PerformanceObserver(list => {
-      for (const task of list.getEntries()) data.longTasks.push({ atMs: task.startTime, durationMs: task.duration });
+  const observers = [];
+  const observe = (type, consume) => {
+    if (!supportedEntryTypes.includes(type)) return;
+    const observer = new PerformanceObserver(list => { if (recording) consume(list.getEntries()); });
+    observer.observe({ type, buffered: false });
+    observers.push({ observer, type, consume });
+  };
+  observe('longtask', entries => {
+    for (const task of entries) data.longTasks.push({ atMs: task.startTime, durationMs: task.duration });
+  });
+  const sourceUrl = raw => {
+    if (!raw) return '';
+    try {
+      const url = new URL(raw, globalThis.location?.href ?? 'http://relative.invalid');
+      if (!['http:', 'https:', 'file:'].includes(url.protocol)) return '[non-url]';
+      return (url.origin === 'http://relative.invalid' || url.protocol === 'file:' ? '' : url.origin) + url.pathname;
+    } catch { return '[non-url]'; }
+  };
+  const invoker = value => typeof value === 'string'
+    ? value.replace(/(?:https?|file):\/\/[^\s)]+/g, sourceUrl) : '';
+  if (diagnostics) {
+    observe('long-animation-frame', entries => {
+      for (const entry of entries) data.diagnostics.loafs.push({
+        startTime: entry.startTime, duration: entry.duration, blockingDuration: entry.blockingDuration,
+        renderStart: entry.renderStart, styleAndLayoutStart: entry.styleAndLayoutStart,
+        firstUIEventTimestamp: entry.firstUIEventTimestamp,
+        scripts: Array.from(entry.scripts ?? [], script => ({ startTime: script.startTime, duration: script.duration,
+          forcedStyleAndLayoutDuration: script.forcedStyleAndLayoutDuration, invoker: invoker(script.invoker),
+          invokerType: script.invokerType, sourceFunctionName: script.sourceFunctionName,
+          sourceURL: sourceUrl(script.sourceURL), sourceCharPosition: script.sourceCharPosition })),
+      });
     });
-    observer.observe({ type: 'longtask', buffered: false });
+    // Register before app startup: its React cleanup clears U+200B measures
+    // after observer delivery. Keep scalar track metadata, never prop diffs.
+    observe('measure', entries => {
+      for (const entry of entries) {
+        const devtools = entry.detail?.devtools;
+        const track = typeof devtools?.track === 'string' ? devtools.track : null;
+        const trackGroup = typeof devtools?.trackGroup === 'string' ? devtools.trackGroup : null;
+        if (!entry.name.startsWith('\u200b') && !track && !trackGroup) continue;
+        data.diagnostics.reactMeasures.push({ name: entry.name, startTime: entry.startTime, duration: entry.duration, track, trackGroup });
+      }
+    });
   }
+  const finishObservations = () => {
+    if (!recording) return;
+    for (const { observer, consume } of observers) {
+      consume(observer.takeRecords?.() ?? []);
+      observer.disconnect();
+    }
+    recording = false;
+    unsubscribeStore?.();
+    unsubscribeStore = undefined;
+    if (diagnostics) data.diagnostics.storeNotificationsAvailable = globalThis.__HAPPIER_SYNC_PERFORMANCE__?.storeNotificationsAvailable?.() ?? false;
+  };
   const storageKey = 'HAPPIER_SYNC_TUNING_JSON';
   const savedKey = '__HAPPIER_PERF_TUNING_ORIGINAL__';
   let original;
@@ -61,13 +129,18 @@
     localStorage.setItem(storageKey, JSON.stringify({ ...JSON.parse(original || '{}'), syncPerformanceTelemetryEnabled: counts }));
   } catch { /* Availability is reported by the collector, never inferred. */ }
   globalThis.__happierPerfProbe = {
-    reset() { data = empty(); globalThis.__HAPPIER_SYNC_PERFORMANCE__?.reset(); },
-    collect() { globalThis.__HAPPIER_SYNC_PERFORMANCE__?.markScenario?.('perf-capture-end'); return { ...data, renderers: counts ? [...hook.renderers.values()].map(renderer => ({ version: renderer.version, package: renderer.rendererPackageName })) : [],
+    reset() {
+      for (const { observer, type } of observers) { observer.takeRecords?.(); if (!recording) observer.observe({ type, buffered: false }); }
+      data = empty(); recording = true; attachTelemetry(); globalThis.__HAPPIER_SYNC_PERFORMANCE__?.reset();
+    },
+    collect() { finishObservations(); globalThis.__HAPPIER_SYNC_PERFORMANCE__?.markScenario?.('perf-capture-end'); return { ...data, timeOrigin: performance.timeOrigin,
+      renderers: counts ? [...hook.renderers.values()].map(renderer => ({ version: renderer.version, package: renderer.rendererPackageName })) : [],
       instrumentation: { fiberHook: counts || Boolean(previous), storeTelemetry: globalThis.__HAPPIER_SYNC_PERFORMANCE__?.isEnabled?.() ?? null },
       telemetryAvailable: Boolean(globalThis.__HAPPIER_SYNC_PERFORMANCE__),
       telemetry: globalThis.__HAPPIER_SYNC_PERFORMANCE__?.flush() }; },
     stop() {
-      observer?.disconnect();
+      finishObservations();
+      if (diagnostics) globalThis.removeEventListener?.('happier:sync-performance-ready', attachTelemetry);
       if (counts) hook.onCommitFiberRoot = commit;
       if (counts && !previous) delete globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
       if (counts && typeof globalThis.__happierPerfTelemetry === 'function') {

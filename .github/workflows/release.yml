@@ -394,6 +394,15 @@ jobs:
       - release_preflight
     if: ${{ inputs.environment == 'preview-and-production' }}
     continue-on-error: true
+  performance:
+    name: Collect informational release performance
+    needs: [release_preflight]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/performance-release.yml
+    with:
+      source_sha: ${{ needs.release_preflight.outputs.source_sha }}
+      dry_run: ${{ inputs.dry_run }}
   source_validation:
     name: Validate shared exact source once
     permissions:

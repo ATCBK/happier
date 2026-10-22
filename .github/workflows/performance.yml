@@ -1,0 +1,60 @@
+name: CI — Performance regressions
+on:
+  schedule:
+    - cron: '37 1 * * *'
+  push:
+    branches: [dev, main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout performance candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || (github.event_name == 'push' && github.sha) || 'dev' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+      - name: Select performance comparison
+        id: selection
+        run: node scripts/pipeline/perf/run-workflow.mjs --plan
+      - name: Install dependencies
+        if: steps.selection.outputs.selected == 'true'
+        uses: ./.github/actions/install-pnpm-dependencies
+        with:
+          args: --frozen-lockfile
+      - name: Run performance comparison
+        if: steps.selection.outputs.selected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/pipeline/perf/run-workflow.mjs
+      - name: Upload reusable performance JSON
+        if: always() && steps.selection.outputs.selected != 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: performance-results
+          path: |
+            .happier/qa/perf/ci/comparison.json
+            .happier/qa/perf/ci/runs/**/bundle.json
+          include-hidden-files: true
+          if-no-files-found: warn
+      - name: Upload comparison and profiles
+        if: always() && steps.selection.outputs.selected != 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: performance-comparison
+          path: .happier/qa/perf/ci
+          include-hidden-files: true
+          if-no-files-found: warn
+      - name: Publish performance summary
+        if: always() && steps.selection.outputs.selected != 'false'
+        run: node scripts/pipeline/perf/run-workflow.mjs --summary

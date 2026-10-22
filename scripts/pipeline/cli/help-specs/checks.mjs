@@ -12,6 +12,23 @@
 
 /** @type {Record<string, CommandHelpSpec>} */
 export const COMMAND_HELP_CHECKS = {
+  'perf-validate': {
+    summary: 'Compare deterministic counts, paired scenario timings, and post-GC heap growth.',
+    usage: 'node scripts/pipeline/run.mjs perf-validate --baseline-ref <ref> --out <dir> [--candidate-ref <ref>] [--baseline-results-dir <dir> | --candidate-only] [--repeats <n>] [--profile <pr|full>] [--dry-run] [--release]',
+    options: [
+      '--baseline-ref <ref>              Required Git comparison baseline.',
+      '--candidate-ref <ref>             Defaults to current source.',
+      '--baseline-results-dir <dir>      Reuse canonical exact-base JSON instead of rebuilding it.',
+      '--candidate-only                  Capture head results with comparison unavailable.',
+      '--out <dir>                       Comparison report and profile directory.',
+      '--repeats <n>                     At least five paired repetitions.',
+      '--dry-run                         Plan without building or starting services.',
+      '--release                         Mark the run as release performance evidence.',
+      '--profile <pr|full>               Short PR scenarios or the full nightly/release set.',
+    ],
+    bullets: ['Scenario counts, timing, heap and bundle measurements are informational until deliberate-regression failure and ten unchanged successful runs establish a stable gate.', 'Existing validated count contracts gate in their test jobs. Setup failures are incomplete evidence. Release dispatch remains maintainer-owned.'],
+    examples: ['node scripts/pipeline/run.mjs perf-validate --baseline-ref cli-v0.2.4 --out .happier/qa/perf/release --repeats 5 --release'],
+  },
   'checks-plan': {
     summary: 'Print the resolved CI check plan for a given profile.',
     usage:

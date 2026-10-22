@@ -4,6 +4,9 @@ import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createCdpConnection } from '../../../ui/scripts/perf/agentBrowserUiPerfAudit.mjs';
 import { startCapture } from './capture.mjs';
+import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { readFile } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
 
 test('the existing audit CDP transport delivers unsolicited events alongside request responses and rejects pending work on disconnect', async t => {
   const server = createServer();
@@ -36,9 +39,11 @@ test('the existing audit CDP transport delivers unsolicited events alongside req
   assert.deepEqual(await client.send('Runtime.enable'), { enabled: true });
   assert.deepEqual(events, ['one']);
   await assert.rejects(client.send('Profiler.start'), /closed|error/i);
+  assert.equal((await client.disconnected)?.reason, 'closed', 'stream finalization must be able to settle on transport loss');
 });
 
 test('capture composes CDP events, safe network records, telemetry and mapped CPU output through the public collector', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-perf-profile-' });
   let ownedSocket;
   const server = createServer((request, response) => {
     response.setHeader('content-type', 'application/json');
@@ -49,6 +54,7 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
   const rendererDelayMs = 15827;
   let rendererClockRequests = 0;
   const asyncDepthCommands = [];
+  let traceCategories;
   const map = 'data:application/json;base64,' + Buffer.from(JSON.stringify({ version: 3, sources: ['src/Owner.ts'], names: ['realOwner'], mappings: 'AAAAA' })).toString('base64');
   server.on('upgrade', (request, socket) => {
     ownedSocket = socket;
@@ -74,6 +80,17 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
         const message = JSON.parse(body.toString());
         let result = {};
         if (message.method === 'Debugger.setAsyncCallStackDepth') asyncDepthCommands.push(message.params.maxDepth);
+        if (message.method === 'Tracing.start') traceCategories = message.params.traceConfig.includedCategories;
+        if (message.method === 'HeapProfiler.stopSampling') result.profile = { head: { callFrame: { scriptId: '1', url: 'http://app.test/bundle.js?key=never-save', functionName: 'a', lineNumber: 0, columnNumber: 0 }, selfSize: 2048, children: [] } };
+        if (message.method === 'Tracing.end') {
+          send({ method: 'Tracing.dataCollected', params: { value: [
+            { name: 'happier-perf:start', ph: 'I', pid: 1, tid: 2, ts: 10000000, cat: 'blink.user_timing' },
+            { name: 'RunTask', ph: 'X', pid: 1, tid: 2, ts: 10000000, dur: 10000 },
+            { name: 'Layout', ph: 'X', pid: 1, tid: 2, ts: 10001000, dur: 1000, args: { data: { url: 'http://app.test/?token=never-save', payload: 'never-save' } } },
+            { name: 'happier-perf:end', ph: 'I', pid: 1, tid: 2, ts: 10100000, cat: 'blink.user_timing' },
+          ] } });
+          send({ method: 'Tracing.tracingComplete', params: { dataLossOccurred: false } });
+        }
         if (message.method === 'Debugger.getStackTrace') result.stackTrace = { description: 'never-save description',
           callFrames: [{ functionName: 'asyncOwner', url: 'http://app.test/issuer.js?token=never-save', lineNumber: 4, columnNumber: 2 }] };
         if (message.method === 'Debugger.enable') send({ method: 'Debugger.scriptParsed', params: { scriptId: '1', url: 'http://app.test/bundle.js', sourceMapURL: map } });
@@ -84,41 +101,53 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
         if (message.method === 'Runtime.evaluate' && message.params.expression === 'Date.now()') rendererClockRequests++;
         if (message.method === 'Runtime.evaluate') result = { result: { value: message.params.expression === 'Date.now()' ? epoch + rendererDelayMs
           : message.params.expression === 'location.href' ? 'http://app.test/'
-          : message.params.expression.includes('.collect()') ? { commits: 2, renders: 3, components: {}, longTasks: [], renderers: [{ version: '19' }], telemetryAvailable: true,
+          : message.params.expression.includes("performance.mark('happier-perf:") ? { epochMs: epoch + (message.params.expression.includes('happier-perf:end') ? 100 : 0), startTime: message.params.expression.includes('happier-perf:end') ? 10100 : 10000, timeOrigin: epoch - 10000 }
+          : message.params.expression.includes('.collect()') ? { commits: 2, renders: 3, components: {}, timeOrigin: epoch - 10000,
+            longTasks: [{ atMs: 9900, durationMs: 60 }, { atMs: 10020, durationMs: 60 }, { atMs: 10101, durationMs: 60 }],
+            renderers: [{ version: '19' }], telemetryAvailable: true,
+            diagnostics: { timeOrigin: epoch - 10000, supportedEntryTypes: ['measure', 'long-animation-frame'], loafs: [], reactMeasures: [{name:'\u200bOwner',startTime:10000,duration:2,track:'Components ⚛'}], storeNotifications: [{atMs:epoch,changedKeys:['machines']}], socketEvents: [] },
             telemetry: { events: [{ name: 'sync.store.storage.notify', count: 2 }] } } : undefined } };
         if (message.method === 'Profiler.start') {
-          const timestamp = 10 + (Date.now() - epoch) / 1000;
+          // The simulated trace owns this clock; host setup delay must not move
+          // its requests outside the fixed epoch..epoch+100 capture window.
+          const timestamp = 10;
           send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 1, payloadData: '42["before-native-pair",{}]' } } });
-          send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: Date.now() / 1000, timestamp,
+          send({ method: 'Network.requestWillBeSent', params: { requestId: 'n', wallTime: epoch / 1000, timestamp,
             request: { method: 'GET', url: 'http://app.test/v1/data?key=never-save' }, initiator: { type: 'script', stack: { callFrames: [],
               parent: { callFrames: [{ functionName: 'inlineScheduler', url: 'http://app.test/scheduler.js?token=never-save', lineNumber: 1, columnNumber: 0 }],
                 parentId: { id: 'out-of-line', debuggerId: 'fixture' }, description: 'never-save description' } } } } });
           send({ method: 'Network.responseReceived', params: { requestId: 'n', timestamp, response: { status: 200, headers: { 'x-request-id': 'returned-id' },
             timing: { requestTime: timestamp, sendStart: 0, receiveHeadersStart: 0 } } } });
+          send({ method: 'Network.dataReceived', params: { requestId: 'n', timestamp, dataLength: 20, encodedDataLength: 8 } });
+          send({ method: 'Network.dataReceived', params: { requestId: 'n', timestamp, dataLength: 22, encodedDataLength: 9 } });
           send({ method: 'Network.loadingFinished', params: { requestId: 'n', timestamp, encodedDataLength: 25 } });
           for (const [requestId, delta] of [['canceled', 0], ['unknown-failure', 0], ['late', 0], ['outside', 1000]]) send({ method: 'Network.requestWillBeSent', params: {
-            requestId, wallTime: Date.now() / 1000 + delta + (requestId === 'outside' ? .5 : 0), timestamp: timestamp + delta,
+            requestId, wallTime: epoch / 1000 + delta + (requestId === 'outside' ? .5 : 0), timestamp: timestamp + delta,
             request: { method: 'GET', url: 'http://app.test/v1/data' }, initiator: { type: 'script' } } });
           send({ method: 'Network.loadingFailed', params: { requestId: 'canceled', timestamp, canceled: true, errorText: 'net::ERR_ABORTED' } });
           send({ method: 'Network.loadingFailed', params: { requestId: 'unknown-failure', timestamp, errorText: 'never-save private URL or diagnostic' } });
           send({ method: 'Runtime.bindingCalled', params: { name: '__happierPerfTelemetry', payload: '{"events":[{"name":"sync.store.storage.notify","count":3}]}' } });
           send({ method: 'Runtime.bindingCalled', params: { name: '__happierPerfTelemetry', payload: '{"events":[{"name":"sync.store.storage.notify","count":3}]}' } });
           send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 1, payloadData: '42["update",{"token":"never-save"}]' } } });
+          send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 2, payloadData: Buffer.from([1, 2, 3, 4]).toString('base64') } } });
+          send({ method: 'Network.webSocketFrameReceived', params: { timestamp, response: { opcode: 8, payloadData: Buffer.from([3, 232]).toString('base64') } } });
         }
         if (message.method === 'Profiler.stop') {
+          send({ method: 'Network.dataReceived', params: { requestId: 'late', timestamp: 1010, dataLength: 91, encodedDataLength: 40 } });
           send({ method: 'Network.loadingFinished', params: { requestId: 'late', timestamp: 1010, encodedDataLength: 50 } });
-          result.profile = { startTime: 0, endTime: 1000,
-          nodes: [{ id: 1, callFrame: { scriptId: '1', url: 'http://app.test/bundle.js', functionName: 'a', lineNumber: 0, columnNumber: 0 } }], samples: [1], timeDeltas: [1000] };
+          result.profile = { startTime: 10000000, endTime: 10100000,
+          nodes: [{ id: 1, callFrame: { scriptId: '1', url: 'http://app.test/bundle.js', functionName: 'a', lineNumber: 0, columnNumber: 0 } }], samples: [1], timeDeltas: [100000] };
         }
         send({ id: message.id, result });
       }
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const capture = await startCapture({ cdp: `http://127.0.0.1:${server.address().port}`, cache: 'warm', captureMode: 'counts' });
+  const capture = await startCapture({ cdp: `http://127.0.0.1:${server.address().port}`, cache: 'warm', captureMode: 'counts', profiling: true, outputDir: fixture.root });
   try {
     await capture.begin();
     const result = await capture.finish();
+    assert.deepEqual(result.sockets.slice(-2).map(row => row.bytes), [4, 2], 'all non-text CDP payloads use base64, including control messages');
     assert.equal(result.network.requests, 4);
     assert.deepEqual(result.network.records.find(row => row.requestId === 'n').initiator.stack.map(frame => frame.functionName),
       ['inlineScheduler', 'asyncOwner'], 'inline and out-of-line async parents must use the same safe frame projection');
@@ -127,10 +156,16 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
       result.network.records.find(row => row.requestId === 'n').nativeWallTime * 1000,
       'membership uses the native coherent wall clock, not a delayed renderer sample');
     assert.equal(result.clock.rendererRoundTripUsed, false);
+    assert.equal(result.startMs, epoch, 'profiling brackets use the timestamp inside the trace marker, never delayed controller receipt');
+    assert.equal(result.endMs, epoch + 100);
+    assert.deepEqual(result.react.longTasks, [{ atMs: 10020, durationMs: 60 }],
+      'setup and finalization tasks must not enter the measured-window count');
     assert.equal(rendererClockRequests, 0, 'a delayed renderer must never be the wall/monotonic clock source');
     assert.ok(result.clock.nativePairs.length >= 5);
     assert.equal(result.network.encodedBytes, 25);
     assert.equal(result.network.encodedBytesObserved, 75);
+    assert.equal(result.network.decodedBytes, 42, 'sum decoded chunks only for responses completed within the window');
+    assert.equal(result.network.records.find(row => row.requestId === 'late').decodedBytes, 91);
     assert.equal(result.network.dispositions.canceled, 1);
     assert.equal(result.network.dispositions.completedAfterWindow, 1);
     assert.equal(result.network.records.find(row => row.requestId === 'canceled').failureCode, 'net::ERR_ABORTED');
@@ -140,10 +175,19 @@ test('capture composes CDP events, safe network records, telemetry and mapped CP
     assert.equal(result.network.records.find(row => row.requestId === 'unknown-failure').failureCode, 'unclassified');
     assert.equal(result.network.records.find(row => row.requestId === 'n').serverRequestId, 'returned-id');
     assert.equal(result.telemetry.reduce((sum, summary) => sum + summary.events[0].count, 0), 8);
-    assert.deepEqual(result.sockets.map(row => row.event), ['before-native-pair', 'update'], 'buffer early sockets and do not shift them with a future native clock step');
+    assert.deepEqual(result.sockets.map(row => row.event), ['before-native-pair', 'update', 'protocol-or-binary', 'protocol-or-binary'], 'buffer early sockets and do not shift them with a future native clock step');
     assert.equal(result.react.commits, 2);
     assert.equal(result.cpu.functions[0].name, 'realOwner');
-    assert.equal(result.attribution.mappedFrames, 1);
+    assert.equal(result.cpu.functions[0].source, 'src/Owner.ts');
+    for (const category of ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing', 'disabled-by-default-v8.cpu_profiler']) assert.ok(traceCategories.includes(category));
+    assert.equal(result.profiling.trace.dataLossOccurred, false);
+    assert.equal(result.profiling.trace.summary.mainThreadBusyMs, 10);
+    assert.equal(result.profiling.trace.summary.styleLayoutPaintMs, 1);
+    assert.equal(result.profiling.heap.summary.sampledBytes, 2048);
+    assert.ok(result.profiling.heap.summary.functions.some(row => row.source === 'src/Owner.ts'));
+    const savedTrace = JSON.parse(gunzipSync(await readFile(fixture.path('trace.json.gz'))));
+    assert.ok(savedTrace.traceEvents.some(event => event.name === 'Layout'));
+    assert.ok(!JSON.stringify(savedTrace).includes('never-save'));
     assert.ok(!JSON.stringify(result).includes('never-save'));
   } finally { assert.equal((await capture.close()).asyncCallStackDepth, 0); }
   assert.equal(asyncDepthCommands.at(-1), 0);

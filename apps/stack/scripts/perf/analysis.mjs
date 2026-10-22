@@ -64,16 +64,41 @@ export function summarizeNetwork(input, { startMs = -Infinity, endMs = Infinity 
     }
     endpoints.set(key, row);
   }
-  const encodedBytesCompletedWithinWindow = requests.reduce((sum, request) => sum + (request.endMs <= endMs ? request.encodedBytes ?? 0 : 0), 0);
+  const completed = requests.filter(request => request.endMs <= endMs);
+  const encodedBytesCompletedWithinWindow = completed.reduce((sum, request) => sum + (request.encodedBytes ?? 0), 0);
+  const decodedBytes = completed.every(request => Number.isFinite(request.decodedBytes) && request.decodedBytes >= 0)
+    ? completed.reduce((sum, request) => sum + request.decodedBytes, 0) : null;
   return { requests: requests.length, duplicateCandidates, dispositions, routeClasses,
-    encodedBytes: encodedBytesCompletedWithinWindow, encodedBytesCompletedWithinWindow,
+    encodedBytes: encodedBytesCompletedWithinWindow, encodedBytesCompletedWithinWindow, decodedBytes,
     encodedBytesObserved: requests.reduce((sum, request) => sum + (request.encodedBytes ?? 0), 0),
     endpoints: [...endpoints.values()].sort((a, b) => b.count - a.count) };
 }
 
 // Promoted from PERF10 profile/cpu-modules: sample-weighted self and inclusive
 // attribution, with recursive frames counted once and script-scoped identity.
+export function normalizeProfileSamples(profile) {
+  // Tracing and Profiler together can deliver out-of-order sample timestamps
+  // encoded as signed deltas. Clamping each incoming delta double-counts time.
+  // Reconstruct first, sort, then clip; retain the original profile as evidence.
+  let timestamp = profile.startTime;
+  const entries = (profile.samples ?? []).map((id, index) => {
+    const delta = profile.timeDeltas?.[index];
+    if (!Number.isFinite(delta)) throw new TypeError('CPU profile sample delta is unavailable');
+    timestamp += delta;
+    return { id, timestamp };
+  }).sort((a, b) => a.timestamp - b.timestamp);
+  let previous = profile.startTime;
+  const timeDeltas = entries.map(entry => {
+    const end = Math.max(profile.startTime, Math.min(profile.endTime, entry.timestamp));
+    const delta = end - previous;
+    previous = end;
+    return delta;
+  });
+  return { ...profile, samples: entries.map(entry => entry.id), timeDeltas };
+}
+
 export function summarizeProfile(profile, symbols = new Map()) {
+  profile = normalizeProfileSamples(profile);
   const nodes = new Map(profile.nodes.map(node => [node.id, node]));
   const parents = new Map();
   for (const node of profile.nodes) for (const child of node.children ?? []) parents.set(child, node.id);
@@ -204,20 +229,28 @@ function percentile(values, fraction) {
   return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
 }
 
+export const backendProfileRolesForRun = run => [...new Set(run.backendProfileRoles ?? [])].sort();
+
+export function isUnperturbedTimingRun(run) {
+  return run.uiMode === 'export' && run.status === 'CAPTURED' && run.captureMode === 'timing'
+    && run.instrumentation?.profiling !== true && backendProfileRolesForRun(run).length === 0
+    && run.instrumentation?.storeTelemetry === false && run.instrumentation?.fiberHook === false;
+}
+
 export function compareRuns(before, after) {
   before = before.filter(run => run.status !== 'FAILED' && run.eligible !== false);
   after = after.filter(run => run.status !== 'FAILED' && run.eligible !== false);
-  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode, run.captureMode ?? 'unknown', run.version ?? 'legacy-unknown']);
+  const key = run => JSON.stringify([run.journey, run.cache, run.uiMode, run.captureMode ?? 'unknown', run.version ?? 'legacy-unknown', run.instrumentation?.profiling === true, backendProfileRolesForRun(run)]);
   return [...new Set([...before, ...after].map(key))].map(group => {
     const left = before.filter(run => key(run) === group);
     const right = after.filter(run => key(run) === group);
     const mean = (runs, metric) => runs.length && runs.every(run => typeof run.counts[metric] === 'number')
       ? runs.reduce((sum, run) => sum + run.counts[metric], 0) / runs.length : null;
     const metrics = new Set([...left, ...right].flatMap(run => Object.keys(run.counts)));
-    const timing = runs => runs.length >= 5 && runs.every(run => run.uiMode === 'export' && run.status === 'CAPTURED'
-      && run.captureMode === 'timing' && run.instrumentation?.storeTelemetry === false && run.instrumentation?.fiberHook === false)
+    const timing = runs => runs.length >= 5 && runs.every(isUnperturbedTimingRun)
       ? { p50Ms: percentile(runs.map(run => run.durationMs), .5), p95Ms: percentile(runs.map(run => run.durationMs), .95) } : null;
-    return { journey: JSON.parse(group)[0], cache: JSON.parse(group)[1], uiMode: JSON.parse(group)[2], captureMode: JSON.parse(group)[3], version: JSON.parse(group)[4],
+    const [journey, cache, uiMode, captureMode, version, profiling, backendProfileRoles] = JSON.parse(group);
+    return { journey, cache, uiMode, captureMode, version, profiling, backendProfileRoles,
       beforeRuns: left.length, afterRuns: right.length, beforeTiming: timing(left), afterTiming: timing(right),
       counts: Object.fromEntries([...metrics].map(metric => {
         const a = mean(left, metric), b = mean(right, metric);

@@ -162,6 +162,16 @@ jobs:
           echo "release_needed=false" >> "$GITHUB_OUTPUT"
           echo "Scheduled nightly already completed successfully for $SOURCE_SHA (run $prior_run_id), and all core rolling tags still match."
 
+  performance:
+    name: Collect informational nightly performance
+    needs: [prepare_release_candidate]
+    if: ${{ needs.prepare_release_candidate.outputs.release_needed == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/performance-release.yml
+    with:
+      source_sha: ${{ needs.prepare_release_candidate.outputs.source_sha }}
+
   verify_source_ci:
     name: Verify ordinary CI for exact nightly source
     needs: [prepare_release_candidate]

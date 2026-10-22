@@ -1,0 +1,14 @@
+{
+  "id": "J13-settled",
+  "intent": "Five minutes of populated Home without input. Assert main-thread busy below the owner's 5% ceiling, conservatively zero long tasks, and no notifications with empty changed-key sets. Real semantic remote changes and polling intent remain owner-level evidence obligations.",
+  "readiness": "Visible populated Session rows have no title/subtitle loaders or skeletons; the ordinary Home shell alone is insufficient. This does not certify every remote Home's full inventory.",
+  "profiling": true,
+  "measurementDurationMs": 300000,
+  "assertions": { "settledHome": {} },
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelectorAll('[data-testid^=\"session-list-item-\"]').length > 0 && !document.querySelector('[data-testid^=\"session-list-title-loading-\"], [data-testid^=\"session-list-subtitle-loading-\"], [data-testid*=\"skeleton\"]')"] }
+  ],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}

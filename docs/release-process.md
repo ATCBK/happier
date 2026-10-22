@@ -158,6 +158,56 @@ surface, and recovery evidence. Combined preview-and-production combines
 channels; it forwards the selected target set to both channels and does not
 couple website and docs publication.
 
+### Performance regression evidence (development)
+
+The development pipeline uses existing test jobs for proven deterministic count
+contracts. Scenario comparisons run nightly on `dev`, on PRs with
+the `performance` label or hot-path changes, and alongside releases. The
+scenario jobs run alongside source validation and publication, outside the
+publication dependency chain. Their results are informational.
+
+Collect the same target-owned report locally:
+
+```bash
+node scripts/pipeline/run.mjs perf-validate --baseline-ref <immutable-release-tag> \
+  --candidate-ref <candidate-sha> --out .happier/qa/perf/release --repeats 5 --release
+```
+
+Omit `--candidate-ref` to measure current source; `--dry-run` only describes the
+work. The runner owns its isolated deterministic environment and writes the
+comparison and profiles under `--out`; it never uses a shared development
+database. PRs reuse JSON from a successful same-repository `dev`/`main` push
+performance run at the exact PR base SHA. They never execute artifact content.
+Without that exact artifact, collection remains head-only and comparison is
+explicitly unavailable: there is no latest-artifact fallback or base rebuild.
+Push runs publish standalone head results for this reuse. Scheduled/release
+workflows compare the nearest ancestral versioned release tag. Same-host timing
+comparisons use paired, interleaved runs with at least five repeats; historical
+artifact timings are nonpaired and do not produce same-host timing ratios.
+
+Only contracts that fail on a deliberate regression and pass ten unchanged
+runs may gate through the existing test jobs. Scenario comparisons do not yet
+have that evidence, so their counts, timing, heap and bundle measurements are
+informational and never block a PR or release. Setup failure is `INCOMPLETE`
+evidence, never a successful measurement. Each local run writes one
+`comparison.json` and `comparison.md`; CI appends that same Markdown to the job
+summary and uploads the full profiles. Keep stable measurements before
+proposing new gates. No acknowledgement or sign-off is required. The private
+maintainer conductor retains release dispatch authority. Collection overhead
+remains unmeasured. Publication does not wait for the performance job, but the
+overall workflow and maintainer status can finish later if that job takes longer
+than publication. No successful hosted run is implied by this development wiring.
+
+Normal `hmaint release promote`/`resume` dispatch reaches the hosted performance
+job through the existing release workflow; `hmaint release status` exposes that
+workflow's URL for its job summary and artifacts. No separate manual performance
+stage is needed. For optional local collection, the development maintainer CLI
+also exposes `hmaint release perf-validate --repo <path>` with the same baseline,
+candidate, output and repeat flags. This adapter invokes the target runner in
+release mode; it is not an automatic local lifecycle hook. The short PR profile runs
+warm startup and streaming scenarios; nightly/release runs use the full set.
+Neither local nor hosted timing/heap reports introduce an approval requirement.
+
 ### Public release contract and approval boundary
 
 Read the versioned, machine-readable release contract before preparing a
