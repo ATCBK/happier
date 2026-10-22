@@ -8,20 +8,12 @@ import {
   formatWorkflowWhereSummary,
   WorkflowProjectTargetControl,
 } from '@/components/workflows/editor/WorkflowProjectTargetControl';
-import { resolveContextualWorkflowProjectTarget } from '@/components/workflows/screens/resolveContextualWorkflowTarget';
-import { useWorkflowEditorAccountMemory } from '@/components/workflows/screens/useWorkflowEditorAccountMemory';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import {
-  isWorkflowProjectTarget,
-  type WorkflowAuthoringTarget,
-} from '@/sync/domains/workflows/workflowProjectTarget';
-import { useMachineListForServer } from '@/sync/store/hooks';
+import { isWorkflowProjectTarget } from '@/sync/domains/workflows/workflowProjectTarget';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 
+import { useDiscussionWorkflowProject } from './useDiscussionWorkflowProject';
 import { useDiscussionWorkflowRun } from './useDiscussionWorkflowRun';
-
-const NO_MACHINES: never[] = [];
 
 /**
  * The Discussion composer's Run… (lab T2-A, T4-R): the shared Pattern picker started from this Discussion,
@@ -41,38 +33,7 @@ export function useDiscussionRunChips(
     disabled: boolean;
   }>,
 ): readonly AgentInputExtraActionChip[] {
-  const machines =
-    useMachineListForServer(params.accountLifetime.scope.serverId) ??
-    NO_MACHINES;
-  const { recentMachinePaths } = useWorkflowEditorAccountMemory(
-    params.accountLifetime,
-  );
-  const [chosen, setChosen] = React.useState<WorkflowAuthoringTarget | null>(
-    null,
-  );
-  const resolved = React.useMemo(
-    () =>
-      resolveContextualWorkflowProjectTarget({
-        machines,
-        recentMachinePaths,
-        scope: params.accountLifetime.isCurrent()
-          ? params.accountLifetime.scope
-          : null,
-      }),
-    [machines, params.accountLifetime, recentMachinePaths],
-  );
-  // The contextual default is a value: keep one identity per Machine and folder, so the Run chip and the
-  // composer's chip rail do not change on every recent-paths read.
-  const contextualKey = resolved ? JSON.stringify([resolved.machineId, resolved.directory]) : null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const contextual = React.useMemo(() => resolved, [contextualKey]);
-  const target = chosen ?? contextual;
-  const project =
-    target &&
-    isWorkflowProjectTarget(target) &&
-    target.directory.trim().length > 0
-      ? target
-      : null;
+  const { target, project, machines, machineName, choose } = useDiscussionWorkflowProject(params.accountLifetime);
   const run = useDiscussionWorkflowRun({
     discussion: params.discussion,
     accountLifetime: params.accountLifetime,
@@ -83,8 +44,6 @@ export function useDiscussionRunChips(
     onStarted: params.onStarted,
     disabled: params.disabled,
   });
-  const machine = machines.find((entry) => entry.id === target?.machineId);
-  const machineName = machine ? getMachineDisplayName(machine) : null;
   const where = React.useMemo(
     () =>
       createExecutionRunStartContentChip({
@@ -108,13 +67,13 @@ export function useDiscussionRunChips(
             purpose="workflow"
             target={target}
             machines={machines}
-            onChange={setChosen}
+            onChange={choose}
             machineName={machineName}
             testIDPrefix="discussion-workflow-run"
           />
         ),
       }),
-    [machineName, machines, params.disabled, project, target],
+    [choose, machineName, machines, params.disabled, project, target],
   );
   return React.useMemo(
     () => (project ? [run.chip, where] : [where]),

@@ -90,7 +90,7 @@ it('chooses a model through ordinary setup, previews its retained slot, and crea
   await screen.unmount();
 });
 
-it('demands only the highlighted Session readiness and keeps two reviewers unavailable without effects', async () => {
+it('demands only the highlighted Session readiness and asks two reviewers as Fresh opinions where Workflows run', async () => {
   const { screen, previewPath } = await mount();
   await vi.waitFor(() => expect(screen.findByTestId('second-opinion.reviewer:reviewer-session')).not.toBeNull());
   expect(screen.findByTestId('second-opinion.reviewer:source-session')).toBeNull();
@@ -102,11 +102,42 @@ it('demands only the highlighted Session readiness and keeps two reviewers unava
   await screen.pressByTestIdAsync('second-opinion.reviewer:reviewer-session');
   await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(1));
   await screen.pressByTestIdAsync('second-opinion.reviewer:unopened-session');
+  await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(2));
   const { t } = await import('@/text');
-  await vi.waitFor(() => expect(screen.getTextContent()).toContain(t(
-    'session.collaboration.discussion.secondOpinion.freshOpinionsUnavailableTitle')));
+  const ask = () => screen.findByTestId('second-opinion.ask');
+  await vi.waitFor(() => expect(ask()?.props.disabled).toBe(false));
+  expect(ask()?.props.title).toBe(t('session.collaboration.discussion.secondOpinion.askFreshOpinions', { count: 2 }));
   expect(boundary.http.requestsFor('/v1/discussions')).toHaveLength(0);
-  expect(boundary.http.requestsFor(previewPath)).toHaveLength(1);
+  await screen.pressByTestIdAsync('second-opinion.ask');
+  // The Machine and folder Discussion Workflows run in is the multi-reviewer placement: without it the
+  // composed Action refuses before any grant or create, so reaching create proves it travelled.
+  await vi.waitFor(() => expect(boundary.http.requestsFor('/v1/discussions').length).toBeGreaterThan(0));
+  expect(screen.findByTestId('second-opinion.failed-diagnostic-target_unavailable')).toBeNull();
+  await screen.unmount();
+});
+
+it('keeps Fresh opinions from asking until it knows where to run, and surfaces the typed refusal', async () => {
+  const { screen, serverId, previewPath } = await mount();
+  storage.setState({ machineListByServerId: { ...storage.getState().machineListByServerId, [serverId]: [] } });
+  await vi.waitFor(() => expect(screen.findByTestId('second-opinion.reviewer:reviewer-session')).not.toBeNull());
+  await screen.pressByTestIdAsync('second-opinion.reviewer:reviewer-session');
+  await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(1));
+  await screen.pressByTestIdAsync('second-opinion.reviewer:unopened-session');
+  await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(2));
+  expect(screen.findByTestId('second-opinion.ask')?.props.disabled).toBe(true);
+  expect(screen.findByTestId('second-opinion-machine-row')).not.toBeNull();
+  // The controller boundary: a multi-reviewer Ask with no placement returns the Action's typed refusal.
+  const { createDiscussionSecondOpinionController } = await import('./discussionSecondOpinionController');
+  const controller = createDiscussionSecondOpinionController({ scope: { serverId, accountId: boundary.accountId(serverId) },
+    availability: 'available', source: { kind: 'session', message: { kind: 'session',
+      session: { serverId, sessionId: 'source-session' }, messageId: 'committed-answer' } },
+    draft: { title: 'Second opinion', question: 'Is this right?', reviewers: [
+      { selection: { kind: 'session', session: { serverId, sessionId: 'reviewer-session' } } },
+      { selection: { kind: 'session', session: { serverId, sessionId: 'unopened-session' } } }] } });
+  await controller.preview();
+  const refused = await controller.ask({ project: null });
+  expect(refused).toEqual({ kind: 'failed', errorCode: 'target_unavailable' });
+  expect(boundary.http.requestsFor('/v1/discussions')).toHaveLength(0);
   await screen.unmount();
 });
 

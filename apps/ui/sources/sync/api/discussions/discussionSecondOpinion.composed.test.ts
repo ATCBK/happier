@@ -1,3 +1,5 @@
+// Initialize declaration-derived policy before the catalog's current approval-request cycle.
+import '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, answerDiscussionThreadForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -264,17 +266,33 @@ it('requires explicit confirmation of a changed preview, then retries the one or
         .map(row => DiscussionPostRequestV1Schema.parse(row.input).localId)).toEqual([retry.questionLocalId, retry.questionLocalId]);
 });
 
-it('reports Fresh opinions unavailable before source reads or mutations for multiple reviewers', async () => {
-    const { serverId, source } = await sourceHome();
+it.each([false, true])('carries selected Workflow placement to multi-reviewer admission and refuses its absence before creation (project=%s)', async withProject => {
+    const { serverId, source, preview } = await sourceHome();
+    const reviewers = ['a', 'b'].map(sessionId => ({
+        selection: { kind: 'session' as const, session: { serverId, sessionId } },
+    }));
+    const selectedPreview = DiscussionSecondOpinionPreviewV1Schema.parse({ ...preview,
+        reviewers: reviewers.map(reviewer => ({ ...reviewer, sourceAccess: 'read', runtimeAccountId: 'alice',
+            audienceAccountIds: ['alice'], missingSourceAccountIds: [], canGrantSource: true, disclosure: { ok: true } })) });
+    homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { body: { ok: true, value: selectedPreview } });
+    answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
+    // Stop at the real Home invitation boundary; the Protocol composition covers Run admission/start.
+    homes.answer(serverId, 'POST /v1/discussions/committed-thread/participants', {
+        status: 403, body: { error: 'discussion_participant_invite_denied' },
+    });
+    const draft: Parameters<typeof createDiscussionSecondOpinionController>[0]['draft'] = {
+        title: 'Review', question: 'What changes?', reviewers,
+        ...(withProject ? { project: { machineId: 'review-machine', directory: '/selected/review' } } : {}),
+    };
     const controller = createDiscussionSecondOpinionController({ scope: { serverId, accountId: 'alice' }, availability: 'available', source,
-        draft: { title: 'Review', question: 'What changes?', reviewers: ['a', 'b'].map(sessionId => ({
-            selection: { kind: 'session', session: { serverId, sessionId } },
-        })) } });
+        draft });
     await controller.preview();
-    expect(controller.getSnapshot().result).toMatchObject({ operation: 'second_opinion', outcome: { kind: 'succeeded',
-        value: { status: 'unavailable', reason: 'fresh_opinions_unavailable', mode: 'fresh_opinions' } } });
-    expect(homes.requestsFor('/v1/discussions/second-opinion/preview')).toHaveLength(0);
-    expect(homes.requestsFor('/v1/discussions')).toHaveLength(0);
+    expect(controller.getSnapshot().preview?.preview).toEqual(selectedPreview);
+    await controller.ask();
+    expect(controller.getSnapshot().result).toMatchObject({ operation: 'second_opinion',
+        outcome: withProject ? { kind: 'succeeded', value: { status: 'pending', stage: 'invite' } }
+            : { kind: 'failed', errorCode: 'target_unavailable' } });
+    expect(homes.requestsFor('/v1/discussions').filter(row => row.input !== null)).toHaveLength(withProject ? 1 : 0);
 });
 
 it('removes a configured model by its retained selection and refuses changes during its real preview', async () => {

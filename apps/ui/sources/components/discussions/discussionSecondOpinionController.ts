@@ -9,7 +9,7 @@ import { buildDiscussionRouteHref } from './discussionRoutes';
 import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
-type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants'>;
+type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants' | 'project'>;
 type Preview = Extract<DiscussionSecondOpinionStartResultV1, { status: 'preview' }>;
 type Result = Readonly<{ operation: 'second_opinion'; outcome: DiscussionClientOutcome<DiscussionSecondOpinionStartResultV1> }>
     | Readonly<{ operation: 'discuss'; outcome: DiscussionClientOutcome<DiscussionCreateResultV1> }>;
