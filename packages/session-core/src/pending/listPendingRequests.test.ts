@@ -200,6 +200,39 @@ describe('derivePendingRequestFlags', () => {
         expect(deriveLatestPendingRequestObservedAt(session)).toBe(5_000);
     });
 
+    it('keeps a hydrated native permission visible when projected zero counts have no observation or predate it', () => {
+        const request = { tool: 'Bash', kind: 'permission' as const, arguments: { command: 'sleep 300' },
+            createdAt: 12_345, turnId: 'native-turn' };
+        const facts = createPendingFacts({ active: true, agentState: { requests: { 'exec-native': request } },
+            projected: { permissionCount: 0, userActionCount: 0, observedAt: null, referenceAt: 20_000 } });
+        for (const observedAt of [null, 12_000]) {
+            const current = { ...facts, projected: { ...facts.projected!, observedAt } };
+            expect(listPendingRequests(current)).toEqual([expect.objectContaining({ id: 'exec-native', tool: 'Bash', turnId: 'native-turn' })]);
+            expect(derivePendingRequestFlags(current)).toEqual({ hasPendingPermissionRequests: true, hasPendingUserActionRequests: false });
+            expect(deriveLatestPendingRequestObservedAt(current)).toBe(request.createdAt);
+        }
+        const newerZero = { ...facts, projected: { ...facts.projected!, observedAt: 13_000 } };
+        expect(listPendingRequests(newerZero)).toEqual([]);
+        expect(derivePendingRequestFlags(newerZero).hasPendingPermissionRequests).toBe(false);
+        expect(deriveLatestPendingRequestObservedAt(newerZero)).toBeNull();
+        const completed = { ...facts, agentState: { requests: { 'exec-native': request }, completedRequests: {
+            'exec-native': { ...request, completedAt: 13_000, status: 'approved' as const },
+        } } };
+        expect(listPendingRequests(completed)).toEqual([]);
+        expect(derivePendingRequestFlags(completed).hasPendingPermissionRequests).toBe(false);
+        expect(deriveLatestPendingRequestObservedAt(completed)).toBeNull();
+        const terminal: Message = { id: 'native', kind: 'tool-call', localId: null, createdAt: request.createdAt,
+            tool: { id: 'native-tool', name: 'Bash', state: 'running', input: request.arguments, createdAt: request.createdAt,
+                startedAt: request.createdAt, completedAt: null, description: null,
+                permission: { id: 'exec-native', status: 'approved' } }, children: [] };
+        const pendingTranscript: Message = { ...terminal, tool: { ...terminal.tool, permission: { id: 'exec-native', status: 'pending' } } };
+        expect(listPendingRequests(newerZero, [pendingTranscript])).toEqual([]);
+        expect(listPendingRequests(facts, [terminal])).toEqual([]);
+        expect(derivePendingRequestFlags(facts, [terminal]).hasPendingPermissionRequests).toBe(false);
+        expect(listPendingRequests({ ...facts, active: false })).toEqual([]);
+        expect(derivePendingRequestFlags({ ...facts, active: false }).hasPendingPermissionRequests).toBe(false);
+    });
+
     it('surfaces live agentState user-action requests even when projected counts are stale zero', () => {
         const session = createPendingFacts({
             active: true,

@@ -592,6 +592,29 @@ contribute that reason. This does not infer review purpose from the current rost
 This projection is ready for page composition; its presence does not
 establish that every rendered list already consumes it.
 
+Native Session permissions are separate from those approval Artifacts. The shared
+Session pending-request owner reconciles opened `agentState.requests` with exact
+completions and stamped summary observations: an unstamped zero counter cannot
+erase a live native permission; a newer stamped zero or matching terminal request
+can retire it. In current 0.3 development, `useSessionAwareness(sessionId, serverId,
+undefined, {accountLifetime, enabled})` exposes `pendingRequests`,
+`oldestPendingRequest` and `requestHref` alongside `awareness`. The captured
+Home/Account must match the current Session read scope; retirement, disabled
+observation and unreadable content withdraw request details. A Discussion may
+mount that existing hook for its admitted participant Session, not derive another
+permission counter or acquire approval authority from membership. Its Open request
+control can open `requestHref` and pass the exact request id/source to the existing
+`setPendingNavigationLanding` owner for Session hydration and reveal. This data
+contract does not establish that Discussion composition already renders the control.
+
+Discussion transcript remount continuity uses the shared `TranscriptListShell`
+renderer through `viewportRetention={repository}`. The scoped repository lifetime
+and qualified Discussion data key retain only a keyed row's viewport offset or
+tail-follow intent; the renderer's existing entry-placement/held-anchor owner
+restores it across Back/Forward, message arrival and viewport changes. This is
+ephemeral navigation placement, not a second message store or synced read cursor.
+Main Session transcripts retain their existing durable entry lifecycle.
+
 In current 0.3 development, UI and CLI `approval.request.list` use the same strict
 Account Artifact header/body scan on the captured Home. The requested matching-count
 limit is not an exhaustive approval census. A private Discussion draft is an existing

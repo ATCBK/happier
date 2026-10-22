@@ -439,10 +439,6 @@ function hasPendingAgentRequests(facts: PendingRequestFacts): boolean {
         || listPendingAgentStateRequests(facts.actionConfirmations).length > 0;
 }
 
-function hasPendingAgentUserActionRequests(facts: PendingRequestFacts): boolean {
-    return derivePendingRequestFlagsFromAgentState(facts.agentState).hasPendingUserActionRequests;
-}
-
 function readProjectedPendingRequestFlags(facts: PendingRequestFacts): PendingRequestFlags {
     return {
         hasPendingPermissionRequests: (facts.projected?.permissionCount ?? 0) > 0,
@@ -498,7 +494,7 @@ export function shouldReadTranscriptForPendingRequests(facts: PendingRequestFact
 export function shouldReadTranscriptForPendingRequestList(facts: PendingRequestFacts): boolean {
     return facts.active && (
         shouldReadTranscriptForPendingRequests(facts)
-        || hasPendingAgentUserActionRequests(facts)
+        || hasPendingAgentRequests(facts)
     );
 }
 
@@ -530,7 +526,7 @@ export function listPendingRequests(
     const transcriptStates = getTranscriptRequestStates(facts, messages, statesCache);
     const pending = new Map<string, SessionPendingRequest>();
     const pendingTranscriptRequests = Array.from(transcriptStates.values())
-        .flatMap((state) => (state.status === 'pending' ? [state.request] : []));
+        .flatMap((state) => (state.status === 'pending' && isPendingRequestCurrent(facts, state.request, state) ? [state.request] : []));
 
     for (const request of pendingTranscriptRequests) {
         pending.set(request.id, request);
@@ -539,11 +535,7 @@ export function listPendingRequests(
     if (pendingAgentStateRequests.length > 0) {
         for (const request of pendingAgentStateRequests) {
             const transcriptState = transcriptStates.get(request.id);
-            if (
-                transcriptState?.status === 'terminal'
-                && transcriptState.terminalKind === 'hard'
-                && (request.createdAt ?? 0) <= transcriptState.createdAt
-            ) {
+            if (!isPendingRequestCurrent(facts, request, transcriptState)) {
                 continue;
             }
 
@@ -566,6 +558,21 @@ export function listPendingRequests(
     }
 
     return Array.from(pending.values());
+}
+
+function isPendingRequestCurrent(facts: PendingRequestFacts, request: SessionPendingRequest, state: TranscriptRequestState | undefined): boolean {
+    if (state?.status === 'terminal' && state.terminalKind === 'hard' && (request.createdAt ?? 0) <= state.createdAt) return false;
+    if (isSessionActionConfirmationRequest(request) || resolvePendingRequestAttentionReasonV1(request) !== 'permission_required'
+        || facts.projected?.permissionCount !== 0) return true;
+    const observedAt = readProjectedPendingRequestObservedAt(facts);
+    return observedAt === null || (request.createdAt !== null && request.createdAt > observedAt);
+}
+
+/** An unstamped summary cannot retire a native request; a newer stamped observation or exact completion can. */
+function hasUnprojectedAgentPermissionRequest(facts: PendingRequestFacts, transcriptStates: Map<string, TranscriptRequestState>): boolean {
+    return listPendingAgentStateRequests(facts.agentState).some(request =>
+        resolvePendingRequestAttentionReasonV1(request) === 'permission_required'
+        && isPendingRequestCurrent(facts, request, transcriptStates.get(request.id)));
 }
 
 export function listPendingPermissionRequests(
@@ -660,12 +667,14 @@ export function derivePendingRequestFlags(
 
     if (hasProjectedPendingRequestCounts(facts)) {
         const transcriptStates = getTranscriptRequestStates(facts, messages, statesCache);
+        const agentPermissionRequired = hasUnprojectedAgentPermissionRequest(facts, transcriptStates);
         if (shouldUseProjectedPendingRequestCounts(facts, transcriptStates)) {
             const projectedFlags = readProjectedPendingRequestFlags(facts);
             const agentStateFlags = derivePendingRequestFlagsFromAgentState(facts.agentState);
             return {
                 hasPendingPermissionRequests:
                     projectedFlags.hasPendingPermissionRequests
+                    || agentPermissionRequired
                     || listPendingAgentStateRequests(facts.agentState).some(isSessionActionConfirmationRequest)
                     || actionFlags.hasPendingPermissionRequests,
                 hasPendingUserActionRequests:
@@ -675,13 +684,14 @@ export function derivePendingRequestFlags(
             };
         }
         const pendingTranscriptRequests = Array.from(transcriptStates.values())
-            .flatMap((state) => (state.status === 'pending' ? [state.request] : []));
+            .flatMap((state) => (state.status === 'pending' && isPendingRequestCurrent(facts, state.request, state) ? [state.request] : []));
         if (pendingTranscriptRequests.length === 0) {
-            return actionFlags;
+            return agentPermissionRequired ? { ...actionFlags, hasPendingPermissionRequests: true } : actionFlags;
         }
         return {
             hasPendingPermissionRequests:
                 pendingTranscriptRequests.some((request) => resolvePendingRequestAttentionReasonV1(request) === 'permission_required')
+                || agentPermissionRequired
                 || actionFlags.hasPendingPermissionRequests,
             hasPendingUserActionRequests:
                 pendingTranscriptRequests.some((request) => resolvePendingRequestAttentionReasonV1(request) === 'user_action_required')

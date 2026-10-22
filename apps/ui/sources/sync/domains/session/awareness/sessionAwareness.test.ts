@@ -97,6 +97,18 @@ describe('UI Session awareness acquisition adapter', () => {
         expect(detail.operational.primary).toBe('failed');
     });
 
+    it('projects a hydrated native permission despite unstamped zero counters in both detail and list awareness', () => {
+        const session = createSessionFixture({ encryptionMode: 'plain', active: true, presence: 'online', activeAt: 13_000,
+            latestTurnStatus: 'in_progress', updatedAt: 13_000, pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+            agentState: { requests: { 'exec-native': { tool: 'Bash', kind: 'permission',
+                arguments: { command: 'sleep 300' }, createdAt: 12_345, turnId: 'native-turn' } } },
+        });
+        for (const source of [session, buildSessionListRenderableFromSession(session, undefined, [])]) {
+            expect(projectUiSessionAwareness(source, 13_001).operational.primary).toBe('permission_required');
+        }
+    });
+
     it('distinguishes missing pending evidence from an observed empty projection', () => {
         const base = createSessionFixture({
             encryptionMode: 'plain', latestTurnStatus: null,
