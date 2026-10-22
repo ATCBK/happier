@@ -318,10 +318,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                                 }
                                 competitions++;
                             }
-                            try { return await query(...values); }
-                            catch (error) {
-                                throw error;
-                            }
+                            return query(...values);
                         };
                     } });
                     try {
