@@ -1871,6 +1871,56 @@ describe('opening a row into the source detail', () => {
         expect(currentHarness?.readDetailInstanceIds).toContain(INSTANCE);
     });
 
+    it('says an identity-only link names no reachable entry once every continuation is exhausted', async () => {
+        // `core/SURFACE.md` §3.1: a location naming an entry NO window holds,
+        // with nothing left to continue, used to render the bare list — the link
+        // looked like it did nothing. The terminal state says what happened,
+        // keeps the requested ref visible, and offers a re-read; it never
+        // invents a connection or issues a detail read for an entry no row held.
+        const subPath = buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1,
+            selection: {
+                source: SOURCE,
+                kindId: 'pull-request',
+                collisionScope: 'example/repository',
+                entryId: '532',
+            },
+        });
+        const shell = await mountShell({ subPath, activeSurface: true });
+        await act(async () => { await Promise.resolve(); });
+        await act(async () => { await Promise.resolve(); });
+
+        await expect(shell.getByText('That entry could not be found')).resolves.toBeDefined();
+        await expect(shell.getByText(
+            'None of the entries this page lists is example/repository · 532. It may have been removed, or belong to a connection that is not set up here.',
+        )).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Check again' })).resolves.toBeDefined();
+        // The list itself is untouched, and nothing was read for the absent ref.
+        await expect(shell.getByText('Replace the duplicated normalizer')).resolves.toBeDefined();
+        expect(currentHarness?.readDetailInstanceIds).toEqual([]);
+        // The requested ref stays the page's location: nothing was rewritten.
+        expect(lastPageLocation).toBeNull();
+    });
+
+    it('does not announce an absent entry while the walk can still reach it', async () => {
+        const subPath = buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1,
+            selection: {
+                source: SOURCE,
+                kindId: 'pull-request',
+                collisionScope: 'example/repository',
+                entryId: '17',
+            },
+        });
+        const shell = await mountShell({ subPath, deferLinkedEntry: true, activeSurface: true });
+        await act(async () => {
+            await vi.waitFor(async () => {
+                await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+            });
+        });
+        await expect(shell.queryByText('That entry could not be found')).resolves.toBeUndefined();
+    });
+
     it('keeps one source detail mount while the open shell crosses split and stacked layouts', async () => {
         const shell = await mountShell();
         await measureFillRegion(900);

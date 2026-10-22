@@ -129,6 +129,7 @@ import {
 import { TriageActionsEditor } from '../actions/ActionsEditor.js';
 import { TriageCreateTaskFields } from '../detail/taskFields.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
+import { readTriageAbsentRouteV1 } from './absentRoute.js';
 import { TriageFirstRun } from './firstRun.js';
 import { useTriageActions } from '../actions/useTriageActions.js';
 import { useTriageConfiguredSources } from '../configuration/useTriageConfiguredSources.js';
@@ -1737,6 +1738,19 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     onRouteWriteFailure: setRouteWriteFailure,
   });
 
+  /**
+   * A location naming an entry nothing this page can read holds, with every
+   * continuation spent: the banner below says so (`ui/shell/absentRoute.ts`).
+   */
+  const absentRoute = readTriageAbsentRouteV1({
+    subPath: props.subPath,
+    windowSettled: state.kind === 'window',
+    selected: surface.selection !== null,
+    pending: window.snapshot.pending,
+    loadMore: window.snapshot.loadMore,
+    rowsByKey,
+  });
+
   const theme = usePluginTheme();
   const { textScale } = usePluginAccessibility();
   const scaledType = React.useMemo(
@@ -2269,6 +2283,25 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
                 'plugins.triage.surface.routeWriteFailed.rejected',
                 'Happier refused the location change, so the last settled view was restored. Try again.',
               )}
+        />
+      )}
+      {absentRoute === null ? null : (
+        <Banner
+          tone="warning"
+          title={text('plugins.triage.surface.absentRoute.title', 'That entry could not be found')}
+          description={text(
+            absentRoute.coverage === 'complete'
+              ? 'plugins.triage.surface.absentRoute.exhausted'
+              : 'plugins.triage.surface.absentRoute.incomplete',
+            absentRoute.coverage === 'complete'
+              ? 'None of the entries this page lists is {entry}. It may have been removed, or belong to a connection that is not set up here.'
+              : 'None of the entries this page could read is {entry}, and some could not be read in full. Check again to read them once more.',
+            { entry: `${absentRoute.entryRef.collisionScope} · ${absentRoute.entryRef.entryId}` },
+          )}
+          action={(
+            <Button titleKey="plugins.triage.surface.absentRoute.retry" title="Check again" variant="secondary"
+              busy={refreshState.kind === 'running'} disabled={refreshState.kind === 'blocked'} onPress={refresh} />
+          )}
         />
       )}
       <TriageListRowEnvironmentContext.Provider value={rowEnvironment}>
