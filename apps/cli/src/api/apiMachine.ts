@@ -925,7 +925,12 @@ export class ApiMachineClient {
                             this.sessionMessageReplyRecoverySupported = true;
                             try { await this.refreshOperationProtocolCapabilitiesAdvertisement(); }
                             catch {
-                                if (transportCurrent()) this.sessionMessageReplyRecoverySupported = false;
+                                // The inventory already proved support. A lost/refused
+                                // publication must not erase that fact: reply admission
+                                // cannot create the Pending hint which would retry it.
+                                if (transportCurrent()) this.machineControlReadinessRetry.schedule(async () => {
+                                    if (transportCurrent()) await this.refreshOperationProtocolCapabilitiesAdvertisement();
+                                });
                                 logger.warn('[API MACHINE] Session reply capability publication remains unavailable');
                             }
                         },

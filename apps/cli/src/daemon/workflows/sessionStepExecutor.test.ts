@@ -1725,17 +1725,20 @@ describe('workflow Session step executor', () => {
     const read = readiness.get.getMockImplementation()!;
     readiness.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${originSessionId}`)
       ? { status: 200, data: { session: createSessionRecordFixture({ id: originSessionId, active: true, encryptionMode: 'plain',
-        metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+        metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), share: null,
         ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
           workspace: { machineId: 'machine-1', path: '/repo' },
-          runtime: { runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } },
+          nativeSession: { runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } },
           connectedServices: { connectedServices },
         }),
       }) } } : read(url));
     const origin = await resolveWorkflowSessionConversation({ credentials, sessionId: originSessionId, machineId: 'machine-1' });
     expect(origin).not.toBeNull();
     if (!origin) throw new Error('Origin Session unavailable');
-    const definition = { version: 1 as const, defaults: { engine: { agentTarget, effort: 'low' } },
+    const modelSelection = { v: 1 as const, updatedAt: 1, ref: {
+      agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6-luna',
+    } };
+    const definition = { version: 1 as const, defaults: { engine: { agentTarget, modelSelection, effort: 'low' } },
       blocks: [{ kind: 'step' as const, id: 'work', document: { text: 'Reply READY.', references: [], attachments: [] } }] };
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
       context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-1', executionTarget: { kind: 'session' },
@@ -1753,7 +1756,7 @@ describe('workflow Session step executor', () => {
     await expect(create({ selection: resolveWorkflowAcceptedStepSelectionV1(leaf).selection,
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
       creationKey: 'workflow:run-1:connected-leaf' })).resolves.toMatchObject({ sessionId: 'new-session' });
-    expect(launches).toMatchObject([{ connectedServices, originSessionId,
+    expect(launches).toMatchObject([{ connectedServices, originSessionId, modelSelection,
       sessionConfigOptionOverrides: { overrides: { reasoning_effort: { value: 'low' } } } }]);
   });
 

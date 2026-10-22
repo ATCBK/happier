@@ -10,6 +10,8 @@ import type { TransferRelayV2SendEnvelope } from '@happier-dev/protocol';
 import type { TransferSessionStore } from '@happier-dev/transfers/node';
 import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import type { RpcHandlerManager } from './rpc/RpcHandlerManager';
 
 import { ApiMachineClient } from './apiMachine';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
@@ -40,8 +42,15 @@ describe('ApiMachineClient filesystem handlers', () => {
       process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = workspace;
       const token = `header.${Buffer.from(JSON.stringify({ sub: 'daemon-owner' })).toString('base64url')}.signature`;
       client = new ApiMachineClient(token, createMachine());
-      const rpc = client.getPeerMediationMachineRpcHandlerManager();
       const input = { rootPath: workspace, path: 'pending' };
+      // Peer transport rejects an unverified caller before native Action admission.
+      await expect(client.getPeerMediationMachineRpcHandlerManager().invokeLocal('daemon.filesystem.createDirectory', input))
+        .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      // Exercise the registered native handler owner below that transport boundary,
+      // as the other filesystem registration tests do, without inventing an actor.
+      const rpc = (client as unknown as Readonly<{
+        rpcHandlerManager: Pick<RpcHandlerManager, 'invokeLocal'>;
+      }>).rpcHandlerManager;
       await expect(rpc.invokeLocal('daemon.filesystem.createDirectory', input)).resolves.toMatchObject({
         ok: false, errorCode: 'filesystem_action_owner_unavailable',
       });

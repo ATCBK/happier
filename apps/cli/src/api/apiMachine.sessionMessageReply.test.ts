@@ -2,7 +2,7 @@ import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { SessionMessageReplyMachineMutationV1Schema, SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
-import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
+import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1,
   MachineUpdateOperationProtocolCapabilitiesRequestV1Schema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import type { StoredCredentials } from '@/persistence';
@@ -32,6 +32,11 @@ import type { TrackedSession } from '@/daemon/types';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/ui/logger';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { createProductionFreshWorkflowSessionConversation, createProductionWorkflowSessionStepExecutor } from '@/daemon/workflows/sessionStepExecutor';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
+import fs from 'node:fs/promises';
 
 const os = vi.hoisted(() => ({ identity: null as import('@happier-dev/protocol').MachineInstallationIdentityV1 | null,
   credentials: null as StoredCredentials | null }));
@@ -69,6 +74,105 @@ function acknowledgeRegistration(event: string, args: unknown[], socket: ReturnT
     queueMicrotask(() => socket.trigger(SOCKET_RPC_EVENTS.REGISTERED, { method: raw.method }));
   }
 }
+
+it('recovers a refused reply advertisement and delivers a fresh Workflow leaf through Session input admission', async () => {
+  vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+  const pair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(51));
+  os.identity = { version: 1, installationId: '11111111-1111-4111-8111-111111111111', createdAt: 1,
+    publicKey: Buffer.from(pair.publicKey).toString('base64url'), privateKey: Buffer.from(pair.secretKey).toString('base64url') };
+  const credentials = { token: 'owner-token', encryption: null };
+  os.credentials = credentials;
+  const sessionId = 'c' + '9'.repeat(24);
+  let published: ReturnType<typeof MachineUpdateOperationProtocolCapabilitiesRequestV1Schema.parse>['capabilities'] = {};
+  let refuseAdvertisement = true;
+  let refused = false;
+  let birth: ReturnType<typeof buildCommittedLaunchMetadata> | undefined;
+  let localId = '';
+  const admitted: unknown[] = [];
+  // Home HTTP/Socket.IO and native process launch are the substituted boundaries.
+  // Capability lifecycle, fresh Session creation, Workflow authoring, protected
+  // input admission and exact reply observation run through their real owners.
+  const socket = createApiSessionSocketStub({ emit: acknowledgeRegistration, emitWithAck: (event, raw) => {
+    if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
+      const request = MachineUpdateOperationProtocolCapabilitiesRequestV1Schema.parse(raw);
+      if (request.capabilities.sessionMessageReply && refuseAdvertisement) {
+        refused = true;
+        return { v: 1, result: 'error', code: 'internal_error' };
+      }
+      published = request.capabilities;
+      return { v: 1, result: 'success', revision: 2 };
+    }
+    if (event === SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1) {
+      const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+      if (!published.sessionMessageReply) return { v: 1, result: { status: 'rejected', code: 'session_input_target_update_required' } };
+      admitted.push(request);
+      localId = request.localId;
+      return { v: 1, result: { status: 'accepted', localId } };
+    }
+    return { result: 'success', version: 1, daemonState: raw && typeof raw === 'object' && 'daemonState' in raw ? raw.daemonState : null };
+  } });
+  bindApiSessionSocketMock(io, socket);
+  const session = () => createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain',
+    machineId: 'target-machine', metadata: JSON.stringify({ machineId: 'target-machine', path: '/repo', ...birth }) });
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.includes('/session-message-replies/pending')) return { status: 200, data: { v: 1, entries: [], nextAfter: null } };
+    if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (url.endsWith('/v1/machines/target-machine')) return { status: 200, data: { machine: { id: 'target-machine',
+      revokedAt: null, replacedByMachineId: null, operationProtocolCapabilitiesRevision: 2, operationProtocolCapabilities: published } } };
+    if (url.endsWith(`/v2/sessions/${sessionId}/messages/reply-capability`)) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+    if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
+      v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'leaf-turn', outcome: { kind: 'pass' } } } };
+    if (url.endsWith(`/v2/sessions/${sessionId}/pending`)) return { status: 200, data: { pending: localId ? [{ localId, status: 'queued' }] : [] } };
+    if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: session() } };
+    return { status: 200, data: { id: 'owner', settings: null, settingsVersion: 0 } };
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (url) => {
+    if (url.endsWith('/v2/sessions/lookup-by-tags')) return { status: 200, data: { sessions: birth ? [session()] : [] } };
+    throw new Error('Unexpected Workflow HTTP write');
+  });
+  vi.spyOn(fs, 'access').mockResolvedValue(undefined);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'owner' }), { status: 200 })));
+  vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async ({ method, request }) => {
+    if (method !== RPC_METHODS.SPAWN_HAPPY_SESSION) throw new Error('Unexpected native launch');
+    const spawn = SpawnDaemonSessionRequestSchema.parse(request);
+    birth = buildCommittedLaunchMetadata({ options: spawn, directory: '/repo', accountSettings: {} });
+    return { type: 'success', sessionId, sessionCreationOutcome: { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+  });
+  const client = new ApiMachineClient(credentials.token, { id: 'target-machine', encryptionKey: new Uint8Array(32),
+    encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+  client.setRPCHandlers({ spawnSession: async () => { throw new Error('Launch uses the exact Machine process boundary'); },
+    sessionSpawnV1OutcomeRequired: true,
+    resolveSpawnSessionByNonce: async () => { throw new Error('No replacement launch'); },
+    stopSession: async () => true, requestShutdown: () => {} });
+  installControlRegistrations(client);
+  try {
+    client.connect();
+    await vi.waitFor(() => expect(refused).toBe(true));
+    expect(published.sessionMessageReply).toBeUndefined();
+    refuseAdvertisement = false;
+    // The existing publication scheduler must recover without a new Session,
+    // reconnect, input hint or caller retry to manufacture another opportunity.
+    await vi.waitFor(() => expect(published.sessionMessageReply).toEqual({ protocolVersions: [1] }), { timeout: 5_000 });
+    const machineAdmissionTransport = client.enqueueSessionPendingByMachine.bind(client);
+    const execute = createProductionWorkflowSessionStepExecutor({ credentials, machineId: 'target-machine', machineAdmissionTransport,
+      createFreshConversation: createProductionFreshWorkflowSessionConversation({ credentials,
+        serverId: configuration.activeServerId, machineId: 'target-machine', workDepth: 0, originRunId: 'run-1', machineAdmissionTransport }),
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => null });
+    await expect(execute({ runId: 'run-1', step: { kind: 'step', id: 'work', document: { text: 'Review', references: [], attachments: [] },
+      input: [], result: { kind: 'text' } }, invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step',
+        invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: 'inv-1' },
+      input: { text: 'Review', references: [], attachments: [], values: [] },
+      execution: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        connectedServices: { v: 2, bindingsByServiceId: {} } }, executionTarget: { kind: 'session' },
+      authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+      workspace: { machineId: 'target-machine', directory: '/repo', checkoutRootPath: '/repo' },
+      beforeInputAdmission: async () => {}, onInputAccepted: async () => {} })).resolves.toMatchObject({ kind: 'completed', result: '' });
+    expect(birth).toBeDefined();
+    expect(admitted).toEqual([expect.objectContaining({ sessionId, targetMachineId: 'target-machine', reply: { mode: 'wait' } })]);
+  } finally { await client.shutdown(); }
+});
 
 it.each([false, true])('recovers a Discussion result through the actual Session publisher without admitting a new Session input (hosted requester: %s)', async hostedRequester => {
   vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
