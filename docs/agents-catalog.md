@@ -549,6 +549,44 @@ If you’re running this repo via happy-stacks, prefer:
 
 ## Connected-account quota recovery (development)
 
+Claude OAuth profile normalization belongs to
+`packages/protocol/src/providers/claude/oauthProfile.ts`; the agents package
+re-exports that owner. Credentials retain the provider-attested organization UUID
+alongside subscription metadata. Protocol owns the credential organization reader
+and required-organization policy, so shared quota machinery uses one decision
+rather than competing provider lists.
+
+Claude usage records combine the provider user with the organization through the
+existing `quotaScope: organization` and `quotaScopeId` key fields. Different
+profile labels for that same context share evidence; the same user in another
+organization has a separate record. Unknown organization identity remains
+provisional and cannot establish shared profile ownership. The existing credential
+refresh coordinator can qualify older credentials using the same token's matching
+profile response, without rotating an unexpired token. It publishes the context
+through the existing credential revision, lease and distribution lifecycle;
+metadata enrichment does not clear quota cooldowns or credential-health failures.
+Exact current-token and user proof can still authorize profile-local recovery
+when the organization is unknown. The existing runtime quota entry retains the
+actual verified token fingerprint; a different current token invalidates that
+unscoped evidence. Local entries use the existing freshness and polling budget
+without establishing global usage aliases.
+Runtime failure attribution and direct-account recovery compare that same
+context; an ambiguous live identity cannot authorize mutation of the runner's
+old launch profile. The public Session runtime-issue shape is unchanged.
+
+Credential metadata projects the attested organization through the protocol
+credential builder. The server invalidates usage-source aliases when that account
+context changes, while ordinary same-context token rotations retain their usage.
+Reset redemption rechecks the token's profile and refuses a different known
+organization before sending a debit request.
+
+The canonical UI quota store lives in the connected-services sync domain. It
+checks current credential context, invalidates the exact binding after a changed
+credential write and rejects late results from retired requests. Transient
+credential-read failures retain accepted cached evidence; a successful credential
+replacement with missing or changed context cannot keep the previous context's
+quota.
+
 Provider-owned quota fetchers discover recovery credits and implement the existing
 consume hook. The daemon quota coordinator owns selection, operation joining,
 receipts, ambiguous-debit holds, post-operation refresh and account-usage publication.

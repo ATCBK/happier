@@ -153,6 +153,7 @@ export function sanitizeConnectedServiceRuntimeFailureClassification(
   const quotaScope = readQuotaScope(value.quotaScope);
   const providerLimitId = readNullableSafeProviderString(value.providerLimitId);
   const sourceProviderAccountId = readNullableSafeProviderString(value.sourceProviderAccountId);
+  const sourceProviderOrganizationId = readNullableSafeProviderString(value.sourceProviderOrganizationId);
   const failingAccessTokenFingerprint = normalizeConnectedServiceAccessTokenFingerprint(value.failingAccessTokenFingerprint);
   const sourceAccountLabel = sourceProviderAccountId
     ? readNullableSafeProviderString(value.sourceAccountLabel)
@@ -187,6 +188,7 @@ export function sanitizeConnectedServiceRuntimeFailureClassification(
     ...(quotaScope ? { quotaScope } : {}),
     ...(value.providerLimitId === undefined ? {} : { providerLimitId }),
     ...(sourceProviderAccountId ? { sourceProviderAccountId } : {}),
+    ...(sourceProviderAccountId && sourceProviderOrganizationId ? { sourceProviderOrganizationId } : {}),
     ...(sourceProviderAccountId && value.sourceAccountLabel !== undefined ? { sourceAccountLabel } : {}),
     ...(failingAccessTokenFingerprint ? { failingAccessTokenFingerprint } : {}),
     ...(value.action === undefined ? {} : { action }),

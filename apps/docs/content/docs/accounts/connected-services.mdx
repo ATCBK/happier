@@ -217,6 +217,23 @@ claude setup-token
 
 Then paste it into Happier.
 
+#### Claude quota identity in development builds
+
+The development correction keeps OAuth quota usage separate when one Claude
+login belongs to different organizations. Profiles for the same user and
+organization share usage evidence, even when their Happier labels differ.
+Personal and work organizations retain their own meters and recovery context.
+
+Older connections can obtain their organization identity during a fresh quota
+check using the connected token. If Claude cannot confirm that context, Happier
+does not infer shared quota ownership from the email or user id alone. Setup
+tokens do not gain OAuth quota telemetry from this correction.
+
+Usage verified with the current credential can still support that profile's local
+recovery when organization information is unavailable. Reconnecting with a
+different credential requires fresh evidence. This does not identify every cause
+of a Claude rate-limit or spend-limit response.
+
 ### Anthropic API key
 
 Supported methods:
