@@ -10,6 +10,7 @@ import type {
 import { resolveActionApprovalFlow, type ActionApprovalFlow, type ActionApprovalResult } from './actionApprovalMetadata.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput, type ActionSpec } from './actionSpecs.js';
 import { isAgentOrUnresolvedSurface, resolveApprovalSurface } from './actionApprovalSurface.js';
+export { isSharedRequesterActionV1 } from './actionRequestAttributionV1.js';
 export { isAgentOrUnresolvedSurface } from './actionApprovalSurface.js';
 
 export type ActionApprovalRoutingDecision = Readonly<{
@@ -82,13 +83,6 @@ export function isAgentInitiatedApprovalRequiredByDefault(actionId: ActionId): b
 /** Whether persisted Action settings may waive this host-declared confirmation. */
 export function isActionApprovalWaivable(spec: Pick<ActionSpec, 'approvalPolicy'>): boolean {
   return spec.approvalPolicy?.nonWaivable !== true;
-}
-
-/** Host attribution identifies the cause, not authority. Unknown people never become the Bot owner. */
-export function isSharedRequesterActionV1(context: Pick<ActionExecutorContext, 'actionRequestAttributionV1' | 'runtimeAccountId'>): boolean {
-  const cause = context.actionRequestAttributionV1;
-  return Boolean(cause && context.runtimeAccountId
-    && (!cause.requester || cause.requester.accountId !== context.runtimeAccountId));
 }
 
 function requiresDefaultApprovalFloor(

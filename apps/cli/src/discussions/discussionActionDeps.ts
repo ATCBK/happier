@@ -133,7 +133,8 @@ export function createDiscussionActionDeps(options: Readonly<{
     const protectedDiscussionContext = hasProtectedDiscussionActionContextV1(context);
     const origin = ApprovalRequestOriginV1Schema.safeParse(context.approvalOrigin);
     const publicationOptions = { ...(signal ? { signal } : {}),
-      ...(context.approvedActionReplay ? { approvedActionReplay: context.approvedActionReplay } : {}) };
+      // Original caller defaults are host-only, not part of the private RPC ABI.
+      ...(context.approvedActionReplay ? { approvedActionReplay: { artifactId: context.approvedActionReplay.artifactId } } : {}) };
     const omittedLocalId = (purpose: Parameters<typeof deriveApprovedDiscussionMutationLocalId>[0]['purpose']) =>
       context.approvedActionReplay ? deriveApprovedDiscussionMutationLocalId({ artifactId: context.approvedActionReplay.artifactId, purpose }) : randomUUID();
     if (agentOrigin && (isPost || actionId === 'discussion.create')

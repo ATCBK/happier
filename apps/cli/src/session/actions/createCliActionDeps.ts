@@ -1444,7 +1444,8 @@ export function createCliActionDeps(params: Readonly<{
             context: { ...context, ...(signal ? { signal } : {}) } });
         },
       });
-      const caller = { surface: context.surface ?? null, ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}) };
+      const caller = { surface: context.surface ?? null, ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}),
+        ...(context.approvedActionReplay ? { approvedActionReplay: context.approvedActionReplay } : {}) };
       const operation = () => execute(actionId, input, caller, context.signal);
       return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, operation) : operation();
   };

@@ -224,6 +224,102 @@ function sharedRequesterCurrentUiContext(input: unknown): ActionExecutorContext 
 }
 
 describe('createActionExecutor (approvals)', () => {
+  it.each(['approve', 'reject', 'cancel'] as const)('refuses subjectless requester-only %s on attribution-absent V1 history', async decision => {
+    const row = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'mcp', sessionId: 's1' }, requestedSurface: 'mcp', actionId: 'session.message.send',
+      actionArgs: { sessionId: 's1', message: 'hello' }, summary: 'Send message' });
+    const transitions: ApprovalRequest[] = [];
+    const executor = createExecutor({ approvalsGet: async () => row,
+      approvalsUpdate: async ({ request }) => { transitions.push(request); return { ok: true }; } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'legacy', decision }, {
+      surface: 'rpc', authority: 'present_user', runtimeAccountId: 'alice', requesterApprovalDecision: { sessionId: 's1',
+        actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true },
+    })).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(transitions).toEqual([]);
+  });
+
+  it.each(['approve', 'reject', 'cancel'] as const)('refuses subjectless requester-only %s on Alice ordinary Run approval', async decision => {
+    const actionId = 'execution.run.permission.respond';
+    const input = { runId: 'alice-run', requestId: 'alice-permission', approved: true };
+    const source = sharedRequesterContext(actionId, input);
+    const ownerSource = { ...source, actionRequestAttributionV1: { ...source.actionRequestAttributionV1!,
+      requestRef: 'alice-input', requester: { serverId: 'server-1', accountId: 'alice' } } };
+    let row: ApprovalRequestV2 | null = null;
+    const effects: ActionExecutorContext[] = [];
+    const executor = createExecutor({
+      approvalsCreate: async ({ request }) => { row = ApprovalRequestV2Schema.parse(request); return { artifactId: 'alice-own-run' }; },
+      approvalsGet: async () => row,
+      approvalsUpdate: async ({ request }) => {
+        if (!row) throw new Error('Missing approval');
+        const transition = decideApprovalRequestTransition(row, request);
+        if (!transition.ok) return transition;
+        row = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      executionRunPermissionRespond: async (_input, context) => { effects.push(context); return { ok: true }; },
+    });
+    expect(await executor.execute(actionId, input, ownerSource))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'alice-own-run' } });
+    expect(row).not.toHaveProperty('requesterConfirmation');
+    expect(await executor.execute('approval.request.decide', { artifactId: 'alice-own-run', decision }, {
+      surface: 'rpc', authority: 'present_user', runtimeAccountId: 'alice', requesterApprovalDecision: { sessionId: 's1',
+        actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true },
+    })).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(row).toMatchObject({ status: 'open' });
+    expect(effects).toEqual([]);
+    // Alice's own Account-person proof remains sufficient for the same row.
+    expect(await executor.execute('approval.request.decide', { artifactId: 'alice-own-run', decision }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: 'alice',
+      serverId: 'server-1', serverIdentityId: 'stable-home',
+    })).toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'executed' : decision === 'reject' ? 'rejected' : 'canceled' } });
+    expect(effects).toHaveLength(decision === 'approve' ? 1 : 0);
+  });
+
+  it.each(['owner', 'requester', 'recovery', 'shared-owner', 'shared-recovery'] as const)('refuses subjectless retained unknown/shared V2 (%s)', async route => {
+    const recovery = route.endsWith('recovery');
+    const actionId = route === 'requester' ? 'execution.run.permission.respond' : 'session.message.send';
+    const input = route === 'requester' ? { runId: 'alice-run', requestId: 'alice-permission', approved: true }
+      : { sessionId: 's1', message: 'hello' };
+    const source = sharedRequesterContext(actionId, input);
+    const context = { ...source, actionRequestAttributionV1: { ...source.actionRequestAttributionV1!,
+      requester: route.startsWith('shared-') ? source.actionRequestAttributionV1!.requester : null } };
+    const origin = buildApprovalExecutionOriginV1({ actionId, input, context, targetSessionId: 's1' });
+    if (!origin?.externalActionExecutionAuthorization || !origin.target || !origin.externalActionInputSignature) {
+      throw new Error('Missing signed historical origin');
+    }
+    expect(verifyExternalActionApprovalInputV1({ authorizationToken: origin.externalActionExecutionAuthorization.token,
+      actionId, target: origin.target, input, signature: origin.externalActionInputSignature,
+      publicKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(39)).publicKey })).toBe(true);
+    let row = ApprovalRequestV2Schema.parse({ ...createApprovalRequest(recovery ? 'approved' : 'open'),
+      actionId, requestedSurface: 'agent', actionArgs: input, executionOriginV1: origin });
+    const effects: ActionExecutorContext[] = [];
+    const executor = createExecutor({ approvalsGet: async () => row, approvalsUpdate: async ({ request }) => {
+      const transition = decideApprovalRequestTransition(row, request);
+      if (!transition.ok) return transition;
+      row = ApprovalRequestV2Schema.parse(request);
+      return { ok: true };
+    }, sessionSendMessage: async ({ context }) => { effects.push(context); return { status: 'accepted', localId: 'retained-unknown' }; },
+    executionRunPermissionRespond: async (_input, context) => { effects.push(context); return { ok: true }; } });
+    const decisionContext: ActionExecutorContext = { surface: route === 'requester' ? 'rpc' : 'ui', authority: 'present_user',
+      actionCaller: { kind: 'host' }, serverId: 'server-1', serverIdentityId: 'stable-home', runtimeAccountId: 'alice',
+      ...(route === 'requester' ? { requesterApprovalDecision: { sessionId: 's1',
+        actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true } } : {}) };
+    const result = recovery
+      ? await executor.replayApprovedApprovalRequest({ artifactId: 'retained-unknown', callerAuthority: 'present_user',
+        currentAccount: { accountId: 'alice', serverId: 'server-1', serverIdentityId: 'stable-home' } })
+      : await executor.execute('approval.request.decide', { artifactId: 'retained-unknown', decision: 'approve' }, decisionContext);
+    expect(result).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(effects).toEqual([]);
+    expect(row.status).toBe(recovery ? 'approved' : 'open');
+    // Refusing new execution must not erase a settled historical receipt.
+    row = ApprovalRequestV2Schema.parse({ ...row, ...createApprovalRequest('executed'),
+      actionId, requestedSurface: 'agent', actionArgs: input, executionOriginV1: origin });
+    expect(await executor.replayApprovedApprovalRequest({ artifactId: 'retained-unknown', callerAuthority: 'present_user',
+      currentAccount: { accountId: 'alice', serverId: 'server-1', serverIdentityId: 'stable-home' } }))
+      .toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(effects).toEqual([]);
+  });
+
   it.each(['policy', 'explicit'] as const)('refuses unknown requester %s consent without falling back to the Bot owner', async route => {
     const requests: ApprovalRequest[] = [];
     const effects: ActionExecutorContext[] = [];

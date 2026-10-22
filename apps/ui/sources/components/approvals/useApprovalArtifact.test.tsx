@@ -433,6 +433,38 @@ describe('useApprovalArtifact', () => {
         expect(hook.getCurrent().error).toBe(false);
     });
 
+    it('observes a committed terminal receipt on an open active-Home detail without reopening or polling', async () => {
+        const serverId = await addHome(null);
+        const artifactId = await openPresentUserApproval(serverId);
+        const hook = await renderReader(artifactId, null);
+        await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('open'));
+        const { encodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadata } = await import('@/sync/domains/artifacts/accountArtifactEnvelope');
+        const stored = harness.artifacts(serverId).read(artifactId);
+        if (!stored || stored.bodyVersion === undefined) throw new Error('Expected a stored approval body revision');
+        const request = ApprovalRequestV2Schema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(artifactId)!));
+        // Persistence is the boundary: another process commits a schema-admitted
+        // terminal receipt; this reader receives only the existing content-free wake.
+        const terminal = ApprovalRequestV2Schema.parse({ ...request, status: 'executed', updatedAtMs: 5,
+            decision: { kind: 'approve', decidedAtMs: 2 }, execution: { ok: true, executedAtMs: 5, result: {} } });
+        const provenance = await openArtifactPrivateRevisionMetadata({ mode: 'plain', artifactId,
+            bodyVersion: stored.bodyVersion, provenance: stored.provenance });
+        harness.artifacts(serverId).replaceStoredRow({ ...stored,
+            header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(terminal)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(terminal) }),
+            provenance: provenance ? await sealArtifactPrivateRevisionMetadata({ mode: 'plain', artifactId,
+                bodyVersion: stored.bodyVersion + 1, provenance }) : null,
+            headerVersion: stored.headerVersion + 1, bodyVersion: stored.bodyVersion + 1, updatedAt: stored.updatedAt + 1 });
+        try {
+            await act(async () => { publishHomeAccountChange(serverId, [artifactId], { changeKinds: ['artifact'] }); });
+            await settle(hook, artifactId, state => {
+                expect(state.artifact?.header?.approvalStatus).toBe('executed');
+                expect(ApprovalRequestV2Schema.parse(JSON.parse(state.artifact!.body as string)).execution?.ok).toBe(true);
+            });
+        } finally { await hook.unmount(); }
+    });
+
     it('resolves a portable Home identity to this device local profile before its first body fetch', async () => {
         const serverId = await addHome(HOME_IDENTITY);
         const request = homeSignedRequest(serverId, HOME_IDENTITY);

@@ -59,12 +59,21 @@ export function applyReachRulesChangeV1(rules: ReachRulesV1, change: ReachRulesC
 }
 
 export function resolveCreateReachV1(input: Readonly<{ kind: 'skill' | 'mcp_server';
-  caller: Readonly<{ surface: ActionExecutorContext['surface'] | null; sessionId?: string }>;
+  caller: Readonly<{ surface: ActionExecutorContext['surface'] | null; sessionId?: string;
+    approvedActionReplay?: ActionExecutorContext['approvedActionReplay'] }>;
   requested?: ReachRulesChangeV1; ctx: ReachRulesWriteContextV1 }>):
   Readonly<{ ok: true; rules: ReachRuleV1[]; includeInSessionId: string | null }> | Readonly<{ ok: false; code: 'where_needs_rules_action' }> {
-  if (input.kind === 'skill' && isAgentOrUnresolvedSurface(input.caller)) {
-    if (input.requested) return { ok: false, code: 'where_needs_rules_action' };
-    return { ok: true, rules: [], includeInSessionId: input.caller.sessionId ?? null };
+  if (input.kind === 'skill') {
+    // Approval changes who may execute, not who originated an omitted default.
+    // An explicit human-approved where remains the deciding intent.
+    const origin = input.caller.approvedActionReplay?.origin;
+    if (input.requested) {
+      if (isAgentOrUnresolvedSurface(input.caller)) return { ok: false, code: 'where_needs_rules_action' };
+    } else if (origin ? origin.caller.kind === 'session' || isAgentOrUnresolvedSurface(origin) : isAgentOrUnresolvedSurface(input.caller)) {
+      return { ok: true, rules: [], includeInSessionId: origin
+        ? origin.caller.kind === 'session' ? origin.caller.sessionId : origin.sessionId ?? null
+        : input.caller.sessionId ?? null };
+    }
   }
   return { ok: true, rules: applyReachRulesChangeV1([], input.requested ?? DEFAULT_CREATE_REACH_CHANGE_V1, input.ctx), includeInSessionId: null };
 }

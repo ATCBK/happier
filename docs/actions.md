@@ -775,8 +775,13 @@ land while its Machine is offline. Its spec declares a reversible direct
 present-user UI effect; Agent, CLI and MCP callers ask by default through the
 existing deferred approval owner. Optional `reason` is a review operand and
 does not change the effect. Undo sends the returned previous override through
-the same Action. Agent-created skills use that same Session include writer;
-widening their reach is a separate rules Action. The former MCP-only Session
+the same Action. Agent-created skills use that same Session include writer.
+In 0.3 development source, approval replay keeps the original caller projection
+on its host-only replay reference: an omitted skill reach defaults to the creating
+Session even when another device approves. Execution authority stays with the
+approving person, and an explicit approved `where` wins. A person's focused
+Session alone does not change the Everywhere default. Direct Agent widening
+still uses a separate rules Action. The former MCP-only Session
 write Action and UI metadata publisher are retired in place.
 
 For attached Runs, `execution_run_child_choice_required` carries a strict
@@ -4459,6 +4464,13 @@ it in `modelSelection.ref.modelId`, with the selected Agent target key,
 Account profile ids belong in `connectedServices`, not the Provider connection
 field. Execution Runs accept that native model string directly as `modelId`.
 
+Session-scoped native hosts send Agent-start Actions through their existing
+credentialed daemon channel, as Session spawn already does. The shared admission
+owner resolves Account catalogs and Role policy before dispatching an attached
+Run to its bound Session RPC. An unavailable host start context returns the
+content-free `details.issues` path `host`; Run refusals retain their authoritative
+creation certainty through the existing failure projector.
+
 For an Agent Session's `session.spawn_new`, omitted `connectedServices` inherits
 the parent selection when the resolved child Agent is the same. An explicit
 binding object overrides it; `{v:2,bindingsByServiceId:{}}` selects native
@@ -4498,6 +4510,9 @@ existing Session-to-daemon Action channel for Agent inventory reads. Session and
 directory, profile, Connected Account and runtime descriptor context as model
 lookup. Unscoped local discovery retains its existing local probe and metadata
 behavior; it does not replace an unavailable selected-Machine observation.
+For `execution.run.start` options, an omitted Machine uses the calling Session's
+Machine. An explicit `draftInput.machineId` still takes precedence; Session spawn
+continues to use its authored `executionTarget.machineId`.
 
 For execution Run model/config/Connected option lookup, set
 `draftInput.backendTargetKey` to the selected backend choice's string `value`;

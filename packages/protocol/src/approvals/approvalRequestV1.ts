@@ -17,7 +17,7 @@ import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
 import { computeActionInputApprovalDigestV1, isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
 import type { ActionId } from '../actions/actionIds.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
-import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
+import { ActionRequestAttributionV1Schema, isSharedRequesterActionV1 } from '../actions/actionRequestAttributionV1.js';
 import { ActionOperationCredentialUseV1Schema } from '../actions/actionExecutionResult.js';
 import { SessionMessageRefV1Schema } from '../sessions/messages/sessionMessageRefV1.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
@@ -422,23 +422,40 @@ export function isApprovalRequesterConfirmationBoundToOriginV1(
 /** Admission only: execution still rechecks its existing signed origin/currentness owner. */
 export async function admitApprovalRequesterDecisionV1(params: Readonly<{
   request: Readonly<{ requesterConfirmation?: ApprovalRequesterConfirmationV1;
-    executionOriginV1?: ApprovalExecutionOriginV1; actionId: ActionId; actionArgs: unknown; status: string }>;
+    executionOriginV1?: ApprovalExecutionOriginV1; actionId: ApprovalRequestV1['actionId']; actionArgs: unknown; status: string }>;
   context: ActionExecutorContext;
 }>): Promise<Readonly<{ ok: true }> | Readonly<{
-  ok: false; errorCode: 'present_user_required' | 'approval_stale'; error: 'present_user_required' | 'approval_stale';
+  ok: false; errorCode: 'present_user_required' | 'approval_stale' | 'approval_requester_unavailable';
+  error: 'present_user_required' | 'approval_stale' | 'approval_requester_unavailable';
 }>> {
   const { request, context } = params;
   const subject = request.requesterConfirmation;
-  if (!subject) return { ok: true };
+  if (!subject) {
+    const origin = request.executionOriginV1;
+    // Session-only proof cannot authorize an ordinary Account-owned request.
+    // Retained shared/unknown requests cannot infer a replacement approver;
+    // attribution-absent history and settled observation retain their custody.
+    if (context.requesterApprovalDecision
+      || !['executed', 'failed', 'rejected', 'canceled'].includes(request.status)
+        && origin?.actionRequestAttributionV1
+        && (!origin.accountId || isSharedRequesterActionV1({
+          actionRequestAttributionV1: origin.actionRequestAttributionV1, runtimeAccountId: origin.accountId,
+        }))) {
+      return { ok: false, errorCode: 'approval_requester_unavailable', error: 'approval_requester_unavailable' };
+    }
+    return { ok: true };
+  }
   const proof = context.requesterApprovalDecision;
   if (context.authority !== 'present_user' || !proof || proof.actor.kind !== 'accountUser'
     || proof.actor.accountId !== subject.requesterAccountId || proof.sessionId !== subject.personaSessionRef.sessionId) {
     return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
   }
+  const actionId = ActionIdSchema.safeParse(request.actionId);
   if (!request.executionOriginV1 || !isApprovalRequesterConfirmationBoundToOriginV1(subject, request.executionOriginV1)
+    || !actionId.success
     || context.runtimeAccountId !== undefined && context.runtimeAccountId !== subject.executionAccountId
     || !['executed', 'failed', 'rejected', 'canceled'].includes(request.status)
-      && computeActionInputApprovalDigestV1(request.actionId, request.actionArgs) !== subject.inputDigest
+      && computeActionInputApprovalDigestV1(actionId.data, request.actionArgs) !== subject.inputDigest
     || context.signal?.aborted || !await proof.isCurrent().catch(() => false) || context.signal?.aborted) {
     return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
   }

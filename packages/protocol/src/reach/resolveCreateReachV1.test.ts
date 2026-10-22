@@ -16,4 +16,23 @@ describe('resolveCreateReachV1', () => {
     expect(resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'agent', sessionId: 's' }, ctx })).toMatchObject({ ok: true, rules: [{ id: 'rule', enabled: true }], includeInSessionId: null });
     expect(resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'rpc' }, ctx })).toEqual(resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'rpc' }, ctx }));
   });
+  it('uses approved Session origin only for omitted skill defaults, preserving explicit reach and MCP defaults', () => {
+    const caller = { surface: 'ui' as const, sessionId: 'focused-session', approvedActionReplay: {
+      artifactId: 'approval', origin: { surface: 'agent' as const,
+        caller: { kind: 'session' as const, sessionId: 'creating-session', starterDepth: 0, turnDepth: 0 } },
+    } };
+    expect(resolveCreateReachV1({ kind: 'skill', caller, ctx })).toEqual({ ok: true, rules: [], includeInSessionId: 'creating-session' });
+    const requested = { kind: 'write', write: { place: { t: 'machine', machineId: 'chosen' }, state: 'on' } } as const;
+    expect(resolveCreateReachV1({ kind: 'skill', caller, requested, ctx })).toMatchObject({ ok: true,
+      rules: [{ target: { t: 'machine', machineId: 'chosen' } }], includeInSessionId: null });
+    expect(resolveCreateReachV1({ kind: 'mcp_server', caller, ctx })).toMatchObject({ ok: true,
+      rules: [{ target: { t: 'allMachines' } }], includeInSessionId: null });
+  });
+  it('does not mistake present-user Session focus for Session-origin creation', () => {
+    const focused = { surface: 'ui' as const, sessionId: 'focused-session' };
+    const expected = resolveCreateReachV1({ kind: 'skill', caller: { surface: 'ui' }, ctx });
+    expect(resolveCreateReachV1({ kind: 'skill', caller: focused, ctx })).toEqual(expected);
+    expect(resolveCreateReachV1({ kind: 'skill', caller: { ...focused, approvedActionReplay: { artifactId: 'approval',
+      origin: { surface: 'ui', caller: { kind: 'host' }, sessionId: 'original-focus' } } }, ctx })).toEqual(expected);
+  });
 });

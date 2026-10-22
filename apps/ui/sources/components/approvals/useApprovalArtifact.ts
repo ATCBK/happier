@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useIsFocused } from '@react-navigation/native';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import { storage, useArtifact } from '@/sync/domains/state/storage';
+import { useArtifact } from '@/sync/domains/state/storage';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -12,7 +12,6 @@ import {
 } from '@/sync/domains/server/serverProfiles';
 import { captureActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { sync } from '@/sync/sync';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
@@ -89,18 +88,19 @@ export function useApprovalArtifact(input: Readonly<{
         } as const;
     }, [requestedServerIdentifier, serverProfilesGeneration]);
     const requestedServerIdentityId = requestedServerTarget?.serverIdentityId ?? null;
-    const serverId = requestedServerTarget?.serverId ?? null;
     const unresolvedServer = requestedServerTarget?.unresolved === true;
+    const activeScope = useActiveServerAccountScope();
+    // Fetch, retained result and receipt observation share this exact Home.
+    // An unresolved explicit link must never fall back to the active Home.
+    const serverId = unresolvedServer ? null : requestedServerTarget?.serverId ?? activeScope?.serverId ?? null;
     const { artifactId } = input;
     const focused = useIsFocused();
     const observing = focused || input.observeWhileUnfocused === true;
     const resolution = useServerCredentialAccountScopeResolution(serverId);
     const scopeMatches = input.scope === undefined || (resolution.kind === 'bound'
         && areServerAccountScopesEqual(resolution.scope, input.scope));
-    const activeScope = useActiveServerAccountScope();
-    const readHomeId = unresolvedServer ? null : serverId ?? activeScope?.serverId;
     // Mounted Action writers have no approval until requested; they need no Home health projection.
-    const relevantHomeIds = React.useMemo(() => artifactId && readHomeId ? [readHomeId] : [], [artifactId, readHomeId]);
+    const relevantHomeIds = React.useMemo(() => artifactId && serverId ? [serverId] : [], [artifactId, serverId]);
     const homeUnreachable = useFailureExplainedByUnreachableHome(relevantHomeIds);
     const local = useArtifact(artifactId ?? '');
     // Socket updates can publish the terminal header before this reader has the
@@ -115,7 +115,7 @@ export function useApprovalArtifact(input: Readonly<{
     // The local store row belongs to the active Home. An unresolvable Home is not
     // the active Home merely because it has no local profile id.
     const localMatches = scopeMatches && !unresolvedServer
-        && (!serverId || (resolution.kind === 'bound' && areServerAccountScopesEqual(activeScope, resolution.scope)));
+        && resolution.kind === 'bound' && areServerAccountScopesEqual(activeScope, resolution.scope);
     const [loaded, setLoaded] = React.useState<Readonly<{
         artifactId: string;
         serverId: string | null;
@@ -167,7 +167,7 @@ export function useApprovalArtifact(input: Readonly<{
     const invalidArtifact = fetchedInvalid;
     const refresh = React.useCallback(async () => {
         pending.current?.abort();
-        if (!artifactId || unresolvedServer || !scopeMatches || (serverId && resolution.kind !== 'bound')) {
+        if (!artifactId || !serverId || unresolvedServer || !scopeMatches || resolution.kind !== 'bound') {
             pending.current = null;
             setLoading(false);
             return;
@@ -177,19 +177,15 @@ export function useApprovalArtifact(input: Readonly<{
         setLoading(true);
         setError(false);
         try {
-            const full = serverId ? await (async () => {
+            const full = await (async () => {
                 const context = await captureActionAccountContext(serverId, controller.signal);
                 try {
                     if (resolution.kind !== 'bound' || context.accountId !== resolution.scope.accountId) return null;
                     if (input.scope && context.accountId !== input.scope.accountId) return null;
                     return await context.fetchArtifact(artifactId);
                 } finally { context.dispose(); }
-            })() : await sync.fetchArtifactWithBody(artifactId);
+            })();
             if (controller.signal.aborted) return;
-            // The unscoped singleton fetch is the existing active-Home reader.
-            // Preserve its established store update so conflict recovery and
-            // socket/local freshness continue through the one artifact owner.
-            if (!serverId && full) storage.getState().updateArtifact(full);
             const compatible = hasCompatibleApprovalArtifact(
                 full,
                 requestedServerIdentityId,
@@ -216,9 +212,11 @@ export function useApprovalArtifact(input: Readonly<{
         }
     }, [artifactId, input.scope, requestedByPortableIdentity, requestedServerIdentityId, resolution, scopeMatches, serverId, unresolvedServer]);
     React.useEffect(() => {
-        if (observing && artifactId && (serverId || (local?.body == null && local?.isDecrypted !== false))) void refresh();
+        // Binding the active Home must not create new demand for retained content,
+        // especially a locked row whose absent body is not a hydration request.
+        if (observing && artifactId && (requestedServerIdentifier || (local?.body == null && local?.isDecrypted !== false))) void refresh();
         return () => { pending.current?.abort(); };
-    }, [artifactId, observing, headerOnlyLocalUpdatedAt, refresh, serverId]);
+    }, [artifactId, observing, headerOnlyLocalUpdatedAt, refresh, requestedServerIdentifier]);
     React.useEffect(() => {
         if (!observing || !artifactId || !serverId || resolution.kind !== 'bound') return;
         // A concurrently observed Home intentionally cannot publish its Artifact

@@ -22,6 +22,7 @@ const { axiosRequest, axiosGet } = vi.hoisted(() => ({ axiosRequest: vi.fn(), ax
 vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet } }));
 
 import { createDiscussionActionDeps, createDiscussionAutonomousCheckInReader } from './discussionActionDeps';
+import { DiscussionAgentPublisherRequestV1Schema } from './discussionAgentPublisher';
 import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
@@ -856,6 +857,23 @@ describe('Home Discussion resource transport', () => {
     expect(result).toMatchObject({ message: { content, producerV1: { sessionId: 'participant-session', runId: 'run-1', toolCallId: 'tool-1' } } });
     expect(postAgentMessage.mock.calls[0]?.[0]).toMatchObject({ sessionId: 'participant-session', discussionId: 'discussion-1' });
     expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
+  });
+
+  it('keeps host-only approval defaults out of the strict Discussion publication transport', async () => {
+    let transportIssues: readonly Readonly<{ code: string; path: readonly PropertyKey[] }>[] = [];
+    const postAgentMessage: NonNullable<Parameters<typeof createDiscussionActionDeps>[0]['postAgentMessage']> = async (request, options) => {
+      const wire = DiscussionAgentPublisherRequestV1Schema.safeParse({ request, approvedActionReplay: options?.approvedActionReplay });
+      if (!wire.success) { transportIssues = wire.error.issues.map(({ code, path }) => ({ code, path })); throw new Error('Invalid private publication'); }
+      return { v: 1, ok: true, value: { message: { ...wireMessage(), content: DiscussionAgentPostRequestV1Schema.parse(request).request.content,
+        producerV1: { v: 1, kind: 'agent', sessionId: 'participant-session', runId: 'run-1', toolCallId: 'tool-1' } }, messageSeq: 1 } };
+    };
+    const result = await action({ postAgentMessage })({ actionId: 'discussion.post',
+      input: { discussionId: 'discussion-1', localId: 'post-1', content },
+      context: { serverId: 'server-1', surface: 'agent', authority: 'account_automation', defaultSessionId: 'participant-session',
+        approvedActionReplay: { artifactId: 'approval', origin: { surface: 'agent',
+          caller: { kind: 'session', sessionId: 'participant-session', starterDepth: 0, turnDepth: 0 } } } } });
+    expect(transportIssues).toEqual([]);
+    expect(result).toMatchObject({ message: { content } });
   });
 
   it('publishes an explicit MCP reply through the admitted participant transport with its exact parent', async () => {

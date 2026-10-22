@@ -863,8 +863,9 @@ export type ActionExecutorContext = Readonly<{
     decidedAtMs?: number;
   }>;
 
-  /** Host-only reference to this executing approved Session Discussion proposal. Never Action input. */
-  approvedActionReplay?: Readonly<{ artifactId: string }>;
+  /** Host-only approved proposal reference. Original caller facts supply defaults, never execution authority or policy. */
+  approvedActionReplay?: Readonly<{ artifactId: string;
+    origin?: Pick<ApprovalExecutionOriginV1, 'surface' | 'caller' | 'sessionId'> }>;
 
   /** Host-bound original Discussion obligation, including failures before any turn was accepted. */
   discussionReplyReturn?: SessionMessageDiscussionReplyReturnV1;

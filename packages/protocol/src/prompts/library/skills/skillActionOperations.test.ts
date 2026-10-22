@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
 import type { PromptLibraryArtifactStore, PromptLibraryStoredArtifact } from '../promptLibraryActionOperations.js';
 import type { SkillRulesActionPortV1 } from '../skillRulesActionsV1.js';
@@ -20,8 +20,9 @@ import retainedFrontmatter from '../../../../fixtures/0.2-retained-skill-frontma
 import { estimateTokensV1 } from '../../../capabilities/estimateTokensV1.js';
 import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
 import { listArtifactHeadersV1 } from '../../../artifacts/artifactListSelectionV1.js';
-import { createActionExecutor, type ActionExecutorContext } from '../../../actions/actionExecutor.js';
+import { buildApprovalExecutionOriginV1, createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps } from '../../../actions/actionExecutor.js';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../../../approvals/approvalRequestV1.js';
+import { createBlockingApprovalCoordinator } from '../../../actions/blockingApprovalCoordinator.js';
 
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
@@ -86,15 +87,55 @@ function harness(registry?: RegistryPorts, foundReader?: (machineId: string, pat
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it.each(['default', 'explicit', 'partial', 'include_failure'] as const)('keeps private registry install intent across the source transport: %s', async mode => {
+    const upstream = gitRegistryHarness(), h = harness(upstream.registry);
+    const input = { source: { kind: 'registry' as const, sourceId: upstream.source.id, itemId: '', version: upstream.initial },
+      ...(mode === 'explicit' ? { where: { kind: 'write' as const, write: { place: { t: 'machine' as const, machineId: 'chosen' }, state: 'on' as const } } } : {}) };
+    const origin = buildApprovalExecutionOriginV1({ actionId: 'skills.install', input, targetSessionId: 'creating-session',
+      context: { surface: 'agent', authority: 'account_automation', serverId: 'home', actionRequestId: 'private-install',
+        actionCaller: { kind: 'session', sessionId: 'creating-session', starterDepth: 0, turnDepth: 0 } } });
+    if (!origin) throw new Error('Missing canonical approval origin');
+    const local = createSkillActionExecuteV1({ store: h.store, skillRules: h.skillRules, randomId: () => 'rule',
+      readRegistrySource: async () => ({ ...upstream.source, token: { secretRef: 'private-source-key' } }),
+      readRegistryItem: upstream.registry.readRegistryItem,
+      // The private source is reachable only on the existing Node transport.
+      fetchRegistrySkillFiles: async () => { throw new Error('Private bytes unavailable on this client'); },
+      executeRegistryInstall: async request => {
+        const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await h.execute('skills.install', request, { surface: 'ui' }));
+        if (!('skillIds' in result)) throw new Error('Missing source receipt');
+        return mode === 'partial'
+          ? { ok: false as const, errorCode: 'content_write_failed', error: 'content_write_failed', details: { skillIds: result.skillIds, incomplete: [] } }
+          : { ok: true as const, result };
+      },
+      includeInSession: async (sessionId, skillId) => {
+        if (mode === 'include_failure') return { ok: false };
+        h.includes.set(sessionId, [...h.includes.get(sessionId) ?? [], skillId]); return { ok: true };
+      },
+    });
+    const output = await local('skills.install', input, { surface: 'ui', sessionId: 'focused-session',
+      approvedActionReplay: { artifactId: 'approval', origin } });
+    if (mode === 'partial') expect(output).toMatchObject({ ok: false, errorCode: 'content_write_failed', details: { skillIds: ['skill-1'], incomplete: [] } });
+    else expect(output).toMatchObject({ skillIds: ['skill-1'], includedInSessionId: mode === 'default' ? 'creating-session' : null });
+    if (mode === 'include_failure') expect(output).toMatchObject({ incomplete: [{ skillId: 'skill-1', step: 'session_include' }] });
+    expect(h.rules()).toEqual(mode === 'explicit' ? [expect.objectContaining({ target: { t: 'machine', machineId: 'chosen' }, enabled: true })] : []);
+    expect(h.includes.get('creating-session')).toEqual(mode === 'default' || mode === 'partial' ? ['skill-1'] : undefined);
+    expect(h.includes.has('focused-session')).toBe(false);
+    expect(h.creates()).toBe(1);
+  });
   it.each(['approved', 'waived', 'explicit', 'held'] as const)('keeps Session-created skills scoped through %s execution', async mode => {
     const h = harness();
+    const coordinator = createBlockingApprovalCoordinator();
+    onTestFinished(() => coordinator.dispose());
+    let waiterReady!: () => void;
+    const ready = new Promise<void>(resolve => { waiterReady = resolve; });
     let approval: ApprovalRequest | null = null;
     const contexts: ActionExecutorContext[] = [];
-    const executor = createActionExecutor({
+    const deps: ActionExecutorDeps = {
       // Independently committed Artifact/row/Session persistence are the boundaries.
       approvalsCreate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { artifactId: 'approval' }; },
       approvalsGet: async () => approval,
-      approvalsUpdate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      approvalsUpdate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request);
+        coordinator.notifyApprovalUpdated({ artifactId: 'approval', request: approval }); return { ok: true }; },
       isApprovalExecutionOriginCurrent: async () => true,
       ...(mode === 'waived' ? { isActionApprovalRequired: () => false } : {}),
       skillActionExecute: async ({ actionId, input, context }) => {
@@ -102,27 +143,36 @@ describe('skill library Actions', () => {
         return h.execute(actionId, input, { ...context, surface: context.surface ?? null,
           ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}) }, context.signal);
       },
-    });
+    };
+    const executor = createActionExecutor({ ...deps, approvalsWaitForDecision: async args => {
+      const pending = coordinator.waitForDecision(args); waiterReady();
+      const decision = await pending;
+      return { ...decision, request: ApprovalRequestV2Schema.parse(decision.request) };
+    } });
     const source = { kind: 'upload', files };
     if (mode === 'held') await h.execute('skills.install', { source }, { surface: 'ui' });
-    const proposed = await executor.execute('skills.install', { source,
+    const pending = executor.execute('skills.install', { source,
       ...(mode === 'explicit' ? { where: { kind: 'write', write: { place: { t: 'machine', machineId: 'chosen' }, state: 'on' } } } : {}),
     }, { surface: 'mcp', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_01234567890123456789012345678901', runtimeAccountId: 'account',
       defaultSessionId: 'creating-session', actionRequestId: 'create-skill',
       actionCaller: { kind: 'session', sessionId: 'creating-session', starterDepth: 0, turnDepth: 0 } });
+    void pending.catch(() => {});
     if (mode !== 'waived') {
-      expect(proposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const admission = await Promise.race([ready.then(() => 'waiting' as const), pending.then(result => result.ok ? 'completed' : result.errorCode)]);
+      expect(admission).toBe('waiting');
       expect(ApprovalRequestV2Schema.parse(approval).executionOriginV1).toMatchObject({
         caller: { kind: 'session', sessionId: 'creating-session' }, surface: 'agent',
       });
-      const decided = await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {
+      // A different device has the same durable stores, not the originating live waiter.
+      const decided = await createActionExecutor(deps).execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {
         surface: 'ui', authority: 'present_user', serverId: 'other-device-profile', serverIdentityId: 'srv_01234567890123456789012345678901', runtimeAccountId: 'account',
         defaultSessionId: 'deciding-session', actionCaller: { kind: 'host' },
       });
-      expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      expect(decided, decided.ok ? undefined : decided.errorCode).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
       // The approving person still owns execution; creation provenance grants no authority.
       expect(contexts.at(-1)).toMatchObject({ surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'other-device-profile' });
-    } else expect(proposed).toMatchObject({ ok: true, result: { skillIds: ['skill-1'], includedInSessionId: 'creating-session' } });
+      await pending;
+    } else expect(await pending).toMatchObject({ ok: true, result: { skillIds: ['skill-1'], includedInSessionId: 'creating-session' } });
     if (mode === 'explicit') {
       expect(h.rules()).toEqual([expect.objectContaining({ skillId: 'skill-1', enabled: true, target: { t: 'machine', machineId: 'chosen' } })]);
       expect(h.includes.size).toBe(0);

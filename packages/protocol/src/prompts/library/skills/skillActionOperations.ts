@@ -1,5 +1,5 @@
-import type { ActionExecutorContext } from '../../../actions/actionExecutor.js';
 import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
+import type { ActionExecuteResult } from '../../../actions/actionExecutionResult.js';
 import { resolveArtifactOrganizationHeaderV1 } from '../../../artifacts/artifactOrganizationV1.js';
 import { readArtifactFolderCatalogV1 } from '../promptFolderActionsV1.js';
 import { readPromptLibraryCatalogRecordV1 } from '../promptLibraryCatalogV1.js';
@@ -24,10 +24,10 @@ import { exportSkillBundlesAsZipV1, skillFileFromBytesV1 } from './skillZipV1.js
 import { FoundSkillBundleV1Schema, type FoundSkillBundleV1 } from './foundSkillTransferV1.js';
 import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from './firstPartySkillsV1.js';
 import { readAvailablePluginSkillItemsV1 } from './readSkillLibraryCatalog.js';
-import { SKILL_ACTION_INPUT_SCHEMAS_V1 as inputs, SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs,
+import { SKILL_ACTION_INPUT_SCHEMAS_V1 as inputs, SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, SkillInstallAcknowledgedEffectsV1Schema,
   type SkillLibraryActionIdV1, type SkillLibraryActionInputByIdV1, type SkillLibraryActionResultByIdV1, type SkillFileInputV1, type SkillInstallAcknowledgedEffectsV1 } from './skillActionSchemasV1.js';
 
-export type SkillActionCallerV1 = Readonly<{ surface: ActionExecutorContext['surface'] | null; sessionId?: string }>;
+export type SkillActionCallerV1 = Parameters<typeof resolveCreateReachV1>[0]['caller'];
 export { SkillInstallAcknowledgedEffectsV1Schema, type SkillInstallAcknowledgedEffectsV1 } from './skillActionSchemasV1.js';
 export type SkillActionPortV1 = Readonly<{
   store: PromptLibraryArtifactStore; skillRules: SkillRulesActionPortV1;
@@ -35,6 +35,10 @@ export type SkillActionPortV1 = Readonly<{
   includeInSession(sessionId: string, skillId: string, signal?: AbortSignal): Promise<Readonly<{ ok: boolean }>>;
   readRegistryItem?(pointer: RegistryItemPointerV1): Promise<RegistryItemV1>;
   readRegistrySource?(sourceId: string): Promise<RegistrySourceDescriptorV1>;
+  /** Existing private-source transport; reach and Session acknowledgements stay in this owner. */
+  executeRegistryInstall?(input: SkillLibraryActionInputByIdV1['skills.install'] & Readonly<{
+    source: Extract<SkillLibraryActionInputByIdV1['skills.install']['source'], { kind: 'registry' }>;
+  }>): Promise<ActionExecuteResult>;
   fetchRegistrySkillFiles?(pointer: RegistryItemPointerV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
   fetchLinkSkillFiles?(url: string, item: RegistryItemV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
   readLinkSkills?(url: string, ref?: RegistrySkillContentRefV1): Promise<readonly RegistryItemV1[]>;
@@ -224,7 +228,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     }
     return includeSkill(base, reach.includeInSessionId, signal);
   }
-  async function includeSkill(base: SkillLibraryActionResultByIdV1['skills.create'], sessionId: string | null, signal?: AbortSignal) {
+  async function includeSkill<T extends Readonly<{ skillId: string; includedInSessionId: string | null }>>(base: T, sessionId: string | null, signal?: AbortSignal) {
     if (sessionId) {
       try { if (!(await port.includeInSession(sessionId, base.skillId, signal)).ok) return { ...base, incomplete: 'session_include' as const }; }
       catch { return { ...base, incomplete: 'session_include' as const }; }
@@ -232,9 +236,22 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     }
     return base;
   }
+  function projectInstalledSkills(receipts: readonly Pick<SkillLibraryActionResultByIdV1['skills.create'], 'skillId' | 'includedInSessionId' | 'incomplete'>[]) {
+    const incomplete = receipts.flatMap(receipt => receipt.incomplete ? [{ skillId: receipt.skillId, step: receipt.incomplete }] : []);
+    return { skillIds: receipts.map(receipt => receipt.skillId),
+      includedInSessionId: receipts.find(receipt => receipt.includedInSessionId)?.includedInSessionId ?? null,
+      ...(incomplete.length ? { incomplete } : {}) };
+  }
+  async function includeInstalledSkills(skillIds: readonly string[], sessionId: string, signal?: AbortSignal) {
+    const receipts = [];
+    for (const skillId of skillIds) receipts.push(await includeSkill({ skillId, includedInSessionId: null as string | null }, sessionId, signal));
+    return projectInstalledSkills(receipts);
+  }
   async function createMany(items: readonly Readonly<{ files: readonly SkillFileInputV1[]; provenance: SkillProvenanceV1; inLibrary?: string; sourceFolderName?: string }>[],
     caller: SkillActionCallerV1, where: SkillLibraryActionInputByIdV1['skills.create']['where'], signal?: AbortSignal,
     held?: Awaited<ReturnType<typeof heldSkills>>) {
+    const reach = resolveCreateReachV1({ kind: 'skill', caller, requested: where, ctx: { nowMs: nowMs(), newId: port.randomId } });
+    if (!reach.ok) return reach;
     const receipts: SkillLibraryActionResultByIdV1['skills.create'][] = [];
     for (const item of items) {
       try {
@@ -243,8 +260,8 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
         const existingId = item.inLibrary ?? (held && identity ? findHeldSkillV1(held, identity)?.skillId : undefined);
         if (existingId && receipts.some(receipt => receipt.skillId === existingId)) continue;
         const receipt = existingId
-          ? await includeSkill({ ok: true, skillId: existingId, revision: (await read(existingId, signal)).revision,
-            includedInSessionId: null }, caller.surface === 'agent' ? caller.sessionId ?? null : null, signal)
+          ? await includeSkill({ ok: true as const, skillId: existingId, revision: (await read(existingId, signal)).revision,
+            includedInSessionId: null }, reach.includeInSessionId, signal)
           : await create(item.files, item.provenance, caller, where, signal, item.sourceFolderName);
         if (!receipt.ok) return receipt;
         receipts.push(receipt);
@@ -261,10 +278,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
         return { ok: false, errorCode: code, error: code, details };
       }
     }
-    const incomplete = receipts.flatMap(receipt => receipt.incomplete ? [{ skillId: receipt.skillId, step: receipt.incomplete }] : []);
-    return { skillIds: receipts.map(receipt => receipt.skillId),
-      includedInSessionId: receipts.find(receipt => receipt.includedInSessionId)?.includedInSessionId ?? null,
-      ...(incomplete.length ? { incomplete } : {}) };
+    return projectInstalledSkills(receipts);
   }
   async function readFound(machineId: string, path: string, signal?: AbortSignal) {
     if (!port.readFoundSkillBundle) return fail('unsupported_source');
@@ -484,6 +498,23 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
           catch { result = { deleted: true, rulesLeft: true }; } break; }
         case 'skills.install': { const input = inputs[actionId].parse(raw);
           const reach = resolveCreateReachV1({ kind: 'skill', caller, requested: input.where, ctx: { nowMs: nowMs(), newId: port.randomId } }); if (!reach.ok) return reach;
+          if (input.source.kind === 'registry' && port.executeRegistryInstall && (await port.readRegistrySource?.(input.source.sourceId))?.token) {
+            // Existing where operands carry the resolved rule intent across the
+            // transport; no caller provenance or authority is added to the wire.
+            const delegated = await port.executeRegistryInstall({ ...input, source: input.source,
+              where: input.where ?? { kind: 'replace', rules: reachRulesToDraftsV1(reach.rules) } });
+            if (!delegated.ok) {
+              const effects = SkillInstallAcknowledgedEffectsV1Schema.safeParse(delegated.details);
+              if (!effects.success || !reach.includeInSessionId) return delegated;
+              const included = await includeInstalledSkills(effects.data.skillIds, reach.includeInSessionId, signal);
+              return { ...delegated, details: { ...effects.data, incomplete: [...effects.data.incomplete, ...included.incomplete ?? []] } };
+            }
+            const output = outputs[actionId].parse(delegated.result);
+            if (!('skillIds' in output) || !reach.includeInSessionId) return output;
+            const included = await includeInstalledSkills(output.skillIds, reach.includeInSessionId, signal);
+            const incomplete = [...output.incomplete ?? [], ...included.incomplete ?? []];
+            return { ...output, includedInSessionId: included.includedInSessionId, ...(incomplete.length ? { incomplete } : {}) };
+          }
           let previews: Awaited<ReturnType<typeof preview>>[];
           if (input.source.kind === 'upload') {
             const uploaded = input.source.files;

@@ -13,6 +13,34 @@ function accountApproval() {
 }
 
 describe('target Action approval decision custody', () => {
+  it.each(['approve', 'reject', 'cancel'] as const)('refuses subjectless requester-only contributed %s before consent', async decision => {
+    let stored = accountApproval();
+    const decide = createTargetActionApprovalDecision({ read: async () => stored,
+      update: async ({ request }) => { stored = request; return { ok: true }; } });
+    expect(await decide({ artifactId: 'owner-only', decision, context: {
+      surface: 'rpc', authority: 'present_user', runtimeAccountId: 'alice', requesterApprovalDecision: {
+        sessionId: 's1', actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' },
+        isCurrent: async () => true,
+      },
+    } })).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(stored.status).toBe('open');
+  });
+
+  it.each(['open', 'approved'] as const)('refuses retained unknown contributed %s before execution', async status => {
+    let stored = TargetActionApprovalRequestV1Schema.parse({ ...accountApproval(), status,
+      ...(status === 'approved' ? { decision: { kind: 'approve', decidedAtMs: 2 } } : {}),
+      executionOriginV1: { v: 1, actionId: 'action.invoke', requestId: 'retained', authority: 'account_automation',
+        surface: 'agent', caller: { kind: 'host' }, serverId: 'home', accountId: 'alice', machineId: 'machine',
+        actionRequestAttributionV1: { requestRef: 'unknown', requester: null,
+          persona: { serverId: 'home', sessionId: 's1' }, origin: null } } });
+    const decide = createTargetActionApprovalDecision({ read: async () => stored,
+      update: async ({ request }) => { stored = request; return { ok: true }; } });
+    expect(await decide({ artifactId: 'unknown', decision: 'approve', context: {
+      surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+    } })).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(stored.status).toBe(status);
+  });
+
   it.each([false, true])('settles an unclaimed approved target Action without racing execution (claim wins: %s)', async claimWins => {
     let stored = TargetActionApprovalRequestV1Schema.parse({ ...accountApproval(), status: 'approved',
       decision: { kind: 'approve', decidedAtMs: 2 } });

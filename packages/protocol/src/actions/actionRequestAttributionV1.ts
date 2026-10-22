@@ -17,6 +17,15 @@ export const ActionRequestAttributionV1Schema = lazyZodSchema(() => z.strictObje
 }));
 export type ActionRequestAttributionV1 = Readonly<z.infer<typeof ActionRequestAttributionV1Schema>>;
 
+/** Host attribution identifies the cause, not authority. Unknown people never become the Bot owner. */
+export function isSharedRequesterActionV1(context: Readonly<{
+  actionRequestAttributionV1?: ActionRequestAttributionV1; runtimeAccountId?: string;
+}>): boolean {
+  const cause = context.actionRequestAttributionV1;
+  return Boolean(cause && context.runtimeAccountId
+    && (!cause.requester || cause.requester.accountId !== context.runtimeAccountId));
+}
+
 /** Copy at a custody boundary so later queued inputs cannot rewrite an earlier cause. */
 export function materializeActionRequestAttributionV1(value: unknown): ActionRequestAttributionV1 {
   const result = ActionRequestAttributionV1Schema.parse(value);

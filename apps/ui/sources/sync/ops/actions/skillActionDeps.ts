@@ -1,4 +1,4 @@
-import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { createSkillActionExecuteV1, type SkillActionPortV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import type { PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -32,10 +32,7 @@ export function createUiSkillActionExecuteV1(account: LazyActionAccountContext, 
         if (!store.organization) throw new Error('skill_catalog_unavailable');
         const registry = await createUiRegistryHostV1(account, store.organization, context);
         let privateSourceId: string | undefined;
-        if (context.surface !== 'agent' && actionId === 'skills.install') {
-            const inputValue = SKILL_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
-            if (inputValue.source.kind === 'registry') privateSourceId = inputValue.source.sourceId;
-        } else if (actionId === 'skills.updates.diff' || actionId === 'skills.updates.apply') {
+        if (actionId === 'skills.updates.diff' || actionId === 'skills.updates.apply') {
             const inputValue = SKILL_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
             const artifact = await store.read(inputValue.skillId, { signal: context.signal });
             const provenance = artifact ? readSkillLockV1(artifact.header).provenance : undefined;
@@ -51,10 +48,9 @@ export function createUiSkillActionExecuteV1(account: LazyActionAccountContext, 
                 return result;
             }
             const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result);
-            if (actionId === 'skills.updates.diff' || actionId === 'skills.install' && 'items' in output) {
+            if (actionId === 'skills.updates.diff') {
                 account.assertCurrent(); context.signal?.throwIfAborted();
             }
-            if (actionId === 'skills.install' && 'skillIds' in output) await refreshUiSkillActionAcknowledgements(account, output.skillIds);
             if (actionId === 'skills.updates.apply') await refreshUiSkillActionAcknowledgements(account, [SKILL_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input).skillId]);
             return output;
         }
@@ -69,10 +65,23 @@ export function createUiSkillActionExecuteV1(account: LazyActionAccountContext, 
             readPluginSkills: async (signal, skillIds) => Promise.all([...new Set(skillIds ?? [])].filter(isPluginSkillIdV1)
                 .map(skillId => readUiPluginSkillBundleV1(account, skillId, { ...context, signal: signal ?? context.signal }))),
             readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
+            ...(context.surface !== 'agent' ? { executeRegistryInstall: async (request: Parameters<NonNullable<SkillActionPortV1['executeRegistryInstall']>>[0]) => {
+                const result = await registry.executeActionForSource(request.source.sourceId, 'skills.install', request);
+                if (!result.ok) {
+                    const effects = SkillInstallAcknowledgedEffectsV1Schema.safeParse(result.details);
+                    if (effects.success) await refreshUiSkillActionAcknowledgements(account, effects.data.skillIds);
+                } else {
+                    const installed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(result.result);
+                    if ('skillIds' in installed) await refreshUiSkillActionAcknowledgements(account, installed.skillIds);
+                    else { account.assertCurrent(); context.signal?.throwIfAborted(); }
+                }
+                return result;
+            } } : {}),
             fetchRegistrySkillFiles: registry.filesForPointer,
             readLinkSkills: registry.readLinkSkills, fetchLinkSkillFiles: registry.fetchLinkSkillFiles,
             randomId: randomUUID,
         })(actionId, input, { surface: context.surface ?? null,
+            ...(context.approvedActionReplay ? { approvedActionReplay: context.approvedActionReplay } : {}),
             ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}) }, context.signal);
         if (actionId === 'skills.list') {
             const local = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].safeParse(output);
