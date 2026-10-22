@@ -67,7 +67,12 @@ line; the detail header's speak decision; the blocking notice; the `Collection` 
 Plugin UI `presentation/capabilities/**`. Happier's Skills, MCP and Agents surfaces bind their words and
 primitives to it, and plugins reach it through the public `components` adapters (`CapabilityStatusChip`,
 `CapabilityFacts`, `CapabilityDetailHeader`, `CapabilityBlockingBanner`, `capabilityCollectionAnatomy`).
-The Where-it's-on control, the catalog Add dialog and the reach map remain host-only.
+The Where-it's-on control (its sentence, rule rows, add menu, consequence and words) is also composed by
+Plugin UI `presentation/capabilities/**` (`HappierWhereItsOnControl`, `sayHappierWhereItsOn`); Happier binds
+its words, settings primitives, Agent marks and the protocol reach rule engine
+(`whereItsOnReach` over `reachRulesChangeV1`) in `components/capabilities/where/**`. It has no public
+`components` adapter yet: plugins have no public reach rule engine (grouping, precedence, writes), and
+publishing one is an SDK decision. The catalog Add dialog and the reach map remain host-only.
 
 ## Declaration, activation and projection
 
