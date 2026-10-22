@@ -38,10 +38,6 @@ vi.mock('@/components/ui/selectionList', async (importOriginal) => {
     };
 });
 
-vi.mock('@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName', () => ({
-    resolveConnectedServiceDisplayName: (id: string) => id,
-}));
-
 vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
     normalizeNodeForView: (node: React.ReactNode) => node,
 }));
@@ -68,7 +64,7 @@ describe('NewSessionConnectedServicesSelectionContent on a Team route', () => {
                 appliedRoute={appliedRoute}
                 teamCredentialResources={[{
                     id: 'resource-1', teamId: 'team-1', displayName: 'QA43 Leeroy brokered', resourceRevision: 1,
-                    readiness: { kind: 'available' }, recoveryAction: null, deliveryMode: 'brokered',
+                    readiness: { kind: 'available' }, recoveryAction: null,
                     mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
                     sessionUsePolicy: 'personal_allowed', providerModels: [],
                     sourcePresentation: { kind: 'connected_service', service: SERVICE },
