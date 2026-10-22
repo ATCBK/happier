@@ -181,7 +181,7 @@ describe('session route index', () => {
         expect(screen.findAllByType(ActivitySpinner).length).toBeGreaterThan(0);
         const sessionView = screen.findByType(SessionView);
         expect(sessionView.props.routeHydrationState).toEqual({
-            kind: 'retrying', sessionId: 'session-1', serverId: runtime.serverId, cause: 'network',
+            kind: 'retrying', sessionId: 'session-1', serverId: runtime.serverId, cause: 'unknown',
         });
     });
 
@@ -248,8 +248,11 @@ describe('session route index', () => {
         expect(cockpit.props.scopeId).toBe('session:address:' + runtime.serverId + ':session-1');
         expect(cockpit.props.surface).toBe('git');
         expect(cockpit.props.routeServerId).toBe(runtime.serverId);
-        // The classic SessionView cannot be mounted under a non-chat cockpit surface.
-        expect(screen.findAllByType(SessionView)).toHaveLength(0);
+        // A non-chat cockpit surface is hosted inside the one Session chrome: the SessionView mounts
+        // with that surface as its content instead of the transcript.
+        const hosts = screen.findAllByType(SessionView);
+        expect(hosts).toHaveLength(1);
+        expect(hosts[0]?.props.contentOverride).toBeTruthy();
     });
 
     it('keeps the cockpit terminal surface when the viewed session server enables terminal', async () => {

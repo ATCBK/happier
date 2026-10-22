@@ -313,7 +313,8 @@ describe('machine picker server scope', () => {
         await renderPicker();
         expect(content().groups).toEqual(expect.arrayContaining([expect.objectContaining({ serverId: homeA })]));
         await vi.waitFor(() => expect(content().poolGroups).toEqual(expect.arrayContaining([expect.objectContaining({ serverId: homeA })])));
-        expect(content().groups?.map(group => group.serverId)).toEqual([homeA]);
+        // The default scope is "All Homes" over every Home this device can use.
+        expect(content().groups?.map(group => group.serverId)).toEqual([homeA, homeB, homeC]);
     });
 
     it('renders grouped selector when target is a group with multiple servers', async () => {
@@ -324,7 +325,7 @@ describe('machine picker server scope', () => {
         expect(content().onSelectScopedMachine).toEqual(expect.any(Function));
     });
 
-    it('tracks active server snapshot changes so machine scope does not stay on a stale server', async () => {
+    it('keeps the captured destination Home while the active Home changes within the allowed Homes', async () => {
         navigation.params = { selectedId: '' };
         await view(null);
         await account.publishMachines(savedHomeB, [machine('machine-b')]);
@@ -332,6 +333,10 @@ describe('machine picker server scope', () => {
         expect(content().selectedServerId).toBe(homeA);
         await act(async () => { await profiles.setActiveServerId(homeB, { scope: 'tab' }); });
         expect(profiles.getActiveServerSnapshot().serverId).toBe(homeB);
-        await vi.waitFor(() => expect(content().selectedServerId).toBe(homeB));
+        // An unpersisted authoring destination is not moved by an unrelated active-Home switch,
+        // and every allowed Home stays offered.
+        await act(async () => {});
+        expect(content().selectedServerId).toBe(homeA);
+        expect(content().groups?.map(group => group.serverId)).toEqual(expect.arrayContaining([homeA, homeB, homeC]));
     });
 });

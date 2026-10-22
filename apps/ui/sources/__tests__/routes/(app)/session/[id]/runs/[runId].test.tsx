@@ -49,12 +49,18 @@ function runFixture(overrides: Partial<ExecutionRunPublicState> = {}) {
         ...(overrides.status === 'running' ? {} : { finishedAtMs: 2 }), ...overrides,
     });
 }
+const { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+const runMachine = createPlainMachineRowFixture({ id: 'machine-target', accountId: 'account-a' });
 const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
 const runtime = installSessionPaneRuntimeTestHarness({
     sessionId: 'session-1',
     credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
     request: async (input, init) => {
         const path = new URL(String(input)).pathname;
+        // The Run's host is the Account's explicitly admitted daemon Machine.
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            return createMachineReadBatchResponseFixture(init.body, id => id === runMachine.id ? runMachine : null);
+        }
         if (path === '/v2/sessions/session-1' && !hydrateReady) {
             return new Promise<Response>(resolve => {
                 const release = () => { pendingHydrationReads.delete(release); resolve(Response.json({ error: 'Session not found' }, { status: 404 })); };
