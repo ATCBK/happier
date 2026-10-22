@@ -56,6 +56,28 @@ describe('SessionListIdentity', () => {
         expect(screen.tree.root.findAllByType('Avatar')).toHaveLength(0);
     });
 
+    it('dims the provider logo for a session that is not live, as the avatar is greyed', async () => {
+        const { lightTheme } = await import('@/theme');
+        const { SessionListIdentity } = await import('./SessionListIdentity');
+        const render = (session: ReturnType<typeof createSessionFixture>, connected: boolean) => renderScreen(
+            <SessionListIdentity
+                session={session}
+                display="agentLogo"
+                serverId="server-a"
+                color={lightTheme.colors.text.secondary}
+                avatarSize={28}
+                agentLogoSize={22}
+                connected={connected}
+            />,
+        );
+        const logoColor = (screen: Awaited<ReturnType<typeof render>>) =>
+            screen.tree.root.findByType(SessionAgentCatalogIdentityIcon).props.color;
+
+        expect(logoColor(await render(createSessionFixture({ active: true }), true))).toBe(lightTheme.colors.text.secondary);
+        expect(logoColor(await render(createSessionFixture({ active: false }), true))).toBe(lightTheme.colors.text.tertiary);
+        expect(logoColor(await render(createSessionFixture({ active: true }), false))).toBe(lightTheme.colors.text.tertiary);
+    });
+
     it('leaves an unresolved list-only provider to the catalog identity fallback', async () => {
         const { SessionListIdentity } = await import('./SessionListIdentity');
         const session = {

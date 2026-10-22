@@ -1,5 +1,6 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -36,7 +37,9 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
     connected: boolean;
     testID?: string;
 }>) {
+    const { theme } = useUnistyles();
     if (props.display === 'none') return null;
+    const notLive = props.session.active !== true || !props.connected;
     const metadata = 'agentState' in props.session
         ? readSessionOwnerMetadataView(props.session)
         : props.session.metadata;
@@ -49,7 +52,7 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
             <Avatar
                 id={getSessionAvatarId(props.session, props.serverId)}
                 size={props.avatarSize}
-                monochrome={props.session.active !== true || !props.connected}
+                monochrome={notLive}
                 flavor={agentId}
                 hasUnreadMessages={false}
             />
@@ -61,7 +64,9 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
             agentId={agentId ?? ''}
             machineId={metadata?.machineId ?? null}
             serverId={props.serverId}
-            color={props.color}
+            // A logo is already a single tint, so the avatar's greyscale has no effect here:
+            // a session that is not live takes the dimmer ink instead.
+            color={notLive ? theme.colors.text.tertiary : props.color}
             size={props.agentLogoSize}
             testID={props.testID}
         />
