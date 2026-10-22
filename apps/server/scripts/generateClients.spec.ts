@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 
 function extractPrismaModelBlock(schema: string, modelName: string): string {
     const modelStart = schema.indexOf(`model ${modelName} {`);
@@ -171,8 +172,9 @@ describe("areRequestedPrismaOutputsCurrent", () => {
         expect(generatedTypes).not.toContain("VoiceSessionLeaseProviderIdProviderConversationIdCompoundUniqueInput");
     });
 
-    it("returns true when the generated clients already match the requested schemas", async () => {
+    it("checks custom runtime copies as well as schemas against the installed client", async () => {
         const serverRoot = "/repo/apps/server";
+        const runtimeSourcePath = createRequire(import.meta.url).resolve("@prisma/client/runtime/library.js");
         const sharedSchema = `
             generator client {
                 provider = "prisma-client-js"
@@ -180,6 +182,9 @@ describe("areRequestedPrismaOutputsCurrent", () => {
             }
         `;
         const files = new Map<string, string>([
+            [runtimeSourcePath, "pristine-runtime"],
+            ["/repo/apps/server/generated/sqlite-client/runtime/library.js", "/* Prisma generated notice */\npristine-runtime"],
+            ["/repo/apps/server/generated/mysql-client/runtime/library.js", "/* Prisma generated notice */\npristine-runtime"],
             ["/repo/apps/server/prisma/schema.prisma", sharedSchema],
             ["/repo/node_modules/.prisma/client/schema.prisma", sharedSchema],
             ["/repo/node_modules/.prisma/client/index.js", "module.exports = {}\n"],
@@ -226,6 +231,23 @@ describe("areRequestedPrismaOutputsCurrent", () => {
         });
 
         expect(current).toBe(true);
+
+        files.set(runtimeSourcePath, "patched-runtime");
+        const check = () => areRequestedPrismaOutputsCurrent({
+            serverRoot,
+            providers: new Set(["postgres", "sqlite", "mysql"]),
+            fileExists: async path => files.has(path),
+            readText: async path => {
+                const value = files.get(path);
+                if (typeof value !== "string") throw new Error(`Unexpected file read: ${path}`);
+                return value;
+            },
+        });
+        expect(await check()).toBe(false);
+        files.set("/repo/apps/server/generated/sqlite-client/runtime/library.js", "/* Prisma generated notice */\npatched-runtime");
+        expect(await check()).toBe(false);
+        files.set("/repo/apps/server/generated/mysql-client/runtime/library.js", "/* Prisma generated notice */\npatched-runtime");
+        expect(await check()).toBe(true);
     });
 
     it("uses the source-schema generation stamp instead of Prisma's reordered generated schema text", async () => {
