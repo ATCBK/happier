@@ -164,6 +164,22 @@ export function readPostgresTransactionSqlState(error: unknown): "40001" | "40P0
     return undefined;
 }
 
+/** Emit only fixed driver failure text: wrappers and DETAIL may contain SQL or values. */
+function readContentFreeDriverErrorMessage(error: unknown): string | undefined {
+    const meta = typeof error === 'object' && error !== null && 'meta' in error ? error.meta : undefined;
+    const message = typeof meta === 'object' && meta !== null && 'message' in meta && typeof meta.message === 'string'
+        ? meta.message : errorMessage(error);
+    return [
+        'could not serialize access due to read/write dependencies among transactions',
+        'could not serialize access due to concurrent update',
+        'could not serialize access due to concurrent delete',
+        'could not serialize access due to concurrent ddl',
+        'deadlock detected',
+        'canceling statement due to lock timeout',
+        'canceling statement due to statement timeout',
+    ].find(summary => message.toLowerCase().includes(summary));
+}
+
 export function isRetryableTransactionError(params: Readonly<{ provider: string; err: unknown }>): boolean {
     // Acquisition-shaped P2028 requires callback-entry context, which only inTx owns.
     if (isTransactionAcquisitionTimeout(params.err)) return false;
@@ -518,6 +534,8 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                         module: "storage-tx", level: "warn", event: "transaction-rollback",
                         transactionClass: options?.transactionClass ?? "unspecified",
                         provider, sqlState, prismaCode, failedStatementRelation, outcome: "conflict-exhausted",
+                        driverErrorCode: sqlState,
+                        driverErrorMessage: sqlState ? readContentFreeDriverErrorMessage(e) : undefined,
                         isolationLevel: provider === "sqlite" ? undefined : options?.isolationLevel ?? "ReadCommitted",
                         readOnly: options?.readOnly === true,
                         attempts: counter + 1,

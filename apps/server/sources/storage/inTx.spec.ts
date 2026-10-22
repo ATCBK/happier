@@ -589,21 +589,32 @@ describe("inTx", () => {
     });
 
     it.each([
-        { meta: { code: "40001", modelName: "Session" }, failedStatementRelation: "Session" },
-        { meta: { code: "40001" }, failedStatementRelation: undefined },
-    ])("reports rollback transaction class and only driver-provided relation metadata (%j)", async ({ meta, failedStatementRelation }) => {
-        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        { meta: { code: "40001", modelName: "Session", message: "ERROR: could not serialize access due to read/write dependencies among transactions\nDETAIL: private query contents" },
+            failedStatementRelation: "Session", driverMessage: "could not serialize access due to read/write dependencies among transactions" },
+        { meta: { code: "40001", message: "ERROR: could not serialize access due to concurrent update" },
+            failedStatementRelation: undefined, driverMessage: "could not serialize access due to concurrent update" },
+        { meta: { code: "40001", message: "private query contents" }, failedStatementRelation: undefined, driverMessage: undefined },
+    ])("reports rollback transaction class and content-free last driver diagnostics (%j)", async ({ meta, failedStatementRelation, driverMessage }) => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
         const failure = new PrismaClientKnownRequestError("private query contents", {
             code: "P2010", clientVersion: "6.19.2", meta,
         });
-        await expect(inTx(async () => { throw failure; }, { transactionClass: "pending-input-admission" }))
+        let attempts = 0;
+        await expect(inTx(async () => {
+            if (++attempts === 1) throw new PrismaClientKnownRequestError("earlier deadlock", {
+                code: "P2010", clientVersion: "6.19.2", meta: { code: "40P01", message: "deadlock detected" },
+            });
+            throw failure;
+        }, { transactionClass: "pending-input-admission" }))
             .rejects.toMatchObject({ code: "database_transaction_conflict_exhausted" });
         const diagnostic = logMock.mock.calls.find(([context]) => context.module === "storage-tx" && context.event === "transaction-rollback");
         expect(diagnostic).toBeDefined();
         expect(diagnostic![0]).toMatchObject({
-            transactionClass: "pending-input-admission", provider: "postgres", sqlState: "40001", outcome: "conflict-exhausted",
+            transactionClass: "pending-input-admission", provider: "postgres", sqlState: "40001", outcome: "conflict-exhausted", attempts: 2,
         });
         expect(diagnostic![0].failedStatementRelation).toBe(failedStatementRelation);
+        expect(diagnostic![0].driverErrorCode).toBe("40001");
+        expect(diagnostic![0].driverErrorMessage).toBe(driverMessage);
         expect(diagnostic![0].conflictingRelation).toBeUndefined();
         expect(JSON.stringify(diagnostic)).not.toContain("private query contents");
     });
