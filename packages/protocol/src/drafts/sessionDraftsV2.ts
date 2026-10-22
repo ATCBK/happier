@@ -371,6 +371,20 @@ export const SessionDraftReadResponseV2Schema = z.discriminatedUnion('status', [
 ]);
 export type SessionDraftReadResponseV2 = z.infer<typeof SessionDraftReadResponseV2Schema>;
 
+/**
+ * Client read projection of a Home response: the record envelope stays strict,
+ * while stored content drops retired fields through the persistence read owner.
+ */
+const SessionDraftRecordV2StoredContentSchema = z.strictObject({
+  ...SessionDraftRecordV2Schema.shape,
+  content: z.nullable(SessionDraftStoredContentEnvelopeV2StoredSchema),
+});
+export const SessionDraftReadResponseV2StoredContentSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('present'), record: SessionDraftRecordV2StoredContentSchema }),
+  z.strictObject({ status: z.literal('deleted'), record: SessionDraftRecordV2StoredContentSchema }),
+  z.strictObject({ status: z.literal('absent') }),
+]);
+
 export const SessionDraftAddressKindV2Schema = z.enum([
   'newSession',
   'session',
@@ -393,6 +407,10 @@ export const SessionDraftListResponseV2Schema = z.strictObject({
   nextAfter: z.optional(CanonicalSessionDraftAddressV2Schema),
 });
 export type SessionDraftListResponseV2 = z.infer<typeof SessionDraftListResponseV2Schema>;
+export const SessionDraftListResponseV2StoredContentSchema = z.strictObject({
+  items: z.array(SessionDraftRecordV2StoredContentSchema),
+  nextAfter: z.optional(CanonicalSessionDraftAddressV2Schema),
+});
 
 export const SessionDraftMutateRequestV2Schema = z.strictObject({
   address: SessionDraftAddressV2Schema,

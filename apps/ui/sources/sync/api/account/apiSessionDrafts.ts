@@ -1,5 +1,5 @@
 import { SESSION_DRAFT_ROUTE_MUTATE, SESSION_DRAFT_ROUTE_READ, SessionDraftMutateRequestV1Schema, SessionDraftReadRequestV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
-import { SESSION_DRAFT_V2_ROUTE_LIST, SESSION_DRAFT_V2_ROUTE_MUTATE, SESSION_DRAFT_V2_ROUTE_READ, SessionDraftEpochUnavailableResponseV2Schema, SessionDraftListRequestV2Schema, SessionDraftListResponseV2Schema, SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema, SessionDraftReadRequestV2Schema, SessionDraftReadResponseV2Schema, isSessionDraftAddressV1, isSessionDraftContentV1, type SessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { SESSION_DRAFT_V2_ROUTE_LIST, SESSION_DRAFT_V2_ROUTE_MUTATE, SESSION_DRAFT_V2_ROUTE_READ, SessionDraftEpochUnavailableResponseV2Schema, SessionDraftListRequestV2Schema, SessionDraftListResponseV2StoredContentSchema, SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema, SessionDraftReadRequestV2Schema, SessionDraftReadResponseV2StoredContentSchema, isSessionDraftAddressV1, isSessionDraftContentV1, type SessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
 import type { SessionDraftRepositoryTransport } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { SessionDraftEpochUnavailableError, isSessionDraftEpochUnavailableError } from '@/sync/ops/sessionDrafts/sessionDraftEpochError';
@@ -78,14 +78,14 @@ export function createApiSessionDraftsTransport(params: Readonly<{
                     epoch: 'v1',
                 });
             }
-            const parsed = SessionDraftReadResponseV2Schema.safeParse(raw);
+            const parsed = SessionDraftReadResponseV2StoredContentSchema.safeParse(raw);
             if (!parsed.success) throw new Error('Invalid session draft response');
             return parsed.data;
         },
         list: async (request) => {
             const body = SessionDraftListRequestV2Schema.parse(request);
             const raw = await postJson({ request: params.request, path: SESSION_DRAFT_V2_ROUTE_LIST, body, epoch: 'v2' });
-            const parsed = SessionDraftListResponseV2Schema.safeParse(raw);
+            const parsed = SessionDraftListResponseV2StoredContentSchema.safeParse(raw);
             if (!parsed.success) throw new Error('Invalid session draft response');
             return parsed.data;
         },
