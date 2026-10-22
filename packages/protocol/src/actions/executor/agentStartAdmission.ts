@@ -6,6 +6,7 @@ import { admitAgentStartV1, AgentStartSessionCallerV1Schema, type AgentStartFact
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { BackendTargetKeyV2Schema, PersistedBackendTargetRefV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
 import { normalizeConnectedServiceSelectionInput } from '../../connect/normalizeConnectedServiceSelectionInput.js';
+import { projectConnectedServiceBindingsForChild } from '../../connect/connectedServiceBindings.js';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '../../providers/selection/v1.js';
 import { parseAgentPermissionIntentV1Alias } from '../../runtime/permissionIntentV1.js';
 import { AcpConfigOptionOverridesV1Schema } from '../../sessions/metadata/metadataOverridesV1.js';
@@ -471,10 +472,18 @@ export function readAgentStartTargetV1(value: unknown) {
 export function stampAgentStartSelectionV1(input: Readonly<Record<string, unknown>>, stamped: Extract<ReturnType<typeof admitAgentStartV1>, {
     ok: true;
 }>['stamped'], kind: 'spawn_new' | 'execution_run', context: AgentStartContextV1) {
-    if (!stamped.roleId || !stamped.engine)
-        return input;
     const baseline = context.caller.kind === 'session' ? context.baseline : { machineId: context.baseline.machineId, directory: context.baseline.directory };
-    return projectAgentStartSelectionV1(input, { ...stamped, engine: stamped.engine }, kind, baseline);
+    const selected = stamped.roleId && stamped.engine
+        ? projectAgentStartSelectionV1(input, { ...stamped, engine: stamped.engine }, kind, baseline)
+        : input;
+    // Freeze an omitted Session-child choice at admission, before the launch
+    // owner considers Account defaults. An explicit empty/native selection wins.
+    const parent = baseline.configuration;
+    const target = readAgentStartTargetV1(selected.agentTarget);
+    return kind === 'spawn_new' && selected.connectedServices === undefined && parent?.connectedServices !== undefined
+        && target && parent.agentTarget && buildBackendTargetKeyV2(target) === buildBackendTargetKeyV2(parent.agentTarget)
+        ? { ...selected, connectedServices: projectConnectedServiceBindingsForChild(parent.connectedServices) }
+        : selected;
 }
 export function projectAgentStartSelectionV1(input: Readonly<Record<string, unknown>>, selection: Readonly<{
     engine: RoleEngineV1;

@@ -6,6 +6,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { accountSettingsParse, normalizeActionsSettingsV1, SessionListQueryV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol';
 import { SessionForkRpcParamsSchema } from '@happier-dev/protocol/sessions/fork';
+import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
@@ -48,8 +49,15 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     starterDepth: 0, turnDepth: 0, callerPermissionMode: read ? 'read-only' : 'default', settings, roles: {} });
   if (!startContext) throw new Error('Missing canonical caller context fixture');
   const members = new Set(children);
+  const connectedServices = { v: 2 as const, bindingsByServiceId: {
+    'acme.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'self-non-default' },
+  } };
   const row = (id: string) => ({ ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const,
-    metadata: JSON.stringify({ machineId: 'read-machine', path: '/workspace' }), active: read || actionId === 'session.open',
+    metadata: JSON.stringify({ machineId: 'read-machine', path: '/workspace', ...(id === sessionId ? { connectedServices } : {}) }), active: read || actionId === 'session.open',
+    ...(id === sessionId && actionId === 'session.status.get' ? { metadataLayoutVersion: 1,
+      metadata: JSON.stringify({ v: 1 }), ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
+        workspace: { machineId: 'read-machine', path: '/workspace' }, connectedServices: { connectedServices },
+      }) } : {}),
     manager: { sessionId } });
   const command = 'node /runtime/.runner-snapshots/session-read/dist/index.mjs';
   const runner = { pid: process.pid, processStartTimeMs: 23346,
@@ -153,7 +161,8 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   try {
     await runtime.mcp.connect(serverTransport);
     await client.connect(clientTransport);
-    const targets = read ? children : ledLifecycle ? [sessionId, ...children] : [sessionId];
+    const targets = actionId === 'session.status.get' ? [sessionId, ...children]
+      : read ? children : ledLifecycle ? [sessionId, ...children] : [sessionId];
     for (const child of targets) {
       const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId, input: { sessionId: child,
@@ -165,6 +174,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       expect(result.isError, JSON.stringify({ content, forwarded, httpReads, queryRequests, boundaryFailures })).not.toBe(true);
       expect(value).toMatchObject(actionId === 'session.status.get'
         ? { ok: true, session: { id: child }, awareness: { sessionId: child },
+          ...(child === sessionId ? { connectedServices } : {}),
           readiness: { configured: true, status: 'unavailable', cause: 'machine', machine: { status: 'offline' } } }
         : actionId === 'session.messages.recent.get'
           ? { ok: true, sessionId: child, items: [{ kind: 'user_message', text: `Ready ${child}` }] }

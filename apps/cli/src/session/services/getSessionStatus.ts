@@ -4,7 +4,8 @@ import { listPendingRequests, readSharedMetadataActionConfirmationState } from '
 import { projectCliSessionAwarenessV1 } from '@/cli/output/session/sessionAwareness';
 import type { StoredCredentials } from '@/persistence';
 import { summarizeSessionRecord, type SessionSummary } from '@/cli/output/session/sessionSummary';
-import { decryptSessionPayload, readSessionPresentationContent } from '@/session/transport/encryption/sessionEncryptionContext';
+import { decryptSessionPayload, readSessionPresentationContent, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { ConnectedServiceBindingsV2IngressSchema, projectConnectedServiceBindingsForChild } from '@happier-dev/protocol/connect/connected-service-bindings';
 import {
   readLatestAgentStateSummaryViaSocket,
   summarizeAgentState,
@@ -21,6 +22,7 @@ import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protoc
 
 export type GetSessionStatusResult =
   | Readonly<{ ok: true; session: SessionSummary; agentState: AgentStateSummary | null; awareness: SessionAwarenessProjectionV1; readiness?: SessionReadinessV1;
+      connectedServices?: SessionStatusResult['connectedServices'];
       pendingRequests: SessionStatusResult['pendingRequests'] }>
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported' | 'encryption_material_unavailable'; candidates?: string[] }>;
 
@@ -140,8 +142,13 @@ export async function getSessionStatus(params: Readonly<{
     tool: request.tool,
   })) : null;
 
+  const ownerMetadata = tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
+    accountEncryptionMode: sessionTarget.accountEncryptionCurrentness.mode, rawSession: sessionTarget.rawSession });
+  const connectedServices = ConnectedServiceBindingsV2IngressSchema.safeParse(ownerMetadata?.connectedServices);
+
   return {
     ok: true,
+    ...(connectedServices.success ? { connectedServices: projectConnectedServiceBindingsForChild(connectedServices.data) } : {}),
     session: summarizeSessionRecord({
       credentials: params.credentials,
       accountEncryptionMode: sessionTarget.accountEncryptionCurrentness.mode,

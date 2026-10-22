@@ -1,5 +1,6 @@
 import { parseQualifiedPluginContributionKey } from '../plugins/contributionIdentity.js';
-import { BackendTargetKeyV2Schema, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
+import { projectConnectedServiceBindingsForChild } from '../connect/connectedServiceBindings.js';
+import { BackendTargetKeyV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { resolveRoleSelectionV1, type ResolveRoleSelectionV1Input, type RoleSelectionRefusalV1 } from '../prompts/roles/resolveRoleSelectionV1.js';
 import type { ResolvedRoleV1 } from '../prompts/roles/rolesV1.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
@@ -142,11 +143,6 @@ export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelecti
         throw new WorkflowStepSelectionErrorV1({ code: 'target_unavailable', reason: 'engine_unavailable', roleId: role.roleId });
       }
       selection.agentTarget = target?.kind === 'agent' ? target : { kind: 'agent', identity };
-      const defaultConnectedServices = input.roleSelection?.defaultConnectedServices;
-      if (selection.connectedServices === undefined && defaultConnectedServices !== undefined
-        && role.engine.agentTargetKey === input.roleSelection?.defaultEngine?.agentTargetKey) {
-        selection.connectedServices = defaultConnectedServices;
-      }
       if (role.engine.modelId !== undefined) {
         selection.modelSelection = {
           v: 1, updatedAt: 0,
@@ -177,6 +173,16 @@ export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelecti
     selection = { ...selection };
     delete selection.agentTarget;
     delete selection.modelSelection;
+  }
+
+  // Connected choice follows the resolved Agent, regardless of whether that
+  // Agent came from a Role, a literal engine or an input-bound engine. Freeze
+  // it here so Session and detached leaves consume the same admitted choice.
+  if (input.purpose !== 'authoring' && selection.connectedServices === undefined && selection.agentTarget
+    && input.roleSelection?.defaultConnectedServices !== undefined
+    && buildBackendTargetKeyV2(selection.agentTarget) === input.roleSelection.defaultEngine?.agentTargetKey) {
+    selection = { ...selection, connectedServices: input.roleSelection.defaultConnectedServices === null
+      ? null : projectConnectedServiceBindingsForChild(input.roleSelection.defaultConnectedServices) };
   }
 
   const runTarget = input.runExecutionTarget ?? defaultTarget;

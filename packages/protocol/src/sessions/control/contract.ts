@@ -1,5 +1,6 @@
 import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { ConnectedServiceBindingsV2Schema } from '../../connect/connectedServiceBindings.js';
 import { SessionTeamCredentialBindingIntentV1Schema } from '../../teams/credentials/sessionBindingIntentV1.js';
 import { z } from 'zod/mini';
 import { SessionManagerV1Schema, SessionManagedSessionsV1Schema } from '../follow/sessionManagerV1.js';
@@ -576,6 +577,8 @@ export type V2SessionMessageResponse = z.infer<typeof V2SessionMessageResponseSc
 
 export const SessionStatusResultSchema = lazyZodSchema(() => z.looseObject({
   session: SessionSummarySchema,
+  // Content-free Session selection; omitted when its owner metadata cannot be opened.
+  connectedServices: z.optional(ConnectedServiceBindingsV2Schema),
   readiness: z.optional(SessionReadinessV1Schema),
   awareness: z.optional(SessionAwarenessProjectionV1Schema),
   // Omitted by older readers; null means request content could not be opened.

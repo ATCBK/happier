@@ -20,7 +20,7 @@ describe('workflow step selection', () => {
     expect(() => selectionOwner.resolveWorkflowStepSelectionV1({ defaults, step, inputs: {} }))
       .toThrow(expect.objectContaining({ code: 'invalid_input' }));
   });
-  it('inherits the origin binding only for its default role engine and preserves authored binding overrides', () => {
+  it('inherits the origin binding for its Agent across role and literal engines and preserves authored overrides', () => {
     const connectedServices = { v: 2 as const, bindingsByServiceId: {
       'external.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-profile' },
     } };
@@ -38,6 +38,8 @@ describe('workflow step selection', () => {
     expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { role: 'second_opinion' } }, roleSelection }).selection.connectedServices)
       .toBeUndefined();
     expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: agent } }, roleSelection }).selection.connectedServices)
+      .toEqual(connectedServices);
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: otherAgent } }, roleSelection }).selection.connectedServices)
       .toBeUndefined();
   });
   it.each([
@@ -45,6 +47,12 @@ describe('workflow step selection', () => {
     { kind: 'agent' as const, identity: { pluginId: 'external.review', localId: 'assistant' } },
   ])('preserves the full explicit role engine target $identity.pluginId', (target) => {
     const agentTargetKey = buildBackendTargetKeyV2(target);
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'external.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'external-origin' },
+    } };
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: target } },
+      roleSelection: { defaultEngine: { agentTargetKey }, defaultConnectedServices: connectedServices } }).selection.connectedServices)
+      .toEqual(connectedServices);
     const resolved = selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { role: 'workflow-reviewer' } },
       roleSelection: { settingsRoles: { 'workflow-reviewer': {
         roleId: 'workflow-reviewer', name: 'Reviewer', instructions: 'Review the work.',

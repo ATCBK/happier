@@ -1,7 +1,7 @@
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
-import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { ConnectedServiceBindingsV2Schema, projectConnectedServiceBindingsForChild } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV2Input, ConnectedServiceBindingsV2, ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
@@ -82,11 +82,9 @@ function projectInheritedConnectedServices(
             throw childSelectionRefusal('execution_run_child_choice_required',
                 'Choose a child credential route; direct Team credential custody cannot be inherited.');
         }
-        bindingsByServiceId[serviceId] = binding.source === 'connected' && binding.selection === 'group'
-            ? { source: 'connected', selection: 'group', groupId: binding.groupId }
-            : binding;
+        bindingsByServiceId[serviceId] = binding;
     }
-    return { v: 2, bindingsByServiceId };
+    return projectConnectedServiceBindingsForChild({ v: 2, bindingsByServiceId });
 }
 
 /** Resolves child omissions once, before credential or Provider materialization. */

@@ -162,6 +162,16 @@ export const ConnectedServiceBindingsV2Schema = lazyZodSchema(() => z.strictObje
 
 export type ConnectedServiceBindingsV2 = z.infer<typeof ConnectedServiceBindingsV2Schema>;
 
+/** Reuse selection identities, never a Pool's currently materialized member. */
+export function projectConnectedServiceBindingsForChild(bindings: ConnectedServiceBindingsV2): ConnectedServiceBindingsV2 {
+    const parsed = ConnectedServiceBindingsV2Schema.parse(bindings);
+    return { v: 2, bindingsByServiceId: Object.fromEntries(Object.entries(parsed.bindingsByServiceId).map(([serviceId, binding]) => [
+        serviceId, binding.source === 'connected' && binding.selection === 'group'
+            ? { source: 'connected' as const, selection: 'group' as const, groupId: binding.groupId }
+            : binding,
+    ])) };
+}
+
 export const PersistedConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.union([
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceNativeBindingV1Schema),
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceProfileBindingV1Schema),

@@ -186,6 +186,39 @@ describe('session.spawn_new canonical execution', () => {
     });
   });
 
+  it.each(['omitted', 'pool', 'explicit', 'native', 'otherAgent'] as const)(
+    'resolves a Session child Connected choice at canonical admission: %s', async choice => {
+    const inherited = { v: 2 as const, bindingsByServiceId: {
+      'acme.auth/subscription': choice === 'pool'
+        ? { source: 'connected' as const, selection: 'group' as const, groupId: 'parent-pool', profileId: 'current-member' }
+        : { source: 'connected' as const, selection: 'profile' as const, profileId: 'parent-selected' },
+    } };
+    const explicit = { v: 2 as const, bindingsByServiceId: choice === 'native' ? {} : {
+      'acme.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'explicit-child' },
+    } };
+    const target = { kind: 'agent' as const, identity: { pluginId: 'acme.agents', localId: choice === 'otherAgent' ? 'other' : 'reviewer' } };
+    let launched: Parameters<NonNullable<ActionExecutorDeps['sessionSpawnNew']>>[0] | undefined;
+    const executor = createActionExecutor({ sessionSpawnNew: async input => {
+      launched = input;
+      return { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' };
+    } } satisfies Partial<ActionExecutorDeps>);
+    const result = await executor.execute('session.spawn_new', { ...canonicalInput, agentTarget: target,
+      ...(choice === 'explicit' || choice === 'native' ? { connectedServices: explicit } : {}),
+    }, { surface: 'agent', authority: 'account_automation', serverId: 'server-1', runtimeAccountId: 'account-1',
+      defaultSessionId: 'parent-session', actionCaller: agentStartContext.caller,
+      agentStartContext: { ...agentStartContext, baseline: { ...agentStartContext.baseline, configuration: {
+        agentTarget: { ...target, identity: { ...target.identity, localId: 'reviewer' } }, connectedServices: inherited,
+      } } }, callerPermissionMode: 'default',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+      sessionInputSource: { sourceSessionId: 'parent-session', sourceTurnId: 'parent-turn-1', via: 'action' },
+      sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(launched?.connectedServices).toEqual(choice === 'pool' ? { v: 2, bindingsByServiceId: {
+      'acme.auth/subscription': { source: 'connected', selection: 'group', groupId: 'parent-pool' },
+    } } : choice === 'omitted' ? inherited
+      : choice === 'otherAgent' ? undefined : explicit);
+  });
+
   it('carries attestation only for the host-stamped plugin spawn caller', async () => {
     const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
       type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',

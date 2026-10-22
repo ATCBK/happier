@@ -22,6 +22,9 @@ import { runObservedWorkflowSessionStartup } from './workflowSessionStartup';
 import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
 import { verifyRequesterSessionCredentialBinding } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
+import { projectWorkflowConversationRoleSelection } from '@/session/actions/workflowMaterializationHost';
 
 const spawnedSessionBirthMetadata = new Map<string, ReturnType<typeof buildCommittedLaunchMetadata>>();
 
@@ -1708,6 +1711,50 @@ describe('workflow Session step executor', () => {
     } as never)).rejects.toMatchObject({ code: 'conversation_workspace_mismatch', details: { reason: 'workspace_mismatch',
       expected: { kind: 'object', ids: ['new_worktree'] } } });
     expect(resolveExistingSessionConversation).not.toHaveBeenCalled();
+  });
+
+  it('spawns a literal-engine Workflow leaf on its origin Session non-default Connected profile', async () => {
+    const launches = installSessionCreationTransport();
+    const originSessionId = 'c111111111111111111111111';
+    const credentials = { token: 'token', encryption: null };
+    const agentTarget = { kind: 'agent' as const,
+      identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-non-default' },
+    } };
+    const read = readiness.get.getMockImplementation()!;
+    readiness.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${originSessionId}`)
+      ? { status: 200, data: { session: createSessionRecordFixture({ id: originSessionId, active: true, encryptionMode: 'plain',
+        metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
+          workspace: { machineId: 'machine-1', path: '/repo' },
+          runtime: { runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } },
+          connectedServices: { connectedServices },
+        }),
+      }) } } : read(url));
+    const origin = await resolveWorkflowSessionConversation({ credentials, sessionId: originSessionId, machineId: 'machine-1' });
+    expect(origin).not.toBeNull();
+    if (!origin) throw new Error('Origin Session unavailable');
+    const definition = { version: 1 as const, defaults: { engine: { agentTarget, effort: 'low' } },
+      blocks: [{ kind: 'step' as const, id: 'work', document: { text: 'Reply READY.', references: [], attachments: [] } }] };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-1', executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct', originSessionId }, authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, roleSelection: projectWorkflowConversationRoleSelection(origin),
+      effects: { resolveTargetAvailability: async () => true } });
+    expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    const leaf = accepted.snapshot.materializedLeaves[0]!;
+    expect(leaf.selection.connectedServices).toEqual(connectedServices);
+    const create = createProductionFreshWorkflowSessionConversation({ credentials,
+      serverId: 'server-1', machineId: 'machine-1', workDepth: 0, originRunId: 'run-1', originSessionId,
+      machineAdmissionTransport: vi.fn() });
+    await expect(create({ selection: resolveWorkflowAcceptedStepSelectionV1(leaf).selection,
+      workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
+      creationKey: 'workflow:run-1:connected-leaf' })).resolves.toMatchObject({ sessionId: 'new-session' });
+    expect(launches).toMatchObject([{ connectedServices, originSessionId,
+      sessionConfigOptionOverrides: { overrides: { reasoning_effort: { value: 'low' } } } }]);
   });
 
   it('creates fresh conversations through canonical target preparation and Session creation owners', async () => {

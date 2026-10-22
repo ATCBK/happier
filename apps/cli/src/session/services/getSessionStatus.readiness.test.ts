@@ -9,6 +9,33 @@ import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/proto
 
 afterEach(() => { vi.restoreAllMocks(); });
 
+it.each(['profile', 'pool', 'native', 'malformed'] as const)('projects the Session Connected selection without credentials: %s', async kind => {
+  const sessionId = 'c123456789012345678901234';
+  const connectedServices = { v: 2, bindingsByServiceId: kind === 'native' ? {} : {
+    'acme.auth/subscription': kind === 'pool'
+      ? { source: 'connected', selection: 'group', groupId: 'session-pool', profileId: 'current-member' }
+      : { source: 'connected', selection: 'profile', profileId: 'session-selected',
+        ...(kind === 'malformed' ? { accessToken: 'must-never-escape' } : {}) },
+  } };
+  const row = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+    metadata: JSON.stringify({ machineId: 'machine-1', connectedServices, environmentVariables: { PRIVATE: 'must-never-escape' } }) });
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+    if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: row } };
+    throw new Error(`Unexpected HTTP read ${path}`);
+  });
+  const result = await getSessionStatus({ credentials: { token: 'token', encryption: null }, idOrPrefix: sessionId, live: false });
+  expect(result.ok).toBe(true);
+  if (kind === 'malformed') expect(result).not.toHaveProperty('connectedServices');
+  else expect(result).toMatchObject({ connectedServices: kind === 'pool' ? { v: 2, bindingsByServiceId: {
+    'acme.auth/subscription': { source: 'connected', selection: 'group', groupId: 'session-pool' },
+  } } : connectedServices });
+  if (kind === 'pool') expect(JSON.stringify(result)).not.toContain('current-member');
+  expect(JSON.stringify(result)).not.toContain('must-never-escape');
+  if (result.ok) expect(SessionStatusResultSchema.parse(result)).toEqual(result);
+});
+
 it('never widens a protected status read to a live socket using the host token', async () => {
   const sessionId = 'c123456789012345678901234';
   const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
