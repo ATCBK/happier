@@ -49,6 +49,9 @@ export function createTypescriptModuleInspectionSession({
   const sourceRuntimePath = fileURLToPath(new URL('../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url));
   const child = spawn(process.execPath, ['--conditions=happier-source', '--import', sourceRuntimePath,
     '--max-old-space-size=2048', workerPath], {
+    // Global tsx hooks also consult cwd. Inspect against this source tree, not
+    // a caller's declaration-emission tsconfig (which may resolve stale SDKs).
+    cwd: fileURLToPath(new URL('../../../../../', import.meta.url)),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   onSpawn?.(child.pid);
