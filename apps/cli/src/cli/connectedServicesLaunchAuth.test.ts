@@ -150,6 +150,25 @@ describe('connectedServicesLaunchAuth', () => {
     expect(listInventory).not.toHaveBeenCalled();
   });
 
+  it.each(['group', 'profile'] as const)('projects a qualified %s identity without an inventory round trip', async selection => {
+    const listInventory = vi.fn(async () => codexInventory);
+    const id = selection === 'group' ? 'team' : 'work';
+    await expect(resolveConnectedServicesLaunchAuthWithInventory({
+      intent: parseConnectedServicesLaunchAuth(`cs:openai-codex:${selection}:${id}`),
+      supportedServiceIds: [CODEX_SERVICE_KEY], listInventory,
+    })).resolves.toEqual({ v: 2, bindingsByServiceId: {
+      [CODEX_SERVICE_KEY]: selection === 'group'
+        ? { source: 'connected', selection: 'group', groupId: id }
+        : { source: 'connected', selection: 'profile', profileId: id },
+    } });
+    expect(listInventory).not.toHaveBeenCalled();
+    await expect(resolveConnectedServicesLaunchAuthWithInventory({
+      intent: parseConnectedServicesLaunchAuth(`cs:unsupported-service:${selection}:${id}`),
+      supportedServiceIds: [CODEX_SERVICE_KEY], listInventory,
+    })).rejects.toThrow('connected_service_auth_not_found');
+    expect(listInventory).not.toHaveBeenCalled();
+  });
+
   it('uses the configured Connected Services default when direct CLI auth is omitted', async () => {
     const bindings = {
       v: 2 as const,

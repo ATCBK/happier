@@ -160,7 +160,13 @@ export function resolveConnectedServicesLaunchAuth(params: Readonly<{
   const selectedServiceId = connectedIntent.serviceId === null ? null
     : readBuiltInLegacyConnectedAccountServiceKeyIngress(connectedIntent.serviceId) ?? connectedIntent.serviceId;
   const supported = new Set(params.supportedServiceIds);
-  const matches = readInventoryCandidates(params.inventory).filter((candidate) => (
+  // A qualified selector already names one identity. Discovery is only needed
+  // to disambiguate shorthand; the spawn owner still admits its live group,
+  // profile and credential rather than trusting this projection as authority.
+  const candidates: readonly InventoryCandidate[] = selectedServiceId && connectedIntent.selection
+    ? [{ serviceId: selectedServiceId, selection: connectedIntent.selection, id: connectedIntent.id }]
+    : readInventoryCandidates(params.inventory);
+  const matches = candidates.filter((candidate) => (
     supported.has(candidate.serviceId)
     && candidate.id === connectedIntent.id
     && (selectedServiceId === null || candidate.serviceId === selectedServiceId)
@@ -194,7 +200,7 @@ export async function resolveConnectedServicesLaunchAuthWithInventory(params: Re
   supportedServiceIds: readonly string[];
   listInventory: () => Promise<unknown>;
 }>): Promise<ConnectedServiceBindingsV2 | null> {
-  const inventory = params.intent.kind === 'connected'
+  const inventory = params.intent.kind === 'connected' && (!params.intent.serviceId || !params.intent.selection)
     ? await params.listInventory()
     : null;
   return resolveConnectedServicesLaunchAuth({

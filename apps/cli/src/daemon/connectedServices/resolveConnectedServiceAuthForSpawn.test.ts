@@ -26,6 +26,7 @@ import {
 } from '@happier-dev/protocol';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { ApiClient } from '@/api/api';
+import { parseConnectedServicesLaunchAuth, resolveConnectedServicesLaunchAuth } from '@/cli/connectedServicesLaunchAuth';
 import { logger } from '@/utils/logger';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from './accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import {
@@ -1800,7 +1801,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     expect(connectedServiceAuth!.env.HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON).toContain('"kind":"group"');
   });
 
-  it('rejects group bindings when the server group has no active profile', async () => {
+  it.each(['missing', 'inactive'] as const)('rejects a qualified CLI group at daemon admission when it is %s', async state => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-missing-active-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-missing-active-test-'));
 
@@ -1810,7 +1811,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     };
 
     const api = {
-      getConnectedServiceAuthGroup: async () => ({
+      getConnectedServiceAuthGroup: async () => state === 'missing' ? null : ({
         v: 1,
         serviceId: 'openai-codex',
         groupId: 'codex-main',
@@ -1827,16 +1828,10 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
 
     await expect(resolveConnectedServiceAuthForSpawn({
       agentId: 'codex',
-      connectedServicesBindingsRaw: {
-        v: 1,
-        bindingsByServiceId: {
-          'openai-codex': {
-            source: 'connected',
-            selection: 'group',
-            groupId: 'codex-main',
-          },
-        },
-      },
+      connectedServicesBindingsRaw: resolveConnectedServicesLaunchAuth({
+        intent: parseConnectedServicesLaunchAuth('cs:openai-codex:group:codex-main'),
+        supportedServiceIds: ['happier.agent.codex/openai-codex'], inventory: null,
+      }),
       materializationKey: 'session-1',
       resolveQualifiedPurposeBindingSnapshot:
         createAppliedQualifiedPurposeBindingSnapshotResolver('codex'),
@@ -1846,7 +1841,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       api,
     })).rejects.toMatchObject({
       name: 'ConnectedServiceSpawnAuthGroupAuthorityError',
-      kind: 'active_profile_missing',
+      kind: state === 'missing' ? 'group_missing' : 'active_profile_missing',
       serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'codex-main',
     });
