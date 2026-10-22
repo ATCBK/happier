@@ -47,22 +47,23 @@ vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'tablet',
 }));
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: vi.fn(),
-        state: {
-            scopes: {
-                scope1: {
-                    right: { isOpen: mockedScopeOpen.right },
-                    details: { isOpen: mockedScopeOpen.details },
-                    bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: vi.fn(),
+            state: {
+                scopes: {
+                    scope1: {
+                        right: { isOpen: mockedScopeOpen.right },
+                        details: { isOpen: mockedScopeOpen.details },
+                        bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+                    },
                 },
             },
-        },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-    }),
-}));
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 describe('AppPaneScopeHost (docked max widths)', () => {
     it('caps docked right pane max width to preserve main min width', async () => {

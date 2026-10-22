@@ -41,22 +41,23 @@ installAppPaneScopeHostCommonModuleMocks({
     },
 });
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: dispatchSpy,
-        state: {
-            scopes: {
-                scope1: {
-                    right: { isOpen: true },
-                    details: { isOpen: true },
-                    bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: dispatchSpy,
+            state: {
+                scopes: {
+                    scope1: {
+                        right: { isOpen: true },
+                        details: { isOpen: true },
+                        bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+                    },
                 },
             },
-        },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-    }),
-}));
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 describe('AppPaneScopeHost (overlayStack keeps right open)', () => {
     it('does not auto-dispatch closeRight when both panes are open in overlayStack', async () => {

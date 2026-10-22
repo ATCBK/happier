@@ -307,6 +307,7 @@ describe('AppShell plugin UI invocation host', () => {
             };
             const noBinding = createAppShellPluginUiInvocationHost({
                 ...base,
+                readNavigationBinding: () => null,
                 isCurrent: () => true,
             });
             await expect(noBinding.executeAction(CLIENT_ACTION_LOCAL_ID, null)).rejects.toMatchObject({

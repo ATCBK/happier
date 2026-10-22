@@ -45,22 +45,23 @@ vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'tablet',
 }));
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: vi.fn(),
-        state: {
-            scopes: {
-                scope1: {
-                    right: { isOpen: true },
-                    details: { isOpen: true },
-                    bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: vi.fn(),
+            state: {
+                scopes: {
+                    scope1: {
+                        right: { isOpen: true },
+                        details: { isOpen: true },
+                        bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+                    },
                 },
             },
-        },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-    }),
-}));
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 describe('AppPaneScopeHost (overlay widths)', () => {
     it('allows overlay panes to use widths beyond docked global max constraints', async () => {

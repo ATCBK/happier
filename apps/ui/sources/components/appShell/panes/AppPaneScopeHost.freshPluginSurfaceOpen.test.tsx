@@ -47,15 +47,16 @@ vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'tablet',
 }));
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: paneHostState.dispatch,
-        state: { scopes: { scope1: paneHostState.scope } },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-        overlayFocusReturnOwner: undefined,
-    }),
-}));
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: paneHostState.dispatch,
+            state: { scopes: { scope1: paneHostState.scope } },
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+            overlayFocusReturnOwner: undefined,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 vi.mock('@/components/plugins/surfaces', () => ({
     PluginSurfacePlacementHost: () => React.createElement('PluginSurfacePlacementHostMock'),

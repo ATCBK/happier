@@ -39,22 +39,23 @@ vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'tablet',
 }));
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: vi.fn(),
-        state: {
-            scopes: {
-                scope1: {
-                    right: { isOpen: false },
-                    details: { isOpen: true },
-                    bottom: { isOpen: false },
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: vi.fn(),
+            state: {
+                scopes: {
+                    scope1: {
+                        right: { isOpen: false },
+                        details: { isOpen: true },
+                        bottom: { isOpen: false },
+                    },
                 },
             },
-        },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-    }),
-}));
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 describe('AppPaneScopeHost (detailsPaneEnabled)', () => {
     it('treats details as closed when detailsPaneEnabled is false', async () => {

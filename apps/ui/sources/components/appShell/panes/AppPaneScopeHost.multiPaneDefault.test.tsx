@@ -39,22 +39,23 @@ vi.mock('@/utils/platform/responsive', () => ({
     useDeviceType: () => 'tablet',
 }));
 
-vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: (select = (value: unknown) => value) => select({
-        dispatch: vi.fn(),
-        state: {
-            scopes: {
-                scope1: {
-                    right: { isOpen: true },
-                    details: { isOpen: false },
-                    bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+vi.mock('./AppPaneProvider', () => {
+    const useSelectedPaneContext = (select = (value: unknown) => value) => select({
+            dispatch: vi.fn(),
+            state: {
+                scopes: {
+                    scope1: {
+                        right: { isOpen: true },
+                        details: { isOpen: false },
+                        bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
+                    },
                 },
             },
-        },
-        getDriver: () => null,
-        driverRegistryVersion: 1,
-    }),
-}));
+            getDriver: () => null,
+            driverRegistryVersion: 1,
+        });
+    return { useAppPaneContext: useSelectedPaneContext, useOptionalAppPaneContext: useSelectedPaneContext };
+});
 
 describe('AppPaneScopeHost (multi-pane default)', () => {
     it('treats uiMultiPanePanelsEnabled as enabled when unset', async () => {

@@ -14,6 +14,12 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+// The 44 px touch floor applies when the primary pointer is a finger; the browser media query is the boundary.
+vi.mock('@/utils/platform/webMobileHeuristics', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/webMobileHeuristics')>(),
+    isCoarsePrimaryPointerEnvironment: () => true,
+}));
+
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();

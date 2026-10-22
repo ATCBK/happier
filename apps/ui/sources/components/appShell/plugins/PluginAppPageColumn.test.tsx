@@ -16,6 +16,8 @@ import {
 
 const routeState = vi.hoisted(() => ({ pathname: '/plugins/acme.triage/triage/views/mine' }));
 const mountedHosts = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+// Mount identity, independent of how often the mounted host re-renders.
+const hostMounts = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -30,6 +32,7 @@ vi.mock('@/text', async () => {
 vi.mock('@/components/plugins/surfaces', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/components/plugins/surfaces')>()),
     PluginSurfacePlacementHost: (props: Record<string, unknown>) => {
+        React.useEffect(() => { hostMounts.count += 1; }, []);
         mountedHosts.push({ ...props, focusEligible: usePluginSurfaceFocusEligibility(), currentUiContextEligible: usePluginSurfaceCurrentUiContextEligibility() });
         return React.createElement('PluginSurfacePlacementHost', props);
     },
@@ -70,6 +73,7 @@ function projectionWith(placement: PluginUiSurfacePlacementProjection): PluginUi
 
 async function renderColumn(model: PluginUiProjectionModel) {
     mountedHosts.length = 0;
+    hostMounts.count = 0;
     return renderScreen(
         <AppShellPluginUiProjectionValueProvider
             value={{
@@ -114,8 +118,8 @@ describe('PluginAppPageColumn', () => {
         routeState.pathname = '/plugins/acme.triage/triage/views/mine';
         await renderColumn(projectionWith(pagePlacement(COLUMN)));
 
-        expect(mountedHosts).toHaveLength(1);
-        const mount = mountedHosts[0]!;
+        expect(hostMounts.count).toBe(1);
+        const mount = mountedHosts.at(-1)!;
         expect(mount.subPath).toBe('views/mine');
         expect((mount.placement as PluginUiSurfacePlacementProjection).renderer).toEqual(COLUMN.renderer);
         expect(mount.machineId).toBe('machine-1');
