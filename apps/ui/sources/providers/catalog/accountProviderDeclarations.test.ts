@@ -8,9 +8,23 @@ import {
     readProviderConnectionPickerKind,
     readProviderContributionIcon,
     resolveAccountAgentProviderRequirements,
+    type ProviderDeclarationContext,
 } from './accountProviderDeclarations';
 
 describe('admitted Provider declarations', () => {
+    it('keeps missing or invalid Agent targets unknown during anonymous catalog composition', () => {
+        const contexts: ProviderDeclarationContext[] = [
+            { kind: 'account' },
+            { kind: 'machine', projection: null },
+            { kind: 'machine', projection: undefined },
+            { kind: 'machine', projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1 }) },
+        ];
+        for (const context of contexts) for (const target of ['', ' ', 'not-a-target']) {
+            expect(readAccountAgentProviderRequirements(target, context)).toBeNull();
+            expect(resolveAccountAgentProviderRequirements(target, context)).toEqual({ kind: 'unknown' });
+        }
+    });
+
     it('keeps an addressed bundled Agent unknown before its Machine answers', () => {
         const agentTargetKey = 'agent:happier.agent.codex/codex';
         const requirements = readAccountAgentProviderRequirements(agentTargetKey, { kind: 'account' })!;
