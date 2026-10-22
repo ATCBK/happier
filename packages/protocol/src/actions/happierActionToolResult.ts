@@ -112,6 +112,8 @@ export type HappierActionToolFailure = Readonly<{
     code: string;
     /** The typed cause or reason the failure's `details` name, when it names one. */
     cause: string | null;
+    /** The executor's own words for it (`error`, or the run's `error.message`), when it gave any. */
+    message: string | null;
 }>;
 
 function readFailureCause(details: unknown): string | null {
@@ -129,24 +131,30 @@ function readFailureCause(details: unknown): string | null {
  * or the host SubAgentRun marker's schema-validated terminal error.
  * Other MCP servers' results are never read, whatever keys they carry.
  */
+/** Words a person can read; an error that only repeats a code (`self_stop_forbidden`, `unsupported_action:x`) is not one. */
+function readFailureMessage(value: unknown): string | null {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text && !/^[\w.:/-]+$/.test(text) ? text : null;
+}
+
 export function readHappierActionToolFailure(toolName: string, input: unknown, result: unknown): HappierActionToolFailure | null {
     // SubAgentRun is the host's own transcript marker, not an arbitrary MCP result.
     if (toolName === 'SubAgentRun') {
         const parsed = SubAgentRunResultV2Schema.safeParse(readHappierActionToolPayload(result));
         return parsed.success && (parsed.data.status === 'failed' || parsed.data.status === 'timeout') && parsed.data.error
-            ? { code: parsed.data.error.code, cause: null } : null;
+            ? { code: parsed.data.error.code, cause: null, message: readFailureMessage(parsed.data.error.message) } : null;
     }
     // Persisted tool calls are read at a boundary: a record without a name is not a first-party call.
     if (typeof toolName !== 'string' || firstPartyName(readHappierActionToolName(toolName, input).trim()) === null) return null;
     for (const candidate of readHappierActionToolResultCandidates(result, input)) {
         if (!isRecord(candidate) || candidate.ok === true) continue;
         if (typeof candidate.errorCode === 'string' && candidate.errorCode.trim() && typeof candidate.error === 'string') {
-            return { code: candidate.errorCode.trim(), cause: readFailureCause(candidate.details) };
+            return { code: candidate.errorCode.trim(), cause: readFailureCause(candidate.details), message: readFailureMessage(candidate.error) };
         }
         if (candidate.type === 'error' && typeof candidate.code === 'string' && candidate.code.trim()) {
             const launch = isRecord(candidate.launchError) && typeof candidate.launchError.code === 'string' && candidate.launchError.code.trim()
                 ? candidate.launchError.code.trim() : null;
-            return { code: launch ?? candidate.code.trim(), cause: null };
+            return { code: launch ?? candidate.code.trim(), cause: null, message: null };
         }
     }
     return null;

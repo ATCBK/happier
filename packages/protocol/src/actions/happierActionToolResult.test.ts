@@ -19,7 +19,7 @@ describe('readHappierActionToolFailure', () => {
     const result = { status: 'failed', runId: 'run_1', callId: 'call_1', sidechainId: 'call_1',
       error: { code: 'codex_tool_restriction_unsupported_auth', message: 'Codex cannot enforce this policy.' } };
     expect(readHappierActionToolFailure('SubAgentRun', { runId: 'run_1' }, result)).toEqual({
-      code: 'codex_tool_restriction_unsupported_auth', cause: null,
+      code: 'codex_tool_restriction_unsupported_auth', cause: null, message: 'Codex cannot enforce this policy.',
     });
     expect(readHappierActionToolFailure('SubAgentRun', { runId: 'run_1' }, { ...result, status: 'succeeded' })).toBeNull();
     expect(readHappierActionToolFailure('mcp__other__run', {}, result)).toBeNull();
@@ -29,14 +29,14 @@ describe('readHappierActionToolFailure', () => {
       errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' },
     });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'unsupported_action', cause: 'target_outside_led_subtree',
+      code: 'unsupported_action', cause: 'target_outside_led_subtree', message: null,
     });
   });
 
   it('reads the reason of a failure that names one instead of a cause', () => {
     const result = mcpTextResult({ errorCode: 'target_unavailable', error: 'target_unavailable', details: { reason: 'external_authorization_refused' } });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'target_unavailable', cause: 'external_authorization_refused',
+      code: 'target_unavailable', cause: 'external_authorization_refused', message: null,
     });
   });
 
@@ -44,7 +44,7 @@ describe('readHappierActionToolFailure', () => {
     const result = mcpTextResult({ type: 'error', code: 'spawn_failed', retryable: true,
       launchError: { kind: 'launch_error', code: 'database_transaction_conflict_exhausted', message: 'Failed to get or create session' } });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'database_transaction_conflict_exhausted', cause: null,
+      code: 'database_transaction_conflict_exhausted', cause: null, message: null,
     });
   });
 
