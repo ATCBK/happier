@@ -33,8 +33,14 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0)
     return true
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
+    // Only ESRCH proves the owner is gone; EPERM and probe failures keep the dir.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
+}
+
+function isPermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'EACCES' || code === 'EPERM'
 }
 
 export function sweepOrphanedTestProcessTempDirs(baseDir = tmpdir()): void {
@@ -42,6 +48,11 @@ export function sweepOrphanedTestProcessTempDirs(baseDir = tmpdir()): void {
     const ownerPid = name.match(OWNED_DIR_PATTERN)?.[1]
     if (!ownerPid) continue
     if (isProcessAlive(Number(ownerPid))) continue
-    rmSync(join(baseDir, name), { recursive: true, force: true })
+    try {
+      rmSync(join(baseDir, name), { recursive: true, force: true })
+    } catch (error) {
+      // A shared tmpdir can hold another user's orphaned dir; leave it rather than abort the run.
+      if (!isPermissionError(error)) throw error
+    }
   }
 }

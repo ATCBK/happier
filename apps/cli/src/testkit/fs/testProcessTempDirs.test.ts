@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { withTempDirSync } from '@/testkit/fs/tempDir'
 import {
@@ -17,6 +17,10 @@ function exitedPid(): number {
 }
 
 describe('test process temp dirs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('removes per-process dirs whose owner process exited and keeps live or unrelated ones', () => {
     withTempDirSync('happier-cli-test-process-dirs-', (baseDir) => {
       const deadPid = exitedPid()
@@ -36,6 +40,44 @@ describe('test process temp dirs', () => {
       expect(readdirSync(baseDir).sort()).toEqual(
         [liveBin, liveHome, unrelated].map((dir) => dir.slice(baseDir.length + 1)).sort(),
       )
+    })
+  })
+
+  // A shared tmpdir can hold a dead worker's dir that this user may not delete (another user's run).
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'leaves undeletable orphaned dirs in place and keeps sweeping',
+    () => {
+      withTempDirSync('happier-cli-test-process-dirs-', (baseDir) => {
+        const lockedHome = resolveTestProcessTempDir('home', exitedPid(), baseDir)
+        const deadBin = resolveTestProcessTempDir('bin', exitedPid(), baseDir)
+        const lockedDir = join(lockedHome, 'locked')
+        mkdirSync(lockedDir, { recursive: true })
+        writeFileSync(join(lockedDir, 'file'), '')
+        mkdirSync(deadBin, { recursive: true })
+        chmodSync(lockedDir, 0o500)
+        try {
+          expect(() => sweepOrphanedTestProcessTempDirs(baseDir)).not.toThrow()
+          expect(existsSync(lockedHome)).toBe(true)
+          expect(existsSync(deadBin)).toBe(false)
+        } finally {
+          chmodSync(lockedDir, 0o700)
+        }
+      })
+    },
+  )
+
+  it('keeps dirs whose owner liveness probe fails for a reason other than ESRCH', () => {
+    withTempDirSync('happier-cli-test-process-dirs-', (baseDir) => {
+      const unverifiedHome = resolveTestProcessTempDir('home', 424242, baseDir)
+      mkdirSync(unverifiedHome, { recursive: true })
+      // process.kill is the OS process boundary; an EIO probe failure is not proof the owner exited.
+      vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('probe failed'), { code: 'EIO' })
+      })
+
+      sweepOrphanedTestProcessTempDirs(baseDir)
+
+      expect(existsSync(unverifiedHome)).toBe(true)
     })
   })
 })
