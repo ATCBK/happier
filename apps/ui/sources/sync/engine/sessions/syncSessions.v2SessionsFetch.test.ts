@@ -26,6 +26,7 @@ import {
 } from '@happier-dev/protocol';
 
 import {
+    buildRenderableFromRowAndCache,
     fetchAndApplySessions as fetchAndApplySessionsSource,
     type SessionListEncryption,
 } from './sessionSnapshot';
@@ -331,6 +332,16 @@ afterEach(() => {
 });
 
 describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
+    it('prefers matching hydrated Agent identity over a same-version compact cache', () => {
+        const row = buildSessionRow({ id: 's_agent_identity', metadataVersion: 7 });
+        const existing = buildExistingSession({ id: row.id, metadataVersion: 7,
+            metadata: { path: '/repo', host: 'home', flavor: 'claude', runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {}, provider: {} } } });
+        const cached = { ...staleCacheEntry(row.id, '/repo'), metadataVersion: 7, flavor: 'claude' };
+        expect(buildRenderableFromRowAndCache(row, { token: 't', secret: 's' },
+            PLAIN_ACCOUNT_CURRENTNESS, cached, existing).metadata?.flavor).toBe('codex');
+    });
+
+
     it('hydrates plaintext sessions for token-only accounts without an account encryption runtime', async () => {
         const row = buildSessionRow({
             id: 's_token_only_plain',
@@ -2516,7 +2527,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         expect(applySessions).not.toHaveBeenCalled();
     });
 
-    it('reuses warm cache list data when metadata and agentState versions match and the canonical session already exists', async () => {
+    it('reuses canonical Session details without decrypting matching warm rows', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
                 sessions: [
@@ -2613,23 +2624,16 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 pendingCount: 2,
                 pendingVersion: 11,
                 metadata: expect.objectContaining({
-                    name: 'Cached title',
-                    summaryText: 'Cached summary',
+                    name: 'Hydrated title',
+                    summaryText: null,
                     path: '/home/u/repo',
-                    homeDir: '/home/u',
+                    homeDir: null,
                     host: 'mbp',
                     machineId: 'm1',
-                    flavor: 'claude',
-                    externalSessionV1: {
-                        v: 1,
-                        agentId: 'codex',
-                        machineId: 'm1',
-                        remoteSessionId: 'remote-cached',
-                        source: { kind: 'codexHome', home: 'user' },
-                    },
+                    flavor: null,
+                    externalSessionV1: null,
                     hiddenSystemSession: false,
                 }),
-                hasPendingUserActionRequests: true,
             }),
         ], { replace: true });
     });

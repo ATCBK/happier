@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createPlainSessionByIdResponseFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import {
     createSessionFilesViewFixture, fileViewSnapshot,
@@ -52,15 +53,20 @@ describe('CommitScreen', () => {
         vi.mocked(operations.sessionScmDiffCommit).mockClear();
         vi.mocked(operations.sessionScmCommitBackout).mockClear();
         fixture = await createSessionFilesViewFixture({ credentials: { token: createAccountTokenForTests("alice", { currentAccount: true }) }, sessionId: 'session-1', rootPath: '/repo',
-            request: async (input, init) => {
-                if (new URL(String(input)).pathname !== '/v2/sessions/' + 'session-1') return new Response(null, { status: 404 });
+            request: createSessionReadBatchFetchBoundary(async (input, init) => {
+                const path = new URL(String(input)).pathname;
+                if (path !== '/v2/sessions/' + 'session-1') {
+                    return /^\/v2\/sessions\/[^/]+$/.test(path)
+                        ? Response.json({ error: 'Session not found' }, { status: 404 })
+                        : new Response(null, { status: 404 });
+                }
                 if (hydrateReady) return Response.json(createPlainSessionByIdResponseFixture(fixture.session));
                 return new Promise<Response>(resolve => {
                     const release = () => { pendingHydrationReads.delete(release); resolve(Response.json(createPlainSessionByIdResponseFixture(fixture.session))); };
                     pendingHydrationReads.add(release);
                     init?.signal?.addEventListener('abort', release, { once: true });
                 });
-            },
+            }),
             rpc: request => {
                 if (request.method === RPC_METHODS.SCM_DIFF_COMMIT) return diffResponse(request);
                 if (request.method === RPC_METHODS.SCM_COMMIT_BACKOUT) return backoutResponse(request);
@@ -195,9 +201,10 @@ describe('CommitScreen', () => {
         diffResponse.mockRejectedValueOnce(new Error('network down'));
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
-        // The transport message is a diagnostic behind the collapsed Details, never the headline.
+        // The SCM RPC boundary reports an unrecognized read failure as an unavailable backend; the
+        // raw transport message is neither the headline nor part of the card.
         expect(screen.findByTestId('scm-commit-details-error')).toBeTruthy();
-        expect(screen.findByTestId('scm-commit-details-error-diagnostic-network down')).toBeTruthy();
+        expect(screen.findByTestId(`scm-commit-details-error-diagnostic-${RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE}`)).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('network down');
     });
 
@@ -225,6 +232,9 @@ describe('CommitScreen', () => {
         await screen.pressByTestIdAsync('scm-commit-details-revert');
         await flushHookEffects();
 
-        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'rpc unavailable');
+        // A thrown mutation transport error leaves the outcome unknown; the raw transport message
+        // is not surfaced.
+        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', expect.stringMatching(/\S/));
+        expect(vi.mocked(Modal.alert).mock.calls[0]?.[1]).not.toContain('rpc unavailable');
     });
 });

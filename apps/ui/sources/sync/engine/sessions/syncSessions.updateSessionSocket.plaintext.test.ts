@@ -75,16 +75,16 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     const session = createSessionFixture({ metadataLayoutVersion: layout, access, ownerMetadataView,
       encryptedContentAvailability: availability, agentState: state });
     const updated = await buildUpdatedSessionFromSocketUpdate({ session,
-      updateBody: { agentState: { version: 2, value: JSON.stringify(state) } },
+      updateBody: { metadataLayoutVersion: layout, agentState: { version: 2, value: JSON.stringify(state) } },
       updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
     expect(updated.agentState).toEqual(retained ? state : null);
     const withoutPayload = await buildUpdatedSessionFromSocketUpdate({ session,
-      updateBody: { active: true }, updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
+      updateBody: { metadataLayoutVersion: layout, active: true }, updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
     expect(withoutPayload.agentState).toBe(retained ? state : null);
     const renderable = createSessionListRenderableSessionFixture({ metadataLayoutVersion: layout, access,
       metadata: ownerMetadataView ? { path: '/private' } : null, encryptedContentAvailability: availability });
     const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({ renderable,
-      updateBody: { agentState: { version: 2, value: JSON.stringify(state) } },
+      updateBody: { metadataLayoutVersion: layout, agentState: { version: 2, value: JSON.stringify(state) } },
       updateSeq: 2, updateCreatedAt: 2, sessionEncryption: null });
     expect(patch.hasPendingPermissionRequests).toBe(retained);
   });
@@ -94,7 +94,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
       ownerMetadataView: { path: '/private', host: 'localhost' }, agentState: state });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
-    const updateBody = { metadata: { version: 2, value: 'invalid-ciphertext' },
+    const updateBody = { metadataLayoutVersion: 1, metadata: { version: 2, value: 'invalid-ciphertext' },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };
     const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
       updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
@@ -112,7 +112,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     const session = createSessionFixture({ metadataLayoutVersion: 2, encryptionMode: 'e2ee',
       ownerMetadataView: { path: '/private', host: 'localhost' }, agentState: state });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
-    const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ path: '/private' }) },
+    const updateBody = { metadataLayoutVersion: 2, metadata: { version: 2, value: await reader.encryptRaw({ path: '/private' }) },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };
     const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
       updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });
@@ -124,7 +124,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
       encryptedContentAvailability: 'encrypted_content_unavailable', ownerMetadataView: { path: '/private', host: 'localhost' } });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
-    const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ v: 1 }) },
+    const updateBody = { metadataLayoutVersion: 1, metadata: { version: 2, value: await reader.encryptRaw({ v: 1 }) },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };
     const updated = await buildUpdatedSessionFromSocketUpdate({ session, updateBody,
       updateSeq: 2, updateCreatedAt: 2, sessionEncryption: reader });

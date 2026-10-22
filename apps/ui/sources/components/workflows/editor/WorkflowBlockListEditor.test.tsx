@@ -686,10 +686,15 @@ describe('workflow block list editor', () => {
         const changes: ReturnType<typeof buildDraft>[] = [];
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
 
-        // Deliver the actual input event: the native input reports both text
-        // and selection, which the real composer uses to reconcile token ranges.
+        // Deliver the actual input event: the native editor reports the text, the caret and the
+        // inline references that survive the edit, which the real composer reconciles by token range.
+        const text = 'Review @src/b.ts';
+        const start = text.indexOf('@src/b.ts');
         await act(async () => {
-            screen.changeTextByTestId('new-session-composer-input', 'Review @src/b.ts');
+            screen.findByTestId('new-session-composer-input')?.props.onChange({ nativeEvent: {
+                text, selection: { start: text.length, end: text.length }, eventCount: 1,
+                references: [{ ref: 'file:src/b.ts', token: '@src/b.ts', start, end: start + '@src/b.ts'.length }],
+            } });
         });
 
         const step = changes.at(-1)?.blocks[0];

@@ -88,6 +88,7 @@ describe('KeyboardShortcutProvider', () => {
             getValue: () => state.doc.toString(),
             flushPendingChange: async () => { controller?.onDocumentChange(state.doc.toString()); },
             setDecorations: (layer, items) => { state = state.update({ effects: runtime.set.of({ layer, items }) }).state; },
+            removeDecoration: (layer, id) => { state = state.update({ effects: runtime.remove.of({ layer, id }) }).state; },
             onDecorationPress: (listener) => { press = listener; return () => { press = undefined; }; },
             runCommand: (command) => {
                 if (typeof command === 'object' && 'replaceDocument' in command) state = state.update({ changes: { from: 0, to: state.doc.length, insert: command.replaceDocument } }).state;

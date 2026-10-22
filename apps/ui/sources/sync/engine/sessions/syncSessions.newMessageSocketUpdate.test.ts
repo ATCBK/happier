@@ -709,6 +709,50 @@ describe('handleNewMessageSocketUpdate', () => {
         });
     });
 
+    it.each([
+        { marker: 'turn_cancelled', status: 'cancelled', thinking: false, markerTurnId: 'turn-1', turnId: 'turn-1' },
+        { marker: 'turn_cancelled', status: 'in_progress', thinking: true, markerTurnId: 'old-turn', turnId: 'new-turn' },
+        { marker: 'task_started', status: 'completed', thinking: false, markerTurnId: 'turn-1', turnId: 'turn-1' },
+    ] as const)('keeps canonical $status Turn authority when transcript $marker arrives', async ({ marker, status, thinking, markerTurnId, turnId }) => {
+        const { params, applySessions, applyMessages } = buildHarness({
+            updateData: buildUpdate({
+                sid: 's1',
+                messageId: 'late-lifecycle-marker',
+                messageSeq: 2,
+                sourceCreatedAt: 100,
+                content: {
+                    t: 'plain',
+                    v: {
+                        role: 'agent',
+                        content: {
+                            type: 'acp',
+                            agentId: 'test-provider',
+                            data: { type: marker, id: markerTurnId },
+                        },
+                    },
+                },
+            }),
+            getSession: () => ({
+                ...buildSession('s1'),
+                encryptionMode: 'plain',
+                latestTurnId: turnId,
+                latestTurnStatus: status,
+                latestTurnStatusObservedAt: 100,
+                thinking,
+            }),
+        });
+
+        await handleNewMessageSocketUpdate(params);
+
+        expect(applySessions.mock.calls[0]?.[0]?.[0]).toMatchObject({
+            latestTurnId: turnId,
+            latestTurnStatus: status,
+            latestTurnStatusObservedAt: 100,
+            thinking,
+        });
+        expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({ id: 'late-lifecycle-marker' });
+    });
+
     it('triggers catch-up when a gap is detected for a loaded transcript', async () => {
         const { params, fetchSessions, applyMessages, onMessageGapDetected, markSessionMaterializedMaxSeq } = buildHarness({
             updateData: buildUpdate({ sid: 's1', messageId: 'm5', messageSeq: 5 }),

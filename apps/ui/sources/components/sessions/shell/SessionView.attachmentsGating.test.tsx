@@ -245,7 +245,7 @@ async function renderScreen(element: Parameters<typeof renderCanonicalScreen>[0]
     <TransferAvailabilityProbe />{element}
   </InjectedAuthProvider>, { createNodeMock: element => Object.assign(
     document.createElement(element.type === 'TextInput' ? 'textarea' : 'div'), {
-      setNativeProps() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+      setNativeProps() {}, setDropCaret() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
     }) });
   const metadata = readSessionOwnerMetadataView(sessionState.session);
   const expectsTransferAvailable = attachmentsTransferAvailableState.value

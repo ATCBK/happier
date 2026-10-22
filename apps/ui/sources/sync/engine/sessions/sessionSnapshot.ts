@@ -466,13 +466,12 @@ export function buildRenderableFromRowAndCache(
     const existingSessionProjectionMatches = existingSessionRenderable?.metadata != null
         && readSessionMetadataLayoutVersion(existingSession?.metadataLayoutVersion) === rowMetadataLayoutVersion
         && existingSession?.metadataVersion === row.metadataVersion;
-    const projectionSource = cachedProjectionUsable && cachedEntry?.metadataVersion === row.metadataVersion
-        ? cachedRenderable
-        : existingSessionProjectionMatches
-            ? existingSessionRenderable
-            : cachedProjectionUsable
-                ? cachedRenderable
-                : undefined;
+    // Hydrated metadata retains identity evidence that older compact cache rows omitted.
+    const projectionSource = existingSessionProjectionMatches
+        ? existingSessionRenderable
+        : cachedProjectionUsable
+            ? cachedRenderable
+            : undefined;
     const undecidedSession: SessionListRenderableSource = {
         ...buildHydratedSessionFromRowState({
             row,

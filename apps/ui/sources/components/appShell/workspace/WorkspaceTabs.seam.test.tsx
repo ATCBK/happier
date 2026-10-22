@@ -164,7 +164,7 @@ describe('workspace tabs production composition', () => {
             const pushes = vi.mocked(router.push).mock.calls.length;
             const replacements = vi.mocked(router.replace).mock.calls.length;
             const anchor = { kind: 'fileLine' as const, startLine: 14 };
-            let opened = false;
+            let opened: boolean | null = false;
             await act(async () => { opened = await opener.open({ kind: 'session', sessionId: 'tracked', serverId: scope.serverId,
                 path: 'main.ts' }, { intent: 'preview', present: false, anchor, anchorSource: 'file', origin: {
                     transcript: { sessionAddress: { serverId: scope.serverId, sessionId: 'tracked' }, routeMessageId: 'local:track', filePath: 'main.ts' },
@@ -295,7 +295,7 @@ describe('workspace tabs production composition', () => {
             await vi.waitFor(async () => { await act(async () => {});
                 expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true });
                 expect(pane.fileFindSeedAccountBindings.get(scope.serverId)?.isCurrent()).toBe(true); });
-            let opened = false;
+            let opened: boolean | null = false;
             await act(async () => { opened = await openProject('shared-project', { serverId: scope.serverId,
                 activeRootPath: '/repo/feature', initialResource: { kind: 'file', path: anchor.filePath, anchor, anchorSource: 'diff', find } }); });
             expect(opened).toBe(true);
@@ -346,7 +346,7 @@ describe('workspace tabs production composition', () => {
             } }) };
             homes.replaceAccountSettings('home', { settings, version: 2 });
             await act(async () => { storage.getState().applySettingsForScope(scope, settings, 2); });
-            let opened: boolean | undefined;
+            let opened: boolean | null | undefined;
             await act(async () => { opened = await fileOpener.open({ kind: 'session', sessionId: 's1', serverId: scope.serverId, path: 'src/a.ts' }, {
                 origin: { transcript: { sessionAddress: { serverId: scope.serverId, sessionId: 's1' }, routeMessageId: 'local:m1', filePath: 'src/a.ts' } },
             }); });

@@ -554,6 +554,13 @@ describe('useSessionViewShellSession', () => {
             const first = hook.getCurrent();
             const firstTurns = first?.sessionTurns;
             render.mockClear();
+            // Root store notifications alone are not selected Session changes.
+            // Keep background publication distinct from the input leaf's text updates.
+            for (let index = 0; index < 26; index += 1) {
+                await act(async () => storage.setState({ settingsVersion: (previousState.settingsVersion ?? 0) + index + 1 }));
+                expect(hook.getCurrent()).toBe(first);
+            }
+            expect(render).not.toHaveBeenCalled();
             await act(async () => storage.getState().applySessions([
                 { ...storage.getState().sessions[base.id], seq: 34, sessionTurns: structuredClone(sessionTurns) },
                 createSessionFixture({ id: 'unrelated-turn-session', serverId: base.serverId }),
