@@ -825,9 +825,7 @@ export async function executeContributedAction(params: Readonly<{
     const sharedRequester = params.approvalContext !== undefined && isSharedRequesterActionV1(params.approvalContext);
     const requestCurrentIntent = params.requestCurrentIntent
       ? async (request: TargetActionCurrentIntentRequest): Promise<TargetActionCurrentIntentResult> => {
-          if (accountTarget || params.context.approvalInputCustody === 'live_only') {
-            return await params.requestCurrentIntent!({ ...request, approvalInputCustody: 'live_only' });
-          }
+          const liveOnly = accountTarget || params.context.approvalInputCustody === 'live_only';
           const requestedSurface = request.invocationSurface ?? request.surface;
           const deferredSurface = requestedSurface === 'api' || requestedSurface === 'cli'
             || requestedSurface === 'agent' || requestedSurface === 'mcp' ? requestedSurface : null;
@@ -835,27 +833,7 @@ export async function executeContributedAction(params: Readonly<{
             && (projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? [])?.confidentialPaths.length ?? 0) > 0;
           const needsApprovalPlacement = (deferredSurface !== null || createsConfidentialApproval || sharedRequester)
             && pluginActionRequiresPresentUserIntent(request.action, requestedSurface, request.action.input);
-          if (!needsApprovalPlacement) return await params.requestCurrentIntent!(request);
-          const currentPlacement = await resolveCurrentTargetApprovalReplayPlacement(
-            runtimeRegistry,
-            pluginId,
-            request.signal,
-          );
-          if (currentPlacement.status !== 'resolved') {
-            return {
-              status: 'unavailable',
-              code: currentPlacement.status === 'aborted'
-                ? 'plugin_action_aborted'
-                : 'plugin_action_execution_origin_unavailable',
-            };
-          }
-          const placement = Object.freeze({
-            serverId: currentPlacement.placement.serverId,
-            machineId: currentPlacement.placement.machineId,
-            ...(params.context.defaultSessionId === undefined
-              ? {}
-              : { defaultSessionId: params.context.defaultSessionId }),
-          });
+          if (!liveOnly && !needsApprovalPlacement) return await params.requestCurrentIntent!(request);
           const projectedInput = projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? []);
           const retainedInput = { action: { pluginId: request.action.pluginId, localId: request.action.localId },
             input: projectedInput?.input ?? request.action.input };
@@ -863,6 +841,30 @@ export async function executeContributedAction(params: Readonly<{
             actionId: 'action.invoke', input: retainedInput, required: sharedRequester });
           if (!requesterAdmission.ok) return { status: 'unavailable', code: requesterAdmission.errorCode };
           const { requesterConfirmation } = requesterAdmission;
+          let placement: TargetActionApprovalReplayPlacementV1 | undefined;
+          // Live custody retains the admitted source without requiring a daemon replay placement.
+          if (!liveOnly) {
+            const currentPlacement = await resolveCurrentTargetApprovalReplayPlacement(
+              runtimeRegistry,
+              pluginId,
+              request.signal,
+            );
+            if (currentPlacement.status !== 'resolved') {
+              return {
+                status: 'unavailable',
+                code: currentPlacement.status === 'aborted'
+                  ? 'plugin_action_aborted'
+                  : 'plugin_action_execution_origin_unavailable',
+              };
+            }
+            placement = Object.freeze({
+              serverId: currentPlacement.placement.serverId,
+              machineId: currentPlacement.placement.machineId,
+              ...(params.context.defaultSessionId === undefined
+                ? {}
+                : { defaultSessionId: params.context.defaultSessionId }),
+            });
+          }
           const originSurface = deferredSurface ?? (requestedSurface === 'plugin' ? 'plugin' : null);
           const executionOriginV1 = (!requesterConfirmation ? params.approvalExecutionOrigin : undefined) ?? (originSurface === null ? null : buildApprovalExecutionOriginV1({
             actionId: 'action.invoke',
@@ -872,18 +874,18 @@ export async function executeContributedAction(params: Readonly<{
               ...params.approvalContext,
               surface: originSurface,
               actionCaller: params.approvalContext?.actionCaller ?? params.context.initiatingActionCaller ?? { kind: 'host' },
-              serverId: placement.serverId,
-              executionRunTargetMachineId: placement.machineId,
+              ...(placement ? { serverId: placement.serverId, executionRunTargetMachineId: placement.machineId } : {}),
               actionRequestId: params.approvalContext?.actionRequestId ?? params.approvalExecutionOrigin?.requestId ?? randomUUID(),
             },
-            targetSessionId: placement.defaultSessionId ?? null,
+            targetSessionId: placement?.defaultSessionId ?? params.context.defaultSessionId ?? null,
           }));
           if (requesterConfirmation && (!executionOriginV1?.externalActionExecutionAuthorization || !executionOriginV1.externalActionInputSignature)) {
             return { status: 'unavailable', code: 'approval_context_unavailable' };
           }
           const result = await params.requestCurrentIntent!({
             ...request,
-            replayPlacement: placement,
+            ...(liveOnly ? { approvalInputCustody: 'live_only' } : {}),
+            ...(placement ? { replayPlacement: placement } : {}),
             ...(executionOriginV1 ? { executionOriginV1 } : {}),
             ...(requesterConfirmation ? { requesterConfirmation } : {}),
           });

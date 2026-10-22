@@ -46,6 +46,7 @@ describe('Session MCP Account routing', () => {
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: false },
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: true },
     { actionId: 'session.list' as const, input: {}, uncertain: false },
+    { actionId: 'agents.backends.list' as const, input: { includeDisabled: false }, uncertain: false },
     { actionId: 'agents.models.list' as const, input: { backendTargetKey: 'agent:acme.discovery/assistant', machineId: 'shared-machine' }, uncertain: false },
     { actionId: 'agents.config_options.list' as const, input: { backendTargetKey: 'agent:acme.discovery/assistant', machineId: 'shared-machine', modelId: 'small' }, uncertain: false },
     { actionId: 'agents.session_modes.list' as const, input: { backendTargetKey: 'agent:acme.discovery/assistant', machineId: 'shared-machine' }, uncertain: false },
@@ -58,14 +59,6 @@ describe('Session MCP Account routing', () => {
     { actionId: 'session.transcript.get' as const, input: { sessionId: 'caller-session', limit: 10 }, uncertain: false },
     { actionId: 'session.notes.set' as const, input: { sessionId: 'led-child', notes: 'Delegated notes' }, uncertain: false },
     { actionId: 'session.roles.apply_to_reports' as const, input: { sessionId: 'caller-session' }, uncertain: false },
-    { actionId: 'execution.run.start' as const, input: { intent: 'task',
-      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-      instructions: 'Reply only', modelId: 'gpt-6-luna', configOptions: { reasoning_effort: 'low' },
-      permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
-    }, uncertain: false },
-    { actionId: 'subagents.delegate.start' as const, input: {
-      backendTargetKeys: ['agent:acme.discovery/assistant'], instructions: 'Reply only',
-    }, uncertain: false },
     { actionId: 'session.spawn_new' as const, input: {
       executionTarget: { serverId: 'home', machineId: 'shared-machine' },
       directory: { kind: 'path', path: '/workspace' },

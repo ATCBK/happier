@@ -1339,7 +1339,7 @@ export function createCliActionDeps(params: Readonly<{
         catch { appliedChildSelection = { status: 'unavailable' }; }
       }
       const availableAgents = scopeOnly ? undefined : await measureActionStartPhaseV1(context, 'agent_inventory',
-        () => inventoryDeps.agentsBackendsList({ includeDisabled: false }));
+        () => (readEffectiveDeps?.() ?? actionDeps).agentsBackendsList({ includeDisabled: false }));
       return { roleSources, settings, appliedChildSelection, availableAgents };
     };
     // Built-in Role/Artifact, captured Settings and ACP reads join one bounded
@@ -1361,7 +1361,7 @@ export function createCliActionDeps(params: Readonly<{
       appliedChildSelection,
       turnDepth,
       callerPermissionMode: context.callerPermissionMode ?? null, settings,
-      accountRoleOverrides: readAccountRoleOverrides(),
+      accountRoleOverrides: scopeOnly ? undefined : await readReadyAccountRoleOverrides(context.signal),
       ...(scopeOnly ? { roles: {} } : {}),
       availableAgentTargetKeys: availableAgents?.items
         .filter((item) => item.enabled).map((item) => item.targetKey),

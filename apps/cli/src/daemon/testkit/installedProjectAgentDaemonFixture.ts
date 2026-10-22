@@ -20,7 +20,9 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   authoredPlugin?: Parameters<typeof createAuthoredAdmittedPluginRuntimeFixture>[0]['plugins'][number],
   controller?: PluginReloadController,
   requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>
-    & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>) {
+    & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>
+    & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'credentials'>>) {
+  const daemonCredentials = requesterOptions?.credentials ?? { token: 'custodian-token', encryption: null };
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
   const fixture = await createInstalledProjectAgentLaunchFixture({ accountActionCredentials });
@@ -68,7 +70,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
       const bootstrap = await resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: f.directory, serverId: 'session-home',
         serverHttpBaseUrl: 'https://session-home.test', sessionId: id, legacyOwnerCredentials: f.bootstrap.credentials,
         ...(attribution ? { expectedAttribution: attribution } : {}), machineAdmissionBoundary: {
-          machineId: 'machine', daemonToken: 'custodian-token', isHomeCurrent: f.isHomeCurrent, readInstallation: () => f.installation } });
+          machineId: 'machine', daemonToken: daemonCredentials.token, isHomeCurrent: f.isHomeCurrent, readInstallation: () => f.installation } });
       if (!bootstrap) requesterRecoveryStage = 'bootstrap_refused';
       return bootstrap;
     },
@@ -76,7 +78,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   const daemon = await startDaemonSessionControlRuntime({ machineId: 'machine', serverId: 'session-home', serverBaseUrl: 'https://session-home.test',
     resolveCurrentMachineExecutionOriginContext: requesterOptions?.resolveCurrentMachineExecutionOriginContext,
     openTeamCredentialProviderBinding: requesterOptions?.openTeamCredentialProviderBinding,
-    externalActionAccountId: 'custodian', credentials: { token: 'custodian-token', encryption: null }, api: {} as never,
+    externalActionAccountId: 'custodian', credentials: daemonCredentials, api: {} as never,
     deviceLocalSecretStorage: await readOrCreateDeviceLocalSecretStorage({ path: join(f.directory, 'fixture-device-secret') }),
     pluginRuntimeController: plugin.controller, connectedServiceRuntimeRegistry,
     daemonSessionMutationCustody: { stageTranscriptMessage: async () => { throw new Error('No transcript mutation'); },

@@ -60,6 +60,8 @@ import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createRoleSourceReader } from '@/session/roles/roleSources';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 const env = process.env;
 
@@ -92,6 +94,7 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
     const metadata = params.readMetadata();
     if (!metadata) return reply.code(404).send({ error: 'not_found' });
     return { session: createSessionRecordFixture({ id: params.sessionId, encryptionMode: mode,
+      share: null,
       metadata: mode === 'plain' ? JSON.stringify(metadata) : encodeBase64(encrypt(secret, 'legacy', metadata)),
     }) };
   });
@@ -145,6 +148,29 @@ const catalogHostTurn = {
   getActiveTurnPermissionWitness: () => ({ turnId: 'catalog-turn',
     causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }),
 };
+
+function createProductionSessionDaemonExecutor(credentials: Parameters<typeof createCliActionExecutorFromCredentials>[0]['credentials']) {
+  return createDaemonSessionAccountActionExecutor({
+    serverId: getTestServerBinding().serverId, serverHttpBaseUrl: getTestServerBinding().serverUrl,
+    token: credentials.token, credentials, machineId: 'machine-1',
+    // Home authorization issuance is the remote boundary. The production daemon
+    // and credentialed executor consume its strict, request-bound result.
+    prepareExternalActionAuthorization: async ({ operation, sessionActionOrigin }) => {
+      const target = { kind: 'machine' as const, machineId: 'machine-1' };
+      return { target, authorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fixture-home-authorization', binding: {
+        accountId: 'account-1', authentication: { kind: 'account', tokenEpoch: 0 },
+        serverIdentityId: 'srv_test-home', machineId: target.machineId, custodianAccountId: 'account-1', installationId: 'fixture-installation',
+        actionId: operation.actionId, requestId: operation.requestId, target, accountEncryptionMode: 'plain',
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: operation.requestId, target, input: operation.input }),
+        sessionActionOrigin, sessionActionSource: { machineId: target.machineId, installationId: 'fixture-installation' },
+      } }) };
+    },
+    createExecutor: (getCurrentTurnWorkDepth, isCallerCurrent) => createCliActionExecutorFromCredentials({
+      credentials, serverId: getTestServerBinding().serverId, serverApiUrl: getTestServerBinding().serverUrl,
+      getCurrentTurnWorkDepth, readCredentials: async () => await isCallerCurrent() ? credentials : null,
+    }),
+  });
+}
 
 afterAll(async () => { await pluginReloadController.shutdown(); });
 
@@ -448,7 +474,8 @@ describe('createHappierMcpServer real host admission', () => {
 
   it.each(['account', 'session'] as const)('retains intent-dependent policy repair and no-creation evidence through native MCP (%s)', async authorityScope => {
     const sessionId = 'c666666666666666666666671';
-    const catalogs = await installAccountCatalogDaemonTransport({ sessionId, serveAccountCatalog: true, readMetadata: () => createTestMetadata() });
+    const catalogs = await installAccountCatalogDaemonTransport({ sessionId, serveAccountCatalog: true,
+      readMetadata: () => createTestMetadata({ machineId: 'machine-1', path: configuration.happyHomeDir }) });
     const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.fixture`, encryption: null };
     setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
@@ -471,6 +498,7 @@ describe('createHappierMcpServer real host admission', () => {
       getServerFeaturesSnapshot: features,
       ...(authorityScope === 'session' ? { getSessionRoleContext: () => sessionRoles, readRoleSources } : {}),
       getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, callerPermissionMode: 'yolo',
         causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
     });
     let manager: ExecutionRunHostBridge | undefined;
@@ -478,10 +506,9 @@ describe('createHappierMcpServer real host admission', () => {
       sessionId, cwd: configuration.happyHomeDir, parentProvider: 'codex', sendAcp: async () => {},
       getServerFeaturesSnapshot: features, onManagerCreated: created => { manager = created; },
     });
-    const accountRuntime = authorityScope === 'session' ? createHappierMcpServer(host, { credentials }) : null;
-    const authority = accountRuntime ? await createSessionDaemonAuthorityFixture({ sessionId,
-      execute: operation => accountRuntime.executeTool({ toolName: 'action_execute',
-        args: { actionId: operation.actionId, input: operation.input } }),
+    const daemonExecute = createProductionSessionDaemonExecutor(credentials);
+    const authority = authorityScope === 'session' ? await createSessionDaemonAuthorityFixture({ sessionId,
+      execute: operation => daemonExecute(operation, { sessionId, isCurrent: async () => true }),
     }) : null;
     process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
     const bridge = await createHappierMcpBridge(host, { authorityScope, sessionCredentials: credentials,
@@ -522,9 +549,10 @@ describe('createHappierMcpServer real host admission', () => {
       expect(options.find(option => option.value === 'voice_agent')?.description)
         .toMatch(/retentionPolicy: resumable.*runClass: long_lived.*ioMode: streaming/u);
       expect(options.find(option => option.value === 'delegate')?.description).toMatch(/ordinary bounded child work/u);
-    } finally { await client.close(); bridge.happierMcpServer.stop(); await accountRuntime?.mcp.close();
+    } finally { await client.close(); bridge.happierMcpServer.stop();
       await authority?.close(); registration.dispose(); await manager?.dispose(); await catalogs.close(); }
   }, 30_000);
+
 
   it.each([
     { name: 'action_spec_get', arguments: { id: 'workflow.run.start', schemaPath: 'private-malformed-pointer' },

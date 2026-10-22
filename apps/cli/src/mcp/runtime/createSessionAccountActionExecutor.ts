@@ -16,7 +16,6 @@ import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtim
 import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
-import { isAgentStartActionV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 
 type ActionExecutor = Readonly<{
   execute(actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult>;
@@ -94,7 +93,8 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       // Direct and dependent native inventories need the daemon's Machine
       // transport and launch environment, not the restricted runner's process.
       const nativeInventoryRead = !params.hasAccountAuthority
-        && (actionId === 'action.options.resolve' || actionId === 'agents.models.list' || actionId === 'agents.config_options.list'
+        && (actionId === 'action.options.resolve' || actionId === 'agents.backends.list'
+          || actionId === 'agents.models.list' || actionId === 'agents.config_options.list'
           || actionId === 'agents.session_modes.list');
       // Origin-required RPCs use the existing source-daemon custody channel,
       // including cross-Session question answers. Own questions stay with the
@@ -105,10 +105,6 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         && executionPlacement !== 'client'
         && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !sessionOriginRpc
         && builtIn.data !== 'session.spawn_new'
-        // Agent admission consumes Account catalogs and Role policy. Restricted
-        // runners use the same credentialed owner as Session spawn; it dispatches
-        // attached Runs back through their bound Session RPC.
-        && !(isAgentStartActionV1(builtIn.data) && !params.hasAccountAuthority)
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.
         && builtIn.data !== 'workflow.run.start'

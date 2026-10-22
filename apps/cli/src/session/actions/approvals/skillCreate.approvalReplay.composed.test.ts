@@ -78,7 +78,7 @@ describe('Session skill creation through durable approval replay', () => {
         const ready = new Promise<void>(resolve => { waiterReady = resolve; });
         const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: session.id, mode: 'plain', ctx: null,
           serverHttpBaseUrl: url });
-        const executor = createActionExecutor({ ...deps, ...(mode === 'waived' || mode === 'rules-receipt' ? { isActionApprovalRequired: () => false } : {}),
+        const executor = createActionExecutor({ ...deps,
           approvalsWaitForDecision: async args => {
             const pending = coordinator.waitForDecision(args); waiterReady();
             const decision = await pending;
@@ -90,6 +90,9 @@ describe('Session skill creation through durable approval replay', () => {
         ] }, ...(mode === 'explicit' ? { where: { kind: 'write', write: { place: { t: 'machine', machineId: 'chosen-machine' }, state: 'on' } } } : {}) }, {
           surface: 'mcp', authority: 'account_automation', serverId: deps.skillRules!.serverId, serverIdentityId, runtimeAccountId: account.id,
           defaultSessionId: session.id, actionRequestId: `d26-${mode}`,
+          ...(mode === 'waived' || mode === 'rules-receipt' ? { actionsSettings: {
+            v: 1 as const, actions: {}, approvalWaivedSurfaces: { 'skills.install': ['agent' as const] },
+          } } : {}),
           signal: proposerLifetime.signal,
           actionCaller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
         });
