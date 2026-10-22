@@ -8,6 +8,7 @@ import {
   isSessionViewerPresenting,
   useOptionalSessionViewerController,
   NO_SESSION_VIEWER_INSET,
+  useSessionViewerComposerReserve,
   useSessionViewerReadingInset,
   type SessionViewerController,
 } from './SessionViewerController';
@@ -15,6 +16,8 @@ import { SessionViewerControllerProvider } from './SessionViewerControllerProvid
 import {
   resolveSessionViewerReadingInset,
   SESSION_VIEWER_EDGE,
+  SESSION_VIEWER_PHONE_RESERVE,
+  SESSION_VIEWER_STATE_MIN_BODY,
 } from './sessionViewerGeometry';
 
 function mountController(
@@ -43,6 +46,7 @@ function mountController(
         () => ({
           controller: useOptionalSessionViewerController()!,
           inset: useSessionViewerReadingInset(),
+          composerReserve: useSessionViewerComposerReserve(),
         }),
         { wrapper: Wrapper },
       ),
@@ -142,6 +146,37 @@ describe('SessionViewerController', () => {
     expect(openDocked).toHaveBeenCalledTimes(1);
     expect(openDocked).toHaveBeenCalledWith('browser');
     await hook.unmount();
+  });
+
+  it('holds room above the composer for a phone viewer, docked or expanded, so the attention band yields to it', async () => {
+    // The reserve holds a whole state card (the least frame the viewer is legible in) plus its gutters.
+    expect(SESSION_VIEWER_PHONE_RESERVE).toBeGreaterThan(SESSION_VIEWER_STATE_MIN_BODY + SESSION_VIEWER_EDGE * 2);
+    const phone = mountController({ phone: true });
+    const hook = await phone.render();
+    expect(hook.getCurrent().composerReserve).toBe(0);
+    await act(async () => {
+      hook.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
+    expect(hook.getCurrent().composerReserve).toBe(SESSION_VIEWER_PHONE_RESERVE);
+    await act(async () => {
+      hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
+    });
+    expect(hook.getCurrent().composerReserve).toBe(SESSION_VIEWER_PHONE_RESERVE);
+    await act(async () => {
+      hook.getCurrent().controller.port.apply({ kind: 'viewer.close' });
+    });
+    expect(hook.getCurrent().composerReserve).toBe(0);
+    await hook.unmount();
+
+    // A desktop frame floats beside the reading column; the composer keeps its whole budget.
+    const desktop = mountController({ phone: false });
+    const wide = await desktop.render();
+    await act(async () => {
+      wide.getCurrent().controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
+    expect(wide.getCurrent().controller.state.mode).toBe('floating');
+    expect(wide.getCurrent().composerReserve).toBe(0);
+    await wide.unmount();
   });
 
   it('reveals the phone dock on every open request, including one for the source already docked', async () => {

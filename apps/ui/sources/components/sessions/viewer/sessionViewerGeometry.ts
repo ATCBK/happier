@@ -1,4 +1,4 @@
-import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
+import { resolveFloatingFrameChromeHeight, type FrameRect } from '@happier-dev/plugin-ui/presentation';
 
 /** The viewer's gutter from the transcript area's edges (the floating presences' 16). */
 export const SESSION_VIEWER_EDGE = 16;
@@ -15,6 +15,13 @@ export const SESSION_VIEWER_DEFAULT_ASPECT = 16 / 10;
  * padding. Below it the card is clipped by the body's rounded edge.
  */
 export const SESSION_VIEWER_STATE_MIN_BODY = 272;
+/**
+ * The room a phone viewer holds above the composer in Chat, docked or expanded: a frame whose body
+ * holds a state card, inside its gutters. The composer's attention band yields this much, so a tall
+ * band never covers the dock nor squeezes Expanded below the dock it came from.
+ */
+export const SESSION_VIEWER_PHONE_RESERVE =
+  resolveFloatingFrameChromeHeight({ footer: false }) + SESSION_VIEWER_STATE_MIN_BODY + SESSION_VIEWER_EDGE * 2;
 
 /**
  * The shape of the frame's body at `width`. The source's own picture shape wins; until it reports one

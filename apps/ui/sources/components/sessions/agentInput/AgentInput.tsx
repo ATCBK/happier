@@ -303,6 +303,7 @@ import {
     resolveLiveInputTextStatus,
 } from './liveInputState';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useSessionViewerComposerReserve } from '@/components/sessions/viewer/SessionViewerController';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 
 /** Lab P1: the reference picker's one frame (list and footer), kept as results narrow. */
@@ -2575,11 +2576,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         overflowThreshold: 2,
         edgeThreshold: 2,
     });
+    // A phone viewer docked or expanded in Chat holds its frame above the composer: the attention band
+    // takes its share of what is left, so it never covers the dock nor squeezes Expanded below it.
+    const viewerComposerReserve = useSessionViewerComposerReserve();
     const permissionRequestsMaxHeightPx = React.useMemo(() => {
-        const available = Math.max(1, props.maxPanelHeight ?? screenHeight);
+        const available = Math.max(1, (props.maxPanelHeight ?? screenHeight) - viewerComposerReserve);
         const desired = Math.round(available * 0.34);
         return clampNumber(desired, 160, Math.min(320, available));
-    }, [props.maxPanelHeight, screenHeight]);
+    }, [props.maxPanelHeight, screenHeight, viewerComposerReserve]);
     const composerAttentionRequestsNode = React.useMemo(() => {
         if (!attentionRequestSessionId || !hasComposerAttentionRequests) return null;
         const sharedProps: Omit<AgentInputPermissionRequestsProps, 'permissionLocationsById'> = {

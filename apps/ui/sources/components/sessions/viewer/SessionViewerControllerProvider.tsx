@@ -8,6 +8,7 @@ import { useSessionViewerPresentationState } from './SessionViewerDestinationSco
 import {
   createSessionViewerPresenceStore,
   NO_SESSION_VIEWER_INSET,
+  SessionViewerComposerReserveContext,
   SessionViewerControllerContext,
   SessionViewerReadingInsetContext,
   type SessionViewerController,
@@ -21,6 +22,7 @@ import {
   type SessionViewerPresentationState,
   type SessionViewerSource,
 } from './sessionViewerPresentation';
+import { SESSION_VIEWER_PHONE_RESERVE } from './sessionViewerGeometry';
 
 /** A floating desktop view occupies the phone's existing sticky slot during reflow. */
 function projectViewportPresentation(state: SessionViewerPresentationState, phone: boolean): SessionViewerPresentationState {
@@ -239,10 +241,17 @@ export function SessionViewerControllerProvider(
     ],
   );
   const effectiveInset = presentedState.mode === 'floating' ? readingInset : NO_SESSION_VIEWER_INSET;
+  // A phone presents the viewer in Chat above the composer; its attention band leaves the frame this room.
+  const composerReserve =
+    props.phone && presentedState.source && (presentedState.mode === 'docked' || presentedState.mode === 'expanded')
+      ? SESSION_VIEWER_PHONE_RESERVE
+      : 0;
   return (
     <SessionViewerControllerContext.Provider value={value}>
       <SessionViewerReadingInsetContext.Provider value={effectiveInset}>
-        {props.children}
+        <SessionViewerComposerReserveContext.Provider value={composerReserve}>
+          {props.children}
+        </SessionViewerComposerReserveContext.Provider>
       </SessionViewerReadingInsetContext.Provider>
     </SessionViewerControllerContext.Provider>
   );

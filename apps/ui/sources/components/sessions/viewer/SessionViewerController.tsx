@@ -135,6 +135,14 @@ export const SessionViewerReadingInsetContext =
   React.createContext<SessionViewerReadingInset>(NO_SESSION_VIEWER_INSET);
 
 
+/** Separate for the same reason: the composer re-renders only when a phone viewer starts or stops holding room. */
+export const SessionViewerComposerReserveContext = React.createContext<number>(0);
+
+/** The height a phone viewer holds above the composer (`SESSION_VIEWER_PHONE_RESERVE`), zero when none. */
+export function useSessionViewerComposerReserve(): number {
+  return React.useContext(SessionViewerComposerReserveContext);
+}
+
 /** The reading column's and centred content's yield to a settled floating viewer (zero when none). */
 export function useSessionViewerReadingInset(): SessionViewerReadingInset {
   return React.useContext(SessionViewerReadingInsetContext);
