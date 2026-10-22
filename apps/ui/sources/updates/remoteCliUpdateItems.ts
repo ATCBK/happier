@@ -1,7 +1,7 @@
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
-import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { resolveFleetMachineAvailability } from '@/sync/domains/machines/administration/fleetUnion';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 
@@ -14,7 +14,7 @@ import type { useMachineUpdateRuns } from './machineUpdateRuns';
 export type RemoteMachineUpdateFacts = Readonly<{
     machine: Machine;
     name: string;
-    online: boolean;
+    online: boolean | null;
     cliItem: UpdateItem;
     lastUpdateSignature: string;
 }>;
@@ -39,7 +39,8 @@ export function buildRemoteMachineUpdateFacts(
     for (const machine of machines) {
         if (machine.id === thisMachineId || !machine.metadata) continue;
         const facts = machine.metadata.cliUpdate ?? null;
-        const online = isMachineSelectableForFleet(accountScope, machine);
+        const availability = resolveFleetMachineAvailability(accountScope, machine);
+        const online = availability === 'unknown' ? null : availability === 'online';
         const lastUpdateSignature = signatureOfLastUpdate(facts?.lastUpdate ?? null);
         const cliItem = buildRemoteCliUpdateItem({
             machineId: machine.id,

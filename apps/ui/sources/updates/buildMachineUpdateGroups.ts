@@ -18,7 +18,7 @@ export type UpdatesGroup = Readonly<{
     /** The machine's display name (case preserved); `null` for this app. */
     machineName: string | null;
     machineId: string | null;
-    online: boolean;
+    online: boolean | null;
     /** When the machine was last seen (its own `activeAt`); `null` for this app and this computer. */
     lastSeenAt: number | null;
     items: readonly UpdateItem[];
@@ -33,7 +33,7 @@ export function readUpdatableInstallables(): readonly InstallableEntry[] {
 
 function buildMachineRows(params: Readonly<{
     machineId: string;
-    online: boolean;
+    online: boolean | null;
     agents: MachineAgentsSnapshot['agents'];
     snapshot: MachineCapabilitiesSnapshot | null;
     runs: ReturnType<typeof useMachineUpdateRuns>;

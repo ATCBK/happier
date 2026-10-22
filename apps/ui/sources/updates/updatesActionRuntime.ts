@@ -52,7 +52,7 @@ export function createUpdatesAction(account: LazyActionAccountContext | null | u
             const installables = getInstallablesRegistryEntries();
             return {
                 groups: owner.groups.map(group => ({
-                groupId: group.id, machineName: group.machineName, online: group.online,
+                groupId: group.id, machineName: group.machineName, online: group.online === true,
                 target: group.kind === 'app' ? { kind: 'app' as const } : group.kind === 'thisComputer'
                     ? { kind: 'local' as const } : { kind: 'machine' as const, machineId: group.machineId },
                 items: group.items.map(item => ({

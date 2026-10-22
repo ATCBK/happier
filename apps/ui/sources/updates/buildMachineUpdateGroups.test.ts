@@ -8,7 +8,8 @@ vi.mock('@/text', async () => {
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
+import { describeUpdatesGroupRow, partitionUpdatesPageGroups } from '@/components/updates/describeUpdatesGroupRow';
 
 import { buildMachineUpdateGroups, readUpdatableInstallables } from './buildMachineUpdateGroups';
 import { buildUpdatesSummary } from './items/buildUpdatesSummary';
@@ -36,6 +37,24 @@ const NO_RUNS = new Map();
 
 describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () => {
     beforeEach(clearMachineRequestReachabilityForTest);
+
+    it('retains unknown update facts without claiming the withdrawn Machine is offline or admitting updates', () => {
+        const scope = { serverId: 'home-a', accountId: 'updates-account' };
+        const studio = machine('studio');
+        const params = { accountScope: scope, machines: [studio], thisMachineId: null, thisComputerItem: null,
+            runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map() };
+        withdrawMachinePresenceForScope(scope);
+        const unknown = buildMachineUpdateGroups(params);
+        expect(partitionUpdatesPageGroups(unknown.groups).offline).toHaveLength(0);
+        expect(describeUpdatesGroupRow(unknown.groups[0]!)).toMatchObject({
+            status: 'updates.settingsSubtitle.unknown', tone: 'neutral', action: null,
+        });
+        expect(unknown.groups[0]?.items[0]).toMatchObject({ currentVersion: '0.2.12', action: { kind: 'none' } });
+        expect(buildUpdatesSummary(unknown.groups.flatMap(group => group.items)).status).not.toBe('offline');
+        captureMachinePresenceObservation(scope)([studio.id]);
+        const offline = buildMachineUpdateGroups({ ...params, machines: [{ ...studio, active: false, activeAt: Date.now() - 120_000 }] });
+        expect(partitionUpdatesPageGroups(offline.groups).offline).toHaveLength(1);
+    });
 
     it('retains update facts and pending runs while failed requests prevent actions, scoped to their Home', () => {
         const studio = machine('studio', {

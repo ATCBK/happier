@@ -62,6 +62,9 @@ export function describeUpdatesGroupRow(
         return status;
     };
 
+    if (group.online === null) {
+        return { title, status: t('updates.settingsSubtitle.unknown'), tone: 'neutral', action: null };
+    }
     if (!group.online) {
         const status = group.lastSeenAt != null
             ? `${t('updates.offline')} · ${t('status.lastSeen', { time: formatLastSeen(group.lastSeenAt) })}`
@@ -147,8 +150,8 @@ export function partitionUpdatesPageGroups(groups: readonly UpdatesGroup[]): Rea
     const quiet: UpdatesGroup[] = [];
     const offline: UpdatesGroup[] = [];
     for (const group of groups) {
-        if (group.kind === 'machine' && !group.online) offline.push(group);
-        else if (group.kind === 'machine' && isQuietMachineGroup(group)) quiet.push(group);
+        if (group.kind === 'machine' && group.online === false) offline.push(group);
+        else if (group.kind === 'machine' && group.online === true && isQuietMachineGroup(group)) quiet.push(group);
         else sections.push(group);
     }
     return { sections, quiet, offline };

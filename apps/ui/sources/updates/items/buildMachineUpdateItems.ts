@@ -68,7 +68,7 @@ function versionState(current: string | null, latest: string | null): UpdateItem
  * update names the person's own way (`manual`).
  */
 function resolveRow(item: UpdateItem, params: Readonly<{
-    online: boolean;
+    online: boolean | null;
     task: UpdateRunObservation;
     canRun: boolean;
     manual: UpdateItemAction | null;
@@ -76,6 +76,7 @@ function resolveRow(item: UpdateItem, params: Readonly<{
     state?: UpdateItemState;
 }>): UpdateItem {
     const state = params.state ?? versionState(item.currentVersion, item.latestVersion);
+    if (params.online === null) return { ...item, state: 'unknown', action: { kind: 'none' } };
     if (!params.online) {
         return { ...item, state: 'offline', action: { kind: 'none' } };
     }
@@ -131,7 +132,7 @@ export function buildThisComputerCliUpdateItem(params: Readonly<{
 export function buildRemoteCliUpdateItem(params: Readonly<{
     machineId: string;
     title: string;
-    online: boolean;
+    online: boolean | null;
     platform: string | null;
     /** `happyCliVersion` from machine metadata — every released daemon writes it. */
     happyCliVersion: string | null;
@@ -157,6 +158,7 @@ export function buildRemoteCliUpdateItem(params: Readonly<{
     if (!facts) {
         // An older daemon: its version, and the command that updates it — never "up to date".
         const command = params.platform === 'win32' ? null : LEGACY_CLI_UPDATE_COMMAND;
+        if (params.online === null) return item;
         if (!params.online) return { ...item, state: 'offline' };
         return { ...item, state: 'unknown', managedBy: 'happier', action: { kind: 'manual', command } };
     }
@@ -203,7 +205,7 @@ export function buildRemoteCliUpdateItem(params: Readonly<{
 /** The Updates projection of the canonical per-machine agent inventory. */
 export function buildAgentCliUpdateItem(params: Readonly<{
     machineId: string;
-    online: boolean;
+    online: boolean | null;
     agent: MachineAgent | null;
     task: UpdateRunObservation;
 }>): UpdateItem | null {
@@ -234,7 +236,7 @@ export function buildProbeFailedItem(params: Readonly<{
     machineId: string;
     subject: Extract<UpdateItem['subject'], { kind: 'agent-cli' | 'installable' }>;
     title: string;
-    online: boolean;
+    online: boolean | null;
 }>): UpdateItem {
     const item = baseItem({
         machineId: params.machineId,
@@ -243,7 +245,8 @@ export function buildProbeFailedItem(params: Readonly<{
         currentVersion: null,
         latestVersion: null,
     });
-    return params.online ? { ...item, state: 'unknown', failure: { kind: 'latestUnknown' } } : { ...item, state: 'offline' };
+    return params.online === false ? { ...item, state: 'offline' }
+        : params.online === true ? { ...item, state: 'unknown', failure: { kind: 'latestUnknown' } } : item;
 }
 
 /** A helper installable (GitHub CLI, codex-acp, …) from the installables registry's detect data. */
@@ -251,7 +254,7 @@ export function buildInstallableUpdateItem(params: Readonly<{
     machineId: string;
     installableKey: string;
     title: string;
-    online: boolean;
+    online: boolean | null;
     data: InstallableDepDataLike | null;
     task: UpdateRunObservation;
 }>): UpdateItem | null {
