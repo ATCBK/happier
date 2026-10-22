@@ -55,6 +55,9 @@ vi.mock('node:fs', async (importOriginal) => {
     return createBundledPluginPublicationFsFixture(actual);
 });
 
+// Cold source admission is setup, not part of the first Agent's RPC workload.
+await import('@/plugins/testkit/admittedRuntime');
+
 describe('bundled conversation content search', () => {
     it.each(['auggie', 'devin'] as const)('admits %s body hits through the registered candidate RPC and strict consumer schema', async agentId => {
         const { createEnvKeyScope } = await import('@/testkit/env/envScope');

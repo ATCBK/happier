@@ -71,6 +71,15 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
   isCurrent(): Promise<boolean>;
 }>): NonNullable<ProjectFiniteActionRuntime['inspectSourceProjectManifest']> {
   return async ({ source, signal }) => {
+    const phase = async <T>(name: string, read: () => T | Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      let status: 'completed' | 'failed' = 'failed';
+      try { const result = await read(); status = 'completed'; return result; }
+      finally { logger.debug('[ProjectDefinition] source inspection phase', { phase: name, status,
+        requestId: params.ingress.callerInputAuthorization?.binding.requestId,
+        transportRequestId: params.ingress.transportRequestId, machineId: source.machineId,
+        durationMs: Math.round(performance.now() - startedAt) }); }
+    };
     const [
       { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId },
       { ProjectDefinitionInspectOutputSchema },
@@ -102,7 +111,7 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
         throw Object.assign(new Error('project_requester_credentials_unavailable'), { code: 'project_requester_credentials_unavailable' });
       }
     };
-    await assertSourceCustody();
+    await phase('custody_before', assertSourceCustody);
     const serverIdentityId = await resolveServerProfileHomeIdentityId(params.serverId);
     const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
     const executor = createCliActionExecutorFromCredentials({
@@ -119,13 +128,13 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
     });
     let result: Awaited<ReturnType<typeof executor.execute>>;
     try {
-      result = await executor.execute('projects.inspect', { workspace: {
+      result = await phase('source_action', () => executor.execute('projects.inspect', { workspace: {
         serverId: source.serverId, workspaceId: source.id,
         machineId: source.machineId, rootPath: source.rootPath,
       } }, { ...context,
         ...(!params.ingress.localActionContext?.surface && !params.ingress.sessionActionOrigin ? { surface: 'api' as const } : {}),
         externalActionTarget: { kind: 'machine', machineId: source.machineId },
-      });
+      }));
     } catch (error) {
       await assertSourceCurrent();
       const code = error instanceof Error && 'code' in error && typeof error.code === 'string'
@@ -136,7 +145,7 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode });
     const output = ProjectDefinitionInspectOutputSchema.safeParse(result.result);
     if (!output.success) throw Object.assign(new Error('project_source_declaration_unavailable'), { code: 'project_source_declaration_unavailable' });
-    await assertSourceCustody();
+    await phase('custody_after', assertSourceCustody);
     return { ...output.data.definition, commands: output.data.commands,
       environmentExecutionInputs: output.data.environmentExecutionInputs };
   };

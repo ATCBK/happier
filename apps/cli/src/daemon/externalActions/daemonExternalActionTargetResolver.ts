@@ -32,6 +32,7 @@ import type { SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions
 
 import type { ResolveExternalActionTarget } from './executeExternalAction';
 import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { logger } from '@/ui/logger';
 
 type CurrentMachineExecutionOrigin = Readonly<{
   serverIdentityId: string;
@@ -131,6 +132,14 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
 }>): DaemonApprovalExecutionOriginCurrentness {
   const now = input.now ?? Date.now;
   return async ({ origin, request, actionInput, signal, reportStale }) => {
+    const phase = async <T>(name: string, read: () => T | Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      let status: 'completed' | 'failed' = 'failed';
+      try { const result = await read(); status = 'completed'; return result; }
+      finally { logger.debug('[ActionApproval] origin phase', { phase: name, status,
+        actionId: origin.actionId, requestId: origin.requestId, machineId: input.machineId,
+        durationMs: Math.round(performance.now() - startedAt) }); }
+    };
     const stale = (reason: DaemonApprovalExecutionOriginStaleReason) => {
       reportStale?.(reason);
       return false;
@@ -143,7 +152,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         && origin.credentialId !== undefined
         && !origin.externalActionExecutionAuthorization
       ) return stale('credential_changed');
-      const currentMachineOrigin = await input.resolveCurrentMachineExecutionOriginContext(signal);
+      const currentMachineOrigin = await phase('home_identity', () => input.resolveCurrentMachineExecutionOriginContext(signal));
       if (!currentMachineOrigin) return stale('home_unavailable');
       if (currentMachineOrigin.machineId !== input.machineId) return stale('machine_changed');
       if (origin.serverIdentityId !== undefined
@@ -195,16 +204,17 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             signature: origin.externalActionInputSignature,
           })
         ) return stale('credential_changed');
-        if (!await input.verifyExternalExecutionAuthorization({
+        const target = origin.target;
+        if (!await phase('external_authorization', () => input.verifyExternalExecutionAuthorization!({
           authorization: externalAuthorization,
           effectActionId: origin.actionId,
-          target: origin.target,
+          target,
           // Generic retained publications keep their incumbent local caller
           // exemption. Only an addressed original can prove this Home purpose.
           ...(retainedDiscussionSource?.discussionAddressing
             ? { retainedDiscussionSource } : {}),
           ...(signal ? { signal } : {}),
-        })) return stale('credential_changed');
+        }))) return stale('credential_changed');
         // The managed child is executed on a new guest, while its accepted
         // Session source remains on the controller. Home's current verifier
         // rechecks that exact source installation/Session/publisher together

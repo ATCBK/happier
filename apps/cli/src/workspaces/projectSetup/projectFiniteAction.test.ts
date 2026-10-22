@@ -843,7 +843,7 @@ describe('authenticated finite Project Action owner', () => {
         ['projects.script.run', 'revoked'], ['projects.script.run', 'mode'], ['projects.script.run', 'disconnect'],
         ['projects.script.run', 'setup revoked'],
         ['projects.script.run', 'environment revoked'], ['projects.script.run', 'setup environment revoked'],
-    ] as const)('observes requester encryption once through real socket custody and HTTP on %s (%s)', async (actionId, change) => {
+    ] as const)('keeps requester encryption observed through real socket custody and HTTP on %s (%s)', async (actionId, change) => {
         const nativeEnvironment = change === 'environment revoked' || change === 'setup environment revoked';
         const h = await harness({ version: 1,
             ...(change === 'setup revoked' || change === 'setup environment revoked' ? { workspace: { setup: [
@@ -887,7 +887,8 @@ describe('authenticated finite Project Action owner', () => {
             serverId: 'home', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://home.example', target: authorization.binding.target,
             installationId: 'installation', privateKey, isCurrent: admitted.isCustodyCurrent });
         if (!carrier) throw new Error('Requester HTTP custody not admitted');
-        expect(h.get.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(1);
+        // Admission also obtains its fresh Settings floor. The zero-read
+        // assertion below measures warm encryption custody after admission.
         expect(ExternalActionExecutionAuthorizationV1Schema.parse(carrier)).toEqual(authorization);
         const { credentials: _owner, ...ports } = h.runtime;
         let changed = false;
@@ -923,8 +924,18 @@ describe('authenticated finite Project Action owner', () => {
                     rpcLifecycleRegistrations: [{ resolveProjectFiniteRuntime: async () => runtime }],
                 });
                 const inspect = client.createProjectDefinitionAction('home', ingress);
-                const output = await inspect({ actionId, input: { workspace: h.address }, context: { serverId: 'home' } });
-                expect(ProjectDefinitionInspectOutputSchema.parse(output)).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
+                const read = () => inspect({ actionId, input: { workspace: h.address }, context: { serverId: 'home' } });
+                await read(); // Warm module/plugin loading before comparing the same passive composition.
+                const phaseLog = vi.spyOn(logger, 'debug');
+                const samples: number[] = [];
+                for (let sample = 0; sample < 3; sample++) {
+                    h.get.mockClear(); h.post.mockClear();
+                    const sampleStarted = performance.now();
+                    const output = await read();
+                    samples.push(Math.round(performance.now() - sampleStarted));
+                    expect(ProjectDefinitionInspectOutputSchema.parse(output)).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
+                }
+                phaseLog.mockRestore();
                 expect(h.spawned).toEqual([]);
             } else {
                 const result = await createProjectFiniteAction(runtime, ingress)({ actionId, input: { workspace: h.address,
@@ -953,7 +964,37 @@ describe('authenticated finite Project Action owner', () => {
             const counts = { encryption: h.get.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
                 verify: h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
             console.info('Requester decision HTTP reads', actionId, counts, { elapsedMs: Math.round(performance.now() - started) });
-            if (actionId === 'projects.inspect') expect(counts).toEqual({ encryption: 0, verify: 4 });
+            if (actionId === 'projects.inspect') {
+                // One initial admitted requester fence, then checks after the
+                // private inputs and after review. No duplicate initial HTTP hop.
+                expect(counts).toEqual({ encryption: 0, verify: 3 });
+                revoked = true;
+                h.post.mockClear();
+                expect(await inspectProjectSetupFromRuntime({ runtime, ingress, workspace: h.address, context: {} }))
+                    .toMatchObject({ setupReadiness: { kind: 'unknown', code: 'project_requester_credentials_unavailable' } });
+                expect(h.post.mock.calls.some(([url]) => String(url).includes('/project-rows/'))).toBe(false);
+                revoked = false;
+                h.post.mockClear();
+                expect(await inspectProjectSetupFromRuntime({ runtime, ingress: { ...ingress, machineAdmission: undefined },
+                    workspace: h.address, context: {} }))
+                    .toMatchObject({ setupReadiness: { kind: 'unknown', code: 'machine_admission_required' } });
+                expect(h.post.mock.calls.some(([url]) => String(url).includes('/project-rows/'))).toBe(false);
+                const cancelled = new AbortController();
+                cancelled.abort();
+                h.post.mockClear();
+                expect(await inspectProjectSetupFromRuntime({ runtime, ingress, workspace: h.address, context: { signal: cancelled.signal } }))
+                    .toMatchObject({ setupReadiness: { kind: 'unknown', code: 'project_requester_credentials_unavailable' } });
+                expect(h.post.mock.calls.some(([url]) => String(url).includes('/project-rows/'))).toBe(false);
+                const currentPost = h.post.getMockImplementation()!;
+                h.post.mockImplementation(async (...args) => {
+                    const response = await currentPost(...args);
+                    if (String(args[0]).includes('/project-rows/')) revoked = true;
+                    return response;
+                });
+                expect(await inspectProjectSetupFromRuntime({ runtime, ingress, workspace: h.address, context: {} }))
+                    .toMatchObject({ setupReadiness: { kind: 'unknown', code: 'project_requester_credentials_unavailable' } });
+                expect(h.spawned).toEqual([]);
+            }
             else expect(counts).toEqual({ encryption: 0, verify: 4 });
         } finally {
             h.spawned.forEach(({ pty }) => pty.exit(0));

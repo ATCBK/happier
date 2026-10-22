@@ -15,6 +15,7 @@ import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { ProjectSetupInspection } from '@/workspaces/projectSetup/projectSetupPreparation';
 import { isReviewedServiceMoveChild } from '@/api/externalActionExecutionAuthorization';
+import { logger } from '@/ui/logger';
 
 type NativeInspectionRuntimeLease = Readonly<{
   registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'resolveProjectNativeAdapter'>;
@@ -82,6 +83,14 @@ export function createProjectDefinitionAction(params: Readonly<{
     reviewSetupConsent?: true }>) => Promise<ProjectSetupInspection>;
 }>): NonNullable<ActionExecutorDeps['projectDefinitionAction']> {
   return async ({ actionId, input, context }) => {
+    const phase = async <T>(name: string, read: () => T | Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      let status: 'completed' | 'failed' = 'failed';
+      try { const result = await read(); status = 'completed'; return result; }
+      finally { logger.debug('[ProjectDefinition] inspection phase', { phase: name, status,
+        actionId, requestId: context.actionRequestId, machineId: params.machineId,
+        durationMs: Math.round(performance.now() - startedAt) }); }
+    };
     const parsed = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
     if (!parsed.success) return failure('invalid_parameters');
     const workspace = parsed.data.workspace;
@@ -105,18 +114,18 @@ export function createProjectDefinitionAction(params: Readonly<{
       const request = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS[actionId].parse(input);
       return await updateProjectManifest({ root, expectedBasis: request.expectedBasis, bytes: request.bytes });
     }
-    const [definition, detection] = await Promise.all([readProjectManifest({ root }), inspectProjectDefinitions(root)]);
+    const [definition, detection] = await phase('definition_files', () => Promise.all([readProjectManifest({ root }), inspectProjectDefinitions(root)]));
     context.signal?.throwIfAborted();
-    if (params.acquirePluginRuntime) await inspectNativeAdapters(root, detection, params.acquirePluginRuntime, context.signal);
+    if (params.acquirePluginRuntime) await phase('native_adapters', () => inspectNativeAdapters(root, detection, params.acquirePluginRuntime!, context.signal));
     context.signal?.throwIfAborted();
-    const facts = await inspectProjectDefinitionExecutionFacts({ root, detection, io: params.nativeIo ?? projectNativeSystemIo,
+    const facts = await phase('execution_facts', () => inspectProjectDefinitionExecutionFacts({ root, detection, io: params.nativeIo ?? projectNativeSystemIo,
       ...(definition.document?.status === 'valid' ? { manifest: definition.document.manifest } : {}),
-      ...(context.signal ? { signal: context.signal } : {}) });
+      ...(context.signal ? { signal: context.signal } : {}) }));
     context.signal?.throwIfAborted();
     let setup: ProjectSetupInspection = { setupReadiness: { kind: 'unknown', code: 'project_setup_requester_review_unavailable' } };
     if (params.inspectSetup) {
-      try { setup = await params.inspectSetup({ workspace, root, context,
-        ...('reviewSetupConsent' in parsed.data && parsed.data.reviewSetupConsent ? { reviewSetupConsent: true as const } : {}) }); }
+      try { setup = await phase('setup_readiness', () => params.inspectSetup!({ workspace, root, context,
+        ...('reviewSetupConsent' in parsed.data && parsed.data.reviewSetupConsent ? { reviewSetupConsent: true as const } : {}) })); }
       catch { context.signal?.throwIfAborted(); }
     }
     context.signal?.throwIfAborted();

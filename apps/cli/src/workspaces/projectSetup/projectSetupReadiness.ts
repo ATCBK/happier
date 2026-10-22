@@ -22,11 +22,15 @@ export async function inspectProjectSetupFromRuntime(input: Readonly<{
     const current = async () => !signal.aborted && (!runtime.isCurrent || await runtime.isCurrent())
         && Boolean(ingress.verifyMachineAdmissionCurrent && await ingress.verifyMachineAdmissionCurrent());
     try {
+        if (!await isServerProfileHomeIdentity(authorityRuntime.serverId, input.workspace.serverId) || input.workspace.machineId !== runtime.machineId
+            || ingress.machineAdmission && ingress.machineAdmission.machineId !== runtime.machineId) return unknown('target_mismatch');
         const refused = await readProjectRuntimeRequesterRefusal(authorityRuntime, ingress);
         if (refused) return unknown(refused.errorCode);
-        if (!await isServerProfileHomeIdentity(authorityRuntime.serverId, input.workspace.serverId) || input.workspace.machineId !== runtime.machineId
-            || ingress.machineAdmission?.machineId !== runtime.machineId) return unknown('target_mismatch');
-        if (!await current()) return unknown('project_requester_credentials_unavailable');
+        // Admitted requester resolution already brackets fresh Machine admission
+        // with installed, Account and HTTP custody. Consume that initial fence
+        // directly; no async work intervenes before the first private read.
+        // Legacy own-Account resolution only checks identity, so still admit it.
+        if (signal.aborted || !ingress.callerInputAuthorization && !await current()) return unknown('project_requester_credentials_unavailable');
         releaseRequester = readRequesterAccountActionContext(runtime.accountAuthorization)?.retain();
         const association = await resolveProjectSetupAcceptedWorkspace({ address: input.workspace,
             ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId,
