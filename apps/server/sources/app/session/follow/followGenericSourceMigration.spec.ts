@@ -21,7 +21,7 @@ describe('generic Follow source storage upgrade', () => {
         const database = provider === 'sqlite' ? new DatabaseSync(':memory:') : new PGlite();
         const execute = async (sql: string) => { await database.exec(sql); };
         const query = async (sql: string) => database instanceof DatabaseSync
-            ? database.prepare(sql).all() : (await database.query(sql)).rows;
+            ? database.prepare(sql).all() : (await database.query<Record<string, unknown>>(sql)).rows;
         const root = provider === 'sqlite' ? migrations : postgresMigrations;
         try {
             if (database instanceof PGlite) await database.waitReady;
