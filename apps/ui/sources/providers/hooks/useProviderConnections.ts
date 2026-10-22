@@ -1,11 +1,12 @@
 import * as React from 'react';
 import type { DaemonProviderConnectionsDescribeResponseV1 } from '@happier-dev/protocol/rpc';
+import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { describeAccountProviderConnectionsV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
-import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { useProviderActionClient, type ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
-import { providerDeclarationContext, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { providerDeclarationContext, readAccountProviderDeclarations, type ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import {
     captureActiveServerAccountScopeLifetime,
@@ -47,13 +48,25 @@ type ProviderConnectionsState = Readonly<{
     loading: boolean;
 }>;
 
+export type ProviderConnectionsQuery = Readonly<{
+    data: Success | null;
+    catalog: ProviderCatalogSnapshot['data'];
+    error: ProviderConnectionsState['error'];
+    machineError: NonNullable<ProviderConnectionsState['machineError']> | null;
+    loading: boolean;
+    refresh: (refreshScope?: ProviderConnectionRefreshScope) => Promise<Success | null | undefined>;
+    pendingApproval: ProviderPendingApproval | null;
+    declarationProjection: PluginProjectionV2 | null;
+    declarationContext: ProviderDeclarationContext;
+}>;
+
 export function useProviderConnections(input: Readonly<{
     enabled: boolean;
     active?: boolean;
     machineId: string | null;
     serverId: string | null;
     connectionId?: string;
-}>) {
+}>): ProviderConnectionsQuery {
     // A missing addressed Home must not use the Action client's omitted-target
     // fallback to the active Home. Account reads may omit a Machine, not a Home.
     const { describeProviderConnections, ready, retryReadiness, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId ?? []);
