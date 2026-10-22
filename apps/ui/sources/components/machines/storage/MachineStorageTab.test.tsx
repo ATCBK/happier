@@ -900,6 +900,36 @@ describe('MachineStorageTab', () => {
         expect(drill.screen.findByTestId('machine-storage-disk-rings')).not.toBeNull();
     });
 
+    it('says a lower bound once on a phone row and gives an unsized folded row no figure', async () => {
+        const node = (nodeId: string, bytes: number, extra: Record<string, unknown> = {}) => ({ nodeId, parentId: '/', name: nodeId.split('/').pop(),
+            kind: 'folder', size: size(bytes), logicalBytes: bytes, items: 12, changedAt: 1,
+            flags: { happier: false, protection: 'none', atLeast: false, inUse: false }, childCount: 0, ...extra });
+        const scan = { scanId: 'scan-2', target: { volumeId: 'mac' }, status: 'complete', progress: { sizedBytes: 5 * GB, usedBytes: 5 * GB, items: 10 },
+            startedAt: 1, finishedAt: 2, unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'granted', binary: { name: 'happier-support', path: '/x' } } };
+        const answer = (rpc: Rpc) => {
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return { ...SUMMARY, wholeDisk: { enabled: true, scans: [scan] } };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [], summary: SUMMARY.pile };
+            if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SCAN_GET) return { state: scan, coverage: [], nodes: [
+                node('/yarn', 4 * GB, { flags: { happier: false, protection: 'none', atLeast: true, inUse: false } }),
+                node('/small', 0, { kind: 'small-items', items: 3, flags: { happier: false, protection: 'none', atLeast: true, inUse: false } }),
+            ] };
+            return undefined;
+        };
+        const phone = await mount({ id: 'storage', view: 'disk' }, {}, answer);
+        await act(async () => { await vi.waitFor(() => expect(phone.screen.findByTestId('machine-storage-disk-shape:map')).not.toBeNull()); });
+        const disk = phone.screen.root.find((entry) => entry.props.testID === 'machine-storage-disk' && typeof entry.type === 'string');
+        await act(async () => { disk.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 800 } } }); });
+        await act(async () => { await vi.waitFor(() => expect(phone.screen.getTextContent()).toContain('≥ 4')); });
+        const text = phone.screen.getTextContent();
+        expect(text).not.toContain('at least this much');
+        expect(text).toContain('3 small items');
+        expect(text).not.toContain('≥ 0');
+        // The table keeps the words beside its figure.
+        const table = await mount({ id: 'storage', view: 'disk' }, {}, answer);
+        await act(async () => { await vi.waitFor(() => expect(table.screen.getTextContent()).toContain('at least this much')); });
+    });
+
     it('identifies the selected scan folder and its own allocation in List, Map and Rings', async () => {
         const folder = '/Users/leeroy/Development/archive';
         const scan = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'complete',

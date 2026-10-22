@@ -1266,7 +1266,8 @@ function DiskList(
               t('machineStorage.disk.itemsCount', { count: row.node.items }),
             );
       }
-      if (row.node.flags.atLeast) parts.push(t('machineStorage.disk.atLeast'));
+      // The phone says its lower bound once, in the "≥" figure at the row's right; the table keeps the words.
+      if (row.node.flags.atLeast && !props.compact) parts.push(t('machineStorage.disk.atLeast'));
       if (row.node.flags.inUse) parts.push(t('machineStorage.disk.inUse'));
       if (props.files !== 'folders')
         parts.push(
@@ -1276,7 +1277,7 @@ function DiskList(
         );
       return parts.join(' · ');
     },
-    [props.files, props.homeDir],
+    [props.compact, props.files, props.homeDir],
   );
   const since = (row: StorageDiskRow) => {
     const delta = row.node.deltaSincePrevious;
@@ -1284,10 +1285,14 @@ function DiskList(
     if (delta === 0) return t('machineStorage.disk.noChange');
     return `${delta > 0 ? '+' : '−'}${formatMachineBytes(Math.abs(delta), 'storage')}`;
   };
+  // The folded "small items" row of a scan that did not size its small files has no size to say ("≥ 0 B" tells nothing).
+  const hasSize = (row: StorageDiskRow) => !(row.node.kind === 'small-items' && row.node.size.allocatedBytes === 0);
   const sizeText = (row: StorageDiskRow) =>
     row.mark === 'mount'
       ? t('machineStorage.disk.anotherDisk')
-      : `${row.node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(row.node.size.allocatedBytes, 'storage')}`;
+      : hasSize(row)
+        ? `${row.node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(row.node.size.allocatedBytes, 'storage')}`
+        : '';
   const fields = React.useMemo(
     (): CollectionField<StorageDiskRow>[] => [
       {
@@ -1383,17 +1388,20 @@ function DiskList(
       // Phone (lab `rs` Mp): the list has no size column, so the row says its size at the right.
       ...(props.compact
         ? {
-            reason: (row: StorageDiskRow) => (
-              <Text style={styles.size} numberOfLines={1}>
-                {sizeText(row)}
-              </Text>
-            ),
+            reason: (row: StorageDiskRow) =>
+              hasSize(row) ? (
+                <Text style={styles.size} numberOfLines={1}>
+                  {sizeText(row)}
+                </Text>
+              ) : null,
           }
         : {}),
       accessibilityLabel: (row) =>
         t('machineStorage.disk.rowLabel', {
           name: storageDiskNodeName(row.node),
-          size: formatMachineBytes(row.node.size.allocatedBytes, 'storage'),
+          size: row.mark !== 'mount' && hasSize(row)
+            ? sizeText(row)
+            : formatMachineBytes(row.node.size.allocatedBytes, 'storage'),
           detail: describe(row),
         }),
       testID: (row) => `machine-storage-disk-row-${row.key}`,
