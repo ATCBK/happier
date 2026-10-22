@@ -562,9 +562,9 @@ describe('AgentInput voice accessory slots', () => {
             height: 44,
         });
 
-        const input = screen.root.findByType('TextInput');
+        const input = screen.root.findByType(MultiTextInput);
         await act(async () => {
-            input.props.onContentSizeChange({ nativeEvent: { contentSize: { height: 240 } } });
+            input.props.onContentHeightChange?.(240);
         });
 
         const toggle = screen.findByTestId('agent-input-expand-toggle');

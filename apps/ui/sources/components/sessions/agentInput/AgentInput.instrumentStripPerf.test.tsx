@@ -31,12 +31,16 @@ const renderCounts = vi.hoisted(() => ({ multiTextInput: 0 }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        TextInput: React.forwardRef<unknown, Record<string, unknown>>(function MeasuredTextInput(props, ref) {
-            renderCounts.multiTextInput += 1;
-            return React.createElement('TextInput', { ...props, ref });
-        }),
+    return createReactNativeWebMock();
+});
+// The composer input is the probe: count renders of the real editor component without replacing it.
+vi.mock('@/components/ui/forms/MultiTextInput', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/components/ui/forms/MultiTextInput')>();
+    const Measured = React.forwardRef<unknown, Record<string, unknown>>(function MeasuredMultiTextInput(props, ref) {
+        renderCounts.multiTextInput += 1;
+        return React.createElement(actual.MultiTextInput as React.ElementType, { ...props, ref });
     });
+    return { ...actual, MultiTextInput: Measured };
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));

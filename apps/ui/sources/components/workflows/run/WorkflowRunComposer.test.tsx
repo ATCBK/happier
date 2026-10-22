@@ -526,8 +526,8 @@ describe('workflow composer admission', () => {
         }
         const content = (open: boolean, ready: boolean) => <ModalProvider><Presenter open={open} ready={ready} /></ModalProvider>;
         const screen = await renderScreen(content(false, false), {
-            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea'
-                ? { focus, blur: vi.fn(), setNativeProps: vi.fn() } : null,
+            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea' || element.type === 'HappierComposerInput'
+                ? { focus, blur: vi.fn(), setNativeProps: vi.fn(), setTextAndSelection: vi.fn(), setSelection: vi.fn() } : null,
         });
         await screen.update(content(true, false));
         expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Saved note');

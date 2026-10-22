@@ -32,8 +32,8 @@ describe('workflow composer accessibility', () => {
         };
         // Physical input focus is the platform boundary; AgentInput and the focus registry stay real.
         const screen = await renderScreen(<WorkflowRunComposer {...props} autoFocusComposer startDisabled={initiallyBlocked} />, {
-            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea'
-                ? { focus, blur: vi.fn(), setNativeProps: vi.fn() } : null,
+            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea' || element.type === 'HappierComposerInput'
+                ? { focus, blur: vi.fn(), setNativeProps: vi.fn(), setTextAndSelection: vi.fn(), setSelection: vi.fn() } : null,
         });
         expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Ready note');
         expect(focus).toHaveBeenCalledTimes(initiallyBlocked ? 0 : 1);

@@ -4104,9 +4104,7 @@ describe('WorkflowRunContent', () => {
     await screen.pressByTestIdAsync('workflow-run-use-replacement-input');
     expect(screen.findByTestId('workflow-run-replacement-input')).toBeTruthy();
     await act(async () => {
-      screen
-        .findByTestId('workflow-run-replacement-input')
-        ?.props.onChangeText('Try the safer path');
+      screen.changeTextByTestId('workflow-run-replacement-input', 'Try the safer path');
     });
     expect(
       screen.findByTestId('workflow-run-replacement-input')?.props.value,

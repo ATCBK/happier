@@ -202,7 +202,10 @@ describe('AgentInput (image attachment thumbnails)', () => {
             expect(remove?.props.accessibilityRole).toBe('button');
             expect(remove?.props.accessibilityLabel).toBe('common.remove');
             expect(remove?.props.hitSlop).toBeUndefined();
-            expect(flattenStyle(remove?.props.style)).toMatchObject({ minHeight: touchFloor, minWidth: touchFloor });
+            // The image tile draws its corner control in a fixed frame; the file chip grows a minimum frame.
+            const frame = flattenStyle(remove?.props.style);
+            expect({ width: frame?.width ?? frame?.minWidth, height: frame?.height ?? frame?.minHeight })
+                .toEqual({ width: touchFloor, height: touchFloor });
         }
     });
 
