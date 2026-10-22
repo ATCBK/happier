@@ -38,6 +38,42 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('persists only explicit Reply intent, supports clearing, and consumes it after observed send success', async () => {
+        const plain = buildDiscussionContent('A new post', []);
+        const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(first.getCurrent().replyTarget).toBeNull();
+        act(() => first.getCurrent().setRecipients([{ kind: 'session', sessionId: 'default-recipient' }]));
+        act(() => first.getCurrent().setReplyTarget({ kind: 'message', messageId: 'explicit-reply' }));
+        act(() => first.getCurrent().setText('A new post'));
+        await first.unmount();
+        const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(restored.getCurrent().replyTarget).toEqual({ kind: 'message', messageId: 'explicit-reply' });
+        expect(restored.getCurrent().prepareContent(plain)).toEqual(plain);
+        act(() => restored.getCurrent().setReplyTarget(null));
+        expect(restored.getCurrent().replyTarget).toBeNull();
+        expect(restored.getCurrent().prepareContent(plain)).toMatchObject({ parts: [{ t: 'mention', participant: { kind: 'session', sessionId: 'default-recipient' } }, { t: 'text' }, { t: 'text' }] });
+        act(() => restored.getCurrent().setReplyTarget({ kind: 'message', messageId: 'next-reply' }));
+        let submitted: DiscussionDraftSubmission;
+        act(() => { submitted = restored.getCurrent().captureSubmittedCurrentness({ kind: 'post', discussionId: existingAddress.discussionId,
+            localId: 'explicit-reply-post', replyTarget: restored.getCurrent().replyTarget! }, { content: plain }); });
+        // Preparing or failing a send must retain intent for retry.
+        expect(restored.getCurrent().replyTarget).toEqual({ kind: 'message', messageId: 'next-reply' });
+        await act(async () => { await restored.getCurrent().clearAfterObservedSuccess(submitted!); });
+        expect(restored.getCurrent().replyTarget).toBeNull();
+        await restored.unmount();
+    });
+
+    it('preserves a newer reply choice made while the previous post was in flight', async () => {
+        const rendered = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        act(() => { rendered.getCurrent().setText('First reply'); rendered.getCurrent().setReplyTarget({ kind: 'message', messageId: 'first' }); });
+        let submitted: DiscussionDraftSubmission;
+        act(() => { submitted = rendered.getCurrent().captureSubmittedCurrentness({ kind: 'post', discussionId: existingAddress.discussionId,
+            localId: 'first-reply', replyTarget: rendered.getCurrent().replyTarget! }); });
+        act(() => rendered.getCurrent().setReplyTarget({ kind: 'message', messageId: 'second' }));
+        await act(async () => { await rendered.getCurrent().clearAfterObservedSuccess(submitted!); });
+        expect(rendered.getCurrent().replyTarget).toEqual({ kind: 'message', messageId: 'second' });
+        await rendered.unmount();
+    });
     it('keeps multiple recipients in the qualified draft through remount and accepted send clearing, while explicit mentions and Reply override them', async () => {
         const recipients = [{ kind: 'session' as const, sessionId: 'reviewer-a' }, { kind: 'account' as const, accountId: 'person-b' }];
         writeDiscussionSessionDraft({ scope, address: existingAddress, patch: { text: 'Review this', recipients } });

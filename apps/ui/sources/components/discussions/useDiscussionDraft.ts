@@ -44,19 +44,28 @@ export type DiscussionDraftAddress = Extract<
     { kind: 'discussion' | 'newDiscussion' }
 >;
 
+export type DiscussionDraftContentOptions = Readonly<{
+    replyTarget?: DiscussionReplyTargetV1;
+    passage?: DocPassageRefV1 | null;
+    /** The selection owner admits persisted defaults against the current roster. */
+    recipients?: readonly DiscussionParticipantRefV1[];
+}>;
+
 export type DiscussionDraft = Readonly<{
     title: string;
     text: string;
     mentions: readonly ComposerStructuredInputMention[];
     recipients: readonly DiscussionParticipantRefV1[];
     setRecipients(recipients: readonly DiscussionParticipantRefV1[]): void;
+    replyTarget: DiscussionReplyTargetV1 | null;
+    setReplyTarget(replyTarget: DiscussionReplyTargetV1 | null): void;
     /** New Discussion only: the people and agents invited at create (never who a message addresses). */
     participants: readonly DiscussionParticipantRefV1[];
     setParticipants(participants: readonly DiscussionParticipantRefV1[]): void;
     passage: DocPassageRefV1 | null;
     submitted: DiscussionDraftSubmittedContentV2 | null;
     setPassage(passage: DocPassageRefV1 | null): void;
-    prepareContent(content: DiscussionMessageContentV1, options?: Readonly<{ replyTarget?: DiscussionReplyTargetV1; passage?: DocPassageRefV1 | null }>): DiscussionMessageContentV1;
+    prepareContent(content: DiscussionMessageContentV1, options?: DiscussionDraftContentOptions): DiscussionMessageContentV1;
     status: SessionDraftStatus;
     conflict: SessionDraftConflict | null;
     setTitle(title: string): void;
@@ -80,7 +89,8 @@ export type DiscussionDraft = Readonly<{
 }>;
 
 const COMPOSER_FIELD_IDS = ['composer.text', 'composer.mentions', 'passage', 'submission'] as const;
-const NEW_DISCUSSION_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'title', 'participants'] as const;
+const SUBMITTED_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'replyTarget'] as const;
+const NEW_DISCUSSION_FIELD_IDS = [...SUBMITTED_FIELD_IDS, 'title', 'participants'] as const;
 const NO_RECIPIENTS: readonly DiscussionParticipantRefV1[] = Object.freeze([]);
 
 function readDiscussionComposerSnapshot(scope: ServerAccountScope, address: DiscussionDraftAddress) {
@@ -97,6 +107,8 @@ function readDiscussionDraftFields(
     mentions: readonly ComposerStructuredInputMention[];
     recipients: readonly DiscussionParticipantRefV1[];
     recipientsMutationId?: string;
+    replyTarget: DiscussionReplyTargetV1 | null;
+    replyTargetMutationId?: string;
     participants: readonly DiscussionParticipantRefV1[];
     participantsMutationId?: string;
     passage: DocPassageRefV1 | null;
@@ -119,6 +131,8 @@ function readDiscussionDraftFields(
         mentions: parseComposerStructuredInputMentionsForText(snapshot?.composer.mentions.value, text).mentions,
         recipients: document?.recipients?.value ?? NO_RECIPIENTS,
         recipientsMutationId: document?.recipients?.mutationId,
+        replyTarget: document?.replyTarget?.value ?? null,
+        replyTargetMutationId: document?.replyTarget?.mutationId,
         participants: document?.participants?.value ?? NO_RECIPIENTS,
         participantsMutationId: document?.participants?.mutationId,
         passage: document?.passage?.value ?? null,
@@ -194,6 +208,7 @@ export function useDiscussionDraft(params: Readonly<{
     );
     const title = fields.title;
     const passage = fields.passage;
+    const replyTarget = React.useMemo(() => fields.replyTarget, [fields.replyTargetMutationId, scope, address]);
     // The canonical field mutation id binds its immutable value. Text edits
     // clone the private document but must not rebuild the recipient picker.
     const recipients = React.useMemo(() => fields.recipients, [fields.recipientsMutationId, scope, address]);
@@ -207,6 +222,9 @@ export function useDiscussionDraft(params: Readonly<{
     const setRecipients = React.useCallback((value: readonly DiscussionParticipantRefV1[]) => {
         writeDiscussionSessionDraft({ scope, address, patch: { recipients: value } });
     }, [address, scope]);
+    const setReplyTarget = React.useCallback((value: DiscussionReplyTargetV1 | null) => {
+        writeDiscussionSessionDraft({ scope, address, patch: { replyTarget: value } });
+    }, [address, scope]);
     const setParticipants = React.useCallback((value: readonly DiscussionParticipantRefV1[]) => {
         if (address.kind !== 'newDiscussion') {
             throw new Error('An existing discussion invites through the participant Action');
@@ -214,10 +232,10 @@ export function useDiscussionDraft(params: Readonly<{
         writeDiscussionSessionDraft({ scope, address, patch: { participants: value } });
     }, [address, scope]);
     const prepareContent = React.useCallback((content: DiscussionMessageContentV1,
-        options?: Readonly<{ replyTarget?: DiscussionReplyTargetV1; passage?: DocPassageRefV1 | null }>): DiscussionMessageContentV1 => {
+        options?: DiscussionDraftContentOptions): DiscussionMessageContentV1 => {
         const basis = readDiscussionDraftFields(scope, address);
         return prepareDiscussionContentForPassage({ content: prepareDiscussionContentForRecipients({
-            content, recipients: basis.recipients, replyTarget: options?.replyTarget,
+            content, recipients: options?.recipients ?? basis.recipients, replyTarget: options?.replyTarget ?? basis.replyTarget ?? undefined,
         }), passage: basis.passage ?? options?.passage });
     }, [address, scope]);
 
@@ -273,7 +291,7 @@ export function useDiscussionDraft(params: Readonly<{
             const current = readDiscussionDraftFields(scope, address);
             const content = submitted?.content ?? prepareDiscussionContentForPassage({ content: prepareDiscussionContentForRecipients({
                 content: buildDiscussionContent(current.text, current.mentions), recipients: current.recipients,
-                replyTarget: attempt.replyTarget,
+                replyTarget: attempt.replyTarget ?? current.replyTarget ?? undefined,
             }), passage: current.passage });
             const title = attempt.kind === 'create' ? submitted?.title ?? resolveDiscussionCreationTitle({ title: current.title, text: current.text }) ?? undefined : undefined;
             writeDiscussionSessionDraft({ scope, address, patch: { submission: {
@@ -286,7 +304,7 @@ export function useDiscussionDraft(params: Readonly<{
             address,
             fieldIds: address.kind === 'newDiscussion'
                 ? [...NEW_DISCUSSION_FIELD_IDS]
-                : [...COMPOSER_FIELD_IDS],
+                : [...SUBMITTED_FIELD_IDS],
         });
         if (attempt) {
             writeSessionDraftLocalSupplement({
@@ -311,7 +329,7 @@ export function useDiscussionDraft(params: Readonly<{
             address,
             fieldIds: address.kind === 'newDiscussion'
                 ? [...NEW_DISCUSSION_FIELD_IDS]
-                : [...COMPOSER_FIELD_IDS],
+                : [...SUBMITTED_FIELD_IDS],
         });
         const capturedText = submission.currentness.mutationIds['composer.text'];
         const capturedMentions = submission.currentness.mutationIds['composer.mentions'];
@@ -331,6 +349,8 @@ export function useDiscussionDraft(params: Readonly<{
             ...(!composerIsCurrent ? ['submission' as const] : []),
             ...(titleIsCurrent ? ['title' as const] : []),
             ...(participantsIsCurrent ? ['participants' as const] : []),
+            // A newer Reply choice belongs to the next post even if its text is unchanged.
+            'replyTarget' as const,
         ];
         // Field currentness decides which drafted fields are cleared, never
         // whether the attempt is retired. The attempt identifies a submission
@@ -339,14 +359,12 @@ export function useDiscussionDraft(params: Readonly<{
         // it would let a remount adopt an accepted create/post and repeat it.
         // Local recovery custody must complete before navigation; a remote
         // draft acknowledgement cannot hold an already committed Discussion open.
-        const cleared = fieldIds.length === 0
-            ? false
-            : clearSessionDraftCurrentnessLocal({
-                scope,
-                address,
-                currentness: submission.currentness,
-                fieldIds,
-            });
+        const cleared = clearSessionDraftCurrentnessLocal({
+            scope,
+            address,
+            currentness: submission.currentness,
+            fieldIds,
+        });
         writeSessionDraftLocalSupplement({ scope, address, patch: { discussionMutationAttempt: null } });
         await flushSessionDraftLocally({ scope });
         // The canonical draft synchronizer retains the pending clear on failure.
@@ -364,7 +382,7 @@ export function useDiscussionDraft(params: Readonly<{
         await purgeSessionDraftPresentation({ scope, address });
     }, [address, scope]);
     const purgeSourcePresentation = React.useCallback(async (): Promise<void> => {
-        await purgeSessionDraftPresentation({ scope, address, fieldIds: ['passage', 'submission'] });
+        await purgeSessionDraftPresentation({ scope, address, fieldIds: ['passage', 'submission', 'replyTarget'] });
     }, [address, scope]);
 
     return React.useMemo(() => ({
@@ -373,6 +391,8 @@ export function useDiscussionDraft(params: Readonly<{
         mentions,
         recipients,
         setRecipients,
+        replyTarget,
+        setReplyTarget,
         participants,
         setParticipants,
         passage,
@@ -400,6 +420,8 @@ export function useDiscussionDraft(params: Readonly<{
         mentions,
         recipients,
         setRecipients,
+        replyTarget,
+        setReplyTarget,
         participants,
         setParticipants,
         passage,

@@ -616,6 +616,15 @@ describe('V2 private payload correspondence', () => {
 });
 
 describe('human discussion draft document', () => {
+  it('retains deliberate reply intent in the private payload and rejects malformed routing', () => {
+    const replyTarget = { kind: 'message', messageId: 'reply-message' };
+    const document = { ...discussionDocument('discussion'), replyTarget: field(replyTarget) };
+    expect(SessionDraftPrivatePayloadV2Schema.parse({ v: 2, address: { kind: 'discussion', discussionId: 'd1' }, document }))
+      .toMatchObject({ document: { replyTarget: { value: replyTarget } } });
+    expect(DiscussionDraftDocumentV2Schema.safeParse({ ...document, replyTarget: field(null) }).success).toBe(true);
+    expect(DiscussionDraftDocumentV2Schema.safeParse({ ...document, replyTarget: field({ ...replyTarget, unexpected: true }) }).success).toBe(false);
+    expect(DiscussionDraftDocumentV2Schema.safeParse(discussionDocument('discussion')).success).toBe(true);
+  });
   it('retains concrete multi-recipient selection through the canonical private payload and closes nested routing refs', () => {
     const recipients = [{ kind: 'account', accountId: 'same-id' }, { kind: 'session', sessionId: 'same-id' }];
     const document = { ...discussionDocument('discussion'), recipients: field(recipients) };

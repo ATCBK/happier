@@ -9,6 +9,7 @@ export type DraftFieldPathV1 =
     | Readonly<{ kind: 'passage' }>
     | Readonly<{ kind: 'submission' }>
     | Readonly<{ kind: 'recipients' }>
+    | Readonly<{ kind: 'replyTarget' }>
     | Readonly<{ kind: 'participants' }>
     | Readonly<{ kind: 'projectOpen'; field: 'selection' | 'uncertainInputs' | 'result' | 'retiredAttempt' }>
     | Readonly<{ kind: 'extension'; pluginId: string; fieldId: string }>;
@@ -42,6 +43,7 @@ export function getSessionDraftDocumentField(document: unknown, path: unknown): 
     if (fieldPath.kind === 'passage') return draft.passage ?? null;
     if (fieldPath.kind === 'submission') return draft.submission ?? null;
     if (fieldPath.kind === 'recipients') return draft.recipients ?? null;
+    if (fieldPath.kind === 'replyTarget') return draft.replyTarget ?? null;
     if (fieldPath.kind === 'participants') return draft.participants ?? null;
     const target = record(draft.target);
     if (fieldPath.kind === 'projectOpen' && typeof fieldPath.field === 'string') {

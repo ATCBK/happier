@@ -205,6 +205,21 @@ describe('sessionDraftRepository', () => {
         expect(repository.getSessionComposerDraftSnapshot(scope, { kind: 'newDiscussion' })?.composer.text.value).toBe('Independent');
     });
 
+    it('retains deliberate Discussion reply intent across repository reload and clears it through field currentness', async () => {
+        const storage = createMemoryStorage();
+        const address = { kind: 'discussion' as const, discussionId: 'reply-draft' };
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        repository.writeDiscussionSessionDraft({ scope, address, patch: { text: 'Reply text', replyTarget: { kind: 'message', messageId: 'chosen' } } });
+        await repository.flushSessionDraftLocally({ scope });
+        const restored = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        expect(restored.getSessionDraftSnapshot(scope, address)?.document).toMatchObject({ replyTarget: { value: { kind: 'message', messageId: 'chosen' } } });
+        expect(restored.getSessionDraftSnapshot(targetScope, address)).toBeNull();
+        const currentness = restored.captureSessionDraftCurrentness({ scope, address, fieldIds: ['replyTarget'] });
+        restored.clearSessionDraftCurrentnessLocal({ scope, address, currentness, fieldIds: ['replyTarget'] });
+        expect(getSessionDraftDocumentField(restored.getSessionDraftSnapshot(scope, address)?.document, { kind: 'replyTarget' })).toBeNull();
+        expect(restored.getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('Reply text');
+    });
+
     it('retains launcher content separately from the parent composer across reload and scoped clearing', () => {
         const storage = createMemoryStorage();
         const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false, randomUUID: () => uuid(986) });

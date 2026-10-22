@@ -2049,6 +2049,14 @@ closed identity data: an unavailable V2 operation retains the keyed local draft 
 must never retry it as an unkeyed write. This is part of the one-way development
 upgrade below, not a new V1 address or mixed-version coexistence contract.
 
+Development Discussion V2 documents also retain an optional, nullable `replyTarget`
+field with the existing field mutation identity and closed Discussion reply-target
+schema. Missing fields read as no deliberate Reply. Navigation focus is never
+converted into this field. Current writes, reload and captured-field clearing use
+the same private payload, encryption and CAS owners; released V1 documents and
+addresses are unchanged. This follows the one-way 0.3 development upgrade, without
+an old/new draft writer pair or a rollback promise.
+
 New-Session V2 authoring retains the title, creation identity, explicit memory choice and qualified
 prompt stack in the canonical synchronized field catalog. Another client can therefore reopen a
 Bot or Ask Happier draft with those choices. Existing 0.3 device-local copies are read only when
@@ -3181,6 +3189,10 @@ resolver or refuses that Collection with `collection_update_required`; the app
 must not substitute the writer contract. No released 0.2 Collection/Run-on
 contract was found in the inspected clean predecessor corridor at
 `f18aba940c5c56e5b24454e176c836c171098a2d`; no 0.3 intermediary shim is retained.
+
+Collection GET responses require the producer's `absenceEpoch`, including when
+`row` is null. A missing epoch is invalid; readers do not invent epoch zero for
+an unpublished intermediate response.
 
 Exact answering-client selection is authority-bearing and cannot be an optional
 field an older relay silently ignores. The canonical reverse RPC transport uses

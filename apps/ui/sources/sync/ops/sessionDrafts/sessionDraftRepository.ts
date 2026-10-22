@@ -301,6 +301,7 @@ export type DiscussionSessionDraftPatch = Readonly<{
     passage?: DocPassageRefV1 | null;
     submission?: DiscussionDraftSubmittedContentV2 | null;
     recipients?: readonly DiscussionInitialParticipantV1[];
+    replyTarget?: DiscussionReplyTargetV1 | null;
     /** New-discussion only: who is invited at create. */
     participants?: readonly DiscussionInitialParticipantV1[];
     /** New-discussion only; renaming an existing discussion is an Action. */
@@ -471,7 +472,7 @@ function isIntrinsicDraftFieldDefault(path: DraftFieldPathV1, value: StrictJsonV
         return typeof value === 'string' && value.trim().length === 0;
     }
     if (path.kind === 'title') return typeof value === 'string' && value.trim().length === 0;
-    if (path.kind === 'passage' || path.kind === 'submission') return value === null;
+    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'replyTarget') return value === null;
     if (path.kind === 'recipients' || path.kind === 'participants') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'composer') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'routing') return value === null;
@@ -555,6 +556,7 @@ function pathKey(path: DraftFieldPathV1): string {
     if (path.kind === 'passage') return 'passage';
     if (path.kind === 'submission') return 'submission';
     if (path.kind === 'recipients') return 'recipients';
+    if (path.kind === 'replyTarget') return 'replyTarget';
     if (path.kind === 'participants') return 'participants';
     if (path.kind === 'projectOpen') return path.field;
     if (path.kind === 'authoring') return `target.authoring.${path.fieldId}`;
@@ -573,7 +575,7 @@ function setField(
         return parsed.success ? parsed.data : next;
     }
     if (path.kind === 'projectOpen') return next;
-    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'recipients' || path.kind === 'participants') {
+    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'recipients' || path.kind === 'participants' || path.kind === 'replyTarget') {
         if (!isDiscussionDocument(next)) return next;
         if (!field) { delete next[path.kind]; return next; }
         return DiscussionDraftDocumentV2Schema.parse({ ...next, [path.kind]: field });
@@ -653,6 +655,7 @@ function listFieldPaths(document: SessionDraftDocumentV2): DraftFieldPathV1[] {
         if (document.passage) paths.push({ kind: 'passage' });
         if (document.submission) paths.push({ kind: 'submission' });
         if (document.recipients) paths.push({ kind: 'recipients' });
+        if (document.replyTarget) paths.push({ kind: 'replyTarget' });
         if (document.participants) paths.push({ kind: 'participants' });
         return paths;
     }
@@ -727,7 +730,7 @@ function hasMeaningfulContent(
     if (isNonEmptyArray(value({ kind: 'composer', field: 'mentions' })) || isNonEmptyArray(value({ kind: 'composer', field: 'attachments' }))) return true;
     if (targetKind === 'discussion' || targetKind === 'newDiscussion') {
         if (isNonEmptyArray(value({ kind: 'recipients' })) || isNonEmptyArray(value({ kind: 'participants' }))) return true;
-        if (value({ kind: 'passage' }) !== null || value({ kind: 'submission' }) !== null) return true;
+        if (value({ kind: 'passage' }) !== null || value({ kind: 'submission' }) !== null || value({ kind: 'replyTarget' }) !== null) return true;
         const title = value({ kind: 'title' });
         return typeof title === 'string' && title.trim().length > 0;
     }
@@ -1527,6 +1530,7 @@ export class SessionDraftRepository {
         materializationIntent?: SessionDraftMaterializationIntent;
     }>): void {
         const writes: Array<{ path: DraftFieldPathV1; value: StrictJsonValue }> = [];
+        if (params.patch.replyTarget !== undefined) writes.push({ path: { kind: 'replyTarget' }, value: params.patch.replyTarget === null ? null : DiscussionReplyTargetV1Schema.parse(params.patch.replyTarget) });
         if (params.patch.recipients !== undefined) writes.push({ path: { kind: 'recipients' }, value: DiscussionInitialParticipantsV1Schema.parse(params.patch.recipients) });
         if (params.patch.participants !== undefined) {
             if (params.address.kind !== 'newDiscussion') throw new Error('Only a new Discussion draft carries initial participants');
@@ -2003,7 +2007,7 @@ export class SessionDraftRepository {
     }
 
     /** Purges presentation after access loss; source-field clears use normal draft sync custody. */
-    async purgeSessionDraftPresentation(params: Readonly<{ scope: SessionDraftRepositoryScope; address: SessionDraftAddressV2; fieldIds?: readonly ('passage' | 'submission')[] }>): Promise<void> {
+    async purgeSessionDraftPresentation(params: Readonly<{ scope: SessionDraftRepositoryScope; address: SessionDraftAddressV2; fieldIds?: readonly ('passage' | 'submission' | 'replyTarget')[] }>): Promise<void> {
         if (params.fieldIds) {
             // Retain the existing captured-field guards and outbox: dropping local
             // fields alone would let the unchanged remote quote reappear on wake.

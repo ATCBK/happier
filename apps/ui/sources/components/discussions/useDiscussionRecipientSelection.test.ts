@@ -8,6 +8,35 @@ import { useDiscussionRecipientSelection } from './useDiscussionRecipientSelecti
 afterEach(() => { standardCleanup(); resetSessionDraftRepositoryForTests(); });
 
 describe('Discussion recipient chip model', () => {
+    it('drops removed recipients before addressing and reports them without erasing persisted intent while the roster loads', async () => {
+        const scope = { serverId: 'recipient-home', accountId: 'owner' };
+        const address = { kind: 'discussion' as const, discussionId: 'discussion' };
+        const label = () => 'Recipient';
+        const removed = { kind: 'session' as const, sessionId: 'removed' };
+        const kept = { kind: 'account' as const, accountId: 'owner' };
+        const roster = DiscussionParticipantsListResponseV1Schema.parse({ discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [], participants: [] });
+        const hook = await renderHook(({ currentRoster }) => {
+            const draft = useDiscussionDraft({ scope, address });
+            return { draft, selection: useDiscussionRecipientSelection({ draft, roster: currentRoster, label }) };
+        }, { initialProps: { currentRoster: roster as typeof roster | null } });
+        act(() => hook.getCurrent().draft.setRecipients([removed, kept]));
+        expect(hook.getCurrent().selection.selectedRecipients).toEqual([kept]);
+        expect(hook.getCurrent().selection.removedRecipients).toEqual([removed]);
+        const plain = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Question' }] };
+        expect(hook.getCurrent().selection.prepareContent(plain)).toEqual({ v: 1, parts: [
+            { t: 'mention', participant: kept }, { t: 'text', text: ' ' }, ...plain.parts,
+        ] });
+        await hook.rerender({ currentRoster: null });
+        expect(hook.getCurrent().selection.removedRecipients).toEqual([]);
+        expect(hook.getCurrent().selection.prepareContent(plain)).toBeNull();
+        // An explicit Reply overrides the chip, even while its roster is loading.
+        expect(hook.getCurrent().selection.prepareContent(plain, { replyTarget: { kind: 'message', messageId: 'explicit' } })).toEqual(plain);
+        expect(hook.getCurrent().draft.recipients).toEqual([removed, kept]);
+        await hook.rerender({ currentRoster: roster });
+        act(() => hook.getCurrent().selection.toggle('account:owner'));
+        expect(hook.getCurrent().draft.recipients).toEqual([]);
+        await hook.unmount();
+    });
     it('multi-selects admitted concrete identities with equal labels and restores them independently of the current roster', async () => {
         const scope = { serverId: 'recipient-home', accountId: 'owner' };
         const address = { kind: 'discussion' as const, discussionId: 'discussion' };

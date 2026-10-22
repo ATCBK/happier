@@ -5,6 +5,7 @@ import { DocPassageRefV1Schema } from '../artifacts/artifactCollaborationV1.js';
 import { DiscussionMessageContentV1Schema } from '../discussions/content.js';
 import { DiscussionLocalIdSchema } from '../discussions/references.js';
 import { DiscussionInitialParticipantsV1Schema } from '../discussions/participants.js';
+import { DiscussionReplyTargetV1Schema } from '../discussions/replyTargets.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
@@ -194,6 +195,8 @@ export const DiscussionDraftDocumentV2Schema = z.strictObject({
   title: z.optional(DiscussionDraftFieldSchema(z.string())),
   /** Explicit composer defaults, retained when submitted text is cleared. Never membership authority. */
   recipients: z.optional(DiscussionDraftFieldSchema(DiscussionInitialParticipantsV1Schema)),
+  /** Explicit Reply intent, independent of navigation focus and cleared with its submitted post. */
+  replyTarget: z.optional(DiscussionDraftFieldSchema(z.nullable(DiscussionReplyTargetV1Schema))),
   /** New Discussion only: the people and agents chosen to invite at create. Addressing stays in the message. */
   participants: z.optional(DiscussionDraftFieldSchema(DiscussionInitialParticipantsV1Schema)),
   /** The source basis is private draft content, never local-only retry metadata. */
