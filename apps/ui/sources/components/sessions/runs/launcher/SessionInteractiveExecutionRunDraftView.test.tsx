@@ -14,11 +14,13 @@ import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/proto
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { ComposerSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
 import type { RoleOverrideRecordV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
+import type { NativeComposerInputHandle } from '@/components/ui/forms/nativeComposerInput';
 
 import { changeTextTestInstance, createMachineFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
@@ -58,6 +60,12 @@ import { ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/ac
 import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
 import { askSelectionQuote, type AskSelectionTargetContext } from '@/components/ui/code/selection/askSelectionTarget';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
+import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
+import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
+import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 // Platform, credentials, local persistence, HTTP and RPC are the boundaries. The composer,
 // capture/coordinator, draft repository, launcher options, role catalog, capability/feature
@@ -160,6 +168,18 @@ let pluginProjection = false;
 let secretAvailable = false;
 let publishedProfiles: Array<ReturnType<typeof AIBackendProfileSchema.parse>> = [];
 let roleOverrides: RoleOverrideRecordV1['overrides'] = {};
+let teamModelsEnabled = false;
+const teamModel = { kind: 'team_credential_provider_model', teamId: 'team_run', resourceId: 'resource_run',
+    expectedResourceRevision: 3, deliveryMode: 'brokered', agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.5' } as const;
+function teamResource(application?: unknown) {
+    return TeamCredentialResourceCatalogEntryV1Schema.parse({ id: teamModel.resourceId, teamId: teamModel.teamId,
+        displayName: 'Shared coding pool', resourceRevision: 3, readiness: { kind: 'available' }, recoveryAction: null,
+        mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
+        connectedServiceSelections: [{ source: 'team_resource', resourceId: teamModel.resourceId, deliveryMode: 'brokered' }],
+        providerModels: application ? [{ selection: teamModel, descriptor: { id: teamModel.modelId, name: 'GPT-5.5' },
+            application, sourceRevision: 'source-1', availability: 'available' }] : [],
+        sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } } });
+}
 const secretRef = 'happier:shared-secret:v1:personal-secret';
 const reviewAgentProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
     agentsById: Object.fromEntries((['claude', 'codex'] as const).map(agentId => [agentId, { id: agentId, title: agentId,
@@ -232,8 +252,10 @@ async function waitFor(assertion: () => void) {
 }
 async function mount(props: Partial<React.ComponentProps<typeof SessionInteractiveExecutionRunDraftView>> = {}) {
     screen = await renderScreen(<SessionInteractiveExecutionRunDraftView sessionId="session_1" serverId={serverId} onRunStarted={vi.fn()} {...props} />, {
-        createNodeMock: (element) => element.type === 'TextInput' || element.type === 'textarea'
-            ? { focus: platform.focus, blur: vi.fn(), setNativeProps: vi.fn() }
+        createNodeMock: (element) => element.type === 'TextInput' || element.type === 'textarea' || element.type === 'HappierComposerInput'
+            ? { focus: platform.focus, blur: vi.fn(), setNativeProps: vi.fn(), setSelection: vi.fn(), setTextAndSelection: vi.fn(),
+                setDropCaret: vi.fn(), offsetAtPoint: vi.fn(async () => null),
+                measureInWindow: callback => callback(0, 0, 300, 40) } satisfies NativeComposerInputHandle & { setNativeProps: () => void }
             : null,
     });
     await settle();
@@ -299,6 +321,9 @@ function outboundText() {
 
 describe('SessionInteractiveExecutionRunDraftView — real composer and Action path', () => {
     beforeEach(async () => {
+        resetTeamsDirectoryEngineForTests();
+        resetTeamsSnapshotsForTests();
+        teamModelsEnabled = false;
         resetProfileCatalogEngineForTests();
         resetProfileCatalogSnapshotsForTests();
         resetSavedSecretCatalogEngineForTests();
@@ -390,7 +415,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         home = await serveActionHomes({
             homes: [{ key: 'home', serverUrl, serverIdentityId,
                 accountId: 'account_1', currentAccount: true }],
-            route: async (request) => {
+            route: createSessionReadBatchHttpBoundary(async (request) => {
+                if (teamModelsEnabled && request.path === '/v1/teams/list') return Response.json({ items: [teamSummaryFixture({ id: teamModel.teamId, name: 'Engineering' })], nextCursor: null });
+                if (teamModelsEnabled && request.path === '/v1/teams/credential-resources/entitled/list') {
+                    const { application } = TeamCredentialResourceReadInputV1Schema.parse(request.body);
+                    return Response.json({ resources: [teamResource(application)], nextCursor: null });
+                }
                 const detachedResponse = await detachedStart.handle(request.url, { method: request.method,
                     headers: request.headers, signal: request.signal,
                     ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) });
@@ -403,10 +433,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                     })) } },
                 }));
                 if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
-                    features: { execution: { runs: { enabled: true } }, teams: { enabled: true }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
+                    features: { execution: { runs: { enabled: true } }, teams: { enabled: true, credentialResources: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                     capabilities: { session: { pendingInput: { protocolVersion: 3 } }, accountStoredContentCompatibility: { v: 1, currentProtocolVersion: 3, minimumProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
                 }));
                 if (request.path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account_1' })]);
+                if (request.path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(request.body,
+                    id => id === 'machine_1' ? createPlainMachineRowFixture({ id, accountId: 'account_1' }) : null);
                 if (request.path === '/v1/machines/machine_1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account_1' }) });
                 if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (request.path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }));
@@ -447,8 +479,8 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                         pending: { ...body, recipient, status: 'queued', position: 1, createdAt: 1, updatedAt: 1 }, pendingVersion: 1, pendingCount: 1 });
                 }
                 if (request.path === '/v1/artifacts') return Response.json([]);
-                return Response.json({ error: 'not_found' }, { status: 404 });
-            },
+                return undefined;
+            }).handle,
         });
         serverId = home.homes.home!.id;
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
@@ -941,6 +973,41 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[1]!));
     });
     describe('choosing a model for this Run from the route chip', () => {
+        async function mountTeamParent() {
+            teamModelsEnabled = true;
+            getStorage().setState(state => ({ sessions: { ...state.sessions, session_1: { ...state.sessions.session_1!, metadata: {
+                ...state.sessions.session_1!.metadata!, flavor: 'codex',
+                sessionAppliedModelV1: { v: 1, provider: 'codex', modelId: 'gpt-5.5', updatedAt: 1 },
+                connectedServices: ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+                    source: 'team_resource', resourceId: teamModel.resourceId, deliveryMode: 'brokered',
+                } } }),
+            } } } }));
+            await mount();
+        }
+        it('names the inherited Team resource and Team on the Run draft', async () => {
+            await mountTeamParent();
+            await waitFor(() => expect(screen.getTextContent()).toContain('Shared coding pool'));
+            expect(screen.getTextContent()).toContain('Engineering');
+        });
+        it.each(['Agent chip', 'route chip'] as const)('offers the Team model through the %s shared picker', async entry => {
+            await mountTeamParent();
+            let picker: Screen;
+            if (entry === 'Agent chip') {
+                const engine = composer().engine!;
+                picker = await renderScreen(<AgentInputChipPickerPanel title={engine.title} options={engine.options}
+                    selectedOptionId={engine.selectedOptionId} onSelect={engine.onSelect} onRequestClose={vi.fn()} />);
+            } else {
+                await chooseModelRow();
+                const shown = modal.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
+                await waitFor(() => expect((modal.update.mock.calls.at(-1)?.[1] ?? shown.props).teamCredentialResources).toEqual(expect.arrayContaining([expect.objectContaining({ id: teamModel.resourceId })])));
+                picker = await renderScreen(React.createElement(shown.component, { ...(modal.update.mock.calls.at(-1)?.[1] ?? shown.props), onClose: vi.fn() }));
+            }
+            const id = `model-picker-overlay-option:${sessionModelSelectionKey(teamModel)}`;
+            await waitFor(() => expect(picker.findByTestId(id)).not.toBeNull());
+            await waitFor(() => expect(picker.findByTestId(id)?.props.disabled).not.toBe(true));
+            expect(picker.getTextContent()).toContain('Shared coding pool');
+            expect(picker.getTextContent()).toContain('Engineering');
+        });
         it('renders the selected Agent model detail in the engine picker and submits its exact choice', async () => {
             await mount();
             const engine = composer().engine!;

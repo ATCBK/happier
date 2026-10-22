@@ -17,6 +17,8 @@ import nacl from 'tweetnacl';
 
 import { createDeferred, createMachineFixture, createPlainMachineRowFixture, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
@@ -46,6 +48,8 @@ import { resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalog
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema,
+    ProviderConnectionsRowReadResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 import { admitExecutionRunLaunchTarget } from './executionRunLaunchAdmission';
 import { useExecutionRunLaunchContext } from './useExecutionRunLaunchContext';
@@ -120,7 +124,7 @@ const launchInstallation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(12
 
 /** Home HTTP remains below the real requester admission and resume owners. */
 function installLaunchHomeHttpBoundary(request?: RuntimeFetch) {
-    setRuntimeFetch(async (url, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
         const handled = await request?.(url, init);
         if (handled && handled.status !== 404) return handled;
         const path = new URL(String(url)).pathname;
@@ -135,6 +139,8 @@ function installLaunchHomeHttpBoundary(request?: RuntimeFetch) {
         const machine = { ...createPlainMachineRowFixture({ id: 'launch-machine', accountId: boundary.accountId }),
             installationPublicKey: Buffer.from(launchInstallation.publicKey).toString('base64') };
         if (path === '/v1/machines') return Response.json([machine]);
+        if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+            id => id === machine.id ? machine : null);
         if (path === '/v1/machines/launch-machine') return Response.json({ machine });
         if (path === '/v2/sessions/rejoined-session') {
             const session = storage.getState().sessions['rejoined-session'];
@@ -147,7 +153,7 @@ function installLaunchHomeHttpBoundary(request?: RuntimeFetch) {
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
         return handled ?? Response.json({}, { status: 404 });
-    });
+    }));
 }
 
 function activeProfileCatalog(profile: ReturnType<typeof AIBackendProfileSchema.parse>): Extract<ProfileCatalogSnapshotV1, { status: 'ready' }> {
@@ -456,6 +462,13 @@ describe('real execution Run launch admission', () => {
                 identity: { pluginId: 'happier.provider.openai', localId: 'openai' }, definitionRevision: 1 } },
         });
         const httpRequests: { path: string; authorization: string | null }[] = [];
+        // Worker compatibility does not grant experimental consent. Serve the recipient's
+        // existing consent through the real Account catalog reader, just as the UI does.
+        const providerCatalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            experimentalBindingConfirmations: [{ v: 1, connectionId: 'connected-source:recipient', catalogSourceKey: 's'.repeat(43),
+                agentTargetKey: teamModel.agentTargetKey, modelId: teamModel.modelId,
+                compatibilityFingerprint: 'compatibility:v1:worker', confirmedAt: 1 }],
+        });
         // Actual Home feature, directory and catalog HTTP responses. Exact
         // Account authorization, parsing, snapshot loading and picker policy stay real.
         installLaunchHomeHttpBoundary(async (url, init) => {
@@ -464,6 +477,9 @@ describe('real execution Run launch admission', () => {
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json(ProviderConnectionsRowReadResponseV1Schema.parse({
+                status: 'present', revision: 1, content: { t: 'plain', v: providerCatalog },
+            }));
             if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
                 status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
             }));
@@ -487,7 +503,7 @@ describe('real execution Run launch admission', () => {
         const readiness = createDeferred<unknown>();
         boundary.rpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
-            // A Team model commits only after the selected worker projects it (recipient consent held there).
+            // The worker projects compatibility; the real Action reads recipient consent from the Account row above.
             if (request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) return createConfirmedTeamModelProjectionFixture({
                 agentTargetKey: teamModel.agentTargetKey, modelId: teamModel.modelId, modelName: 'Shared review model' });
             if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
@@ -551,6 +567,10 @@ describe('real execution Run launch admission', () => {
         });
         await screen.pressByTestIdAsync(teamOptionTestId);
         await vi.waitFor(() => expect(consent).toHaveBeenCalled());
+        await vi.waitFor(async () => { await act(async () => {});
+            expect(screen.findByTestId(`model-picker-overlay-option-selected-indicator:${sessionModelSelectionKey(teamModel)}`),
+                screen.getTextContent()).not.toBeNull();
+        });
         const submitTestId = selecting ? 'review-execution-run-launch-continue' : 'start-review-start';
         await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId(submitTestId)?.props.disabled).toBe(false); });
         await screen.pressByTestIdAsync(submitTestId);
