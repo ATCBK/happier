@@ -19824,6 +19824,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `workflow.discussion.round.project`
+
+**Read Discussion round outcomes** — Project completed participant outcomes in the current accepted Workflow frame. Pass and next speakers come from exact reply custody, never prose.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `workflow.events.list`
 
 **List eligible workflow events** — List eligible trigger events from the selected Machine's current Event declarations. Returns event ids, titles, supported observation transports and source setup Actions. Use these declarations to discover Event trigger types; runWhen values are workflow block outcome conditions. This catalog does not configure, list or admit source instances.
