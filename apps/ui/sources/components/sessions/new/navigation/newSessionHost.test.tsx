@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
     mergeNewSessionHostParams,
@@ -37,6 +38,24 @@ function useHostSurface() {
 }
 
 describe('newSessionHost', () => {
+    it('withdraws route demand while the New Session surface is retained out of view', async () => {
+        let presented = false;
+        const hook = await renderHook(useNewSessionHostDemanded, {
+            wrapper: ({ children }: React.PropsWithChildren) => (
+                <PluginSurfaceFocusEligibilityProvider active={presented}>{children}</PluginSurfaceFocusEligibilityProvider>
+            ),
+        });
+        try {
+            expect(hook.getCurrent()).toBe(false);
+            presented = true;
+            await hook.rerender();
+            expect(hook.getCurrent()).toBe(true);
+            presented = false;
+            await hook.rerender();
+            expect(hook.getCurrent()).toBe(false);
+        } finally { await hook.unmount(); }
+    });
+
     it('on /new, reads and writes the route and opens drafts by navigating', async () => {
         const hook = await renderHook(useHostSurface);
         const surface = hook.getCurrent();

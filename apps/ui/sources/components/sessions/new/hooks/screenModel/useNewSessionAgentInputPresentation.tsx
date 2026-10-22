@@ -19,9 +19,9 @@ import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSe
 import type { NewSessionTranscriptStorage } from '@/components/sessions/new/modules/newSessionTranscriptStorage';
 import { t } from '@/text';
 import { createNewSessionLinkedFilesActionChip } from '@/components/sessions/agentInput/definitions/createLinkedFilesActionChip';
-import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { canAttemptMachineSpawn, type MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import type { NewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
@@ -104,26 +104,20 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     }> | undefined;
     agentInputExtraActionChips: ReadonlyArray<AgentInputExtraActionChip>;
 }> {
-    const reachabilityRevision = useMachineReachabilityRevision();
     const { binding } = useServerCredentialAccountScopeBinding(params.targetServerId);
     const scope = binding?.isCurrent() ? binding.scope : null;
-    const selectedMachineActive = params.selectedMachine?.active;
-    const selectedMachineActiveAt = params.selectedMachine?.activeAt;
-    const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
-    const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
-    const selectedMachineReachability = React.useMemo(() => (
-        params.selectedMachine ? resolveMachineReachability(scope, params.selectedMachine) : 'unknown'
-    ), [
-        params.selectedMachine?.id,
-        selectedMachineActive,
-        selectedMachineActiveAt,
-        selectedMachineReplacedByMachineId,
-        selectedMachineRevokedAt,
-        params.targetServerId,
-        reachabilityRevision,
-        scope,
-    ]);
+    const readPresenceMachines = React.useCallback(() => [params.selectedMachine], [params.selectedMachine]);
+    const readReachability = React.useCallback((nowMs: number) => (
+        params.selectedMachine ? resolveMachineReachability(scope, params.selectedMachine, nowMs) : 'unknown'
+    ), [params.selectedMachine, scope]);
+    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
+    const canAttemptSpawn = canAttemptMachineSpawn({
+        scope,
+        selectedMachineId: params.selectedMachineId,
+        machine: params.selectedMachine,
+        spawnReadiness: params.selectedMachineSpawnReadiness,
+    });
     // The sentence names the machine, or says "this machine" while its details are locked or loading; never its id.
     const selectedMachineLabel = getMachineSentenceName(params.selectedMachine);
     // The composer's status line speaks only when the machine cannot take the session: a ready machine
@@ -140,17 +134,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
                 recovery: 'machine' as const,
             };
         }
-        const online = selectedMachineReadinessStatus === 'ready'
-            || (
-                (
-                    selectedMachineReadinessStatus === undefined
-                    || selectedMachineReadinessStatus === 'unknown'
-                    || selectedMachineReadinessStatus === 'probing'
-                )
-                && selectedMachineReachability === 'reachable'
-            );
-
-        if (online) return undefined;
+        if (canAttemptSpawn) return undefined;
         return {
             text: selectedMachineReadinessStatus === 'keyUnavailable'
                 ? t('machineRequester.keyPending', { machine: selectedMachineLabel })
@@ -167,6 +151,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         selectedMachineReadinessStatus,
         selectedMachineLabel,
         params.theme.colors.state.danger.foreground,
+        canAttemptSpawn,
     ]);
 
 

@@ -16,6 +16,8 @@ const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabi
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
 const { EMPTY_MACHINE_AGENTS } = await import('@/agents/machineAgents/machineAgentInventoryStore');
+const { useMachinePresenceSummary } = await import('@/sync/domains/machines/reachability/useMachinePresenceSummary');
+const { readMachineOnlineGraceMsFromEnv } = await import('@/utils/sessions/machineUtils');
 const machineAgents = { ...EMPTY_MACHINE_AGENTS, refresh: async () => {} };
 
 beforeEach(() => {
@@ -32,6 +34,31 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine launch readiness', () => {
+    it('ages launch admission with the roster at the same presence deadline', async () => {
+        const home = await network.addHome('https://presence-deadline.example.test', 'presence-owner');
+        vi.useFakeTimers();
+        const machine = createMachineFixture({ id: 'presence-deadline', active: true,
+            activeAt: Date.now() - readMachineOnlineGraceMsFromEnv() + 10 });
+        storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
+        const hook = await renderHook(() => ({
+            roster: useMachinePresenceSummary(home.id, machine.id),
+            launch: useNewSessionAvailabilityState({
+                machineAgents, selectedMachineId: machine.id, selectedMachine: machine,
+                capabilityServerId: home.id, machineProbesEnabled: false,
+                externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
+                backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
+                setBackendTarget: vi.fn(), machines: [machine], allProfiles: [],
+            }),
+        }), { flushOptions: { advanceTimersMs: 0 } });
+        try {
+            expect(hook.getCurrent().roster.reachability).toBe('reachable');
+            expect(hook.getCurrent().launch.selectedMachineReachability).toBe('reachable');
+            await act(async () => { await vi.advanceTimersByTimeAsync(11); });
+            expect(hook.getCurrent().roster.reachability).toBe('unreachable');
+            expect(hook.getCurrent().launch.selectedMachineReachability).toBe('unreachable');
+            expect(hook.getCurrent().launch.selectedMachineSpawnReadiness.status).toBe('offline');
+        } finally { await hook.unmount(); }
+    });
     it('looks up acquired catalog targets without revalidating them and withdraws removed inventory', async () => {
         const { getResolvedBackendCatalogEntries } = await import('@/agents/backendCatalog/getResolvedBackendCatalogEntries');
         const { createMachineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');

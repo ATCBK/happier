@@ -151,11 +151,23 @@ describe('useNewSessionAgentInputPresentation', () => {
         // A ready machine is named by its chip; healthy state says nothing above the card.
         expect(hook.getCurrent().connectionStatus).toBeUndefined();
         expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(true);
+        // Presence can recover before the earlier capabilities/readiness snapshot.
+        readiness = { status: 'offline', machineId: 'm1' };
+        await hook.rerender();
+        expect(hook.getCurrent().connectionStatus).toBeUndefined();
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(true);
+        // Conversely, a cached ready result must not override current withdrawal.
+        readiness = { status: 'ready', machineId: 'm1' };
         await act(async () => withdrawMachinePresenceForScope(scope));
         expect(hook.getCurrent().connectionStatus?.text).toBe('newSession.machineUnavailableStatus');
         expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(false);
         await act(async () => captureMachinePresenceObservation(scope)([machine!.id]));
         expect(hook.getCurrent().connectionStatus).toBeUndefined();
+        machine = { ...machine!, active: false, activeAt: 0 };
+        await hook.rerender();
+        expect(hook.getCurrent().connectionStatus?.text).toBe('newSession.machineOfflineInlineTitle');
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(false);
+        machine = { ...machine, active: true, activeAt: Date.now() };
         readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({

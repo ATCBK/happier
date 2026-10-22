@@ -28,7 +28,7 @@ import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInterac
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { resolveWindowsTerminalAvailable } from '@/capabilities/windowsTerminalAvailability';
 import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -77,7 +77,6 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     machines: ReadonlyArray<Machine>;
     allProfiles: ReadonlyArray<AIBackendProfile>;
 }>) {
-    const reachabilityRevision = useMachineReachabilityRevision();
     const { binding } = useServerCredentialAccountScopeBinding(params.capabilityServerId);
     const scope = binding?.isCurrent() ? binding.scope : null;
     const machineProbesEnabled = params.machineProbesEnabled !== false;
@@ -191,20 +190,12 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         });
     }, [machineAgentsById]);
 
-    const selectedMachineReachability = React.useMemo(() => {
-        if (!params.selectedMachineId) return 'unknown';
-        const machine = params.selectedMachine;
-        if (!machine) return 'unknown';
-        return resolveMachineReachability(scope, machine);
-    }, [
-        params.selectedMachineId,
-        params.selectedMachine?.active,
-        params.selectedMachine?.activeAt,
-        params.selectedMachine?.revokedAt,
-        params.capabilityServerId,
-        reachabilityRevision,
-        scope,
-    ]);
+    const readPresenceMachines = React.useCallback(() => [params.selectedMachine], [params.selectedMachine]);
+    const readReachability = React.useCallback((nowMs: number) => (
+        params.selectedMachineId && params.selectedMachine
+            ? resolveMachineReachability(scope, params.selectedMachine, nowMs) : 'unknown'
+    ), [params.selectedMachineId, params.selectedMachine, scope]);
+    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability);
     const selectedMachineOnline = selectedMachineReachability === 'reachable';
 
     const selectedMachineSpawnReadiness = React.useMemo(() => {

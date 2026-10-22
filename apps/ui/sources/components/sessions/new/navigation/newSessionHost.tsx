@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import type { ProviderBoundModelRef } from '@happier-dev/protocol';
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc';
@@ -113,10 +114,11 @@ export function useNewSessionHostSpawnExecutor(): SessionSpawnNewActionExecutor 
     return React.useContext(NewSessionEmbeddedHostContext)?.executeSpawnAction;
 }
 
-/** Route-mode surfaces always have intent (the person opened them); embedded ones wait for it. */
+/** Visible routes have intent; embedded composers additionally wait for their host's intent. */
 export function useNewSessionHostDemanded(): boolean {
     const host = React.useContext(NewSessionEmbeddedHostContext);
-    return host ? host.demanded : true;
+    const presented = useLayoutPresentationActive();
+    return presented && (host ? host.demanded : true);
 }
 
 type RouterLike = ReturnType<typeof useRouter>;
