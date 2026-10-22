@@ -1850,6 +1850,9 @@ export async function handleUpdateContainer(params: {
             )
             && (
                 fullContentConsumerActive
+                // Visible metadata/awareness consumers need request identities and settlements,
+                // even when the public counters stay zero. This does not consume a transcript.
+                || isSessionListRowVisible(updateData.body.id, sourceServerId)
                 || shouldHydrateAgentStateForHiddenSession({
                     session,
                     updateBody: updateData.body,

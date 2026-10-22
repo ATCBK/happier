@@ -12,6 +12,8 @@ import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { buildPermissionToolCallRoute } from '@/utils/sessions/permissions/buildPermissionToolCallRoute';
 import { isSessionContentReadable, readSessionContentAvailability } from '../encryptedContentAvailability';
+import { useSessionContentDemand } from '../useSessionContentDemand';
+import { getSessionSurfaceVisibilityResetVersion, subscribeSessionSurfaceVisibilityReset } from '../sessionSurfaceVisibility';
 
 const NO_PENDING_REQUESTS: readonly SessionPendingRequest[] = Object.freeze([]);
 export type SessionAwarenessScopeOptions = Readonly<{ accountLifetime: ServerAccountScopeLifetime | null; enabled?: boolean }>;
@@ -45,6 +47,15 @@ export function useSessionAwareness(sessionId: string, serverId: string | null, 
             && areServerAccountScopesEqual(accountLifetime.scope, activeScope))),
     [accountLifetime, activeScope, enabled, scopeRequired, serverId]);
     const currentScope = React.useSyncExternalStore(subscribeScope, readCurrentScope, readCurrentScope);
+    const resetVersion = React.useSyncExternalStore(subscribeSessionSurfaceVisibilityReset,
+        getSessionSurfaceVisibilityResetVersion, getSessionSurfaceVisibilityResetVersion);
+    // Explicit scoped leaves demand a fresh snapshot even when their Session was never opened.
+    // The existing list-content owner shares exact reads and live metadata updates, never messages.
+    // Incumbent unscoped Summary/transcript callers retain their host-owned acquisition lifecycle.
+    useSessionContentDemand(scopeRequired && serverId ? [{ serverId, sessionId }] : [], {
+        active: currentScope && scopeRequired,
+        hydrate: 'viewport', resetVersion, tag: 'session-awareness',
+    });
     const liveSession = useSession(currentScope ? sessionId : '', currentScope ? serverId : null);
     // Summary retains its already-authorized shell while a live row is absent.
     // App transcripts deliberately provide no fallback and never invent activity.

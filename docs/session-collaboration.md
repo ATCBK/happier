@@ -614,6 +614,15 @@ control can open `requestHref` and pass the exact request id/source to the exist
 `setPendingNavigationLanding` owner for Session hydration and reveal. This data
 contract does not establish that Discussion composition already renders the control.
 
+The explicit scoped awareness binding also acquires a never-opened Session through
+`useSessionContentDemand` in viewport mode. That existing demand owner retains the
+qualified Session as a visible metadata consumer and shares Sync's exact snapshot
+hydration with `hydrateMessages: false`; it neither opens a transcript nor marks
+the Session as viewed. Requests and settlements continue through the ordinary
+Session store/socket projection. Disabling the leaf or retiring its Account
+withdraws that demand, and the existing surface-reset version reacquires it after
+a Home reset. Unscoped Summary/transcript callers keep their host-owned acquisition.
+
 Discussion transcript remount continuity uses the shared `TranscriptListShell`
 renderer through `viewportRetention={repository}`. The scoped repository lifetime
 and qualified Discussion data key retain only a keyed row's viewport offset or
@@ -683,6 +692,11 @@ ordinary authoring selections/readiness only, not a model inventory or setup pro
 readiness stays unknown, and listing never invites, launches or grants access. The mounted
 Invite hook and public Action share the same eligibility/exclusion projection; writes still
 revalidate at their canonical owners.
+
+The shared executable picker uses the ordinary launch-visibility and Machine-action
+ordering owners for model setup targets: removed/replaced targets are omitted, available
+Machines lead, and offline/unknown targets remain selectable afterward with their readiness
+cause. This does not reorder existing Session reviewers or probe every Session on opening.
 
 The standalone API-token SDK derives `actions.discussion.*` from `PUBLIC_ACTION_IDS`, a
 narrower credential-admitted projection. It does not expose present-user create, rename,

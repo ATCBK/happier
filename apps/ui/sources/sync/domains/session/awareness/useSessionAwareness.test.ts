@@ -2,10 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+// Scoped awareness now uses the app's existing content-demand acquisition owner.
+await loadSyncSingletonForTests();
 const { useSessionAwareness } = await import('./useSessionAwareness');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
