@@ -19,7 +19,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import type { WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
-import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { getSessionName, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 
 import type { BoardMember } from './boardMembership';
@@ -44,7 +44,7 @@ export type BoardCardBody =
         progress: WorkflowRunSummaryV1['stepProgress'] }>
     | Readonly<{ kind: 'workflow'; needsYouCount: number | null; lastRunWord: string | null; lastRunAt: string | null;
         runSummaryAvailable: boolean; triggerSummary: string | null; nextRun: BoardWorkflowNextRun }>
-    | Readonly<{ kind: 'machine'; online: boolean; counts: MachineSessionCounts }>
+    | Readonly<{ kind: 'machine'; online: boolean | null; counts: MachineSessionCounts }>
     | Readonly<{ kind: 'none' }>;
 
 export type BoardCard = Readonly<{
@@ -185,12 +185,13 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
         case 'machine': {
             const machine = facts.machine(member.ref);
             if (!machine) return missingEntity(member, facts).status;
-            const online = isMachineReachable(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs);
+            const reachability = resolveMachineReachability(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs);
+            const online = reachability === 'unknown' ? null : reachability === 'reachable';
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return resolveWorkStatusTone({ kind: 'machine', facts: {
                 // A Machine that needs the person says why ("1 needs you"); its presence word in the attention
                 // tone would read as if being online were the problem.
-                word: !online ? t('boards.card.machine.offline') : counts.needsYou > 0
+                word: online === null ? t('common.unknown') : !online ? t('boards.card.machine.offline') : counts.needsYou > 0
                     ? t('boards.card.machine.needYou', { count: counts.needsYou }) : t('boards.card.machine.online'),
                 online, needsYouCount: counts.needsYou, runningSessionCount: counts.running,
                 machineId: machine.id, revokedAt: machine.revokedAt, managedMachine: facts.managedMachine?.(member.ref),
@@ -259,7 +260,8 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
         case 'machine': {
             const machine = facts.machine(member.ref);
             if (!machine) return missingEntity(member, facts);
-            const online = isMachineReachable(facts.machineScope?.(serverId), machine, facts.nowMs);
+            const reachability = resolveMachineReachability(facts.machineScope?.(serverId), machine, facts.nowMs);
+            const online = reachability === 'unknown' ? null : reachability === 'reachable';
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return {
                 ...base,
@@ -340,7 +342,8 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
                 case 'machine': {
                     const machine = facts.machine(member.ref);
                     source = machine;
-                    machineOnline = machine ? isMachineReachable(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs) : null;
+                    const reachability = machine ? resolveMachineReachability(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs) : 'unknown';
+                    machineOnline = reachability === 'unknown' ? null : reachability === 'reachable';
                     break;
                 }
             }

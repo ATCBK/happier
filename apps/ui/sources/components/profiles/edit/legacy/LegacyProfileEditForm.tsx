@@ -20,7 +20,7 @@ import { getBuiltInProfileDocumentation } from '@/sync/domains/profiles/profileU
 import { EnvironmentVariablesList } from '@/components/profiles/environmentVariables/EnvironmentVariablesList';
 import { useSetting, useSettings, useAllMachines, useMachine, useSettingMutable } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -166,6 +166,7 @@ function LegacyProfileEditFormReady({
     const observedMachines = React.useMemo(() => resolvedMachine ? [resolvedMachine] : [], [resolvedMachine]);
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
     useMachineReachabilityRevision(Boolean(resolvedMachine));
+    const machinePresence = resolvedMachine ? resolveMachineReachability(machineBinding?.isCurrent() ? machineBinding.scope : null, resolvedMachine, presenceNowMs) : 'unknown';
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: resolvedMachineId,
         serverId: activeServerId,
@@ -661,7 +662,7 @@ function LegacyProfileEditFormReady({
                         subtitle={resolvedMachine ? t('profiles.previewMachine.resolveSubtitle') : t('profiles.previewMachine.selectSubtitle')}
                         detail={getMachineDisplayName(resolvedMachine) ?? undefined}
                         detailStyle={resolvedMachine
-                            ? { color: isMachineReachable(machineBinding?.isCurrent() ? machineBinding.scope : null, resolvedMachine, presenceNowMs) ? theme.colors.status.connected : theme.colors.status.disconnected }
+                            ? { color: machinePresence === 'reachable' ? theme.colors.status.connected : machinePresence === 'unreachable' ? theme.colors.status.disconnected : theme.colors.text.secondary }
                             : undefined}
                         onPress={showMachinePreviewPicker}
                     />

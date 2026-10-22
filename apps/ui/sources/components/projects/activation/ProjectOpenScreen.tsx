@@ -54,6 +54,7 @@ import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { WorkspaceActivationSyncFields } from '@/components/workspaces/activation/WorkspaceActivationEditor';
 
 import { ProjectRefSelect } from '../ProjectRefSelect';
@@ -462,7 +463,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
               id: candidate.id,
               title: machineNames.get(candidate.id)!,
               // A choice says its state in a word; the full sentence belongs to the chosen Where row.
-              subtitle: isMachineSelectableForFleet(props.scope, candidate, presenceNowMs)
+              subtitle: resolveMachineReachability(props.scope, candidate, presenceNowMs) === 'unknown' ? t('common.unknown') : isMachineSelectableForFleet(props.scope, candidate, presenceNowMs)
                 ? [t('status.online'), formatOSPlatform(candidate.metadata?.platform ?? undefined)].filter(Boolean).join(' · ')
                 : t('status.offline'),
               icon: (

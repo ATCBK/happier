@@ -31,7 +31,7 @@ import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWor
 import { warmWorkspaceRepositoryDirectoryCache } from '@/sync/domains/workspaces/files/workspaceRepositoryDirectory';
 import { normalizeWorkspaceRootPath, tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
@@ -228,7 +228,7 @@ function CheckoutsBody(props: Props): React.ReactElement {
     // An offline machine's checkout stays listed and says so (lab p-projects: dimmed, last-known).
     const isOffline = (machineId: string) => {
         const machine = machineOf(machineId);
-        return machine != null && !isMachineReachable(accountScope, machine, presenceNowMs);
+        return machine != null && resolveMachineReachability(accountScope, machine, presenceNowMs) === 'unreachable';
     };
     const fact = (machineId: string, ref: WorkspaceRefV1 | null) => {
         const attention = status(ref)?.attention ?? null;

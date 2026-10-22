@@ -28,7 +28,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { useProjectsSourcesComposition } from './useProjectsSourcesComposition';
 import { useProjectsTreeCheckoutFacts } from './useProjectsTreeCheckoutFacts';
 import { buildProjectsTreeHiddenItems, buildProjectsTreeProjects, projectsTreeCheckoutKey } from './projectsTreeRows';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
@@ -118,8 +118,9 @@ export function useProjectsListModel() {
             groups: projectGroups, projectName: resolveWorkspaceRefDisplayName,
             machine: machineId => {
                 const machine = machinesById.get(machineId);
+                const reachability = machine ? resolveMachineReachability(accountScope, machine, presenceNowMs) : 'unknown';
                 return { name: machineNames.get(machineId) ?? t('machine.unlistedMachine'), homeDir: machine?.metadata?.homeDir ?? null,
-                    online: machine ? isMachineReachable(accountScope, machine, presenceNowMs) : null };
+                    online: reachability === 'unknown' ? null : reachability === 'reachable' };
             },
             sources: composition.sources, teamName: composition.teamName,
             checkoutFacts: ref => checkoutFacts.get(projectsTreeCheckoutKey({ refId: ref.id, workspaceAddress: workspaceAddressFromRefV1(ref) })) ?? null,

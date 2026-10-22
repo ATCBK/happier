@@ -18,7 +18,7 @@ import { ItemListStatic } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { useServerScopedMachine } from '@/sync/domains/state/storage';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -213,7 +213,8 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
     const machineNameColor = React.useMemo(() => {
         if (!props.machineId) return theme.colors.text.secondary;
         if (!machine) return theme.colors.text.secondary;
-        return isMachineReachable(machineScope, machine, presenceNowMs) ? theme.colors.status.connected : theme.colors.status.disconnected;
+        const presence = resolveMachineReachability(machineScope, machine, presenceNowMs);
+        return presence === 'reachable' ? theme.colors.status.connected : presence === 'unreachable' ? theme.colors.status.disconnected : theme.colors.text.secondary;
     }, [machine, machineScope, presenceNowMs, reachabilityRevision, props.machineId, theme.colors.status.connected, theme.colors.status.disconnected, theme.colors.text.secondary]);
 
     const allowedSources = React.useMemo(() => {

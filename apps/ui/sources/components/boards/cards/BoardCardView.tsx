@@ -99,6 +99,7 @@ function describeBody(body: BoardCardBody, nowMs: number, shownWord: string | nu
                 .filter(Boolean).join(' · ') || null;
         }
         case 'machine': {
+            if (body.online === null) return shownWord === t('common.unknown') ? null : t('common.unknown');
             if (!body.online) return t('boards.card.machine.offlineBody');
             // Who needs the person is the card's state word; the body says what the Machine is doing.
             return body.counts.running > 0 ? t('boards.card.machine.running', { count: body.counts.running }) : t('boards.card.machine.idle');

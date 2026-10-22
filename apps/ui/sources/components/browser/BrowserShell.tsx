@@ -320,7 +320,7 @@ export function BrowserShell(props: Readonly<{
      * The Machine this browser runs on, when it is a Session's: the docked pane's bar says it once
      * (the floating viewer's controls already do), the same mark the Computer pane's bar draws.
      */
-    machine?: Readonly<{ name: string; online: boolean }> | null;
+    machine?: Readonly<{ name: string; online: boolean | null }> | null;
     browserRecording?: BrowserShellRecordingState | null;
     browserProfile?: BrowserShellProfileState | null;
     navigationEffect?: BrowserControlCommandEffect | null;

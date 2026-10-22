@@ -32,6 +32,7 @@ vi.mock('react-native-unistyles', async () => {
 const { useProjectsListModel } = await import('./useProjectsListModel');
 const { useProjectRowCreationActions } = await import('./ProjectSaveAsSourceSheet');
 const { storage } = await import('@/sync/domains/state/storage');
+const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 let serverId: string;
 let rows: ProjectAccountRowV1[];
 const mutationPath = '/v1/account/project-rows/mutate';
@@ -63,12 +64,27 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     await standardCleanup();
+    clearMachineRequestReachabilityForTest();
     vi.useRealTimers();
     const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
     await disconnectActiveServerConnection(); await homes.reset();
 });
 
 describe('Projects model Action admission', () => {
+    it('never dims a retained checkout as offline while its Machine presence is withdrawn', async () => {
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } =
+            await import('@/sync/domains/machines/reachability/machineReachability');
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+        storage.setState({ machines: { machine }, machineListByServerId: { [serverId]: [machine] } });
+        const hook = await renderHook(() => useProjectsListModel());
+        const scope = { serverId, accountId: 'account-a' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBeUndefined();
+        await act(async () => captureMachinePresenceObservation(scope)([machine.id]));
+        expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBe(false);
+        await hook.unmount();
+    });
+
     it('disabled authoring cannot open New session here through the Projects model', async () => {
         const scope = { serverId, accountId: 'account-a' };
         const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({

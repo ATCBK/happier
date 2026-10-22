@@ -25,7 +25,7 @@ import {
 } from './boardCards';
 import type { BoardMember } from './boardMembership';
 import { readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
 import { readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionSourceState, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 
@@ -54,6 +54,20 @@ const workingSession = createSessionListRenderableSessionFixture({
 });
 
 describe('board cards', () => {
+    it('reprojects withdrawn Machine presence from offline to unknown without changing its retained row', () => {
+        const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'mbp' } } as const;
+        const machine = createMachineFixture({ id: 'mbp', active: false, activeAt: 1 });
+        const scope = { serverId: 'home-a', accountId: 'owner' };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => null, workflowRun: () => null, workflow: () => null,
+            machine: () => machine, machineScope: () => scope, machineSessionCounts: new Map(), accountScopedHome: () => true };
+        const project = createBoardCardProjection();
+        expect(project([member(ref)], facts)[0]?.status.bucket).toBe('offline');
+        withdrawMachinePresenceForScope(scope);
+        expect(project([member(ref)], facts)[0]).toMatchObject({ body: { online: null },
+            status: { bucket: 'idle', word: 'common.unknown' } });
+        captureMachinePresenceObservation(scope)([machine.id]);
+        expect(project([member(ref)], facts)[0]).toMatchObject({ body: { online: false }, status: { bucket: 'offline' } });
+    });
     it('settles linked-task status with its Session read and recovers without replacing the task', () => {
         const ref = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-cold' }, pluginId: 'com.acme.tasks' } as const;
         const task = { title: 'Cold linked work', category: 'completed' as const,
@@ -151,7 +165,7 @@ describe('board cards', () => {
         expect(project([member(ref)], facts)[0]?.status.bucket).toBe('offline');
         recordMachineRequestSucceeded({ ...scope, machineId: machine.id, observedAtMs: NOW + 1 });
         expect(project([member(ref)], facts)[0]?.body).toMatchObject({ online: true });
-        expect(project([member(ref)], { ...facts, machineScope: () => null })[0]?.body).toMatchObject({ online: false });
+        expect(project([member(ref)], { ...facts, machineScope: () => null })[0]?.body).toMatchObject({ online: null });
     });
     it('keeps the enrolled Machine asleep and reprojects observed Start through the shared status owner', () => {
         const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'guest' } } as const;

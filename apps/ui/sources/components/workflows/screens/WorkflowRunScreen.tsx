@@ -106,7 +106,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { normalizeResultPreview } from '../presentation/resultPreview';
 import { formatWorkflowUsageLabel } from '../presentation/workflowUsagePresentation';
 import {
@@ -822,11 +822,12 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     const observedRunMachines = React.useMemo(() => activelyViewed && runMachine ? [runMachine] : [], [activelyViewed, runMachine]);
     const presenceNowMs = useMachinePresenceNowMs(observedRunMachines);
     useMachineReachabilityRevision(activelyViewed && runMachine !== null);
-    const runMachineReachable = runMachine ? isMachineReachable(accountLifetime?.isCurrent() ? activeAccountScope : null, runMachine, presenceNowMs) : undefined;
+    const runMachineReachability = runMachine ? resolveMachineReachability(accountLifetime?.isCurrent() ? activeAccountScope : null, runMachine, presenceNowMs) : 'unknown';
+    const runMachineReachable = runMachineReachability === 'unknown' ? undefined : runMachineReachability === 'reachable';
     const managedHomes = React.useMemo(() => summary && activelyViewed && activeAccountScope ? [activeAccountScope.serverId] : [],
         [summary, activelyViewed, activeAccountScope]);
     const managedInventory = useManagedMachineInventory(managedHomes);
-    const runMachineStatus = runMachine && activeAccountScope ? resolveWorkStatusTone({ kind: 'machine', facts: {
+    const runMachineStatus = runMachine && activeAccountScope && runMachineReachability !== 'unknown' ? resolveWorkStatusTone({ kind: 'machine', facts: {
         machineId: runMachine.id, revokedAt: runMachine.revokedAt, online: runMachineReachable === true, word: '', needsYouCount: 0, runningSessionCount: 0,
         managedMachine: managedInventory.machinesByEnrolledMachineIdByServerId[activeAccountScope.serverId]?.[runMachine.id],
     } }) : undefined;
