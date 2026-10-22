@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createDeferred, flushHookEffects } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { readMachineRows } from './machineRowsApi';
+import { prepareMachineRows, readMachineRows, type PreparedMachineRows } from './machineRowsApi';
 import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
@@ -55,15 +55,14 @@ describe('selected Machine reads through the real Home admission owner', () => {
         const second = await captureLazyActionAccountContext(homes.homes.home!.id);
         const abort = new AbortController();
         const pending: Promise<unknown>[] = [];
+        let preparation: PreparedMachineRows | undefined;
         try {
             if (!first.readTransport || !second.readTransport) throw new Error('Captured Machine read transport unavailable');
+            preparation = prepareMachineRows({ readTransport: second.readTransport });
             const leaving = readMachineRows({ readTransport: first.readTransport, machineIds: ids.slice(0, 2), signal: abort.signal });
-            // Independent prepared readers can resume at different microtask
-            // depths within the same event-loop turn; retain one physical batch.
-            await Promise.resolve();
-            await Promise.resolve();
-            await Promise.resolve();
-            const stayed = readMachineRows({ readTransport: second.readTransport, machineIds: ids.slice(1) });
+            // Register known preparation before it yields, independent of depth.
+            for (let depth = 0; depth < 64; depth += 1) await Promise.resolve();
+            const stayed = preparation.read(ids.slice(1));
             pending.push(leaving, stayed);
             const abandoned = expect(leaving).rejects.toMatchObject({ name: 'AbortError' });
             await entered.promise;
@@ -120,6 +119,7 @@ describe('selected Machine reads through the real Home admission owner', () => {
             } finally { next.dispose(); }
             await flushHookEffects();
         } finally {
+            preparation?.release();
             abort.abort();
             release.resolve(); censusRelease.resolve(); await Promise.allSettled(pending);
             first.dispose(); second.dispose(); await homes.dispose(); await app.close();

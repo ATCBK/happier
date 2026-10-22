@@ -3,16 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
 
 describe('scoped batch pending reads', () => {
-    it('gathers concurrent readers after their independent asynchronous preparations', async () => {
+    it.each([33, 64])('gathers concurrent readers after %i asynchronous preparation steps', async preparationDepth => {
         const realTask = globalThis.setTimeout;
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         try {
             const reads = createScopedBatchResolutionSingleFlight<string>();
             const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+            const preparing = reads.reserve('details');
             const first = reads.run('details', ['a', 'b'], request);
             // Credential/carrier preparations have unequal promise depths.
-            for (let depth = 0; depth < 32; depth += 1) await Promise.resolve();
-            const second = reads.run('details', ['b', 'c'], request);
+            for (let depth = 0; depth < preparationDepth; depth += 1) await Promise.resolve();
+            const second = preparing.run(['b', 'c'], request);
             // Observe a completed microtask checkpoint without advancing the
             // frozen timer queue used by consumer deadline/cleanup tests.
             await new Promise<void>(resolve => realTask(resolve, 0));
@@ -21,6 +22,67 @@ describe('scoped batch pending reads', () => {
             expect([...left.keys()]).toEqual(['a', 'b']);
             expect([...right.keys()]).toEqual(['b', 'c']);
         } finally { vi.useRealTimers(); }
+    });
+
+    it('dispatches an unreserved first read promptly without advancing frozen timers', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const reads = createScopedBatchResolutionSingleFlight<string>();
+            const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+            const result = reads.run('details', ['a'], request);
+            await Promise.resolve();
+            expect(request).toHaveBeenCalledTimes(1);
+            expect([...await result]).toEqual([['a', 'a']]);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('releases an aborted preparation without holding a ready borrower or selecting the departed ids', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const abort = new AbortController();
+        const preparing = reads.reserve('details', { signal: abort.signal });
+        const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+        const ready = reads.run('details', ['a'], request);
+        await Promise.resolve();
+        expect(request).not.toHaveBeenCalled();
+        abort.abort();
+        await expect(preparing.run(['b'], request)).rejects.toMatchObject({ name: 'AbortError' });
+        expect([...await ready]).toEqual([['a', 'a']]);
+        expect(request.mock.calls.map(([ids]) => ids)).toEqual([['a']]);
+    });
+
+    it('releases a failed preparation and does not hold other authority or projection partitions', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const scope = {};
+        const preparing = reads.reserve('details', { scope });
+        const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+        const ready = reads.run('details', ['held'], request, { scope });
+        const independent = await Promise.all([
+            reads.run('details', ['other-authority'], request, { scope: {} }),
+            reads.run('messages', ['other-projection'], request, { scope }),
+            reads.run('details', ['fresh'], request, { scope, fresh: true }),
+        ]);
+        expect(independent.map(result => [...result.keys()])).toEqual([['other-authority'], ['other-projection'], ['fresh']]);
+        expect(request.mock.calls.some(([ids]) => ids.includes('held'))).toBe(false);
+        preparing.release();
+        preparing.release();
+        expect([...await ready]).toEqual([['held', 'held']]);
+    });
+
+    it('isolates invalidation during preparation without holding or overwriting the successor', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const scope = {};
+        const preparing = reads.reserve('details', { scope });
+        const oldRequest = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, 'old'])));
+        const old = reads.run('details', ['a'], oldRequest, { scope });
+        await Promise.resolve();
+        reads.invalidate(scope);
+        const replacement = await reads.run('details', ['a'], async () => new Map([['a', 'new']]), { scope });
+        expect([...replacement]).toEqual([['a', 'new']]);
+        expect(oldRequest).not.toHaveBeenCalled();
+        const prepared = preparing.run(['a', 'b'], oldRequest);
+        expect([...await old]).toEqual([['a', 'old']]);
+        expect([...await prepared]).toEqual([['a', 'old'], ['b', 'old']]);
+        expect(oldRequest.mock.calls.map(([ids]) => ids)).toEqual([['a', 'b']]);
     });
 
     it('gathers matching authority paths without assigning reference ids', async () => {

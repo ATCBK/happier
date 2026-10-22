@@ -74,50 +74,71 @@ function assertMachineReadResponse(response: Response): void {
 }
 
 /** Exact selected IDs, not ordinary discovery: ephemeral targets retain exact admission. */
-export async function readMachineRows(params: Readonly<{
+type MachineRowsReadOptions = Readonly<{
     readTransport: CapturedServerReadTransport;
-    machineIds: readonly string[];
     signal?: AbortSignal;
     /** Conditional mutation/readback witnesses must not borrow an older read. */
     fresh?: boolean;
-}>): Promise<ReadonlyMap<string, MachinePublishedRowV1 | null>> {
+}>;
+
+/** Register the exact captured binding before awaiting Machine-specific preparation. */
+export function prepareMachineRows(params: MachineRowsReadOptions) {
     const transportKey = params.readTransport.key;
-    return selectedReads.run(JSON.stringify(['machine-exact-v1', transportKey]), params.machineIds, async (ids, signal) => {
-        const emptyBody = { machineIds: [] as string[] };
-        const batches: string[][] = [];
-        let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-        let batch: string[] = [];
-        for (const id of ids) {
-            if (!budget.tryAdmit(id)) {
-                if (!batch.length) throw new Error('Machine id exceeds the HTTP request body limit');
-                batches.push(batch);
-                batch = [];
-                budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-                if (!budget.tryAdmit(id)) throw new Error('Machine id exceeds the HTTP request body limit');
-            }
-            batch.push(id);
+    const reservation = selectedReads.reserve(JSON.stringify(['machine-exact-v1', transportKey]), {
+        scope: params.readTransport.scope ?? transportKey, signal: params.signal, fresh: params.fresh,
+    });
+    return {
+        release: reservation.release,
+        async read(machineIds: readonly string[], signal?: AbortSignal): Promise<ReadonlyMap<string, MachinePublishedRowV1 | null>> {
+            try {
+                return await reservation.run(machineIds,
+                    (ids, sharedSignal) => readMachineRowsBatch(params.readTransport, ids, sharedSignal), signal);
+            } finally { reservation.release(); }
+        },
+    };
+}
+
+export type PreparedMachineRows = ReturnType<typeof prepareMachineRows>;
+
+export async function readMachineRows(params: MachineRowsReadOptions & Readonly<{ machineIds: readonly string[] }>): Promise<ReadonlyMap<string, MachinePublishedRowV1 | null>> {
+    return await prepareMachineRows(params).read(params.machineIds);
+}
+
+async function readMachineRowsBatch(readTransport: CapturedServerReadTransport, ids: readonly string[], signal: AbortSignal) {
+    const emptyBody = { machineIds: [] as string[] };
+    const batches: string[][] = [];
+    let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+    let batch: string[] = [];
+    for (const id of ids) {
+        if (!budget.tryAdmit(id)) {
+            if (!batch.length) throw new Error('Machine id exceeds the HTTP request body limit');
+            batches.push(batch);
+            batch = [];
+            budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+            if (!budget.tryAdmit(id)) throw new Error('Machine id exceeds the HTTP request body limit');
         }
-        if (batch.length) batches.push(batch);
-        const result = new Map<string, MachinePublishedRowV1 | null>();
-        for (const machineIds of batches) {
-            const input = MachineReadBatchRequestV1Schema.parse({ machineIds });
-            const body = await params.readTransport.read('/v1/machines/read-batch', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
-            }, undefined, async response => {
-                assertMachineReadResponse(response);
-                return MachineReadBatchResponseV1Schema.parse(await response.json());
-            });
-            const expected = new Set(machineIds);
-            for (const row of body.results) {
-                if (!expected.delete(row.machineId) || (row.status === 'found' && row.machine.id !== row.machineId)) {
-                    throw new Error('Invalid Machine batch response');
-                }
-                result.set(row.machineId, row.status === 'found' ? row.machine : null);
+        batch.push(id);
+    }
+    if (batch.length) batches.push(batch);
+    const result = new Map<string, MachinePublishedRowV1 | null>();
+    for (const machineIds of batches) {
+        const input = MachineReadBatchRequestV1Schema.parse({ machineIds });
+        const body = await readTransport.read('/v1/machines/read-batch', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
+        }, undefined, async response => {
+            assertMachineReadResponse(response);
+            return MachineReadBatchResponseV1Schema.parse(await response.json());
+        });
+        const expected = new Set(machineIds);
+        for (const row of body.results) {
+            if (!expected.delete(row.machineId) || (row.status === 'found' && row.machine.id !== row.machineId)) {
+                throw new Error('Invalid Machine batch response');
             }
-            if (expected.size) throw new Error('Incomplete Machine batch response');
+            result.set(row.machineId, row.status === 'found' ? row.machine : null);
         }
-        return result;
-    }, { scope: params.readTransport.scope ?? transportKey, signal: params.signal, fresh: params.fresh });
+        if (expected.size) throw new Error('Incomplete Machine batch response');
+    }
+    return result;
 }
 
 /** The complete include-revoked census remains a different projection from exact selection. */

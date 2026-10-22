@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit';
 import type { ServerFetch } from '@/sync/http/client';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { createArtifact, fetchArtifactReadBatch } from './apiArtifacts';
+import { createArtifact, fetchArtifactReadBatch, prepareArtifactReadBatch } from './apiArtifacts';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
@@ -120,8 +120,14 @@ describe('Artifact read acquisition', () => {
             return missing(input.artifactIds);
         };
         const readTransport = capturedRead(request);
+        const preparing = prepareArtifactReadBatch({ token: 'same-authority' }, { readTransport });
         const first = fetchArtifactReadBatch({ token: 'same-authority' }, ids.slice(0, 2), { readTransport });
-        const second = fetchArtifactReadBatch({ token: 'same-authority' }, ids.slice(1), { readTransport });
+        const second = (async () => {
+            try {
+                for (let depth = 0; depth < 64; depth += 1) await Promise.resolve();
+                return await preparing.read(ids.slice(1));
+            } finally { preparing.release(); }
+        })();
         release.resolve();
         const results = await Promise.all([first, second]);
         expect(results.map(items => items.map(item => item.artifactId))).toEqual([ids.slice(0, 2), ids.slice(1)]);

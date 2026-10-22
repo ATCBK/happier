@@ -173,55 +173,71 @@ async function artifactHttpReadError(response: Response, fallback: string, code?
 }
 
 /** Read only the selected details and their current authorized recipient census. */
+export function prepareArtifactReadBatch(credentials: AuthCredentials,
+    opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'> = {}) {
+    throwIfAborted(opts.signal);
+    const binding = captureArtifactReadBinding(opts);
+    const reservation = artifactDetailReads.reserve(JSON.stringify(['artifact-detail-census', binding.key, resolveAuthCredentialsScopeKey(credentials)]),
+        { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
+    return {
+        release: reservation.release,
+        async read(artifactIds: readonly string[]): Promise<ArtifactReadBatchResponseV1['items']> {
+            try {
+                throwIfAborted(opts.signal);
+                if (artifactIds.length === 0) return [];
+                ArtifactReadBatchInputV1Schema.parse({ artifactIds });
+                const result = await reservation.run(artifactIds, async (demandedIds, sharedSignal) => {
+                    const items = new Map<string, ArtifactReadBatchItem>();
+                    const batches: string[][] = [];
+                    let batch: string[] = [];
+                    let budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+                    for (const id of demandedIds) {
+                        if (!budget.tryAdmit(id)) {
+                            if (batch.length === 0) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
+                            batches.push(batch);
+                            batch = [];
+                            budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+                            if (!budget.tryAdmit(id)) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
+                        }
+                        batch.push(id);
+                    }
+                    if (batch.length) batches.push(batch);
+                    for (const ids of batches) {
+                        throwIfAborted(sharedSignal);
+                        const consume = async (response: Response) => {
+                            if (!response.ok) throw await artifactHttpReadError(response, 'Artifact details are unavailable', 'artifact_content_unavailable');
+                            const parsed = ArtifactReadBatchResponseV1Schema.safeParse(await response.json());
+                            throwIfAborted(sharedSignal);
+                            if (!parsed.success || parsed.data.items.length !== ids.length
+                                || parsed.data.items.some((item, index) => item.artifactId !== ids[index])) {
+                                throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
+                            }
+                            for (const item of parsed.data.items) if (item.ok) readArtifactResponse(item.artifact);
+                            return parsed.data.items;
+                        };
+                        const init = { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify(ArtifactReadBatchInputV1Schema.parse({ artifactIds: ids })), signal: sharedSignal };
+                        const page = await binding.read('/v1/artifacts/read', init, consume);
+                        for (const item of page) items.set(item.artifactId, item);
+                    }
+                    return items;
+                });
+                throwIfAborted(opts.signal);
+                return artifactIds.map(id => {
+                    const item = result.get(id);
+                    if (!item) throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
+                    return item;
+                });
+            } finally { reservation.release(); }
+        },
+    };
+}
+
 export async function fetchArtifactReadBatch(credentials: AuthCredentials, artifactIds: readonly string[],
     opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'> = {}): Promise<ArtifactReadBatchResponseV1['items']> {
     throwIfAborted(opts.signal);
     if (artifactIds.length === 0) return [];
-    ArtifactReadBatchInputV1Schema.parse({ artifactIds });
-    const binding = captureArtifactReadBinding(opts);
-    const result = await artifactDetailReads.run(JSON.stringify(['artifact-detail-census', binding.key, resolveAuthCredentialsScopeKey(credentials)]),
-        artifactIds, async (demandedIds, sharedSignal) => {
-            const items = new Map<string, ArtifactReadBatchItem>();
-            const batches: string[][] = [];
-            let batch: string[] = [];
-            let budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
-            for (const id of demandedIds) {
-                if (!budget.tryAdmit(id)) {
-                    if (batch.length === 0) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
-                    batches.push(batch);
-                    batch = [];
-                    budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
-                    if (!budget.tryAdmit(id)) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
-                }
-                batch.push(id);
-            }
-            if (batch.length) batches.push(batch);
-            for (const ids of batches) {
-                throwIfAborted(sharedSignal);
-                const consume = async (response: Response) => {
-                    if (!response.ok) throw await artifactHttpReadError(response, 'Artifact details are unavailable', 'artifact_content_unavailable');
-                    const parsed = ArtifactReadBatchResponseV1Schema.safeParse(await response.json());
-                    throwIfAborted(sharedSignal);
-                    if (!parsed.success || parsed.data.items.length !== ids.length
-                        || parsed.data.items.some((item, index) => item.artifactId !== ids[index])) {
-                        throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
-                    }
-                    for (const item of parsed.data.items) if (item.ok) readArtifactResponse(item.artifact);
-                    return parsed.data.items;
-                };
-                const init = { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify(ArtifactReadBatchInputV1Schema.parse({ artifactIds: ids })), signal: sharedSignal };
-                const page = await binding.read('/v1/artifacts/read', init, consume);
-                for (const item of page) items.set(item.artifactId, item);
-            }
-            return items;
-        }, { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
-    throwIfAborted(opts.signal);
-    return artifactIds.map(id => {
-        const item = result.get(id);
-        if (!item) throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
-        return item;
-    });
+    return await prepareArtifactReadBatch(credentials, opts).read(artifactIds);
 }
 
 /** The Home supplies only the isolated shell location, never opened HTML or a public grant. */

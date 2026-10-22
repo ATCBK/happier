@@ -13,7 +13,7 @@ import { createOperationAccountCurrentnessSource } from './fetchSessionByIdWithS
 import { runWithServerRequestAuthorityForServerAccountScope } from './createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority, readSessionSnapshotsForAuthority } from './readSessionSnapshotForAuthority';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
-import { readSessionBatchForAuthority } from './readSessionBatchForAuthority';
+import { prepareSessionPartsRead, readSessionBatchForAuthority } from './readSessionBatchForAuthority';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
@@ -64,11 +64,16 @@ it('gathers overlapping same-authority Session projections across independent co
     await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
         const read = (sessionIds: string[]) => readSessionBatchForAuthority({ authority, sessionIds,
             includeSnapshot: true, includeMessages: false, assertCurrent: () => {} });
+        const preparing = prepareSessionPartsRead({ request: authority.request, readTransport: authority.readTransport,
+            includeSnapshot: true, includeMessages: false, assertCurrent: () => {} });
         const first = read(['first', 'shared']);
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        const [left, right] = await Promise.all([first, read(['shared', 'last'])]);
+        const second = (async () => {
+            try {
+                for (let depth = 0; depth < 64; depth += 1) await Promise.resolve();
+                return await preparing.read(['shared', 'last']);
+            } finally { preparing.release(); }
+        })();
+        const [left, right] = await Promise.all([first, second]);
         expect([...left.keys()]).toEqual(['first', 'shared']);
         expect([...right.keys()]).toEqual(['shared', 'last']);
         const gathered = home!.requests.filter(request => request.path === '/v2/sessions/read-batch');

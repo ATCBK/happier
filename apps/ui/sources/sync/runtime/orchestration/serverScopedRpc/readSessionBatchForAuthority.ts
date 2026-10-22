@@ -34,7 +34,7 @@ export type SessionPartsReadOptions = Readonly<{
 }>;
 
 /** The one parsed Session-parts acquisition owner; admission and opening remain per borrower. */
-export async function readSessionParts(params: SessionPartsReadOptions): Promise<ReadonlyMap<string, SessionReadPart>> {
+export function prepareSessionPartsRead(params: Omit<SessionPartsReadOptions, 'sessionIds'>) {
     const assertCurrent = () => {
         params.assertCurrent();
         // Hermes AbortSignal implementations need not expose throwIfAborted.
@@ -49,54 +49,66 @@ export async function readSessionParts(params: SessionPartsReadOptions): Promise
     const transport = params.readTransport;
     const transportKey = transport?.key;
     const scope = transport?.scope ?? transportKey;
-    try {
-        return await sessionParts.run(JSON.stringify([transportKey ?? null, params.includeSnapshot, includeTurns, params.includeMessages,
-            params.accessProjectionVersion ?? null, params.retry ?? null]), params.sessionIds, async (ids, signal) => {
-            const result = new Map<string, SessionReadPart>();
-            let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-            const batches: string[][] = [];
-            let batch: string[] = [];
-            for (const id of ids) {
-                if (!budget.tryAdmit(id)) {
-                    if (!batch.length) throw new Error('Session id exceeds the HTTP request body limit');
-                    batches.push(batch);
-                    batch = [];
-                    budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-                    if (!budget.tryAdmit(id)) throw new Error('Session id exceeds the HTTP request body limit');
-                }
-                batch.push(id);
-            }
-            if (batch.length) batches.push(batch);
-            for (const sessionIds of batches) {
-                const input = SessionReadBatchRequestV1Schema.parse({ ...emptyBody, sessionIds });
-                const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal };
-                const consume = async (response: Response) => {
-                    const payload: unknown = await response.json().catch(() => null);
-                    if (!response.ok) throw new SessionPartsHttpError(response.status, payload);
-                    const parsed = SessionReadBatchResponseV1Schema.safeParse(payload);
-                    if (!parsed.success) throw new SessionPartsInvalidResponseError();
-                    return parsed.data;
-                };
-                const body = transport
-                    ? await transport.read('/v2/sessions/read-batch', init, params.retry ? { retry: params.retry } : undefined, consume)
-                    : await consume(await params.request('/v2/sessions/read-batch', init));
-                const expected = new Set(sessionIds);
-                for (const row of body.results) {
-                    if (!expected.delete(row.sessionId)
-                        || (params.includeSnapshot && !row.detail)
-                        || (includeTurns && row.detail?.status === 200 && !row.turns)
-                        || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
-                        throw new SessionPartsInvalidResponseError();
+    const reservation = sessionParts.reserve(JSON.stringify([transportKey ?? null, params.includeSnapshot, includeTurns, params.includeMessages,
+        params.accessProjectionVersion ?? null, params.retry ?? null]), { scope, signal: params.signal, fresh: params.fresh || !transport });
+    return {
+        release: reservation.release,
+        async read(sessionIds: readonly string[]): Promise<ReadonlyMap<string, SessionReadPart>> {
+            try {
+                assertCurrent();
+                return await reservation.run(sessionIds, async (ids, signal) => {
+                    const result = new Map<string, SessionReadPart>();
+                    let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+                    const batches: string[][] = [];
+                    let batch: string[] = [];
+                    for (const id of ids) {
+                        if (!budget.tryAdmit(id)) {
+                            if (!batch.length) throw new Error('Session id exceeds the HTTP request body limit');
+                            batches.push(batch);
+                            batch = [];
+                            budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+                            if (!budget.tryAdmit(id)) throw new Error('Session id exceeds the HTTP request body limit');
+                        }
+                        batch.push(id);
                     }
-                    result.set(row.sessionId, row);
-                }
-                if (expected.size) throw new SessionPartsInvalidResponseError();
+                    if (batch.length) batches.push(batch);
+                    for (const sessionIds of batches) {
+                        const input = SessionReadBatchRequestV1Schema.parse({ ...emptyBody, sessionIds });
+                        const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal };
+                        const consume = async (response: Response) => {
+                            const payload: unknown = await response.json().catch(() => null);
+                            if (!response.ok) throw new SessionPartsHttpError(response.status, payload);
+                            const parsed = SessionReadBatchResponseV1Schema.safeParse(payload);
+                            if (!parsed.success) throw new SessionPartsInvalidResponseError();
+                            return parsed.data;
+                        };
+                        const body = transport
+                            ? await transport.read('/v2/sessions/read-batch', init, params.retry ? { retry: params.retry } : undefined, consume)
+                            : await consume(await params.request('/v2/sessions/read-batch', init));
+                        const expected = new Set(sessionIds);
+                        for (const row of body.results) {
+                            if (!expected.delete(row.sessionId)
+                                || (params.includeSnapshot && !row.detail)
+                                || (includeTurns && row.detail?.status === 200 && !row.turns)
+                                || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
+                                throw new SessionPartsInvalidResponseError();
+                            }
+                            result.set(row.sessionId, row);
+                        }
+                        if (expected.size) throw new SessionPartsInvalidResponseError();
+                    }
+                    return result;
+                });
+            } finally {
+                reservation.release();
+                assertCurrent();
             }
-            return result;
-        }, { scope, signal: params.signal, fresh: params.fresh || !transport });
-    } finally {
-        assertCurrent();
-    }
+        },
+    };
+}
+
+export async function readSessionParts(params: SessionPartsReadOptions): Promise<ReadonlyMap<string, SessionReadPart>> {
+    return await prepareSessionPartsRead(params).read(params.sessionIds);
 }
 
 /** Finite exact-Account batch facade; all projections use the same pending-only owner. */

@@ -13,8 +13,8 @@ type ReadScope = object | string;
 type ReadPartitionScope = ReadScope | readonly ReadScope[];
 
 export type ScopedPhysicalReadOptions = ScopedReadOptions & Readonly<{
-    /** Transfer prepared RPC custody synchronously, before dispatch or borrower retirement. */
-    onPhysicalAcquire?: (signal: AbortSignal) => (() => void | Promise<void>);
+    /** Register physical custody or a selected batch item before dispatch/borrower retirement. */
+    onPhysicalAcquire?: (signal: AbortSignal) => (() => void | Promise<void>) | void;
 }>;
 
 /** Ordered existing references partition pending work without assigning identities to them. */
@@ -97,7 +97,7 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
             };
             if (!flight) {
                 const abort = new AbortController();
-                let dispose: (() => void | Promise<void>) | undefined;
+                let dispose: (() => void | Promise<void>) | void;
                 try {
                     dispose = options.onPhysicalAcquire?.(abort.signal);
                 } catch (error) {
@@ -159,9 +159,20 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
     };
 }
 
+type BatchRead<T> = (ids: readonly string[], signal: AbortSignal) => Promise<ReadonlyMap<string, T>>;
+
+export type ScopedBatchReadPreparation<T> = Readonly<{
+    /** Settle this reservation once the caller has prepared its selected ids. */
+    run: (ids: readonly string[], read: BatchRead<T>, signal?: AbortSignal) => Promise<ReadonlyMap<string, T>>;
+    /** A failed or abandoned preparation must not hold other ready readers. */
+    release: () => void;
+}>;
+
 export type ScopedBatchResolutionSingleFlight<T> = Readonly<{
+    /** Register before awaiting preparation, under the already captured authority/projection key. */
+    reserve: (groupKey: string, options?: ScopedReadOptions) => ScopedBatchReadPreparation<T>;
     run: (groupKey: string, ids: readonly string[],
-        read: (ids: readonly string[], signal: AbortSignal) => Promise<ReadonlyMap<string, T>>,
+        read: BatchRead<T>,
         options?: ScopedReadOptions) => Promise<ReadonlyMap<string, T>>;
     invalidate: (scope?: ReadPartitionScope) => void;
     reset: () => void;
@@ -169,16 +180,58 @@ export type ScopedBatchResolutionSingleFlight<T> = Readonly<{
 
 /** Gathers ids at the same pending owner; each typed adapter keeps its existing wire/body budget. */
 export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolutionSingleFlight<T> {
-    const reads = createScopedResolutionSingleFlight<T>();
     const defaultScope = {};
-    type Item = { id: string; signal: AbortSignal; accept: (value: T) => void; reject: (error: unknown) => void };
-    type Batch = { items: Item[]; read: Parameters<ScopedBatchResolutionSingleFlight<T>['run']>[2] };
-    const queues = createReadPartitions<Map<string, Batch>>();
+    type Item = { id: string; signal: AbortSignal; read: BatchRead<T>; accept: (value: T) => void; reject: (error: unknown) => void };
+    type Batch = { items: Item[]; preparations: number; scheduled: boolean };
+    type Partition = { reads: ScopedResolutionSingleFlight<T>; groups: Map<string, Batch>; users: number };
+    const partitions = createReadPartitions<Partition>();
+
+    function acquire(options: ScopedReadOptions) {
+        throwIfAborted(options.signal);
+        const scope = options.fresh ? {} : options.scope ?? defaultScope;
+        let partition = partitions.get(scope);
+        if (!partition) {
+            partition = { reads: createScopedResolutionSingleFlight<T>(), groups: new Map(), users: 0 };
+            partitions.set(scope, partition);
+        }
+        const captured = partition;
+        captured.users += 1;
+        return { partition: captured, release: () => {
+            captured.users -= 1;
+            if (captured.users === 0 && captured.groups.size === 0) partitions.forget(scope, captured);
+        }, forgetIfIdle: () => {
+            if (captured.users === 0 && captured.groups.size === 0) partitions.forget(scope, captured);
+        } };
+    }
+
+    function batchFor(partition: Partition, groupKey: string): Batch {
+        let batch = partition.groups.get(groupKey);
+        if (!batch) {
+            batch = { items: [], preparations: 0, scheduled: false };
+            partition.groups.set(groupKey, batch);
+        }
+        return batch;
+    }
+
+    function flushWhenPrepared(acquisition: ReturnType<typeof acquire>, groupKey: string, batch: Batch) {
+        if (batch.scheduled || batch.preparations > 0) return;
+        batch.scheduled = true;
+        // Only registered preparations define the frontier; Promise depth and
+        // timer service never determine how long an ordinary batch gathers.
+        queueMicrotask(() => {
+            batch.scheduled = false;
+            if (batch.preparations > 0) return;
+            if (acquisition.partition.groups.get(groupKey) === batch) acquisition.partition.groups.delete(groupKey);
+            acquisition.forgetIfIdle();
+            void dispatch(batch);
+        });
+    }
 
     async function dispatch(batch: Batch) {
         const items = batch.items.filter(item => !item.signal.aborted);
         for (const item of batch.items) if (item.signal.aborted) item.reject(abortReason(item.signal));
-        if (items.length === 0) return;
+        const first = items[0];
+        if (!first) return;
         const abort = new AbortController();
         const cancelIfUnwanted = () => {
             if (items.every(item => item.signal.aborted)) abort.abort();
@@ -187,7 +240,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
         try {
             cancelIfUnwanted();
             throwIfAborted(abort.signal);
-            const result = await batch.read(items.map(item => item.id), abort.signal);
+            const result = await first.read(items.map(item => item.id), abort.signal);
             for (const item of items) {
                 if (item.signal.aborted) item.reject(abortReason(item.signal));
                 else if (!result.has(item.id)) item.reject(new Error('Scoped batch omitted a requested resource'));
@@ -201,56 +254,84 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
         }
     }
 
+    async function run(acquisition: ReturnType<typeof acquire>, groupKey: string, batch: Batch,
+        ids: readonly string[], read: BatchRead<T>, options: ScopedReadOptions, signal?: AbortSignal) {
+        const invocation = new AbortController();
+        const cancellation = mergeAbortSignals([invocation.signal, options.signal, signal]);
+        try {
+            throwIfAborted(cancellation.signal);
+            const pending = Promise.all([...new Set(ids)].map(async id => {
+                let selected!: Promise<T>;
+                const value = await acquisition.partition.reads.run(JSON.stringify([groupKey, id]), () => selected, {
+                    signal: cancellation.signal,
+                    onPhysicalAcquire: signal => {
+                        // Selection is synchronous: a ready flush may already
+                        // be queued when another preparation settles its ids.
+                        selected = new Promise<T>((accept, reject) => {
+                            batch.items.push({ id, signal, read, accept, reject });
+                        });
+                        // The last borrower can leave before the deferred
+                        // resolver runs; dispatch still settles its queued item.
+                        void selected.catch(() => {});
+                        flushWhenPrepared(acquisition, groupKey, batch);
+                    },
+                });
+                return [id, value] as const;
+            }));
+            flushWhenPrepared(acquisition, groupKey, batch);
+            const values = await pending;
+            throwIfAborted(cancellation.signal);
+            return new Map(values);
+        } finally {
+            // Promise.all can fail while sibling items remain pending. This
+            // invocation no longer wants them; independent borrowers stay.
+            invocation.abort();
+            cancellation.dispose();
+            acquisition.release();
+        }
+    }
+
     return {
+        reserve(groupKey, options = {}) {
+            const acquisition = acquire(options);
+            const batch = batchFor(acquisition.partition, groupKey);
+            batch.preparations += 1;
+            let open = true;
+            const release = () => {
+                if (!open) return;
+                open = false;
+                options.signal?.removeEventListener('abort', release);
+                batch.preparations -= 1;
+                flushWhenPrepared(acquisition, groupKey, batch);
+                acquisition.release();
+            };
+            options.signal?.addEventListener('abort', release, { once: true });
+            return {
+                run(ids, read, signal) {
+                    if (!open) {
+                        return Promise.reject(options.signal?.aborted ? abortReason(options.signal)
+                            : new Error('Scoped read preparation has already ended'));
+                    }
+                    // Retain this exact partition even if invalidation has
+                    // withdrawn its joins while preparation was awaiting.
+                    acquisition.partition.users += 1;
+                    try { return run(acquisition, groupKey, batch, ids, read, options, signal); }
+                    finally { release(); }
+                },
+                release,
+            };
+        },
         async run(groupKey, ids, read, options = {}) {
-            throwIfAborted(options.signal);
-            const scope = options.fresh ? {} : options.scope ?? defaultScope;
-            const invocation = new AbortController();
-            const cancellation = mergeAbortSignals([invocation.signal, options.signal]);
-            try {
-                const values = await Promise.all([...new Set(ids)].map(async id => {
-                    const value = await reads.run(JSON.stringify([groupKey, id]), signal => new Promise<T>((accept, reject) => {
-                        let groups = queues.get(scope);
-                        if (!groups) { groups = new Map(); queues.set(scope, groups); }
-                        const partition = groups;
-                        let batch = partition.get(groupKey);
-                        if (!batch) {
-                            batch = { items: [], read };
-                            const created = batch;
-                            partition.set(groupKey, created);
-                            // Gather through a short preparation chain without depending on
-                            // timer tasks (which consumer clocks may freeze). This is
-                            // best-effort coalescing, not global microtask quiescence;
-                            // later asks still share any identical pending resource read.
-                            let preparationTurns = 32;
-                            const flush = () => {
-                                if (preparationTurns-- > 0) { queueMicrotask(flush); return; }
-                                if (partition.get(groupKey) === created) partition.delete(groupKey);
-                                if (partition.size === 0) queues.forget(scope, partition);
-                                void dispatch(created);
-                            };
-                            queueMicrotask(flush);
-                        }
-                        batch.items.push({ id, signal, accept, reject });
-                    }), { scope, signal: cancellation.signal });
-                    return [id, value] as const;
-                }));
-                throwIfAborted(options.signal);
-                return new Map(values);
-            } finally {
-                // Promise.all can fail while sibling items remain pending. This
-                // invocation no longer wants them; independent borrowers stay.
-                invocation.abort();
-                cancellation.dispose();
-            }
+            const acquisition = acquire(options);
+            return await run(acquisition, groupKey, batchFor(acquisition.partition, groupKey), ids, read, options);
         },
         invalidate(scope = defaultScope) {
-            reads.invalidate(scope);
-            queues.invalidate(scope);
+            // Incumbents keep their own pending owner; preparations may not
+            // join or delay the successor partition after invalidation.
+            partitions.invalidate(scope);
         },
         reset() {
-            reads.reset();
-            queues.clear();
+            partitions.clear();
         },
     };
 }

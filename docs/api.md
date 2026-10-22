@@ -1187,6 +1187,17 @@ fallback or negotiation; 0.2-created retained Session data remains readable.
 This batches HTTP transport; storage snapshots and database work remain per
 Session, with queuing owned by the existing database pool and snapshot reader.
 
+The 0.3 UI's Machine, Session and Artifact acquisition adapters share the
+pending-only batch owner in `scopedResolutionSingleFlight.ts`. A caller with
+asynchronous preparation reserves its already-captured authority/projection
+partition before awaiting, then settles the reservation with its selected IDs
+or releases it on failure/cancellation. Ready work dispatches in a microtask
+once that partition has no open preparations; unreserved work has no gathering
+delay beyond its dispatch microtask. Invalidation separates successor joins
+without cancelling incumbents. Reservations retain neither settled results nor
+authorization: each borrower still owns currentness, fresh-witness and opening
+checks, and only the final physical-read borrower leaving cancels acquisition.
+
 Automatic transport selects `action` for an E2EE Session without a content
 credential, and otherwise selects a session-scoped viewer socket. Failure to
 open socket content is not a reason to silently switch transports. The Action adapter
