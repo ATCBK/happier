@@ -39,6 +39,7 @@ import {
 import { WorkflowAcceptedWorkspaceTargetV1Schema } from './workflowWorkspaceV1.js';
 import {
   WorkflowDefinitionV1Schema,
+  WorkflowIngressSchema,
   WorkflowValidationIssueV1Schema,
 } from './workflowV1.js';
 export { WorkflowValidationIssueV1Schema } from './workflowV1.js';
@@ -90,14 +91,24 @@ const RevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegati
  * Keeping the carrier non-recursive prevents the generic Zod boundary from
  * overflowing before that owner can return path-addressed typed issues.
  */
-const WorkflowIngressCarrierV1Schema = lazyZodSchema(() => z.strictObject({
-  version: z.optional(z.literal(1)),
-  inputs: z.optional(z.array(z.unknown())),
-  defaults: z.optional(z.unknown()),
-  roles: z.optional(z.unknown()),
-  blocks: z.array(z.unknown()).check(z.minLength(1)),
-  finalOutput: z.optional(z.unknown()),
-}));
+const WorkflowIngressCarrierV1Schema = lazyZodSchema(() => {
+  const schema = z.strictObject({
+    version: z.optional(z.literal(1)),
+    inputs: z.optional(z.array(z.unknown())),
+    defaults: z.optional(z.unknown()),
+    roles: z.optional(z.unknown()),
+    blocks: z.array(z.unknown()).check(z.minLength(1)),
+    finalOutput: z.optional(z.unknown()),
+  });
+  // Transport remains shallow so the iterative validator owns deep diagnostics.
+  // Discovery describes that owner's authored grammar, including recursive
+  // blocks and shorthand, rather than advertising its transport placeholders.
+  schema._zod.processJSONSchema = (context, _json, params) => {
+    z.core.process(WorkflowIngressSchema, context, params);
+    context.seen.get(schema)!.ref = WorkflowIngressSchema;
+  };
+  return schema;
+});
 const WorkflowInputsV1Schema = lazyZodSchema(() => z.record(z.string(), StrictJsonValueSchema).check(z.superRefine((inputs, context) => {
     for (const inputName of Object.keys(inputs)) {
       if (!WorkflowInputNameSchema.safeParse(inputName).success) {

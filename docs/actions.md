@@ -4444,6 +4444,10 @@ or a step's `execution.engine`; use `effort`, rather than a
 `reasoning_effort` entry in `sessionConfigOptionOverrides`. Run
 `workflow.validate` before starting an authored definition. These
 contracts share discovery and admission owners with UI, CLI and external plugins.
+Workflow definition schema sections expose the canonical authored ingress,
+including recursive block shapes and prompt shorthand. The Action transport
+remains shallow so the iterative Workflow validator can report deep repair
+paths without overflowing a recursive transport parser.
 
 The read uses the daemon's retained Provider services through its existing
 Machine transport, after the owning Action's ordinary credential admission.

@@ -640,7 +640,8 @@ export const WorkflowIngressBlockSchema = createWorkflowBlockSchema<WorkflowIngr
 export const WorkflowIngressSchema = lazyZodSchema(() => z.strictObject({
   version: z.optional(z.literal(1)),
   inputs: z.optional(z.array(WorkflowInputDefinitionSchema)),
-  defaults: z.optional(WorkflowStepSelectionV1Schema),
+  // The normalization owner treats null defaults as omitted authoring input.
+  defaults: z.optional(z.nullable(WorkflowStepSelectionV1Schema)),
   roles: z.optional(z.array(WorkflowRoleV1Schema)),
   blocks: z.array(WorkflowIngressBlockSchema).check(z.minLength(1)),
   finalOutput: zMini.optional(WorkflowAuthoredResultReferenceSchema),

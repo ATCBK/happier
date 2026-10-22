@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDeepWorkflowDefinition } from './workflowDefinition.testkit.js';
+import { z } from 'zod/mini';
+import Ajv from 'ajv';
 
 import {
   WORKFLOW_ACTION_IDS_V1,
@@ -16,6 +18,25 @@ import {
 } from './index.js';
 
 describe('workflow Action contracts', () => {
+  it('projects the recursive authored ingress while retaining the shallow transport and path-addressed validator', () => {
+    const schema = WorkflowActionInputSchemasV1['workflow.validate'];
+    const validate = new Ajv({ strict: false, validateFormats: false }).compile(z.toJSONSchema(schema, {
+      io: 'input', target: 'draft-7', reused: 'ref',
+    }));
+    expect(validate({ definition: { blocks: ['Work'] } })).toBe(true);
+    const invalid = { blocks: [{ kind: 'loop', id: 'loop', body: [{}],
+      repetition: { kind: 'count', count: { kind: 'literal', value: 1 } } }] };
+    // Transport defers detailed diagnostics to the iterative Workflow owner.
+    expect(schema.safeParse({ definition: invalid }).success).toBe(true);
+    expect(validateWorkflowDefinition(invalid).valid).toBe(false);
+    expect(validate({ definition: invalid })).toBe(false);
+    expect(validate({ definition: { blocks: [], extra: true } })).toBe(false);
+    const nullDefaults = { defaults: null, blocks: ['Work'] };
+    expect(validateWorkflowDefinition(nullDefaults, { context: {
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    } }).valid).toBe(true);
+    expect(validate({ definition: nullDefaults })).toBe(true);
+  });
   it('accepts omitted wait conditions or a nonempty unique set, never a host snapshot sink', () => {
     const schema = WorkflowActionInputSchemasV1['workflow.run.wait'];
     const runId = '11111111-1111-4111-8111-111111111111';
