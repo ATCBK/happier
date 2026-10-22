@@ -580,7 +580,7 @@ export const CLIPROXYAPI_STATIC_MODELS = {
       "name": "gpt-image-1.5",
       "capabilities": {
         "reasoningControls": "unknown",
-        "toolRoundTrips": "unknown"
+        "toolRoundTrips": "unsupported"
       }
     },
     {
@@ -588,7 +588,7 @@ export const CLIPROXYAPI_STATIC_MODELS = {
       "name": "gpt-image-2",
       "capabilities": {
         "reasoningControls": "unknown",
-        "toolRoundTrips": "unknown"
+        "toolRoundTrips": "unsupported"
       }
     }
   ]

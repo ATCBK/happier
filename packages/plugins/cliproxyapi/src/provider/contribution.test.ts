@@ -29,7 +29,10 @@ describe('CLIPROXYAPI_PROVIDER_CONTRIBUTION', () => {
     for (const family of families) {
       expect(new Set(family.staticModels?.map((model) => model.id)).size).toBe(family.staticModels?.length);
       for (const model of family.staticModels ?? []) {
-        expect(model.capabilities).toEqual({ toolRoundTrips: 'unknown', reasoningControls: 'unknown' });
+        expect(model.capabilities).toEqual({
+          toolRoundTrips: ['gpt-image-1.5', 'gpt-image-2'].includes(model.id) ? 'unsupported' : 'unknown',
+          reasoningControls: 'unknown',
+        });
         expect(model).not.toHaveProperty('accountEntitlementVerified');
       }
     }
@@ -197,7 +200,7 @@ describe('CLIPROXYAPI_PROVIDER_CONTRIBUTION', () => {
       catalog: {
         source: 'probe',
         manualModelPolicy: 'allowed',
-        sourceRegistryVersion: 'v7.2.95:reasoning-v1',
+        sourceRegistryVersion: 'v7.2.95:reasoning-image-capabilities-v2',
         probes: [{
           endpointTemplateId: 'cliproxyapi-openai-responses',
           path: '/v1/models',

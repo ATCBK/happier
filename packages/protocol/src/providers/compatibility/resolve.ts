@@ -63,6 +63,31 @@ const MODEL_CAPABILITY_REASON_CODES = {
   unknown: ProviderCompatibilityReasonCodeV1;
 }>>;
 
+/** Model-only eligibility shared by binding resolution and source-independent pickers.
+ * Unknown support still requires experimental confirmation; it is not a hard exclusion.
+ * Endpoint, credential and execution compatibility remain the binding resolver's job.
+ */
+export function resolveProviderModelCapabilityCompatibilityV1(input: Readonly<{
+  required: AgentProviderRequirementsV1['required'];
+  model?: ProviderModelDescriptorV1;
+}>): Readonly<{ incompatible: boolean; reasons: readonly ProviderCompatibilityReasonCodeV1[] }> {
+  const reasons: ProviderCompatibilityReasonCodeV1[] = [];
+  let incompatible = false;
+  for (const capability of ['toolRoundTrips', 'reasoningControls'] as const) {
+    if (!input.required[capability]) continue;
+    if (!input.model) {
+      reasons.push('model_required_for_capability_resolution');
+      incompatible = true;
+      continue;
+    }
+    const support = input.model.capabilities?.[capability];
+    if (support === 'supported') continue;
+    reasons.push(MODEL_CAPABILITY_REASON_CODES[capability][support === 'unsupported' ? 'unsupported' : 'unknown']);
+    if (support === 'unsupported') incompatible = true;
+  }
+  return { incompatible, reasons: [...new Set(reasons)] };
+}
+
 function matchesTransport(
   transport: ProviderCredentialTransportV1,
   agent: AgentProviderRequirementsV1,
@@ -173,16 +198,11 @@ function resolveProviderBindingCompatibilityV1(
       }
       if (endpointSupport === 'unknown') reasons.push(CAPABILITY_REASON_CODES[capability].unknown);
       if (capability === 'toolRoundTrips' || capability === 'reasoningControls') {
-        if (!params.model) {
-          reasons.push('model_required_for_capability_resolution');
-          continue;
-        }
-        const modelSupport = params.model?.capabilities?.[capability];
-        if (modelSupport !== 'supported') {
-          if (modelSupport === 'unsupported') reasons.push(MODEL_CAPABILITY_REASON_CODES[capability].unsupported);
-          else reasons.push(MODEL_CAPABILITY_REASON_CODES[capability].unknown);
-          modelScoped = true;
-        }
+        const modelCompatibility = resolveProviderModelCapabilityCompatibilityV1({
+          required: { [capability]: true }, model: params.model,
+        });
+        reasons.push(...modelCompatibility.reasons);
+        if (params.model && modelCompatibility.reasons.length > 0) modelScoped = true;
       }
     }
 

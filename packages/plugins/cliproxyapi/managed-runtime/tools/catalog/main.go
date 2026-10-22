@@ -42,8 +42,9 @@ type optionValue struct {
 }
 
 type sdkModel struct {
-	ID       string `json:"id"`
-	Thinking *struct {
+	ID             string `json:"id"`
+	ToolRoundTrips string `json:"-"`
+	Thinking       *struct {
 		Levels []string `json:"levels"`
 	} `json:"thinking"`
 }
@@ -167,7 +168,15 @@ func generate(moduleDir, version string) ([]byte, error) {
 				}
 				// WithCodexBuiltins replaces an embedded row with this ID. These
 				// pinned image constructors carry no Thinking facts.
-				models[id] = sdkModel{ID: id}
+				entry := sdkModel{ID: id}
+				// v7.2.95 has no modality field: these exact upstream image
+				// constructors (absent from models.json) are image-only. Do not
+				// classify arbitrary catalog IDs by their spelling.
+				switch name.Name {
+				case "codexBuiltinImage15ModelInfo", "codexBuiltinImageModelInfo":
+					entry.ToolRoundTrips = "unsupported"
+				}
+				models[id] = entry
 			}
 		}
 		for id, entry := range models {
@@ -179,6 +188,9 @@ func generate(moduleDir, version string) ([]byte, error) {
 			row := model{ID: id, Name: id, Capabilities: map[string]string{
 				"toolRoundTrips": "unknown", "reasoningControls": "unknown",
 			}}
+			if entry.ToolRoundTrips != "" {
+				row.Capabilities["toolRoundTrips"] = entry.ToolRoundTrips
+			}
 			if entry.Thinking != nil && len(entry.Thinking.Levels) > 0 {
 				choices := make([]optionValue, 0, len(entry.Thinking.Levels))
 				for _, level := range entry.Thinking.Levels {

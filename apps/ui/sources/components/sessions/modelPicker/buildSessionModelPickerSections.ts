@@ -4,12 +4,14 @@ import type { ProviderSettingsV1 } from '@happier-dev/protocol/providers/setting
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc';
 import type { DaemonProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/rpc';
 import type { TeamCredentialProviderModelSelectionV1, TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
+import { resolveProviderModelCapabilityCompatibilityV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 
 import type { OptionPickerOption, OptionPickerSection } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { buildActionRowAccessibilityLabel } from '@/components/ui/lists/actionRowAccessibility';
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 import { presentProviderModelRow } from '@/providers/models/presentProviderModelRow';
 import { providerConnectionSourceLabel } from '@/providers/session/resolveSessionRoutePresentation';
+import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 import { t } from '@/text';
 import {
     formatLimitResetUtc,
@@ -206,6 +208,9 @@ export function buildSessionModelPickerSections(input: Readonly<{
      */
     gatewaySlotTitle?: (slot: SessionModelGatewaySlot) => string | null;
 }>): readonly SessionModelPickerSection[] {
+    const requirements = readAccountAgentProviderRequirements(input.agentTargetKey);
+    const modelEligible = (model: ProviderModelDescriptorV1) => !requirements
+        || !resolveProviderModelCapabilityCompatibilityV1({ required: requirements.required, model }).incompatible;
     const nativeSource = { label: input.nativeSourceLabel || t('settingsProviders.models.builtIn'), native: true };
     const shouldShowDescriptions = input.nativeModels.some((model) => (
         model.value !== 'default'
@@ -254,6 +259,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
     const providerSections = input.providerGroups.flatMap((group): SessionModelPickerSection[] => {
         const source = { label: sessionModelConnectionTitle(group), native: false };
         const entries = group.rows.flatMap((row): { row: typeof row; option: SessionModelPickerOption }[] => {
+            if (!modelEligible(row.descriptor)) return [];
             const hiddenCurrentSelection = row.visibility === 'hidden_current_selection';
             if (row.visibility !== 'visible' && !hiddenCurrentSelection) return [];
             const presentation = presentProviderModelRow({
@@ -304,6 +310,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
     const teamSections = (input.teamCredentialResources ?? []).flatMap((resource): SessionModelPickerSection[] => {
         const options = resource.providerModels.flatMap((row): SessionModelPickerOption[] => {
             if (row.selection.agentTargetKey !== input.agentTargetKey) return [];
+            if (!modelEligible(row.descriptor)) return [];
             const current = input.currentTeamCredentialResourceKeys?.has(`${resource.teamId}:${resource.id}`) ?? true;
             const available = current && resource.readiness.kind === 'available'
                 && row.availability === 'available';
@@ -389,6 +396,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             row.selection.agentTargetKey === selectedValue.agentTargetKey
             && row.selection.modelId === selectedValue.modelId
         )) ?? null;
+        const teamModelEligible = !teamModel || modelEligible(teamModel.descriptor);
         const label = recovery?.displaySnapshot?.modelName
             ?? teamModel?.descriptor.name
             ?? selectedValue.modelId;
@@ -437,8 +445,8 @@ export function buildSessionModelPickerSections(input: Readonly<{
                             ? t('agentInput.model.unavailable')
                             : t('settingsProviders.detail.deletedDescription'),
                 ...(accessibilityLabel ? { accessibilityLabel } : {}),
-                disabled: !(teamResource && input.onRecoverTeamCredentialResource),
-                ...(teamResource && input.onRecoverTeamCredentialResource
+                disabled: !(teamResource && teamModelEligible && input.onRecoverTeamCredentialResource),
+                ...(teamResource && teamModelEligible && input.onRecoverTeamCredentialResource
                     ? { onActivate: () => input.onRecoverTeamCredentialResource?.(teamResource) }
                     : {}),
             }],

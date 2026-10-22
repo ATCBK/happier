@@ -11,6 +11,7 @@ import { presentProviderError } from '@/providers/connection/errorPresentation';
 import { t } from '@/text';
 import { sessionModelSelectionKey } from './sessionModelSelectionKey';
 import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 function providerGroup(input: Readonly<{
     connectionId: string;
@@ -58,6 +59,52 @@ function providerGroup(input: Readonly<{
 }
 
 describe('buildSessionModelPickerSections', () => {
+    it.each(['agent:happier.agent.codex/codex', 'agent:happier.agent.claude/claude'])(
+        'excludes unsupported tool models from Team and Provider rows for %s while keeping unknown chat models', (agentTargetKey) => {
+        // Exercise the canonical publisher's actual declaration through the
+        // strict Team schema and the real picker, not copied capability facts.
+        const models = readAccountProviderDeclarations().find(entry => entry.definition.id === 'cliproxyapi')
+            ?.definition.managedRuntime?.connectedAccounts?.find(family => family.purpose === 'openai-upstream')?.staticModels ?? [];
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
+            id: 'resource-1', teamId: 'team-1', displayName: 'Connected Pool', resourceRevision: 3,
+            readiness: { kind: 'available' }, recoveryAction: null,
+            mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
+            providerModels: ['gpt-image-1.5', 'gpt-image-2', 'gpt-5.5'].map(modelId => ({
+                selection: { kind: 'team_credential_provider_model', resourceId: 'resource-1', teamId: 'team-1',
+                    expectedResourceRevision: 3, deliveryMode: 'brokered', agentTargetKey, modelId },
+                descriptor: models.find(model => model.id === modelId),
+                application: { agentTargetKey,
+                    implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+                    endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' },
+                sourceRevision: 'source-v1', availability: 'available',
+            })),
+            sourcePresentation: { kind: 'provider', provider: {
+                identity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' }, definitionRevision: 1,
+            } },
+        });
+        const group = providerGroup({ connectionId: 'pc_work', modelId: 'gpt-5.5' });
+        const sections = buildSessionModelPickerSections({
+            agentTargetKey, nativeModels: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true,
+            teamCredentialResources: [resource],
+            providerGroups: [{ ...group, rows: resource.providerModels.map(row => ({
+                ...group.rows[0]!, ref: { ...group.rows[0]!.ref, agentTargetKey, modelId: row.descriptor.id },
+                descriptor: row.descriptor,
+            })) }],
+        });
+        expect(sections.map(section => section.options.map(option => option.value?.modelId)))
+            .toEqual([['gpt-5.5'], ['gpt-5.5']]);
+        // Preserve an already-selected model's identity without offering a repair
+        // action that could re-admit a model known to lack required capabilities.
+        const retained = buildSessionModelPickerSections({
+            agentTargetKey, nativeModels: [], hiddenNativeModelKeys: new Set(), providerProjectionAuthoritative: true,
+            providerGroups: [], teamCredentialResources: [resource],
+            selectedTeamCredentialModel: resource.providerModels[0]!.selection,
+            onRecoverTeamCredentialResource: vi.fn(),
+        });
+        expect(retained[0]?.options[0]).toMatchObject({ disabled: true });
+        expect(retained[0]?.options[0]?.onActivate).toBeUndefined();
+    });
     it('keeps a selected Provider model named before its demanded projection arrives, then uses the projected row', () => {
         const group = providerGroup({ connectionId: 'pc_work', modelId: 'same', connectionName: 'Work' });
         const input = {

@@ -33,11 +33,11 @@ export const CLIPROXYAPI_MANAGED_HEALTH_IDENTITY = Object.freeze({
 });
 
 // The managed catalog is projected from the pinned CLIProxyAPI SDK registry.
-// Version the adapter as well as the SDK: reasoning-v1 retains the SDK's exact
-// Thinking.Levels in modelOptions, so catalogs cached before that projection
-// must refresh. Process restarts and credential changes do not change this fact.
+// Version the adapter as well as the SDK: retain exact Thinking.Levels and
+// unsupported tool-round-trip facts for upstream image builtins. Older cached
+// descriptors must refresh; process restarts and credentials do not change facts.
 export const CLIPROXYAPI_MANAGED_CATALOG_SOURCE_REGISTRY_VERSION =
-  `${CLIPROXYAPI_MANAGED_HEALTH_IDENTITY.sdkVersion}:reasoning-v1`;
+  `${CLIPROXYAPI_MANAGED_HEALTH_IDENTITY.sdkVersion}:reasoning-image-capabilities-v2`;
 
 /**
  * CLIProxyAPI's one private managed-family owner. The manifest projection,
