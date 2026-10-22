@@ -1,11 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ComposerContentHandleV1 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
-import { renderHook } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
@@ -15,10 +16,20 @@ import { useFilePreviewSource } from './useFilePreviewSource';
 import { buildImageCompareModel, projectImageComparePreview } from '@/components/workspaces/scm/review/imageCompare/imageCompareModel';
 
 const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8Array[]; closed: number; deletes: number }>());
+const handoffs = vi.hoisted(() => ({ copies: [] as string[], shares: [] as number[][] }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeNativeMock({ platformOS: 'ios' });
+    return createReactNativeNativeMock({ platformOS: 'ios' }, {
+        Share: { sharedAction: 'shared', dismissedAction: 'dismissed', share: async ({ url }: { url: string }) => {
+            handoffs.shares.push(files.get(url)!.chunks.flatMap(chunk => [...chunk]));
+            return { action: 'shared' };
+        } },
+    });
 });
+vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated'))
+    .createReanimatedModuleMock({ settleTimingCallbacks: true }));
+// Availability is the native share-sheet boundary; materialization and file handoff stay real.
+vi.mock('expo-sharing', () => ({ isAvailableAsync: async () => true }));
 // Accept the real Action owner's in-place read confirmation at the modal boundary.
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -40,6 +51,12 @@ vi.mock('expo-file-system', () => ({
         }
         create() { files.get(this.uri)!.exists = true; }
         delete() { const file = files.get(this.uri)!; file.exists = false; file.deletes++; }
+        copy(destination: { uri: string }) {
+            const source = files.get(this.uri)!;
+            if (!source.exists) throw new Error('Preview was released before Save');
+            handoffs.copies.push(this.uri);
+            files.set(destination.uri, { exists: true, chunks: source.chunks.map(chunk => new Uint8Array(chunk)), closed: 0, deletes: 0 });
+        }
         open() { const file = files.get(this.uri)!; return {
             offset: 0,
             writeBytes: (bytes: Uint8Array) => file.chunks.push(new Uint8Array(bytes)),
@@ -52,10 +69,14 @@ describe('useFilePreviewSource', () => {
     let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
     let downloadFailure: Extract<FilesystemDownloadOutput, { success: false }> | null;
+    let interruptTransfer: boolean;
     beforeAll(prepareSessionFilesViewTestkit);
     beforeEach(async () => {
         files.clear();
+        handoffs.copies.length = 0;
+        handoffs.shares.length = 0;
         downloadFailure = null;
+        interruptTransfer = false;
         transfer = createSessionFileNativeTransferBoundary();
         const serverIdentityId = 'srv_file_preview_source';
         const boundary = await createExternalActionAccountHttpBoundary({
@@ -77,6 +98,9 @@ describe('useFilePreviewSource', () => {
             credentials: { token: `e30.${Buffer.from(JSON.stringify({ sub: 'alice', provenance: { v: 1, kind: 'account', authority: 'present_user' }, tokenEpoch: 0 })).toString('base64url')}.signature` },
             machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
                 const parsed = new URL(String(url));
+                if (interruptTransfer && parsed.origin === transfer.origin && parsed.pathname.endsWith('/chunks/0')) {
+                    return new Response('Interrupted image transfer', { status: 503 });
+                }
                 if (parsed.pathname === '/v1/machines') return Response.json([row]);
                 if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
                     id => id === row.id ? row : null);
@@ -92,6 +116,42 @@ describe('useFilePreviewSource', () => {
         });
     });
     afterEach(async () => { await fixture.dispose(); });
+
+    it.each([
+        { kind: 'workspace', cacheKey: null },
+        { kind: 'workspace', cacheKey: 'stage-retry-sha' },
+        { kind: 'session', cacheKey: null },
+    ] as const)('retries a failed $kind byte read with key $cacheKey and saves the shown picture', async ({ kind, cacheKey }) => {
+        const { MediaStage } = await import('./stage/MediaStage');
+        interruptTransfer = true;
+        fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0 });
+        const source = kind === 'workspace'
+            ? { kind, scope: fixture.scope, filePath: 'stage-retry.png' }
+            : { kind, sessionId: fixture.session.id, filePath: '.happier/uploads/messages/m1/stage-retry.png' };
+        const screen = await renderScreen(fixture.wrap(React.createElement(MediaStage, {
+            initialIndex: 0, onClose: () => {}, items: [{ kind: 'image', title: 'stage-retry.png',
+                source: { enabled: true, source, cacheKey, mimeType: 'image/png', sizeBytes: 3 } }],
+        })));
+        let shownUri: string | undefined;
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('media-stage-retry')).toBeTruthy());
+            expect(screen.findByTestId('media-stage-save')).toBeFalsy();
+            interruptTransfer = false;
+            await act(async () => screen.findByTestId('media-stage-retry')!.props.onPress());
+            await vi.waitFor(() => expect(screen.findByTestId('media-stage-image')).toBeTruthy());
+            shownUri = screen.findByTestId('media-stage-image')!.props.source.uri;
+            expect(files.get(shownUri!)?.chunks.flatMap(chunk => [...chunk])).toEqual([97, 98, 99]);
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 100, height: 60 } }));
+            expect(screen.findByTestId('media-stage-save')).toBeTruthy();
+            await act(async () => screen.findByTestId('media-stage-save')!.props.onPress());
+            await vi.waitFor(() => expect(handoffs.shares).toEqual([[97, 98, 99]]));
+            expect(handoffs.copies).toEqual([shownUri]);
+            expect(files.get(shownUri!)?.exists).toBe(true);
+            // One current picture owner, not a second unkeyed read for flight/Save.
+            expect(transfer.prepares).toHaveLength(2);
+        } finally { await screen.unmount(); }
+        if (shownUri) expect(files.get(shownUri)?.exists).toBe(false);
+    });
 
     it.each([true, false])('retains the size-limit reason when size is known before transfer: %s', async (knownSize) => {
         const hook = await renderHook(() => useFilePreviewSource({ enabled: true,

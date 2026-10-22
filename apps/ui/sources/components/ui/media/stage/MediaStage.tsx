@@ -176,7 +176,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     const preview = useFilePreviewSource({
       ...item.source,
       enabled: picture && item.source.enabled,
-      cacheKey: item.source.cacheKey != null && attempt > 0 ? `${item.source.cacheKey}:retry:${attempt}` : item.source.cacheKey,
+      retryCount: attempt,
     });
     const [size, setSize] = React.useState<MediaPictureSize | null>(null);
     const [failed, setFailed] = React.useState<string | null>(null);
@@ -200,6 +200,14 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     const { onSize, onZoomChange, onPage, onDismiss, onTap } = props;
     const index = props.index;
     const reportPreview = React.useCallback((state: FilePreviewSourceState) => props.onPreviewChange(index, state), [index, props.onPreviewChange]);
+    const pictureUri = picture && !failed && preview.status === 'loaded' ? preview.uri : null;
+    const pictureMime = pictureUri && preview.status === 'loaded' ? preview.mimeType : undefined;
+    React.useEffect(() => {
+      if (!picture) return;
+      reportPreview(pictureUri
+        ? { status: 'loaded', uri: pictureUri, error: null, mimeType: pictureMime }
+        : { status: 'disabled', uri: null, error: null });
+    }, [picture, pictureUri, pictureMime, reportPreview]);
 
     React.useEffect(() => {
       if (!picture) onSize(index, null);
@@ -617,9 +625,9 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
   const [phase, setPhase] = React.useState<Phase>('opening');
   const [immersive, setImmersive] = React.useState(false);
   const [zoomPercent, setZoomPercent] = React.useState<number | null>(null);
-  const [documentPreview, setDocumentPreview] = React.useState<Readonly<{ index: number; uri: string; mimeType?: string }> | null>(null);
+  const [heldPreview, setHeldPreview] = React.useState<Readonly<{ index: number; uri: string; mimeType?: string }> | null>(null);
   const handlePreviewChange = React.useCallback((index: number, state: FilePreviewSourceState) => {
-    setDocumentPreview(current => {
+    setHeldPreview(current => {
       const uri = state.status === 'loaded' ? state.uri : null;
       if (uri === null) return current?.index === index ? null : current;
       const mimeType = state.status === 'loaded' ? state.mimeType : undefined;
@@ -767,7 +775,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
       if (next < 0 || next >= gallery.items.length || next === gallery.index)
         return;
       gallery.select(next);
-      setDocumentPreview(null);
+      setHeldPreview(null);
       setZoomPercent(null);
       dragProgress.value = 0;
       const nextItem = gallery.items[next]!;
@@ -804,15 +812,10 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
 
   const flightTarget = flightSize ? fitRect(flightSize, viewport) : null;
   const flightItem = item;
-  // The current picture's bytes (a cache hit on the viewer's identity): the flight layer and Save read them.
-  const flightPreview = useFilePreviewSource({
-    ...flightItem.source,
-    enabled: isPicture(flightItem) && flightItem.source.enabled,
-  });
-  const savable = flightPreview.status === 'loaded' ? flightPreview.uri
-    : documentPreview?.index === gallery.index ? documentPreview.uri : null;
-  const handoffMime = flightPreview.status === 'loaded' ? flightPreview.mimeType
-    : documentPreview?.index === gallery.index ? documentPreview.mimeType : undefined;
+  // The active viewer holds these bytes for its lifetime; flight and Save follow that exact preview, including Retry.
+  const currentPreview = heldPreview?.index === gallery.index ? heldPreview : null;
+  const savable = currentPreview?.uri ?? null;
+  const handoffMime = currentPreview?.mimeType;
   const handoff = React.useCallback((action?: 'open') => {
     if (!savable) return;
     void saveFileUri({ uri: savable, fileName: item.title, action,
@@ -863,7 +866,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
         {...(item.openFile ? { onOpenFile: item.openFile } : {})}
       />
 
-      {phase !== 'open' && flightTarget && flightPreview.status === 'loaded' ? (
+      {phase !== 'open' && flightTarget && isPicture(flightItem) && currentPreview ? (
         <Animated.View pointerEvents="none" style={flip.clipStyle}>
           <Animated.View
             style={[
@@ -873,7 +876,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
           >
             <MediaPicture
               kind={flightItem.kind === 'svg' ? 'svg' : 'image'}
-              uri={flightPreview.uri}
+              uri={currentPreview.uri}
               size={{ width: flightTarget.width, height: flightTarget.height }}
             />
           </Animated.View>

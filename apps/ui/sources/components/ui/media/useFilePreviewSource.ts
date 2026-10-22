@@ -28,6 +28,8 @@ export type UseFilePreviewSourceInput = Readonly<{
     enabled: boolean;
     source: FilePreviewSource;
     cacheKey?: string | null;
+    /** Explicit consumer retry; restarts unkeyed reads and requests fresh keyed bytes. */
+    retryCount?: number;
     cacheScopeId?: string | null;
     mimeType?: string | null;
     sizeBytes?: number | null;
@@ -95,7 +97,9 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
     const previewLimit = useSetting('filesImagePreviewMaxBytes');
     const maxBytes = input.maxBytes !== undefined ? input.maxBytes : viewer.kind === 'video' ? null : previewLimit;
     const normalizedMaxBytes = maxBytes === null ? null : typeof maxBytes === 'number' && Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : 0;
-    const cacheKey = (input.cacheKey ?? stage?.sha256)?.trim() || null;
+    const retryCount = input.retryCount ?? 0;
+    const originalCacheKey = (input.cacheKey ?? stage?.sha256)?.trim() || null;
+    const cacheKey = originalCacheKey && retryCount > 0 ? `${originalCacheKey}:retry:${retryCount}` : originalCacheKey;
     const cacheScopeId = input.cacheScopeId?.trim() || (attachment
         ? JSON.stringify(['session-attachment', attachment.sessionId, attachment.id])
         : stage ? JSON.stringify(['composer-stage', stage.executionTarget.serverId, stage.executionTarget.machineId, stage.owner.pluginId, stage.owner.localId, stage.id])
@@ -103,7 +107,7 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         : source.kind === 'session' ? source.sessionId : source.kind === 'bytes' ? 'bytes' : '');
     const stageIdentity = stage ? JSON.stringify(stage) : null;
     const attachmentIdentity = attachment ? JSON.stringify(attachment) : null;
-    const identity = JSON.stringify([kind, cacheScopeId, cacheKey, filePath, mimeType, sizeBytes, normalizedMaxBytes, stageIdentity, attachmentIdentity]);
+    const identity = JSON.stringify([kind, cacheScopeId, cacheKey, retryCount, filePath, mimeType, sizeBytes, normalizedMaxBytes, stageIdentity, attachmentIdentity]);
     const [resource, setResource] = React.useState<Readonly<{ identity: string; bytes: Uint8Array | null; state: FilePreviewSourceState }> | null>(null);
     const [progress, setProgress] = React.useState<Readonly<{ identity: string; value: FilePreviewProgress }> | null>(null);
     const sourceRef = React.useRef(source);
