@@ -975,11 +975,13 @@ describe('VoiceSessionRuntime', () => {
         configurable: true,
         get() { dictationReads += 1; return dictation; },
       });
-      await act(async () => {
-        storage.getState().applyProfile({ ...storage.getState().profile, firstName: 'Updated' });
-      });
+      for (let tick = 0; tick < 5; tick++) {
+        await act(async () => {
+          storage.getState().applyProfile({ ...storage.getState().profile, firstName: `Updated-${tick}` });
+        });
+      }
 
-      expect(commits).toBeGreaterThan(commitsBeforeProfile);
+      expect(commits - commitsBeforeProfile).toBe(0);
       expect(storage.getState().settings.voiceSettingsV1).toBe(canonicalVoice);
       expect(dictationReads).toBe(0);
     } finally {

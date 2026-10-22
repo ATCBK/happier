@@ -64,7 +64,12 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
   const canonicalVoiceSettings = useSetting('voiceSettingsV1');
   const savedSecretCatalog = useSavedSecretCatalog();
   const secrets = [...savedSecretCatalog.usableSecrets];
-  const profile = useProfile();
+  const profile = useProfile(profile => ({
+    connectedServicesV2: profile.connectedServicesV2,
+    connectedServiceCredentialRevisionsV1: profile.connectedServiceCredentialRevisionsV1,
+    connectedAccountsV4: profile.connectedAccountsV4,
+    connectedAccountGroupsV4: profile.connectedAccountGroupsV4,
+  }));
   const executionMachine = useVoiceExecutionMachinePresentation();
   const accountScope = useActiveServerAccountScope();
   const settingsScope = useAccountSettingsScope();
