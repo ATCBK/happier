@@ -4,6 +4,7 @@ import { Animated, View, type LayoutChangeEvent } from 'react-native';
 import { ComposerKeyboardFloatingInset } from '@/components/sessions/keyboardAvoidance';
 import { resolveOverlayMotionPreset, useOverlayMotionAnimation, useOverlayPresence } from '@/components/ui/overlays/motion/overlayMotion';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useFindComposerSlotSeat } from './FindComposerSlot';
 
@@ -46,6 +47,8 @@ export function FindBarPlacement(props: Readonly<{
     const visible = props.visible ?? true;
     const presentation = useFindBarPresentation();
     const seated = presentation === 'keyboardSeated';
+    // A seated bar floating over a page clears the phone's floating tab bar, the same reservation pinned bars make.
+    const chromeClearance = useFloatingChromeClearance();
     // While open the bar renders live; while leaving it keeps its last open frame.
     const lastFrame = React.useRef<React.ReactNode>(null);
     if (visible) lastFrame.current = props.children(presentation);
@@ -71,7 +74,7 @@ export function FindBarPlacement(props: Readonly<{
         return <View testID={visible ? props.testID : undefined} pointerEvents="box-none">{bar}</View>;
     }
     return seated
-        ? <ComposerKeyboardFloatingInset testID={visible ? props.testID : undefined}
+        ? <ComposerKeyboardFloatingInset testID={visible ? props.testID : undefined} baseBottom={chromeClearance}
             style={{ position: 'absolute', left: 0, right: 0, zIndex: 20 }}>{bar}</ComposerKeyboardFloatingInset>
         : <View testID={visible ? props.testID : undefined} pointerEvents="box-none" onLayout={visible ? props.onLayout : undefined}
             style={{ position: 'absolute', top: 10, left: 14, right: 14, alignItems: 'flex-end', zIndex: 20 }}>{bar}</View>;

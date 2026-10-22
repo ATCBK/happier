@@ -8,7 +8,7 @@ import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFo
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useFindSurfaceRegistration } from '@/keyboard/KeyboardShortcutProvider';
 import { t } from '@/text';
-import { useFileViewerFind, type FileViewerFindContent, type FileViewerFindSnapshot } from './useFileViewerFind';
+import { useFileViewerFind, type FileViewerFindContent, type FileViewerFindMemory, type FileViewerFindSnapshot } from './useFileViewerFind';
 
 export function FileViewerFindSurface(props: Readonly<{
     surfaceId: string;
@@ -17,15 +17,18 @@ export function FileViewerFindSurface(props: Readonly<{
     focusRootRef?: React.RefObject<View | null>;
     findSeed?: FileFindSeed | null;
     onFindSeedConsumed?: () => void;
-    initialQuery?: string;
-    onRememberQuery?: (query: string) => void;
+    /** The query and open bar this file's last page left behind. */
+    initialFind?: FileViewerFindMemory;
+    onRememberFind?: (find: FileViewerFindMemory) => void;
+    /** Whether the bar is showing: the page yields its bottom edge to it. Withdrawn when the surface leaves. */
+    onOpenChange?: (open: boolean) => void;
     children(snapshot: FileViewerFindSnapshot): React.ReactNode;
 }>) {
-    const model = useFileViewerFind(props.content, props.active, props.initialQuery);
+    const model = useFileViewerFind(props.content, props.active, props.initialFind);
     React.useLayoutEffect(() => {
         if (!props.active) return;
-        return () => props.onRememberQuery?.(model.query);
-    }, [model, props.active, props.onRememberQuery]);
+        return () => props.onRememberFind?.({ query: model.query, open: model.getSnapshot().open });
+    }, [model, props.active, props.onRememberFind]);
     const snapshot = React.useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
     const viewport = React.useRef<View | null>(null);
     const input = React.useRef<TextInput | null>(null);
@@ -58,6 +61,11 @@ export function FileViewerFindSurface(props: Readonly<{
     }, [model, props.active, props.content.mode, props.content.text, props.findSeed, props.onFindSeedConsumed]);
     const shown = snapshot.open && props.active;
     const presence = useFindBarPresence(shown);
+    const { onOpenChange } = props;
+    React.useEffect(() => {
+        onOpenChange?.(shown);
+        return () => onOpenChange?.(false);
+    }, [onOpenChange, shown]);
     const bar = presence.present ? <FindBarPlacement visible={shown}>{(presentation) => <FindBar
         query={snapshot.query} options={snapshot.options} status={snapshot.status} capabilities={model.capabilities}
         surfaceLabel={t('find.surface.file')} presentation={presentation} autoFocus inputRef={input}

@@ -19,6 +19,9 @@ const { CodeLinesViewCore } = await import('@/components/ui/code/view/CodeLinesV
 const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
 const { readWorkspaceFileView } = await import('./workspaceFileDetails/workspaceFileView');
 const { useWorkspaceFileView } = await import('./workspaceFileDetails/useWorkspaceFileView');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { readActiveFileViewActionOwner } = await import('@/sync/ops/actions/scopeActionFamily');
+const { useRouter } = await import('expo-router');
 const filePath = 'source.txt';
 const tabKey = `file:${filePath}`;
 const scopeId = 'project:read-memory';
@@ -34,6 +37,20 @@ function FilePane(props: Readonly<{ shown: boolean; seed?: FileFindSeed; anchorL
         ? <WorkspaceFileDetailsView scopeId={scopeId} scope={fixture.scope} filePath={filePath} sessionIdForAugmentation={null}
             findSeed={props.seed} deepLinkAnchor={props.anchorLine ? { source: 'file', anchor: { kind: 'fileLine', startLine: props.anchorLine } } : null} />
         : null}</PluginSurfaceFocusEligibilityProvider></KeyboardShortcutProvider>;
+}
+
+function RetainedProjectFiles(props: Readonly<{ focused: string; definition?: boolean }>) {
+    // The canonical Expo boundary supplies navigation; File/pane ownership and destination focus stay real.
+    const navigation = useRouter();
+    return <KeyboardShortcutProvider handlers={{}}>{['first', 'second'].map(id => {
+        const path = id === 'second' && props.definition ? 'retry.ts' : `${id}.ts`;
+        return <DestinationInstanceHost key={id} tabId={id}
+            ref={{ kind: 'project', params: { workspaceRefId: id, serverId: fixture.scope.serverId } }}
+            pathname={`/projects/${id}/code`} navigation={navigation} focused={props.focused === id} visible>
+            <WorkspaceFileDetailsView scopeId={`project:${id}`} scope={fixture.scope} filePath={path}
+                sessionIdForAugmentation={null} />
+        </DestinationInstanceHost>;
+    })}</KeyboardShortcutProvider>;
 }
 
 beforeEach(async () => {
@@ -52,6 +69,22 @@ beforeEach(async () => {
     fixture.storage.getState().updateWorkspaceScmSnapshot(fixture.scope, fileViewSnapshot());
 });
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
+
+it('publishes only the presented File when another project retains an open File, including definition navigation', async () => {
+    const screen = await fixture.render(<RetainedProjectFiles focused="first" />);
+    try {
+        await vi.waitFor(() => expect(screen.findAllByType(CodeLinesViewCore).length).toBeGreaterThan(0));
+        expect(readActiveFileViewActionOwner()).not.toBeNull();
+        expect(readActiveFileViewActionOwner()?.search?.symbols?.target.path).toBe('first.ts');
+        expect(readActiveFileViewActionOwner()?.search?.symbols?.getText()).toBe(text);
+        await screen.update(fixture.wrap(<RetainedProjectFiles focused="second" />));
+        await vi.waitFor(() => expect(readActiveFileViewActionOwner()?.search?.symbols?.target.path).toBe('second.ts'));
+        await screen.update(fixture.wrap(<RetainedProjectFiles focused="second" definition />));
+        await vi.waitFor(() => expect(readActiveFileViewActionOwner()?.search?.symbols?.target.path).toBe('retry.ts'));
+        expect(readActiveFileViewActionOwner()?.search?.symbols?.getText()).toBe(text);
+    } finally { await screen.unmount(); }
+    expect(readActiveFileViewActionOwner()).toBeNull();
+});
 
 it.each(['file', 'scope'] as const)('keeps a departing reader patch bound to its original tab when the retained page changes %s', async (change) => {
     let patch!: ReturnType<typeof useWorkspaceFileView>['patchView'];
@@ -82,13 +115,12 @@ it('captures the real read owners into tab state and restores both after a pane 
         await act(async () => { screen.changeTextByTestId('file-viewer-find.input', 'needle'); });
         await act(async () => { screen.findByType(CodeLinesViewCore).findByType('FlatList').props.onViewableItemsChanged({ viewableItems: [{ index: 7 }] }); });
         await screen.update(fixture.wrap(<FilePane shown={false} />));
-        expect(readWorkspaceFileView(pane.scopeState?.details.tabState[tabKey])).toMatchObject({ scrollLine: 8, findQuery: 'needle' });
+        expect(readWorkspaceFileView(pane.scopeState?.details.tabState[tabKey])).toMatchObject({ scrollLine: 8, findQuery: 'needle', findOpen: true });
 
         scrollToIndex.mockClear();
         await screen.update(fixture.wrap(<FilePane shown />));
         await vi.waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 7, viewPosition: 0, animated: false })));
-        expect(screen.findByTestId('file-viewer-find.input')).toBeNull();
-        await act(async () => { screen.findByType(FilePageHeader).props.find.onOpen(); });
+        // A rebuilt page (a resize between the desktop pane and the phone page) keeps Find open with its query.
         expect(screen.findByTestId('file-viewer-find.input')?.props.value).toBe('needle');
 
         await screen.update(fixture.wrap(<FilePane shown={false} />));

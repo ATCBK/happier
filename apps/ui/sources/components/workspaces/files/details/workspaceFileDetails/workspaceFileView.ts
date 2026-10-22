@@ -16,6 +16,8 @@ export type WorkspaceFileView = Readonly<{
     scrollLine?: number;
     wrap?: boolean;
     findQuery?: string;
+    /** Find was open when the page last left, so a rebuilt page (a resize) shows the bar again. */
+    findOpen?: boolean;
     previewSlice?: 'head' | 'tail';
     /** A PDF's zoom and reading place, remembered per file (lab files FV5z). */
     pdfZoom?: PdfZoom;
@@ -45,6 +47,7 @@ export function readWorkspaceFileView(tabState: unknown): WorkspaceFileView {
         ...(typeof view.scrollLine === 'number' && Number.isSafeInteger(view.scrollLine) && view.scrollLine > 0 ? { scrollLine: view.scrollLine } : {}),
         ...(typeof view.wrap === 'boolean' ? { wrap: view.wrap } : {}),
         ...(typeof view.findQuery === 'string' ? { findQuery: view.findQuery } : {}),
+        ...(typeof view.findOpen === 'boolean' ? { findOpen: view.findOpen } : {}),
         ...(view.previewSlice === 'head' || view.previewSlice === 'tail' ? { previewSlice: view.previewSlice } : {}),
         ...(view.startEditing === true ? { startEditing: true } : {}),
         ...(view.pdfZoom === 'fit-width' || view.pdfZoom === 'fit-page'

@@ -39,6 +39,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import type { FileChangesScope } from '@happier-dev/protocol/scm';
 import { FileViewerFindSurface } from './FileViewerFindSurface';
+import type { FileViewerFindMemory } from './useFileViewerFind';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { FileEditorPanel, FileMarkdownEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { FileEditorAskControls } from '@/components/workspaces/files/file/editor/FileEditorAskControls';
@@ -78,6 +79,7 @@ import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { useDestinationFocus } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import {
     DEFAULT_WORKSPACE_FILE_VIEWER_PREFERENCES_V1,
@@ -628,6 +630,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const checkoutReachability = useCheckoutReachability(props.scope);
     const constrainWidth = presentation === 'screen';
     const pane = useAppPaneScope(props.scopeId);
+    const destinationFocused = useDestinationFocus();
     const getAskTargetContext = useAskSelectionTargetContext(React.useCallback(() => ({ openDetailsTab: pane.openDetailsTab }), [pane.openDetailsTab]));
     const editorAccountScope = useActiveServerAccountScope(props.scope?.serverId ?? null);
     const patchDetailsTabState = pane.patchDetailsTabState;
@@ -650,7 +653,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
     const { view: fileView, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
     const isActive = props.openableContentViewer?.details.active ?? (presentation === 'screen' || (pane.scopeState?.details?.isOpen === true && pane.scopeState.details.activeTabKey === tabKey));
-    const rememberFindQuery = React.useCallback((findQuery: string) => patchFileView({ findQuery }), [patchFileView]);
+    const rememberFind = React.useCallback((find: FileViewerFindMemory) => patchFileView({ findQuery: find.query, findOpen: find.open }), [patchFileView]);
     const rememberReadingLine = React.useCallback((scrollLine: number) => patchFileView({ scrollLine }), [patchFileView]);
     const readingMemory = React.useMemo(() => ({ identity: `${props.scopeId}:${tabKey}`, line: fileView.scrollLine, active: isActive, remember: rememberReadingLine }), [props.scopeId, tabKey, fileView.scrollLine, isActive, rememberReadingLine]);
     const persistedDraft = readWorkspaceFileEditorDraft(pane.scopeState?.details?.tabState?.[tabKey], editorAccountScope?.accountId ?? null);
@@ -1080,7 +1083,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     });
     const fileViewActionOwner = React.useRef<FileViewActionOwner | null>(null);
     fileViewActionOwner.current = {
-        tabId: tabKey, active: isActive, serverId: scope?.serverId ?? null,
+        // A retained destination keeps its local File tab selected, but cannot own current-File commands.
+        tabId: tabKey, active: isActive && destinationFocused, serverId: scope?.serverId ?? null,
         accountId: editorAccountScope?.accountId ?? null,
         mode: isEditorSelected ? 'edit' : headerModel.modes.find(option => option.displayMode === displayMode)?.id ?? 'view',
         changesScope: fileView.changesScope, blame: fileView.blame ?? false,
@@ -1382,15 +1386,15 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const pdfBody = displayMode === 'file' && fileContent?.isBinary === true && fileViewer.kind === 'pdf';
     const [pdfPageInfo, setPdfPageInfo] = React.useState<Readonly<{ path: string; info: PdfPageInfo }> | null>(null);
     const shownPdfPageInfo = pdfPageInfo?.path === filePath ? pdfPageInfo.info : null;
-    // The file whose PDF Find bar is showing, as its viewer reports it (the viewer owns Find).
-    const [pdfFindOpenPath, setPdfFindOpenPath] = React.useState<string | null>(null);
+    // The file whose Find bar is showing, as its owner reports it (the PDF viewer, or the text surface).
+    const [findOpenPath, setFindOpenPath] = React.useState<string | null>(null);
+    const reportFindOpen = React.useCallback((open: boolean) => setFindOpenPath(current => open ? filePath : current === filePath ? null : current), [filePath]);
     // The phone's bottom toolbar steps aside while something else holds the bottom edge: the editor's key row
-    // (ED1p), the review bar in Changes (rvp P1) or the PDF's Find bar. The header then carries the view choice
+    // (ED1p), the review bar in Changes (rvp P1) or Find's bar. The header then carries the view choice
     // and Done itself.
-    const pdfFindHoldsBottom = pdfBody && pdfFindOpenPath === filePath;
-    const phoneToolbar = phonePage && !isEditorSelected
-        && !(displayMode === 'diff' && changesReview.controller.strip.total > 0)
-        && !pdfFindHoldsBottom;
+    const findHoldsBottom = findOpenPath === filePath;
+    const toolbarSeat = phonePage && !isEditorSelected && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
+    const phoneToolbar = toolbarSeat && !findHoldsBottom;
     const pdfZoom = fileView.pdfZoom ?? 'fit-width';
     const pdfPosition = fileView.pdfPosition ?? null;
     const pdfControl = React.useMemo(() => ({
@@ -1399,10 +1403,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         position: pdfPosition,
         onPositionChange: (position: PdfViewPosition) => patchFileView({ pdfPosition: position }),
         onPageInfo: (info: PdfPageInfo) => setPdfPageInfo({ path: filePath, info }),
-        onFindOpenChange: (open: boolean) => setPdfFindOpenPath(current => open ? filePath : current === filePath ? null : current),
+        onFindOpenChange: reportFindOpen,
         // Phones show the page in the bottom toolbar, so only one thing floats.
         showPagePill: !phonePage,
-    }), [filePath, patchFileView, pdfPosition, pdfZoom, phonePage]);
+    }), [filePath, patchFileView, pdfPosition, pdfZoom, phonePage, reportFindOpen]);
     const pageFind = (displayMode === 'diff' ? typeof diffContent === 'string' : pdfBody || (typeof fileContent?.content === 'string' && !isBinaryContent))
         && headerModel.findAvailable !== false ? { onOpen: () => findRuntime.open(findSurfaceId) } : null;
 
@@ -1532,7 +1536,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     {blameRegion.note ? <FileBlameNote note={blameRegion.note} /> : null}
                     {blameRegion.card}
                     <FileViewerFindSurface key={readingMemory.identity} surfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
-                        initialQuery={fileView.findQuery} onRememberQuery={rememberFindQuery}
+                        initialFind={{ query: fileView.findQuery ?? '', open: fileView.findOpen === true }} onRememberFind={rememberFind}
+                        onOpenChange={reportFindOpen}
                         content={{ path: filePath, mode: displayMode, text: displayMode === 'diff' ? (surface ? surface.unifiedDiff : diffContent) : fileContent?.isBinary ? null : fileContent?.content ?? null }}
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}>
                     {(find) => (
@@ -1632,7 +1637,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     edit={pageEditControl}
                     menuActions={menuActions}
                     // PDF Find only borrows the toolbar's edge, so the header stays as it was (lab FV5fp: ⋯ only).
-                    toolbarBelow={phoneToolbar || (phonePage && !isEditorSelected && pdfFindHoldsBottom)}
+                    toolbarBelow={toolbarSeat}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
                     diffMode={diffMode}

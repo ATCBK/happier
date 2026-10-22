@@ -27,6 +27,17 @@ describe('file content scroll intent', () => {
         expect(hook.getCurrent()).toBeUndefined();
         await hook.unmount();
     });
+    it('keeps the remembered place under a restored Find bar until a match becomes current, then never rebounds', async () => {
+        const hook = await renderHook<string | undefined, { target: string | null }>((props) =>
+            useFileContentScrollTarget(undefined, { open: true, lineTarget: props.target }, 'f:8'),
+        { initialProps: { target: null } });
+        expect(hook.getCurrent()).toBe('f:8');
+        await hook.rerender({ target: 'f:12' });
+        expect(hook.getCurrent()).toBe('f:12');
+        await hook.rerender({ target: null });
+        expect(hook.getCurrent()).toBeUndefined();
+        await hook.unmount();
+    });
     it('does not rebound to an old deep link on invalid query or close, but honors a new target', async () => {
         const text = 'first\nneedle\nlast';
         const lines = buildCodeLinesFromFile({ text });

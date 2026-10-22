@@ -619,7 +619,7 @@ function FileContentPanelInner({
                 externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={virtualized}
                 scrollToLineId={scrollToLineId}
-                scrollToLineAlignment={scrollToLineId && scrollToLineId === rememberedTarget && !jumpHighlight && !find?.open ? 'start' : undefined}
+                scrollToLineAlignment={scrollToLineId && scrollToLineId === rememberedTarget && !jumpHighlight && !(find?.open && find.lineTarget) ? 'start' : undefined}
                 onRememberReadingLine={readingMemory?.active ? readingMemory.remember : undefined}
                 findRangesByLineId={find?.lineRanges}
                 highlightLineId={jumpHighlight?.scrollToLineId}

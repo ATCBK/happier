@@ -75,4 +75,33 @@ describe('mounted file Find surface', () => {
             expect(container.querySelector('[data-testid="file-viewer-find.status"]')?.textContent).toContain('2');
         } finally { await act(async () => { root.unmount(); }); container.remove(); }
     });
+    it('rebuilds with the bar and query its last page left open, and says what it leaves behind', async () => {
+        const remember = vi.fn();
+        const openChange = vi.fn();
+        const container = document.createElement('div'); document.body.appendChild(container);
+        let root = createRoot(container);
+        const page = (initialFind?: { query: string; open: boolean }) => <PluginSurfaceFocusEligibilityProvider active>
+            <FileViewerFindSurface surfaceId="file:memory" active content={{ path: 'a.ts', mode: 'file', text }}
+                initialFind={initialFind} onRememberFind={remember} onOpenChange={openChange}>
+                {(find) => <CodeLinesViewCore lines={lines} virtualized={false} findRangesByLineId={find.lineRanges} scrollToLineId={find.lineTarget ?? undefined} />}
+            </FileViewerFindSurface>
+        </PluginSurfaceFocusEligibilityProvider>;
+        try {
+            await act(async () => { root.render(page({ query: 'needle', open: true })); });
+            expect(container.querySelector<HTMLInputElement>('[data-testid="file-viewer-find.input"]')?.value).toBe('needle');
+            // The reader's place is kept: the matches show, none is current until they step.
+            expect(container.querySelector('[data-testid="find-match-all"]')?.textContent).toBe('needle');
+            expect(container.querySelector('[data-testid="find-match-current"]')).toBeNull();
+            expect(openChange).toHaveBeenLastCalledWith(true);
+            await act(async () => { root.unmount(); });
+            expect(remember).toHaveBeenLastCalledWith({ query: 'needle', open: true });
+            expect(openChange).toHaveBeenLastCalledWith(false);
+
+            root = createRoot(container);
+            await act(async () => { root.render(page({ query: 'needle', open: false })); });
+            expect(container.querySelector('[data-testid="file-viewer-find.input"]')).toBeNull();
+            await act(async () => { root.unmount(); });
+            expect(remember).toHaveBeenLastCalledWith({ query: 'needle', open: false });
+        } finally { container.remove(); }
+    });
 });

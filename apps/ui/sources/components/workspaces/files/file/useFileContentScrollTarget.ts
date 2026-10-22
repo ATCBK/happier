@@ -7,9 +7,10 @@ export function useFileContentScrollTarget(jumpTarget: string | undefined, find?
     React.useLayoutEffect(() => {
         if (intent.target !== jumpTarget) { intent.target = jumpTarget; intent.retired = false; }
         if (find?.open) intent.retired = true;
-        if (find?.open || jumpTarget) intent.memoryRetired = true;
-    }, [find?.open, jumpTarget, intent]);
-    if (find?.open) return find.lineTarget ?? undefined;
+        // A match takes the place the reader had; a Find bar restored with no current match keeps it.
+        if ((find?.open && find.lineTarget) || jumpTarget) intent.memoryRetired = true;
+    }, [find?.open, find?.lineTarget, jumpTarget, intent]);
+    if (find?.open) return find.lineTarget ?? (jumpTarget || intent.memoryRetired ? undefined : rememberedTarget);
     if (jumpTarget) return intent.target === jumpTarget && intent.retired ? undefined : jumpTarget;
     return intent.memoryRetired ? undefined : rememberedTarget;
 }

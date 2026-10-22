@@ -5,6 +5,9 @@ import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLine
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { projectMarkdownFindText, type FindDisplayText } from '@/components/markdown/rendering/markdownFindProjection';
 
+/** What a file's Find keeps when its page is rebuilt (a resize between the desktop pane and the phone page). */
+export type FileViewerFindMemory = Readonly<{ query: string; open: boolean }>;
+
 export type FileViewerFindContent = Readonly<{ path: string; mode: 'file' | 'diff' | 'markdown'; text: string | null }>;
 
 type FileViewerFindMatch = Readonly<{ lineId: string | null; line: number; ranges: readonly FindTextRange[] }>;
@@ -34,12 +37,14 @@ function sourceRanges(projection: FindDisplayText, start: number, end: number): 
 }
 
 /** One ephemeral mounted file owner; closed refreshes never project or match its content. */
-export function createFileViewerFindModel(read: () => FileViewerFindContent, initialQuery = '') {
-    let snapshot: FileViewerFindSnapshot = { open: false, query: initialQuery, options: { matchCase: false, regex: false },
+export function createFileViewerFindModel(read: () => FileViewerFindContent, initial: FileViewerFindMemory = { query: '', open: false }) {
+    let snapshot: FileViewerFindSnapshot = { open: initial.open, query: initial.query, options: { matchCase: false, regex: false },
         status: { kind: 'idle' }, lineTarget: null, markdownLineTarget: null,
         lineRanges: new Map(), markdownRanges: [], revealRevision: 0 };
     let matches: readonly FileViewerFindMatch[] = [];
     let current = -1;
+    // A page rebuilt with Find open keeps the reader's place: no match is current until they step or edit.
+    let settled = !initial.open;
     let content: FileViewerFindContent | null = null;
     let lines: ReturnType<typeof buildCodeLinesFromFile> = [];
     let markdown: FindDisplayText | null = null;
@@ -111,7 +116,7 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent, ini
         if (targetLine !== undefined) current = matches.findIndex((match) => match.line >= targetLine);
         else if (!reset && previous) current = matches.findIndex((match) => match.lineId === previous.lineId
             && match.line === previous.line && match.ranges[0]?.start === previous.ranges[0]?.start);
-        if (current < 0 && matches.length > 0) current = 0;
+        if (current < 0 && matches.length > 0 && settled) current = 0;
         results();
     };
     const model: FindController & {
@@ -120,10 +125,11 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent, ini
     } = {
         get query() { return snapshot.query; }, get options() { return snapshot.options; },
         get status() { return snapshot.status; }, capabilities: { regex: true, stop: false },
-        setQuery(query) { publish({ query }); refresh(undefined, true); },
-        setOptions(options) { publish({ options }); refresh(undefined, true); },
+        setQuery(query) { settled = true; publish({ query }); refresh(undefined, true); },
+        setOptions(options) { settled = true; publish({ options }); refresh(undefined, true); },
         step(direction) { if (!snapshot.open || !matches.length) return;
-            current = (current + direction + matches.length) % matches.length; results(); },
+            settled = true;
+            current = current < 0 ? (direction > 0 ? 0 : matches.length - 1) : (current + direction + matches.length) % matches.length; results(); },
         stop() {},
         close() { matches = []; current = -1; publish({ open: false, status: { kind: 'idle' },
             lineRanges: new Map(), markdownRanges: [], lineTarget: null, markdownLineTarget: null }); },
@@ -131,7 +137,7 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent, ini
         refresh,
         getSnapshot: () => snapshot,
         subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        applySeed(seed) { const destination = read();
+        applySeed(seed) { settled = true; const destination = read();
             if (seed.target.path !== destination.path || destination.text === null) return false;
             publish({ open: true, query: seed.query, options: seed.options });
             const anchor = seed.target.anchor;
@@ -142,10 +148,10 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent, ini
 
 export type FileViewerFindModel = ReturnType<typeof createFileViewerFindModel>;
 
-export function useFileViewerFind(content: FileViewerFindContent, active = true, initialQuery = ''): FileViewerFindModel {
+export function useFileViewerFind(content: FileViewerFindContent, active = true, initial?: FileViewerFindMemory): FileViewerFindModel {
     const latest = React.useRef(content);
     latest.current = content;
-    const model = React.useMemo(() => createFileViewerFindModel(() => latest.current, initialQuery), [content.path]);
+    const model = React.useMemo(() => createFileViewerFindModel(() => latest.current, initial), [content.path]);
     React.useEffect(() => { if (active) model.refresh(); }, [model, active, content.mode, content.text]);
     return model;
 }

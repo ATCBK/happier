@@ -21,6 +21,7 @@ import { Typography } from '@/constants/Typography';
 import { resolveScmDiffAreaLabel } from '@/scm/diff/diffAreaLabels';
 import type { ScmProjectInFlightOperation } from '@/sync/runtime/orchestration/projectManager';
 import { t } from '@/text';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 
 import { FilePageAttributionFact, FilePageDeletionFact } from './FilePageAttributionFact';
 import { FilePageBreadcrumb } from './FilePageBreadcrumb';
@@ -428,10 +429,12 @@ export function FilePageToolbar(props: Readonly<{
     bottomInset: number;
 }>) {
     const showModes = props.modes.length > 1 && props.edit?.kind !== 'done' && props.edit?.kind !== 'save';
+    // Under the phone's floating tab bar the toolbar floats just above it, never beneath it.
+    const chromeClearance = useFloatingChromeClearance();
     if (!showModes && !props.find && !props.edit && !props.accessory) return null;
     return (
-        <View pointerEvents="box-none" style={styles.toolbarHost}>
-            <FloatingTabBarSurface testID="file-page-toolbar" bottomInset={props.bottomInset} stretch overPicture={props.overPicture}>
+        <View pointerEvents="box-none" style={[styles.toolbarHost, chromeClearance > 0 ? { bottom: chromeClearance } : null]}>
+            <FloatingTabBarSurface testID="file-page-toolbar" bottomInset={chromeClearance > 0 ? 0 : props.bottomInset} stretch overPicture={props.overPicture}>
                 <View style={styles.toolbarRow}>
                     {showModes ? (
                         <SegmentedTabBar
