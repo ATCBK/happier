@@ -19,6 +19,7 @@ export type WidgetDefinitionCommandOutcome<Result> =
     | Readonly<{ kind: 'refused'; errorCode: string; details?: unknown }>;
 
 type CommandId = Extract<ActionId,
+    | 'widgets.catalog.list'
     | 'widgets.fragment.list'
     | 'widgets.fragment.get'
     | 'widgets.fragment.create'
@@ -149,7 +150,7 @@ export function createWidgetItemAddAttempt(target: WidgetCommandTarget): Readonl
 
 export async function runWidgetDefinitionCommand<Id extends CommandId>(
     actionId: Id,
-    input: PublicActionInputById[Id] | (() => PublicActionInputById[Id]),
+    input: PublicActionInputById[Id] | (() => PublicActionInputById[Id] | Promise<PublicActionInputById[Id]>),
     target: WidgetCommandTarget,
     signal?: AbortSignal,
     widgetAreaContext?: ActionExecutorContext['widgetAreaContext'],
@@ -162,7 +163,7 @@ export async function runWidgetDefinitionCommand<Id extends CommandId>(
 ): Promise<WidgetDefinitionCommandOutcome<PublicActionResultById[Id]>> {
     try {
         // Preparing widget inputs can fail at the platform or validation boundary too.
-        const preparedInput = typeof input === 'function' ? input() : input;
+        const preparedInput = await (typeof input === 'function' ? input() : input);
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         // The person pressed it: present-user authority, one request id, so a consequential
         // operation enters the existing approval policy exactly as any other UI Action does.

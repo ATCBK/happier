@@ -1,14 +1,17 @@
 import type {
   UsageAgentShare, UsageDayModel, UsageRunLengthModel, UsageScoreModel, UsageShippedModel, UsageSkyDay, UsageSkyModel,
-  UsageSteeringTideModel, UsageConstellationModel, UsageRiverModel, UsageWeekHourModel, UsageDaylightModel,
+  UsageSteeringTideModel, UsageConstellationModel, UsageRiverModel, UsageWeekHourModel, UsageDaylightModel, UsagePortraitModel,
 } from '@happier-dev/plugin-ui/presentation';
 import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { resolveUsageDayStreaks } from '@happier-dev/protocol/usage/usageActivitySummary';
+import { resolveUsageDayStreaks, projectUsageOrdinalLevels } from '@happier-dev/protocol/usage/usageActivitySummary';
 import { resolveUsageCalendarInstant, resolveUsageBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
 import { isUsageNightHour, summarizeUsageConcurrency } from '@happier-dev/protocol/usage/usageWorkIntervals';
 import { UsagePresentationMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageChartMetric } from './usageChartHost';
+import { countUsageChartCalendarDates, projectUsageRiverWeekRange } from '@happier-dev/plugin-ui/presentation';
+import { projectUsageCalendarArtModel, type UsageCalendarArtModel,
+  type UsageMoonsModel, type UsageMachinesModel, type UsageProjectsModel, type UsageAtmosphereModel, type UsageGalaxyModel } from '@happier-dev/plugin-ui/presentation';
 
 /**
  * Private Usage → chart body models. Every figure comes from its canonical owner in the admitted slice
@@ -18,6 +21,43 @@ import type { UsageChartMetric } from './usageChartHost';
 
 /** The Agent calendar owner's result as the query carries it. */
 export type UsageAgentCalendar = NonNullable<UsageHowYouWork['agentCalendar']>;
+export type UsagePlanetFamilyModels = Readonly<{
+  calendarArt: UsageCalendarArtModel;
+  moons: UsageMoonsModel;
+  machines: UsageMachinesModel;
+  projects: UsageProjectsModel;
+  atmosphere: UsageAtmosphereModel | null;
+  galaxy: UsageGalaxyModel | null;
+}>;
+
+/** Private producer over the canonical admitted Usage facts, using the same finite art models. */
+export function projectUsagePlanetFamilyModels(calendar: UsageAgentCalendar, slice: UsageQueryResultSlice | null,
+  referenceMs: number, projects?: UsageProjectsModel['links']): UsagePlanetFamilyModels {
+  const byDate = new Map(calendar.days.map(day => [day.date, day.totals.eventCount]));
+  const dates = periodDates(calendar);
+  const observations = dates.map(date => ({ date, eventCount: byDate.has(date) ? byDate.get(date)!
+    : calendar.coverage.accounting === 'complete_for_supplied_facts' ? 0 : null }));
+  const levels = projectUsageOrdinalLevels(observations.map(day => day.eventCount));
+  const streaks = resolveUsageDayStreaks({ days: observations, referenceMs, timeZoneOffsetMinutes: calendar.timeZoneOffsetMinutes,
+    range: calendar.period, coverage: calendar.coverage.accounting === 'complete_for_supplied_facts' ? 'complete' : 'partial' });
+  const known = observations.some(day => day.eventCount !== null);
+  const calendarArt = projectUsageCalendarArtModel({ period: { ...calendar.period, timeZoneOffsetMinutes: calendar.timeZoneOffsetMinutes },
+    days: observations.map((day, index) => ({ date: day.date, level: levels[index]! })),
+    ...(known && streaks.currentStreakDays !== null ? { currentStreakDays: streaks.currentStreakDays } : {}),
+    ...(known && streaks.longestStreakDays !== null ? { bestStreakDays: streaks.longestStreakDays } : {}),
+  });
+  return { calendarArt,
+    moons: { agents: projectUsageAgentShares(calendar, 'tokens'), periodDays: calendarArt.days.length },
+    // The canonical owner currently has no witnessed kind taxonomy. Never infer one from machine ids or paths.
+    machines: { kinds: null, coverage: { status: calendar.machineKinds.status, method: 'unknown' } },
+    // A private Project label or allocation is not an SCM-admitted public link.
+    projects: { links: projects ?? null },
+    atmosphere: calendar.coverage.busy === 'unavailable' ? null : { weeks: calendar.weeklyPeakParallel.map(week => ({
+      startMs: week.startMs, endMs: week.endMs, peak: week.peak, coverage: { status: week.coverage, method: 'runtime' },
+    })), ...(slice?.howYouWork?.intervals ? { peakParallel: slice.howYouWork.intervals.maxParallel } : {}) },
+    galaxy: slice ? projectUsageRunLengthModel(slice) : null,
+  };
+}
 type CalendarBucket = UsageAgentCalendar['days'][number];
 type CalendarMetrics = CalendarBucket['totals'];
 const DAY_MS = 86_400_000;
@@ -186,12 +226,12 @@ export function projectUsageScoreModel(calendar: UsageAgentCalendar, day: string
     : calendar.weeks.reduce<UsageAgentCalendar['weeks'][number] | null>((best, bucket) => (bucket.totals.busyMs ?? 0) > (best?.totals.busyMs ?? 0) ? bucket : best, null);
   if (!week) return null;
   const weekStartMs = resolveUsageBucketBounds('week', week.startMs, calendar.timeZoneOffsetMinutes).bucketStartMs;
-  const rows = new Map<string, (number | null)[][]>();
+  const rows = new Map<string | null, (number | null)[][]>();
   for (const bucket of calendar.hours) {
     if (bucket.hour === null || bucket.startMs < week.startMs || bucket.startMs >= week.endMs) continue;
     const dayIndex = Math.floor((bucket.startMs - weekStartMs) / DAY_MS);
     for (const entry of bucket.agents) {
-      if (!entry.agentId || !entry.metrics.busyMs) continue;
+      if (!entry.metrics.busyMs) continue;
       const hours = rows.get(entry.agentId) ?? Array.from({ length: 7 }, (_, dayIndex) => Array.from({ length: 24 }, (_, hour) => {
         const instant = weekStartMs + dayIndex * DAY_MS + hour * HOUR_MS;
         return calendar.coverage.busy === 'complete_for_supplied_facts' && instant >= calendar.period.startMs && instant + HOUR_MS <= calendar.period.endMs ? 0 : null;
@@ -206,33 +246,45 @@ export function projectUsageScoreModel(calendar: UsageAgentCalendar, day: string
     rows: [...rows.entries()].sort((a, b) => total(b[1]) - total(a[1])).map(([agentId, hours]) => ({ agentId, hours })) };
 }
 
-/** Named Agents consume the owner's full-period accounting shares, including Unknown in its denominator. */
-export function projectUsageAgentShares(calendar: UsageAgentCalendar, metric: UsageChartMetric): readonly UsageAgentShare[] {
+/** Every member consumes the owner's full-period shares, retaining canonical Unknown attribution. */
+export function projectUsageAgentShares(calendar: UsageAgentCalendar, metric: UsageChartMetric,
+  formatCoverage?: (status: UsageAgentCalendar['coverage']['accounting']) => UsageAgentShare['coverage']): readonly UsageAgentShare[] {
   const days = new Map(calendar.agentActiveDays.map((entry) => [entry.agentId, entry.days]));
-  return calendar.periodSummary.agents.flatMap((entry) => entry.agentId === null ? [] : [{
+  return calendar.periodSummary.agents.map((entry) => ({
     agentId: entry.agentId,
     share: metric === 'tokens' || metric === 'cost' ? entry.shares[metric] : null,
     activeDays: days.get(entry.agentId) ?? null,
-  }])
+    ...(formatCoverage ? { coverage: formatCoverage(entry.coverage.accounting) } : {}),
+  }))
     .sort((a, b) => (b.share ?? -1) - (a.share ?? -1));
 }
 
 export function projectUsageRiverModel(calendar: UsageAgentCalendar, metric: UsageChartMetric): UsageRiverModel | null {
-  const weeks = calendar.weeks.filter(week => {
-    const bounds = resolveUsageBucketBounds('week', week.startMs, calendar.timeZoneOffsetMinutes);
-    return week.startMs === bounds.bucketStartMs && week.endMs === bounds.bucketEndMs;
-  }).map(week => {
+  const weeks = calendar.weeks.map(week => {
     const total = readUsageCalendarMetric(week.totals, metric);
     const tokenMix = calendar.weeklyAgentMix.find(mix => mix.startMs === week.startMs);
-    return { start: week.date, total,
-      shares: metric === 'tokens' ? Object.fromEntries(tokenMix?.mix.flatMap(entry => entry.agentId ? [[entry.agentId, entry.share]] : []) ?? [])
-        : Object.fromEntries(week.agents.flatMap(entry => {
+    return { ...projectUsageRiverWeekRange(week, calendar.timeZoneOffsetMinutes), total,
+      shares: metric === 'tokens' ? (tokenMix?.mix.map(({ agentId, share }) => ({ agentId, share })) ?? [])
+        : week.agents.flatMap(entry => {
           const value = readUsageCalendarMetric(entry.metrics, metric);
-          return entry.agentId !== null && value !== null && total !== null && total > 0 ? [[entry.agentId, value / total]] : [];
-        })),
+          return value !== null && total !== null && total > 0 ? [{ agentId: entry.agentId, share: value / total }] : [];
+        }),
     };
   });
   return weeks.length >= 2 ? { width: 'amount', weeks } : null;
+}
+
+/** The private portrait consumes the same day/streak and interval facts as the other Usage charts. */
+export function projectUsagePortraitModel(calendar: UsageAgentCalendar, peakParallel: number | null, referenceMs: number): UsagePortraitModel {
+  const activityKnown = calendar.coverage.accounting !== 'unavailable';
+  const total = countUsageChartCalendarDates(calendar.period, calendar.timeZoneOffsetMinutes);
+  const streaks = resolveUsageDayStreaks({ referenceMs, timeZoneOffsetMinutes: calendar.timeZoneOffsetMinutes, range: calendar.period,
+    days: calendar.days.map(day => ({ date: day.date, eventCount: day.totals.eventCount })) });
+  return {
+    ...(activityKnown && streaks.activeDays !== null ? { activeDays: { active: streaks.activeDays, of: total } } : {}),
+    ...(peakParallel === null ? {} : { peakParallel }),
+    ...(activityKnown && streaks.currentStreakDays !== null ? { streak: { current: streaks.currentStreakDays, best: streaks.longestStreakDays } } : {}),
+  };
 }
 
 export function projectUsageShippedModel(slice: UsageQueryResultSlice): UsageShippedModel | null {

@@ -1,2 +1,2 @@
 // Platform paint adapters and static public output share the Brand presentation owner.
-export { pictureBackdropProps } from '@happier-dev/brand/atmosphere';
+export { pictureBackdropProps, releaseLook } from '@happier-dev/brand/atmosphere';

@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ru as actionTitlesRu } from './actionTitles/ru';
@@ -15299,6 +15300,9 @@ settingsSession: {
           usage_constellation: "Созвездие",
           usage_planet: "Ваша планета",
           usage_run_length: "Длительность ходов",
+          usage_machines: "Машины",
+          usage_projects: "Проекты",
+          usage_atmosphere: "Атмосфера",
         },
         presets: {
           "overview": "Обзор",
@@ -15991,7 +15995,7 @@ settingsSession: {
             unavailableTitle: "Данные Coach за этот период не загружены",
           },
           charts: {
-            ...usageChartInputTranslations.ru,
+            ...usageChartInputTranslations.ru, ...usageChartPlanetFamilyTranslations.ru,
             // usage-board:charts
             shippedUnavailableTitle: "Слитые пул-реквесты недоступны",
             collaborationNotRecorded: "Совместная работа агентов за этот период пока не записана; каждая планета — агент, по размеру его доли.",

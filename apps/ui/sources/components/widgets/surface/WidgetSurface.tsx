@@ -22,6 +22,8 @@ import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/Ho
 import { useSessionCallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime';
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { isPublicProfileWidgetSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { PublicProfileWidgetSurface } from '@/components/settings/account/publicProfile/PublicProfileWidgetSurface';
 
 /** Placement supplies context and presentation, never executable target facts. */
 export type WidgetSurfaceProps = Readonly<{
@@ -198,7 +200,8 @@ export function WidgetSurface(props: WidgetSurfaceProps): React.ReactElement {
     // It fills the frame's body room, so a state that replaces the body can sit balanced in it.
     const body = <View testID={`${props.testID}.geometry`} onLayout={inherited ? undefined : onLayout} style={{ minWidth: 0, flexGrow: 1 }}>
         <WidgetMachineNoticeBoundary testID={props.testID}>
-            <WidgetSurfaceBody {...props} />
+            {isPublicProfileWidgetSurfaceV1(props.scope) ? <PublicProfileWidgetSurface instance={props.instance} descriptor={descriptor}
+                size={props.size} testID={props.testID} /> : <WidgetSurfaceBody {...props} />}
         </WidgetMachineNoticeBoundary>
     </View>;
     return inherited ? body : <WidgetPresentationProvider value={value}>{body}</WidgetPresentationProvider>;

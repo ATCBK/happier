@@ -1,8 +1,6 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierBadge, HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
-import { Text } from '@/components/ui/text/Text';
+import { UsageFootprintBody } from '@happier-dev/plugin-ui/presentation';
 import { Typography } from '@/constants/Typography';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCount } from '@/utils/format/usageNumbers';
@@ -36,54 +34,30 @@ export function UsageFootprintWidget(props: UsageBodyProps) {
   }
   const tokens = footprint.coverage.accountedTokens.total;
   return (
-    <View style={styles.body} testID={`${props.testID}.footprint`}>
-      <View style={styles.head}>
-        <View style={styles.headText}>
-          <Text style={styles.title} testID={`${props.testID}.status`}>
-            {t('usage.board.howYouWork.footprintInsufficientTitle')}
-          </Text>
-          <Text style={styles.reason}>
-            {t('usage.board.howYouWork.footprintInsufficientReason')}
-          </Text>
-        </View>
-        <HappierBadge color={theme.colors.text.secondary} backgroundColor={theme.colors.surface.inset}>
-          {t('usage.board.howYouWork.footprintNoEstimate')}
-        </HappierBadge>
-      </View>
-      <HappierDataMetric
-        theme={chartTheme}
-        testID={`${props.testID}.tokens`}
-        label={t('usage.board.howYouWork.footprintAccounted')}
-        value={formatTokenCount(tokens)}
-        unit={t('usage.tokens').toLocaleLowerCase()}
-        comparison={{
-          value: t('usage.board.howYouWork.footprintProxy'),
-          label: t('usage.board.howYouWork.footprintProxyDetail'),
-          meaning: 'neutral',
-        }}
-      />
-      <View style={styles.method}>
-        <Text style={styles.methodTitle}>
-          {t('usage.board.howYouWork.footprintMethodTitle')}
-        </Text>
-        <Text style={styles.reason}>
-          {t('usage.board.howYouWork.footprintMethodBody')}
-        </Text>
-      </View>
-      <UsageCoverageLine
+    <UsageFootprintBody theme={chartTheme} testID={props.testID} accountedTokens={formatTokenCount(tokens)}
+      spacing={{ head: theme.space.s12, detail: theme.space.s4 }}
+      badgeColor={theme.colors.text.secondary} badgeBackgroundColor={theme.colors.surface.inset}
+      textStyles={{ title: styles.title, reason: styles.reason, methodTitle: styles.methodTitle }}
+      labels={{
+        title: t('usage.board.howYouWork.footprintInsufficientTitle'),
+        reason: t('usage.board.howYouWork.footprintInsufficientReason'),
+        noEstimate: t('usage.board.howYouWork.footprintNoEstimate'),
+        accounted: t('usage.board.howYouWork.footprintAccounted'),
+        tokensUnit: t('usage.tokens').toLocaleLowerCase(),
+        proxy: t('usage.board.howYouWork.footprintProxy'),
+        proxyDetail: t('usage.board.howYouWork.footprintProxyDetail'),
+        methodTitle: t('usage.board.howYouWork.footprintMethodTitle'),
+        methodBody: t('usage.board.howYouWork.footprintMethodBody'),
+      }} coverage={<UsageCoverageLine
         testID={`${props.testID}.coverage`}
         slice={props.slice}
         sources={['accounting']}
         onRetry={props.model.refresh}
-      />
-    </View>
+      />} />
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 18, minWidth: 0 },
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12 },
-  headText: { flex: 1, minWidth: 0, gap: theme.space.s4 },
   title: {
     ...Typography.variant('heading'),
     color: theme.colors.text.primary,
@@ -92,7 +66,6 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.variant('body'),
     color: theme.colors.text.secondary,
   },
-  method: { gap: theme.space.s4 },
   methodTitle: {
     ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.primary,

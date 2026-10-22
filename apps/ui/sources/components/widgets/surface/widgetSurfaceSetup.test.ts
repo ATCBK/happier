@@ -10,6 +10,20 @@ import { t } from '@/text';
 import { buildWidgetCandidateSetup, runAcknowledgedWidgetSetupCommand, widgetProvidedContext, widgetSetupFieldsForCandidate } from './widgetSurfaceSetup';
 import type { WidgetCandidate } from '../widgetCatalog';
 
+describe('public-profile snapshot setup', () => {
+    it('translates a copied Usage choice to public presentation only, without asking for a private query', () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_rhythm' })!;
+        const candidate: WidgetCandidate = { ...descriptor, pluginName: 'Happier', sharedPluginName: false };
+        const setup = buildWidgetCandidateSetup({ candidate, context: {}, audience: 'personal',
+            scope: { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' } },
+            mode: { kind: 'add', submitLabel: 'Add', copiedInput: { style: 'sky', colourBy: 'agent', metric: 'cost',
+                agents: ['private-agent'], period: { relative: '7days' } } }, submit: async () => ({ ok: true }) });
+        expect(setup.fields.map(field => field.field.path)).toEqual(['style', 'colourBy']);
+        expect(setup.resolve(setup.initial)).toEqual({ status: 'ready', input: { style: 'sky', colourBy: 'intensity' } });
+        expect(JSON.stringify(setup.initial)).not.toMatch(/private-agent|cost|7days/);
+    });
+});
+
 describe('Usage declared inputs on every host', () => {
     const accounting = usageQaAccountingFixture();
     const query = usageAnalyticsRequestToQuery({ dateRange: { startMs: accounting.coverage!.range.startMs }, costMode: 'auto' });

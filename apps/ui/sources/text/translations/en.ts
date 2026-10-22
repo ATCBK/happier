@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
@@ -18904,6 +18905,9 @@ const enUsage = {
     usage_constellation: "Constellation",
     usage_planet: "Your planet",
     usage_run_length: "Run length",
+    usage_machines: "Machines",
+    usage_projects: "Projects",
+    usage_atmosphere: "Atmosphere",
   },
   presets: {
     "overview": "Overview",
@@ -19594,7 +19598,7 @@ const enUsage = {
       unavailableTitle: "Coach evidence isn't loaded for this period",
     },
     charts: {
-      ...usageChartInputTranslations.en,
+      ...usageChartInputTranslations.en, ...usageChartPlanetFamilyTranslations.en,
       // usage-board:charts — the shared chart bodies (Sky of days, Week tide, Daylight, A day in agents, Score, Orbit, Crew, Agent river, Shipped, Constellation, Your planet, Steering by Agent, Run length)
       shippedUnavailableTitle: "Merged pull requests aren't available",
       collaborationNotRecorded: "Collaboration between agents isn't recorded for this period yet; each planet is an agent sized by its share.",

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { projectUsageAgentShares, projectUsageConstellationModel, projectUsageDaylight, projectUsageDayModel, projectUsageScoreModel, projectUsageRiverModel, projectUsageSkyModel, projectUsageSteeringModel, projectUsageWeekHours, type UsageAgentCalendar } from './usageChartModels';
+import { projectUsageAgentShares, projectUsageConstellationModel, projectUsageDaylight, projectUsageDayModel, projectUsagePortraitModel, projectUsageScoreModel, projectUsageRiverModel, projectUsageSkyModel, projectUsageSteeringModel, projectUsageWeekHours, type UsageAgentCalendar } from './usageChartModels';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { projectUsagePlanetFamilyModels } from './usageChartModels';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2026, 8, 7); // Monday 7 Sep 2026, UTC calendar
@@ -28,6 +29,35 @@ const calendar = (input: Partial<UsageAgentCalendar>): UsageAgentCalendar => ({
 } satisfies UsageAgentCalendar);
 
 describe('Usage chart models', () => {
+  it('feeds planet art from recorded calendar days, actual weekly peaks and explicit unavailable evidence', () => {
+    const value = calendar({ period: { startMs: START, endMs: START + 4 * DAY },
+      coverage: { ...coverage, accounting: 'partial' },
+      days: [bucket(0, { eventCount: 3 }), bucket(1, { eventCount: 3 }), bucket(2, { eventCount: 0 })],
+      agentActiveDays: [{ agentId: 'codex', days: 2, coverage: 'partial' }],
+      periodSummary: { totals: metrics({ tokens: 10 }), leaders: leaders(), agents: [{ agentId: 'codex',
+        metrics: metrics({ tokens: 10 }), shares: { tokens: 1, cost: null }, coverage }] },
+      weeklyPeakParallel: [{ startMs: START, endMs: START + 4 * DAY, peak: 2, coverage: 'partial' }],
+    });
+    const models = projectUsagePlanetFamilyModels(value, null, START + 4 * DAY);
+    expect(models.calendarArt.days.map(day => day.level)).toEqual([4, 4, 0, null]);
+    expect(models.calendarArt.bestStreakDays).toBe(2);
+    expect(models.moons).toEqual({ agents: [{ agentId: 'codex', share: 1, activeDays: 2 }], periodDays: 4 });
+    expect(models.atmosphere?.weeks).toEqual([{ startMs: START, endMs: START + 4 * DAY, peak: 2,
+      coverage: { status: 'partial', method: 'runtime' } }]);
+    expect(models.machines.kinds).toBeNull();
+    expect(models.projects.links).toBeNull();
+    expect(models.galaxy).toBeNull();
+  });
+  it.each([7, 30])('counts all %s calendar dates including the partial current day in the private portrait', days => {
+    const value = calendar({ period: { startMs: START, endMs: START + (days - 1) * DAY + 10 * 3_600_000 },
+      days: Array.from({ length: days }, (_, day) => bucket(day, { eventCount: 1 })) });
+    expect(projectUsagePortraitModel(value, null, value.period.endMs).activeDays).toEqual({ active: days, of: days });
+  });
+
+  it('counts dates at the selected offset for a clipped period, excluding an exact end boundary', () => {
+    const value = calendar({ period: { startMs: START + 23 * 3_600_000, endMs: START + 3 * DAY - 2 * 3_600_000 }, timeZoneOffsetMinutes: 120 });
+    expect(projectUsagePortraitModel(value, null, value.period.endMs).activeDays?.of).toBe(2);
+  });
   it('keeps unavailable phone-answer observations unknown beside observed zero steering', () => {
     const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY }, includeActivity: true });
     const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', acceptedInputs: [], facts: [
@@ -61,6 +91,16 @@ describe('Usage chart models', () => {
     expect(projectUsageScoreModel(value, undefined)!.rows[0]!.hours[0]![9]).toBeCloseTo(7_201_000 / 60_000);
   });
 
+  it('retains unknown-only witnessed busy work in Score', () => {
+    const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY }, includeActivity: true });
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', facts: [
+      { workId: 'unknown', evidenceId: 'unknown', agentId: null, machineId: null, kind: 'busy', startMs: START, endMs: START + 60_000 },
+    ] } }] }).results[0]!;
+    const score = projectUsageScoreModel(slice.howYouWork!.agentCalendar!, undefined);
+    expect(score?.rows.map(row => row.agentId)).toEqual([null]);
+    expect(score?.rows[0]?.hours[0]?.[0]).toBe(1);
+  });
+
   it('keeps partial-range day clocks and Score weekdays on the query calendar, with out-of-range hours unknown', () => {
     const hour = 3_600_000;
     const query = normalizeUsageQuery({ period: { startMs: START + DAY + 9 * hour, endMs: START + 3 * DAY }, timeZoneOffsetMinutes: 120, includeActivity: true });
@@ -92,10 +132,24 @@ describe('Usage chart models', () => {
       weeklyAgentMix: weeks.map(week => ({ startMs: week.startMs, endMs: week.endMs, mix: [
         { agentId: 'claude', share: 0.9, coverage: 'partial' }, { agentId: 'codex', share: 0.1, coverage: 'partial' },
       ] })) });
-    expect(projectUsageRiverModel(value, 'cost')!.weeks[0]!.shares).toEqual({ claude: 0.2, codex: 0.8 });
+    expect(projectUsageRiverModel(value, 'cost')!.weeks[0]!.shares).toEqual([{ agentId: 'claude', share: 0.2 }, { agentId: 'codex', share: 0.8 }]);
     expect(projectUsageRiverModel({ ...value, weeks: weeks.map(week => ({ ...week, totals: metrics({ tokens: 100 }) })) }, 'cost')!.weeks[0]!.total).toBeNull();
     expect(projectUsageRiverModel({ ...value, period: { ...value.period, endMs: START + 8 * DAY },
-      weeks: [weeks[0]!, { ...weeks[1]!, endMs: START + 8 * DAY }] }, 'cost')).toBeNull();
+      weeks: [weeks[0]!, { ...weeks[1]!, endMs: START + 8 * DAY }] }, 'cost')!.weeks).toHaveLength(2);
+  });
+
+  it('retains both clipped weeks and nullable members from the canonical weekly mix', () => {
+    const startMs = START + 3 * DAY, endMs = START + 10 * DAY + 3_600_000;
+    const weeks = [{ ...bucket(3, { tokens: 100 }), startMs, endMs: START + 7 * DAY },
+      { ...bucket(7, { tokens: 200 }), endMs }];
+    const value = calendar({ period: { startMs, endMs }, weeks,
+      weeklyAgentMix: weeks.map(week => ({ startMs: week.startMs, endMs: week.endMs, mix: [
+        { agentId: null, share: 0.25, coverage: 'partial' }, { agentId: 'codex', share: 0.75, coverage: 'partial' },
+      ] })) });
+    expect(projectUsageRiverModel(value, 'tokens')?.weeks).toEqual(weeks.map(week => ({
+      start: week.date, end: new Date(week.endMs - 1).toISOString().slice(0, 10), partial: true,
+      total: week.totals.tokens, shares: [{ agentId: null, share: 0.25 }, { agentId: 'codex', share: 0.75 }],
+    })));
   });
   it('does not turn an absent day of partial evidence into measured inactivity', () => {
     const model = projectUsageSkyModel(calendar({ coverage: { ...coverage, busy: 'partial' } }), 'busy', 'intensity', START + DAY);
@@ -128,6 +182,7 @@ describe('Usage chart models', () => {
     ] }), 'tokens');
     expect(shares).toEqual([
       { agentId: 'claude', share: 0.75, activeDays: null },
+      { agentId: null, share: 0.25, activeDays: null },
       { agentId: 'pi', share: null, activeDays: null },
     ]);
   });
@@ -145,6 +200,27 @@ describe('Usage chart models', () => {
       { agentId: 'claude', share: 0.75, activeDays: null },
       { agentId: 'codex', share: 0.25, activeDays: 2 },
     ]);
+  });
+
+  it.each(['cost', 'tokens'] as const)('does not infer a context-only method from an unavailable %s denominator', metric => {
+    const value = calendar({ periodSummary: { totals: metrics({ tokens: metric === 'tokens' ? 0 : 50 }), leaders: leaders(), agents: [
+      { agentId: 'codex', metrics: metrics({ tokens: metric === 'tokens' ? 0 : 50 }), coverage, shares: { tokens: null, cost: null } },
+    ] } });
+    const rows = projectUsageAgentShares(value, metric, status => status === 'complete_for_supplied_facts'
+      ? { long: 'Measured', short: 'Measured' } : undefined);
+    expect(rows).toEqual([{ agentId: 'codex', share: null, activeDays: null, coverage: { long: 'Measured', short: 'Measured' } }]);
+  });
+
+  it('keeps an eighth Agent and its only collaboration edge in the complete shared model', () => {
+    const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY } });
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', facts: [] } }] }).results[0]!;
+    // Use the canonical summary type; no rendering projection may truncate this membership.
+    const model = projectUsageConstellationModel({ ...slice, howYouWork: { ...slice.howYouWork!, collaboration: {
+      coverage: 'partial', unknownTimestampCount: 0, unknownSourceAgentCount: 0, unknownTargetAgentCount: 0,
+      edges: [{ sourceAgentId: 'a0', targetAgentId: 'a7', relation: 'run', count: 1 }],
+    } } }, Array.from({ length: 8 }, (_, index) => ({ agentId: `a${index}`, share: 1 / 8 })));
+    expect(model.nodes).toHaveLength(8);
+    expect(model.edges).toEqual([{ from: 'a0', to: 'a7', kind: 'run', count: 1 }]);
   });
 
   it('does not sum Sessions or peak parallel across hours, which would double count', () => {

@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WidgetLayoutFragmentSummaryV1 } from '@happier-dev/protocol/widgets';
-import { widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { widgetCandidateDefinitionV1, readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import type { WidgetSetupDraft } from '@/components/widgets/add/widgetSetupModel';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -38,6 +39,15 @@ afterEach(() => standardCleanup());
 const account = { serverId: 's', accountId: 'a' };
 
 describe('Add to… for a group', () => {
+  it('offers the captured Public profile area when enabled, and excludes it when already there', async () => {
+    const { resolveWidgetGroupCopyDestinations } = await import('./widgetGroupCopy');
+    const destinations = resolveWidgetGroupCopyDestinations({ current: { ...account, owner: { kind: 'home' } }, projects: [], publicProfileEnabled: true });
+    expect(destinations).toContainEqual({ key: 'public-profile', label: expect.any(String), surface: { ...account,
+      owner: { kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' } } });
+    expect(resolveWidgetGroupCopyDestinations({ current: { ...account, owner: { kind: 'home' } }, projects: [] })).toEqual([]);
+    expect(resolveWidgetGroupCopyDestinations({ current: destinations[0]!.surface, projects: [], publicProfileEnabled: true })
+      .some(destination => destination.key === 'public-profile')).toBe(false);
+  });
   it('offers Home and each Project, never the surface the group is already on', async () => {
     const { resolveWidgetGroupCopyDestinations } =
       await import('./widgetGroupCopy');
@@ -105,6 +115,27 @@ describe('Save group', () => {
 });
 
 describe('a saved group in Add', () => {
+  it('does not ask for or retain private group pins when copying to Public profile', () => {
+    const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_parallel' })!;
+    const candidate: WidgetCandidate = { ...descriptor, pluginName: 'Happier', sharedPluginName: false };
+    const fragment: WidgetLayoutFragmentSummaryV1 = { artifactId: 'private-usage', name: 'Usage', childCount: 1,
+      inputs: { fields: [{ path: 'agents', title: 'Agents', widget: 'select', required: true, optionsSourceId: 'agents' }] },
+      inputSchema: { type: 'object', required: ['agents'] },
+      group: { width: 'full', frameStyle: 'card', dividers: 'hairline',
+        context: { agents: { kind: 'value', value: ['private-agent'] } },
+        children: [{ kind: 'widget', instance: { v: 1, definition: descriptor.definition,
+          bindings: { agents: { kind: 'context', slot: 'agents' }, style: { kind: 'value', value: 'lanes' } } } }] } };
+    const preview = vi.fn((_fragment: WidgetLayoutFragmentSummaryV1, _draft: WidgetSetupDraft) => null);
+    const setup = buildWidgetGroupFragmentEntry({ fragment, candidates: [candidate],
+      scope: { ...account, owner: { kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' } },
+      context: {}, submitLabel: 'Add', add: async () => ({ ok: true }), renderGroupPreview: preview }).setup!();
+    expect(setup.fields).toEqual([]);
+    expect(setup.initial.bindings).toEqual({});
+    expect(setup.resolve(setup.initial)).toMatchObject({ status: 'ready', input: {} });
+    setup.renderPreview?.({ draft: setup.initial, input: {} });
+    expect(preview.mock.calls[0]?.[0].group).toMatchObject({ children: [{ instance: { bindings: { style: { kind: 'value', value: 'peak' } } } }] });
+    expect(JSON.stringify(preview.mock.calls)).not.toMatch(/private-agent|lanes/);
+  });
   it('discovers a later child field through that child when adding a saved group', () => {
     const field = { path: 'result', title: 'Result', widget: 'select' as const, optionsSourceId: 'sessions' };
     const candidates: WidgetCandidate[] = ['first', 'second'].map((id, index) => ({

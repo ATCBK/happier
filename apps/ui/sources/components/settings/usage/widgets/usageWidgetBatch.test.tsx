@@ -102,13 +102,14 @@ describe('Usage page batch', () => {
       accountingViewAvailable = useUsageAnalyticsView(props.slice, props.query) !== null;
       return null;
     }
-    function Probe(props: { metric: 'tokens' | 'busy'; style: 'sky' | 'heatmap' }) {
-      const selected = useUsageWidgetModel({ ...scope, metric: props.metric, style: props.style, colourBy: 'intensity', day: '2026-10-21' }, 'usage_rhythm');
+    type ChartWidget = 'usage_rhythm' | 'usage_orbit' | 'usage_atmosphere' | 'usage_machines' | 'usage_projects';
+    function Probe(props: { metric: 'tokens' | 'busy'; style: string; widgetId: ChartWidget }) {
+      const selected = useUsageWidgetModel({ ...scope, metric: props.metric, style: props.style, colourBy: 'intensity', day: '2026-10-21' }, props.widgetId);
       query = selected.query;
       return selected.query && selected.model.slice ? <AccountingProjection slice={selected.model.slice} query={selected.query} /> : null;
     }
-    const view = (metric: 'tokens' | 'busy', style: 'sky' | 'heatmap' = 'sky') => <InjectedAuthProvider credentials={credentials}><UsageWidgetBatchProvider clauses={clauses}>
-      <Probe metric={metric} style={style} /></UsageWidgetBatchProvider></InjectedAuthProvider>;
+    const view = (metric: 'tokens' | 'busy', style = 'sky', widgetId: ChartWidget = 'usage_rhythm') => <InjectedAuthProvider credentials={credentials}><UsageWidgetBatchProvider clauses={clauses}>
+      <Probe metric={metric} style={style} widgetId={widgetId} /></UsageWidgetBatchProvider></InjectedAuthProvider>;
     const screen = await renderScreen(view('tokens'));
     try {
       await expect.poll(() => query?.metric).toBe('tokens');
@@ -121,6 +122,16 @@ describe('Usage page batch', () => {
       await expect.poll(() => accountingViewAvailable).toBe(false);
       await screen.update(view('busy', 'heatmap'));
       await expect.poll(() => query?.includeSessionEvidence).toBe(false);
+      await screen.update(view('busy', 'ninetyPlanets'));
+      expect(query).toMatchObject({ includeSessionEvidence: false, includeTranscriptEvidence: false });
+      await screen.update(view('tokens', 'moons', 'usage_orbit'));
+      expect(query).toMatchObject({ includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false });
+      await screen.update(view('tokens', '', 'usage_atmosphere'));
+      expect(query).toMatchObject({ includeSessionEvidence: true, includeTranscriptEvidence: false, includeWorkEvidence: false });
+      for (const widgetId of ['usage_machines', 'usage_projects'] as const) {
+        await screen.update(view('tokens', '', widgetId));
+        expect(query).toMatchObject({ includeAccounting: false, includeSessionEvidence: false, includeTranscriptEvidence: false, includeWorkEvidence: false });
+      }
     } finally { await screen.unmount(); }
   });
   it('keeps a Project setup preview out of the mounted Account page batch', async () => {

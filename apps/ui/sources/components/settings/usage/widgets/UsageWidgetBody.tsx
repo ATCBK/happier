@@ -35,7 +35,8 @@ import { UsageRecapWidget } from './UsageRecapWidget';
 import { UsageFootprintWidget } from './UsageFootprintWidget';
 import { UsageSourcesWidget } from './UsageSourcesWidget';
 import { UsageSourceCoverageWidget, UsageUnpricedWidget } from './UsageSourcePanels';
-import { UsageConstellationBody, UsageOrbitBody, UsagePlanetBody, UsageRunLengthBody, UsageScoreBody } from './UsageChartStyleBodies';
+import { UsageConstellationBody, UsagePlanetBody, UsageRunLengthBody, UsageScoreBody } from './UsageChartStyleBodies';
+import { UsageAtmosphereBody, UsageMachinesBody, UsageOrbitStyleBody, UsageProjectsBody } from './UsagePlanetFamilyBodies';
 
 /** The one body per builtin Usage definition; all share the descriptor owner's ids. */
 const USAGE_QUERY_BODIES: Readonly<
@@ -67,10 +68,13 @@ const USAGE_QUERY_BODIES: Readonly<
   usage_source_coverage: UsageSourceCoverageWidget,
   usage_unpriced: UsageUnpricedWidget,
   usage_score: UsageScoreBody,
-  usage_orbit: UsageOrbitBody,
+  usage_orbit: UsageOrbitStyleBody,
   usage_constellation: UsageConstellationBody,
   usage_planet: UsagePlanetBody,
   usage_run_length: UsageRunLengthBody,
+  usage_machines: UsageMachinesBody,
+  usage_projects: UsageProjectsBody,
+  usage_atmosphere: UsageAtmosphereBody,
 };
 
 export function isUsageBuiltinWidgetId(

@@ -10,6 +10,8 @@ import { usagePageCostTrend } from '../usageCostPresentation';
 import { renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
 import { UsagePeriodSummaryWidget } from './UsagePeriodSummaryWidget';
+import { UsageFootprintWidget } from './UsageFootprintWidget';
+import { formatTokenCount } from '@/utils/format/usageNumbers';
 import { UsageCostFactsWidget } from './UsageCostFactsWidget';
 import { UsageSourceCoverageWidget, UsageUnpricedWidget } from './UsageSourcePanels';
 import { UsageDailyWidget } from './UsageDailyWidget';
@@ -48,6 +50,18 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it('keeps the private footprint as an accounted-token proxy with no fabricated estimate', async () => {
+    const props = mountedCosts();
+    const slice = resolveUsagePageAggregation({ queries: [props.query],
+      accounting: [{ query: props.query, status: 'available', value: props.slice.accounting! }],
+      howYouWork: [{ query: props.query, asOfMs: day, detail: { status: 'available', facts: [] } }],
+    }).results[0]!;
+    const screen = await renderScreen(<UsageFootprintWidget {...props} slice={slice} id="usage_footprint" testID="footprint" />);
+    const metric = screen.findAllByType(HappierDataMetric).find(row => row.props.testID === 'footprint.tokens');
+    expect(metric?.props.value).toBe(formatTokenCount(slice.accounting!.totals.tokens.total));
+    expect(metric?.props.comparison.value).toBe(t('usage.board.howYouWork.footprintProxy'));
+    expect(screen.getTextContent()).toContain(t('usage.board.howYouWork.footprintNoEstimate'));
+  });
   it('does not reaggregate unchanged comparison contributions on a source-progress render', async () => {
     const props = mountedCosts();
     const query = normalizeUsageQuery({ ...props.query, period: { startMs: day, endMs: 2 * day } });

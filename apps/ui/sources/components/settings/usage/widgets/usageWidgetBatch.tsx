@@ -59,6 +59,11 @@ const USAGE_WIDGET_DEMAND = {
   usage_constellation: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
   usage_planet: { includeSessionEvidence: true, includeWorkEvidence: false },
   usage_run_length: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_atmosphere: { includeAccounting: false, includeSessionEvidence: true, includeWorkEvidence: false },
+  // Kind evidence and owner-selected public links are unavailable in a private Usage query.
+  // Offering these bodies must not hydrate private Session/SCM data to invent either fact.
+  usage_machines: { includeAccounting: false, includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_projects: { includeAccounting: false, includeSessionEvidence: false, includeWorkEvidence: false },
 } satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeQuotaHistory?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;

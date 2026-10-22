@@ -63,7 +63,7 @@ describe('Save as widget placement', () => {
         resetRuntimeFetch();
     });
 
-    it.each(['placed', 'savePending', 'placementPending', 'placementRefused', 'builtinPlaced'] as const)(
+    it.each(['placed', 'savePending', 'placementPending', 'placementRefused', 'builtinPlaced', 'publicPlaced'] as const)(
         'promotes Session Add-to before setup placement and preserves %s outcomes', async outcome => {
         const accountId = 'owner';
         const sessionId = 'source';
@@ -105,6 +105,8 @@ describe('Save as widget placement', () => {
             sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
             inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
             body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Original checks' } } },
+            ...(outcome === 'publicPlaced' ? { publicPresentation: { kind: 'declarative',
+                document: { version: 1, root: { kind: 'text', text: 'Shared edition' } } } } : {}),
             ...(outcome === 'placementPending' ? { networkOverride: { network: 'none' } } : {}),
             ...(outcome === 'builtinPlaced' ? { name: 'Copied daily usage', body: nativeDefinition,
                 sizeDeclaration: native.sizeDeclaration, inputs: native.inputs, inputSchema: native.inputSchema } : {}) });
@@ -144,7 +146,13 @@ describe('Save as widget placement', () => {
         try {
             await screen.pressByTestIdAsync('openAdd');
             await screen.pressByTestIdAsync('sessionAdd.addTo.destination.home');
-            const setup = screen.tree.root.findByType(WidgetSetupStep).props.setup;
+            const publicSurface = { ...account, owner: { kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' } } as const;
+            const setup = outcome === 'publicPlaced'
+                ? (await import('./WidgetCopyPanel')).buildWidgetCopySetup({ instance,
+                    candidate: (await import('../widgetCatalog')).describeAuthoredWidgetDefinitionV1(definition, { kind: 'inline', definition }),
+                    destination: { key: 'public-profile', label: 'Public profile', surface: publicSurface },
+                    current: { ...account, owner: { kind: 'sessionBoard', sessionId } }, providedContext: {}, promoted: { current: null }, testID: 'publicCopy' })
+                : screen.tree.root.findByType(WidgetSetupStep).props.setup;
             let result: Awaited<ReturnType<typeof setup.submit>>;
             await act(async () => { result = await setup.submit(setup.initial); });
             const saved = harness.artifacts(serverId).list().filter(row => Reflect.get(decodePlainArtifactStoredContent(row.header) as object, 'kind') === 'widget-definition.v1');
@@ -160,7 +168,15 @@ describe('Save as widget placement', () => {
             expect(JSON.parse(harness.artifacts(serverId).readPlainBody(saved[0]!.id)!)).toMatchObject({
                 body: definition.body, provenance: { source: { kind: 'session', serverId, sessionId, itemId: instance.id } },
             });
-            if (outcome === 'placementRefused') {
+            if (outcome === 'publicPlaced') {
+                const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                expect(result!).toEqual({ ok: true });
+                const listed = await createDefaultActionExecutor().execute('widgets.item.list', { surface: publicSurface },
+                    { serverId, surface: 'ui', authority: 'present_user', expectedAccountId: accountId });
+                if (!listed.ok) throw new Error(listed.errorCode);
+                const placed = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].parse(listed.result).instances;
+                expect(placed.some(copy => copy.instance.definition.kind === 'artifact' && copy.instance.definition.artifactId === saved[0]!.id)).toBe(true);
+            } else if (outcome === 'placementRefused') {
                 expect(result!).toEqual({ ok: false, message: t('widgetDefinition.savedButNotPlaced') });
                 await act(async () => { await setup.submit(setup.initial); });
                 expect(harness.artifacts(serverId).list().filter(row => Reflect.get(decodePlainArtifactStoredContent(row.header) as object, 'kind') === 'widget-definition.v1')).toHaveLength(1);

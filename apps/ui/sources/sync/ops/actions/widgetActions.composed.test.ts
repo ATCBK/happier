@@ -101,6 +101,43 @@ function waiveUiAction(actionId: 'session.manager.set' | 'widgets.item.remove') 
 }
 
 describe('widget semantic Actions through production UI composition', () => {
+    it('admits snapshot item/group copies and refuses private pins through the real public-area writer', async () => {
+        const surface = scope({ kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' });
+        const executor = createDefaultActionExecutor();
+        const peak = WidgetInstanceV1Schema.parse({ v: 1, id: 'peak-copy', definition: { kind: 'builtin', id: 'usage_parallel' },
+            bindings: { style: { kind: 'value', value: 'peak' } } });
+        const added = await executor.execute('widgets.item.add', { surface, instance: peak }, context());
+        expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+        const leaked = await executor.execute('widgets.item.add', { surface, instance: { ...peak, id: 'private-copy', bindings: {
+            ...peak.bindings, metric: { kind: 'value', value: 'cost' },
+        } } }, context());
+        expect(leaked).toMatchObject({ ok: false, errorCode: 'widget_inputs_invalid' });
+        const group = { kind: 'group', id: 'public-group', width: 'full', frameStyle: 'plain', dividers: 'none',
+            children: [{ kind: 'widget', instance: { ...peak, id: 'child-peak' }, size: 'medium' }] };
+        const grouped = await executor.execute('widgets.group.add', { surface, group }, context());
+        expect(grouped, JSON.stringify(grouped)).toMatchObject({ ok: true });
+        const privateGroup = await executor.execute('widgets.group.add', { surface, group: { ...group, id: 'private-group',
+            context: { period: { kind: 'value', value: { relative: '7days' } } },
+            children: [{ kind: 'widget', instance: { ...peak, id: 'other-child' }, size: 'medium' }],
+        } }, context());
+        expect(privateGroup).toMatchObject({ ok: false, errorCode: 'widget_inputs_invalid' });
+        const { runCopyWidgetGroupCommandV1 } = await import('@/components/widgets/definitions/widgetLayoutFragmentCommands');
+        const { WidgetLayoutGroupV1Schema } = await import('@happier-dev/protocol/widgets');
+        const copy = await runCopyWidgetGroupCommandV1(WidgetLayoutGroupV1Schema.parse({ ...group, id: 'private-source',
+            context: { agents: { kind: 'value', value: ['private-agent'] } },
+            children: [{ kind: 'widget', instance: { ...peak, id: 'source-child', displayName: 'private label', bindings: {
+                style: { kind: 'value', value: 'lanes' }, metric: { kind: 'value', value: 'cost' },
+            } }, size: 'medium' }],
+        }), surface);
+        expect(copy, JSON.stringify(copy)).toMatchObject({ kind: 'applied' });
+        const read = await executor.execute('widgets.item.list', { surface }, context());
+        expect(read).toMatchObject({ ok: true, result: { instances: expect.arrayContaining([
+            expect.objectContaining({ instance: expect.objectContaining({ id: 'peak-copy' }) }),
+            expect.objectContaining({ instance: expect.objectContaining({ bindings: { style: { kind: 'value', value: 'peak' } } }) }),
+        ]) } });
+        expect(JSON.stringify(read)).not.toMatch(/private-copy|private-group|7days|cost/);
+        expect(JSON.stringify(read)).not.toMatch(/private-agent|private label/);
+    });
     it('retains a bound human area edit through explicit Ask with the supplied scoped executor', async () => {
         const { scopedHomeActionExecutor } = await import('./scopedHomeActionExecutor');
         const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');

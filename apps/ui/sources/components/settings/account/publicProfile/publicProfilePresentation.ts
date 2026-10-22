@@ -1,0 +1,49 @@
+import * as React from 'react';
+import type { HappierPublicProfileLabels, HappierPublicProfileUsageHost } from '@happier-dev/plugin-ui/presentation';
+import type { PublicPeriod, PublicProfileSnapshotV1 } from '@happier-dev/protocol/account/publicProfile';
+import type { PublicProfileContextV1 } from '@happier-dev/protocol/account/publicProfilePublication';
+
+import { usageAtmosphereLabels, usageCrewLabels, usageMachinesLabels, usageMoonsLabels, usageOrbitLabels, usagePlanetLabels, usageProjectsLabels,
+  usageRingsLabels, usageShippedLabels, usageSkyLabels, usageSurfaceLabels, usagePublicOriginalLabels } from '@/components/settings/usage/widgets/usageChartLabels';
+import { useUsageChartHost } from '@/components/settings/usage/widgets/usageChartHost';
+import { formatUsageCalendarDate, formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
+import { t } from '@/text';
+import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
+
+export function publicProfilePageLabels(context: PublicProfileContextV1, snapshot: PublicProfileSnapshotV1 | null,
+  credit: string | null): HappierPublicProfileLabels {
+  const period = snapshot?.period;
+  const since = context.identity.sinceMs === undefined ? null : formatUsageCalendarDate(context.identity.sinceMs,
+    period?.timeZoneOffsetMinutes ?? 0, { month: 'long', year: 'numeric' });
+  return {
+    identityLine: [context.handle ? `@${context.handle}` : null, context.service?.displayName ?? null,
+      since ? t('publicIdentity.page.since', { date: since }) : null].filter(Boolean).join(' · '),
+    periodTitle: formatUsageCalendarPeriod({ relative: '90days' }),
+    periodDetail: snapshot && period ? t('publicIdentity.page.periodDetail', { range: formatUsageCalendarPeriod(period),
+      synced: formatRelativeTime(snapshot.computedAtMs) }) : t('publicIdentity.profile.reasons.usage_unavailable'),
+    emptyLayout: t('publicIdentity.page.empty'), footerNote: t('publicIdentity.page.footerNote'), report: t('publicIdentity.page.report'),
+    madeWith: t('publicIdentity.page.madeWith'), inert: { success: t('publicIdentity.page.success'), warning: t('publicIdentity.page.warning'),
+      error: t('publicIdentity.page.error'), incomplete: t('publicIdentity.page.incomplete') },
+    ...(credit ? { heroCredit: credit } : {}),
+  };
+}
+
+/** The same chart host and wording as private Usage, read against the public snapshot's calendar. */
+export function usePublicProfileUsageHost(serverId: string, period: PublicPeriod | null): HappierPublicProfileUsageHost {
+  const host = useUsageChartHost(serverId);
+  const timeZoneOffsetMinutes = period?.timeZoneOffsetMinutes ?? 0;
+  const periodLabel = period ? formatUsageCalendarPeriod(period) : '';
+  return React.useMemo(() => {
+    const query = { timeZoneOffsetMinutes };
+    return { paint: host.paint, agent: host.agent, renderPlanet: host.renderPlanet,
+      labels: {
+        chartLabel: (widgetId) => t(`usage.widgets.${widgetId}`), unavailable: t('publicIdentity.page.blockUnavailable'),
+        original: usagePublicOriginalLabels(query, periodLabel),
+        sky: usageSkyLabels({ query, metricName: t('publicIdentity.page.activityLevel'), formatValue: value => String(value), colourBy: 'intensity' }),
+        crew: usageCrewLabels(null), orbit: usageOrbitLabels(), planet: usagePlanetLabels(), shipped: usageShippedLabels(query, 'accent'),
+        calendar: { ...usageSurfaceLabels(query), noRuns: usageRingsLabels(query).noRuns }, moons: usageMoonsLabels(),
+        machines: usageMachinesLabels(), projects: usageProjectsLabels(), atmosphere: usageAtmosphereLabels(query),
+      },
+    };
+  }, [host.paint, host.agent, host.renderPlanet, timeZoneOffsetMinutes, periodLabel]);
+}

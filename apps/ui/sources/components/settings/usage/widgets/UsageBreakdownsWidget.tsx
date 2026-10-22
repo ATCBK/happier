@@ -1,14 +1,12 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 import { resolveUsageCostForSelection } from '@happier-dev/protocol/usage/usageCostFacts';
 import { type UsageAnalyticsBreakdownDimension, type UsageAnalyticsBreakdownEntry } from '@happier-dev/protocol';
 import {
   HappierPressable,
-  RankedRows,
+  UsageBreakdownsBody,
+  type UsageBreakdownBlock,
 } from '@happier-dev/plugin-ui/presentation';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
@@ -129,32 +127,25 @@ function UsageBreakdownsWidgetOriginal(props: UsageBodyProps) {
       />
     );
   return (
-    <View style={styles.body} testID={`${props.testID}.breakdowns`}>
-      {blocks.map((block) => {
+    <UsageBreakdownsBody theme={chartTheme} spacing={theme.space} testID={`${props.testID}.breakdowns`} model={{ namedByCard,
+      blocks: blocks.map((block): UsageBreakdownBlock => {
         const lead = leadingUsageRows(block.rows, expanded.includes(block.dimension));
-        return (
-        <View key={block.dimension} style={styles.block}>
-            {namedByCard ? null : <Text style={styles.heading} accessibilityRole="header">
-              {t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}
-            </Text>}
-          <RankedRows
-            theme={chartTheme}
-            label={t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}
-            rows={lead.rows.map((row, index) => ({
+        return {
+            id: block.dimension,
+            label: t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension]),
+            rows: lead.rows.map((row, index) => ({
               ...row,
               color: block.dimension === 'agent' ? getAgentIdentityColor(theme, row.id) : usageMeterFill(theme, index === 0),
-            }))}
-            total={total}
-            size="full"
+            })),
+            total,
             // An unknown value is a quiet dash in the value column, never a bold word (states: unknowns stay quiet).
-            unknownLabel="—"
-            testID={`${props.testID}.${block.dimension}`}
-            valueFormatter={
+            unknownLabel: '—',
+            testID: `${props.testID}.${block.dimension}`,
+            valueFormatter:
               metric === 'cost'
                 ? (value) => formatUsageCost(value, currency)
-                : formatTokenCount
-            }
-            {...(DRILL_FIELD[block.dimension] &&
+                : formatTokenCount,
+            ...(DRILL_FIELD[block.dimension] &&
             drill.available(DRILL_FIELD[block.dimension]!)
               ? {
                   // A row of a scope dimension is a drill: it adds that value to the one filter row.
@@ -184,8 +175,8 @@ function UsageBreakdownsWidgetOriginal(props: UsageBodyProps) {
                     );
                   },
                 }
-              : {})}
-            {...(block.dimension === 'agent'
+              : {}),
+            ...(block.dimension === 'agent'
               ? {
                   leads: Object.fromEntries(
                     block.rows.map((row) => [
@@ -198,32 +189,19 @@ function UsageBreakdownsWidgetOriginal(props: UsageBodyProps) {
                     ]),
                   ),
                 }
-              : {})}
-          />
-          <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}`}
+              : {}),
+          footer: <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}`}
             total={block.rows.length} hidden={lead.hidden} complete={block.truncated === 0} expanded={expanded.includes(block.dimension)}
             unlisted={block.truncated > 0 && lead.hidden === 0 ? t('usage.board.page.moreRows', { count: block.truncated }) : null}
             testID={`${props.testID}.${block.dimension}.more`}
             onToggle={() => setExpanded(current => current.includes(block.dimension)
-              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} />
-        </View>
-        );
-      })}
-      <UsageCoverageLine
+              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} />,
+        };
+      }) }} coverage={<UsageCoverageLine
         slice={props.slice}
         sources={['accounting']}
         onRetry={props.model.refresh}
         testID={`${props.testID}.coverage`}
-      />
-    </View>
+      />} />
   );
 }
-
-const styles = StyleSheet.create((theme) => ({
-  body: { gap: theme.space.s20 },
-  block: { gap: theme.space.s10 },
-  heading: {
-    ...Typography.variant('body', 'semiBold'),
-    color: theme.colors.text.secondary,
-  },
-}));

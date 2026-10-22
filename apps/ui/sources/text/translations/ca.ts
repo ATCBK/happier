@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ca as actionTitlesCa } from './actionTitles/ca';
@@ -14190,8 +14191,11 @@ settingsSession: {
           usage_constellation: "Constel·lació",
           usage_planet: "El teu planeta",
           usage_run_length: "Durada de les execucions",
+          usage_machines: "Màquines",
+          usage_projects: "Projectes",
+          usage_atmosphere: "Atmosfera",
         },
-        board: { charts: { ...usageChartInputTranslations.ca,
+        board: { charts: { ...usageChartInputTranslations.ca, ...usageChartPlanetFamilyTranslations.ca,
           shippedUnavailableTitle: "Les sol·licituds d’incorporació fusionades no estan disponibles",
           collaborationNotRecorded: "Encara no s’ha registrat col·laboració entre agents en aquest període; cada planeta és un agent amb una mida segons la seva proporció.",
           coveragePartial: "Parcial · algunes fonts són incompletes",

@@ -14,6 +14,7 @@ import { useAtmospherePictureCatalog } from '@/components/atmosphere/useAtmosphe
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 
@@ -24,9 +25,9 @@ export type PublicProfileLookPreparation =
 /**
  * Look for a public profile: Home's backdrop controls (source, the library and this device's pictures,
  * effect, fade, strength, layout) over the profile's private candidate, without the global glass rows.
- * Every edit goes to `onChange`; nothing here writes Home, a project or glass. Adding a picture goes
- * through the admitted Settings operation bound to this captured draft. The line at the end says what
- * Applying will publish about the chosen picture, or how to recover one that isn't on this device.
+ * Every edit goes through Settings bound to this captured draft; nothing here writes Home, a project
+ * or glass. The footer explains what Apply publishes about the chosen picture, or how to recover one
+ * that isn't on this device.
  */
 export const PublicProfileLookPanel = React.memo(function PublicProfileLookPanel(
   props: Readonly<{
@@ -50,7 +51,7 @@ export const PublicProfileLookPanel = React.memo(function PublicProfileLookPanel
       mounted.current = false;
     };
   }, []);
-  const update = React.useCallback((edit: (current: AtmospherePresentation) => AtmospherePresentation) => {
+  const updateDraft = React.useCallback((edit: (current: AtmospherePresentation) => AtmospherePresentation) => {
     const next = edit(latest.current.value);
     if (next === latest.current.value) return;
     latest.current.value = next;
@@ -63,10 +64,18 @@ export const PublicProfileLookPanel = React.memo(function PublicProfileLookPanel
         serverId,
         isCurrent: () => mounted.current && Boolean(latest.current.binding?.isCurrent()),
         read: () => latest.current.value,
-        update,
+        update: updateDraft,
       },
     },
-  }), [serverId, update]);
+  }), [serverId, updateDraft]);
+  const { setSetting, isCurrent } = useSettingActionFeedback({ serverId, executorOptions: pictureActions.executorOptions });
+  const update = React.useCallback((edit: (current: AtmospherePresentation) => AtmospherePresentation) => {
+    const setting = { anchor: 'appearance.homeAtmosphere', target: pictureActions.target };
+    if (!isCurrent(setting)) return;
+    const next = edit(latest.current.value);
+    if (next === latest.current.value) return;
+    return setSetting(setting, next);
+  }, [isCurrent, pictureActions.target, setSetting]);
   const editor = React.useMemo<AtmosphereEditor>(() => ({ value, update, pictureActions }), [value, update, pictureActions]);
   return (
     <View style={styles.panel} testID={props.testID}>

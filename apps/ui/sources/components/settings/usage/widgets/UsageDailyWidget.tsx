@@ -1,11 +1,10 @@
 import * as React from 'react';
 import { UsageAccountingMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
-import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
 import {
-  StackedSeriesChart,
+  UsageDailyChart,
   type HappierSeries,
 } from '@happier-dev/plugin-ui/presentation';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -233,36 +232,32 @@ export function UsageDailyWidget(props: UsageBodyProps) {
     // Until the first read answers, the body holds the settled chart's shape (its plot, axis and legend room).
     return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={shape} onRetry={props.model.refresh} />;
   return (
-    <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.daily`}>
-      <StackedSeriesChart
-        {...details}
-        testID={`${props.testID}.chart`}
-        theme={chartTheme}
-        label={caption}
-        series={chartSeries}
-        variant="bar"
-        size={compact ? 'tile' : 'full'}
-        viewportHeight={height}
-        barGap={count > 45 ? 2 : count > 20 ? 4 : 6}
-        barMinHeight={0}
-        axisTicks={axisTicks}
-        {...(leads ? { leads } : {})}
+    <UsageDailyChart theme={chartTheme} gap={theme.space.s10} testID={props.testID} chart={{
+        ...details,
+        label: caption,
+        series: chartSeries,
+        size: compact ? 'tile' : 'full',
+        viewportHeight: height,
+        barGap: count > 45 ? 2 : count > 20 ? 4 : 6,
+        barMinHeight: 0,
+        axisTicks,
+        ...(leads ? { leads } : {}),
         // A near-zero money scale reads in whole cents ($0.05 · $0.10), never "$0.005".
-        minimumMaximum={metric === 'cost' ? 0.1 : 1}
-        showGrid
-        showScaleValues
-        scaleGutter={44}
-        showPeakValue={dailyShowsPeak(phone, compact)}
-        showLegend={!compact && series.length > 1}
-        {...dailyContext}
-        {...motion}
-        unknownLabel="—"
-        showReadout={false}
-        valuesLabel={t('usage.showAll')}
-        valuesCollapseLabel={t('usage.showLess')}
-        valueFormatter={format}
-        {...lens}
-        {...(drillable
+        minimumMaximum: metric === 'cost' ? 0.1 : 1,
+        showGrid: true,
+        showScaleValues: true,
+        scaleGutter: 44,
+        showPeakValue: dailyShowsPeak(phone, compact),
+        showLegend: !compact && series.length > 1,
+        ...dailyContext,
+        ...motion,
+        unknownLabel: '—',
+        showReadout: false,
+        valuesLabel: t('usage.showAll'),
+        valuesCollapseLabel: t('usage.showLess'),
+        valueFormatter: format,
+        ...lens,
+        ...(drillable
           ? {
               onSeriesPress: (seriesId: string) => {
                 choice(seriesId)?.onPress();
@@ -273,14 +268,12 @@ export function UsageDailyWidget(props: UsageBodyProps) {
                 .filter((entry) => drill.selected('agents', agentForSeries(entry.id)))
                 .map((entry) => entry.id),
             }
-          : {})}
-      />
-      <UsageCoverageLine
+          : {}),
+      }} footer={<UsageCoverageLine
         slice={props.slice}
         sources={['accounting']}
         onRetry={props.model.refresh}
         testID={`${props.testID}.coverage`}
-      />
-    </View>
+      />} />
   );
 }

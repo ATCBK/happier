@@ -20,6 +20,8 @@ import { randomUUID } from '@/platform/randomUUID';
 import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
+import { isPublicProfileWidgetSurfaceV1, projectWidgetPublicProfileDescriptorV1, translateWidgetPublicProfileCopyV1 } from '@happier-dev/protocol/widgets';
 
 import { createWidgetArtifactWriteAttempt, createWidgetItemAddAttempt } from './widgetDefinitionCommands';
 
@@ -40,14 +42,17 @@ export function useWidgetCopyTarget(instance: WidgetInstanceV1 | null, current: 
     const installed = React.useMemo(() => instance ? readWidgetDescriptor(runtime.pluginUiProjection, instance.definition) : null, [runtime.pluginUiProjection, instance]);
     const candidate = useWidgetInstanceDescriptor(current, instance, installed);
     const refs = useWorkspaceRefs();
+    const publicProfile = useFeatureDecision('account.publicProfiles', { scopeKind: 'spawn', serverId: current.serverId });
+    const publicProfileEnabled = publicProfile?.state === 'enabled';
     // Names only: choosing a place never opens a Board's record. They arrive after the first paint, so the caller reserves their row.
     const boards = useWorkBoardSummaries();
     const boardsRead = useWorkBoardReadState();
     // Until the Account's Board store is current it answers "scope retired" with nothing read: that is still waiting, not an empty list.
     const boardsLoading = boardsRead.status === 'loading' || (!boardsRead.hasSnapshot && boardsRead.errorCode === 'board_scope_retired');
     const destinations = React.useMemo(() => resolveWidgetGroupCopyDestinations({ current,
-        projects: listWidgetGroupProjects(refs, current.serverId), boards: boards.map(board => ({ boardId: board.id, label: board.name })) })
-        .filter(destination => instance === null || (candidate && isWidgetTargetHostableV1(candidate, destination.surface.owner.kind))), [boards, candidate, current, instance, refs]);
+        projects: listWidgetGroupProjects(refs, current.serverId), boards: boards.map(board => ({ boardId: board.id, label: board.name })), publicProfileEnabled })
+        .filter(destination => instance === null || (candidate && isWidgetTargetHostableV1(candidate, destination.surface.owner.kind)
+            && (!isPublicProfileWidgetSurfaceV1(destination.surface) || projectWidgetPublicProfileDescriptorV1(instance.definition, candidate)))), [boards, candidate, current, instance, refs, publicProfileEnabled]);
     return { candidate, destinations, boardsLoading };
 }
 
@@ -128,6 +133,7 @@ export function buildWidgetCopySetup(input: Readonly<{
     testID: string;
 }>): WidgetSetup {
     const { candidate, destination, promoted, current, instance } = input;
+    const publicDestination = isPublicProfileWidgetSurfaceV1(destination.surface);
     const attempt = input.attempt ?? {};
     const projects = composeWidgetGroupContextV1({ surfaceOwner: destination.surface.owner, providedContext: {} }).projects?.[0];
     const context: WidgetSurfaceContext = projects !== undefined ? { slots: {
@@ -155,11 +161,17 @@ export function buildWidgetCopySetup(input: Readonly<{
             const { networkOverride: _sourceNetworkOverride, ...sourceInstance } = instance;
             const networkOverride = definition ? readWidgetDefinitionNetworkOverrideV1(definition) : undefined;
             attempt.placement ??= createWidgetItemAddAttempt(destination.surface);
-            const outcome = await attempt.placement.run(() => ({ surface: destination.surface,
-                instance: definition ? { ...sourceInstance, id: randomUUID(), definition: { kind: 'artifact', artifactId: definition.id },
+            const outcome = await attempt.placement.run(() => {
+                const copy: WidgetInstanceV1 = definition ? { ...sourceInstance, id: randomUUID(), definition: { kind: 'artifact', artifactId: definition.id },
                     bindings: draft.bindings, ...(networkOverride ? { networkOverride } : {}) }
-                    : { ...instance, id: randomUUID(), bindings: draft.bindings },
-                ...(destination.area ? { area: destination.area } : {}), ...(draft.size ? { size: draft.size } : {}) }),
+                    : { ...instance, id: randomUUID(), bindings: draft.bindings };
+                const placement = publicDestination ? translateWidgetPublicProfileCopyV1(copy,
+                    definition ? { ...candidate, authoredDefinition: definition,
+                        publicPresentation: definition.publicPresentation ?? candidate.publicPresentation } : candidate) : copy;
+                if (!placement) throw Object.assign(new Error('Public snapshot unavailable'), { code: 'widget_public_profile_presentation_unavailable' });
+                return { surface: destination.surface, instance: placement,
+                    ...(destination.area ? { area: destination.area } : {}), ...(draft.size ? { size: draft.size } : {}) };
+            },
                 { surface: destination.surface, values: providedContext });
             return outcome.kind === 'refused' ? { ok: false, message: t(definition ? 'widgetDefinition.savedButNotPlaced' : 'widgetAdd.addFailed') }
                 : { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) };

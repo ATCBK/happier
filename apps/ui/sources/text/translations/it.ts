@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { it as actionTitlesIt } from './actionTitles/it';
@@ -15724,6 +15725,9 @@ settingsSession: {
           usage_constellation: "Costellazione",
           usage_planet: "Il tuo pianeta",
           usage_run_length: "Durata dei turni",
+          usage_machines: "Macchine",
+          usage_projects: "Progetti",
+          usage_atmosphere: "Atmosfera",
         },
         presets: {
           "overview": "Panoramica",
@@ -16414,7 +16418,7 @@ settingsSession: {
             unavailableTitle: "Le prove del Coach non sono caricate per questo periodo",
           },
           charts: {
-            ...usageChartInputTranslations.it,
+            ...usageChartInputTranslations.it, ...usageChartPlanetFamilyTranslations.it,
             // usage-board:charts
             shippedUnavailableTitle: "Le pull request unite non sono disponibili",
             collaborationNotRecorded: "La collaborazione tra agenti non è ancora registrata per questo periodo; ogni pianeta è un agente, grande quanto la sua quota.",

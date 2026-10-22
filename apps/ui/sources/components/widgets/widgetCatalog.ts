@@ -1,4 +1,5 @@
 import type { ConnectedAccountUiProjectionEntryV1, PluginContributionIdentityV1, PluginJsonSchemaV2, PluginProjectedResourceV2 } from '@happier-dev/protocol';
+import { WidgetPublicSnapshotPresentationV1Schema, type WidgetPublicSnapshotPresentationV1 } from '@happier-dev/protocol/widgets';
 import { readWidgetInputTargetV1, WidgetConnectedAccountPurposeBindingV1Schema, WidgetSizeDeclarationV1Schema, type WidgetSizeDeclarationV1, type WidgetConnectedAccountPurposeBindingV1, type WidgetDefinitionAuthorV1, type WidgetDefinitionSummaryV1 } from '@happier-dev/protocol/widgets';
 import { buildQualifiedPluginContributionKey, PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
@@ -56,6 +57,7 @@ export type WidgetCandidate = WidgetCandidateIdentityV1 & Readonly<{
     target: WidgetTargetKind;
     inputs?: InputHints;
     inputSchema?: PluginJsonSchemaV2;
+    publicPresentation?: WidgetPublicSnapshotPresentationV1;
     sessionInputPath?: string;
     connectedAccountPurposeBindings?: readonly WidgetConnectedAccountPurposeBindingV1[];
     resources?: readonly PluginContributionIdentityV1[];
@@ -76,6 +78,7 @@ export function describeWidgetDefinitionSummaryV1(summary: WidgetDefinitionSumma
         title: summary.name, pluginName: installed?.pluginName ?? summary.name, sharedPluginName: false,
         icon: installed?.icon ?? 'stack', homeDefault: 'available', target: summary.sessionInputPath ? 'session' : 'app',
         inputs: summary.inputs, inputSchema: summary.inputSchema, bodyKind: summary.bodyKind, sizeDeclaration: summary.sizeDeclaration,
+        ...(summary.publicPresentation ? { publicPresentation: summary.publicPresentation } : installed?.publicPresentation ? { publicPresentation: installed.publicPresentation } : {}),
         ...(summary.author ? { madeBy: { author: summary.author, ...(summary.createdAt !== undefined ? { createdAt: summary.createdAt } : {}) } } : {}),
         ...(summary.sessionInputPath ? { sessionInputPath: summary.sessionInputPath } : {}),
         ...(summary.connectedAccountPurposeBindings ? { connectedAccountPurposeBindings: summary.connectedAccountPurposeBindings } : {}),
@@ -94,6 +97,7 @@ export function describeAuthoredWidgetDefinitionV1(definition: WidgetDefinitionV
         title: definition.name, pluginName: installed?.pluginName ?? definition.name, sharedPluginName: false,
         icon: native?.icon ?? installed?.icon ?? 'stack', homeDefault: 'available', target: readWidgetInputTargetV1(definition).kind === 'session' ? 'session' : 'app',
         inputs: definition.inputs, inputSchema: definition.inputSchema, sizeDeclaration: definition.sizeDeclaration,
+        ...(definition.publicPresentation ? { publicPresentation: definition.publicPresentation } : installed?.publicPresentation ? { publicPresentation: installed.publicPresentation } : {}),
         ...(definition.sessionInputPath ? { sessionInputPath: definition.sessionInputPath } : {}),
         ...(definition.connectedAccountPurposeBindings ? { connectedAccountPurposeBindings: definition.connectedAccountPurposeBindings } : {}),
         resources: installed?.resources ?? readWidgetDefinitionResourcesV1(definition), authoredDefinition: definition,
@@ -212,6 +216,7 @@ function describeWidgetPlacements(
         const inputSchema = PluginJsonSchemaV2Schema.safeParse(placement.inputSchema);
         const sessionInputPath = InputPathSchema.safeParse(placement.sessionInputPath);
         const sizeDeclaration = WidgetSizeDeclarationV1Schema.safeParse(placement.sizeDeclaration);
+        const publicPresentation = WidgetPublicSnapshotPresentationV1Schema.safeParse(placement.publicPresentation);
         if (!sizeDeclaration.success) continue;
         const purposeBindings = Array.isArray(placement.connectedAccountPurposeBindings)
             ? placement.connectedAccountPurposeBindings.map((binding) => WidgetConnectedAccountPurposeBindingV1Schema.safeParse(binding)) : [];
@@ -219,6 +224,7 @@ function describeWidgetPlacements(
             ? placement.resources.map(resource => PluginContributionIdentityV1Schema.safeParse(resource)) : [];
         candidates.push(Object.freeze({
             sizeDeclaration: sizeDeclaration.data,
+            ...(publicPresentation.success ? { publicPresentation: publicPresentation.data } : {}),
             surface,
             key,
             title: resolvePluginSurfaceDestinationLabel(placement, localize),

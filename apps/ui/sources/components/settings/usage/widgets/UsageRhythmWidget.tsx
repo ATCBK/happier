@@ -2,11 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
-import {
-  DotGrid,
-  Heatmap,
-  StackedSeriesChart,
-} from '@happier-dev/plugin-ui/presentation';
+import { UsageRhythmChart, USAGE_RHYTHM_MATRIX_MIN_WIDTH_PX, USAGE_RHYTHM_SIDE_BY_SIDE_MIN_WIDTH_PX } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -33,14 +29,7 @@ import {
   type UsageBodyProps,
 } from './usageBodyKit';
 import { UsageSkyStyleBody, UsageWeekTideStyleBody, UsageDaylightStyleBody } from './UsageChartStyleBodies';
-
-/**
- * Below this body width the 7×24 matrix has no room to be read (a phone); the 24-hour rhythm says the same.
- * A half-width card keeps the matrix: its weekday axis is the point of the card (lab `d2views-OV`).
- */
-const MATRIX_MIN_WIDTH_PX = 360;
-/** Calendar and weekday×hour sit side by side only when each keeps a comfortable matrix width. */
-const SIDE_BY_SIDE_MIN_WIDTH_PX = 880;
+import { UsageCalendarArtStyleBody, isUsageCalendarArtStyle } from './UsagePlanetFamilyBodies';
 
 /**
  * What the settled body measures at the widths the page is designed for, so the reading state holds
@@ -54,8 +43,8 @@ const HALF_WIDTH_MAX_PX = 520;
 const SETTLED_PHONE_BODY_PX = 223;
 function settledBodyPx(width: number | undefined): number | undefined {
   if (width === undefined) return undefined;
-  if (width >= SIDE_BY_SIDE_MIN_WIDTH_PX) return SETTLED_SIDE_BY_SIDE_BODY_PX;
-  if (width < MATRIX_MIN_WIDTH_PX) return SETTLED_PHONE_BODY_PX;
+  if (width >= USAGE_RHYTHM_SIDE_BY_SIDE_MIN_WIDTH_PX) return SETTLED_SIDE_BY_SIDE_BODY_PX;
+  if (width < USAGE_RHYTHM_MATRIX_MIN_WIDTH_PX) return SETTLED_PHONE_BODY_PX;
   return width < HALF_WIDTH_MAX_PX ? SETTLED_HALF_WIDTH_BODY_PX : undefined;
 }
 
@@ -65,6 +54,7 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
   if (style === 'sky') return <UsageSkyStyleBody {...props} />;
   if (style === 'weekTide') return <UsageWeekTideStyleBody {...props} />;
   if (style === 'daylight') return <UsageDaylightStyleBody {...props} />;
+  if (isUsageCalendarArtStyle(style)) return <UsageCalendarArtStyleBody {...props} style={style} />;
   return <UsageRhythmWidgetOriginal {...props} />;
 }
 
@@ -109,102 +99,42 @@ function UsageRhythmWidgetOriginal(props: UsageBodyProps) {
       />
     );
   }
-  const matrix = width === undefined || width >= MATRIX_MIN_WIDTH_PX;
-  const sideBySide = width !== undefined && width >= SIDE_BY_SIDE_MIN_WIDTH_PX;
+  const matrix = width === undefined || width >= USAGE_RHYTHM_MATRIX_MIN_WIDTH_PX;
   return (
-    <View style={styles.body} testID={`${props.testID}.rhythm`}>
-      <View style={[styles.blocks, sideBySide ? styles.row : null]}>
-        {hasCalendar && calendar ? (
-          <View style={[styles.block, sideBySide ? styles.half : null]}>
-            <Text style={styles.label}>
-              {t('usage.board.howYouWork.activeDays')}
-            </Text>
-            <Heatmap
-              testID={`${props.testID}.calendar`}
-              theme={chartTheme}
-              showReadout={false}
-              {...calendar}
-              renderCell={usageGridTooltip(
-                accent,
-                'usage-heatmap-cell-trigger',
-              )}
-              renderFrame={
-                calendar.layout === 'strip' ? undefined : usageGridFrame
-              }
-            />
-          </View>
-        ) : null}
-        {hasRhythm ? (
-          <View style={[styles.block, sideBySide ? styles.half : null]}>
-            <Text style={styles.label}>
-              {matrix
-                ? t('usage.board.howYouWork.weekdayHour')
-                : t('usage.board.howYouWork.byHour')}
-            </Text>
-            {matrix ? (
-              <DotGrid
-                testID={`${props.testID}.punchcard`}
-                theme={chartTheme}
-                showReadout={false}
-                {...usageDotGridPresentation(
-                  view.punchCard,
-                  accent,
-                  theme.colors.border.default,
-                )}
-                renderCell={usageGridTooltip(
-                  accent,
-                  'usage-punchcard-cell-trigger',
-                )}
-              />
-            ) : (
-              <StackedSeriesChart
-                testID={`${props.testID}.hours`}
-                theme={chartTheme}
-                label={t('usage.workRhythm')}
-                series={createUsageHourRhythmSeries(
-                  view.hourRhythm,
-                  accent,
-                  theme.colors.border.default,
-                )}
-                variant="bar"
-                size="tile"
-                viewportHeight={52}
-                barGap={2}
-                barMinHeight={2}
-                axisTicks={[
-                  { label: '12A', bucket: 0 },
-                  { label: '6A', bucket: 6 },
-                  { label: '12P', bucket: 12 },
-                  { label: '6P', bucket: 18 },
-                ]}
-                showGrid={false}
-                showAnnotations
-                showReadout={false}
-                renderBucket={usageSeriesTooltip(
-                  accent,
-                  'usage-rhythm-hour-trigger',
-                )}
-              />
-            )}
-          </View>
-        ) : null}
-      </View>
-      <UsageCoverageLine
+    <UsageRhythmChart theme={chartTheme} width={width} testID={props.testID}
+      spacing={{ body: theme.space.s12, blocks: theme.space.s20, block: theme.space.s8 }}
+      headings={{
+        calendar: <Text style={styles.label}>{t('usage.board.howYouWork.activeDays')}</Text>,
+        weekdayHour: <Text style={styles.label}>{t('usage.board.howYouWork.weekdayHour')}</Text>,
+        byHour: <Text style={styles.label}>{t('usage.board.howYouWork.byHour')}</Text>,
+      }}
+      calendar={hasCalendar && calendar ? {
+        ...calendar,
+        renderCell: usageGridTooltip(accent, 'usage-heatmap-cell-trigger'),
+        renderFrame: calendar.layout === 'strip' ? undefined : usageGridFrame,
+      } : undefined}
+      punch={hasRhythm && matrix ? {
+        ...usageDotGridPresentation(view.punchCard, accent, theme.colors.border.default),
+        renderCell: usageGridTooltip(accent, 'usage-punchcard-cell-trigger'),
+      } : undefined}
+      hours={hasRhythm && (width === undefined || !matrix) ? {
+        label: t('usage.workRhythm'),
+        series: createUsageHourRhythmSeries(view.hourRhythm, accent, theme.colors.border.default),
+        variant: 'bar', size: 'tile', viewportHeight: 52, barGap: 2, barMinHeight: 2,
+        axisTicks: [{ label: '12A', bucket: 0 }, { label: '6A', bucket: 6 }, { label: '12P', bucket: 12 }, { label: '6P', bucket: 18 }],
+        showGrid: false, showAnnotations: true, showReadout: false,
+        renderBucket: usageSeriesTooltip(accent, 'usage-rhythm-hour-trigger'),
+      } : undefined}
+      footer={<UsageCoverageLine
         testID={`${props.testID}.coverage`}
         slice={props.slice}
         sources={['accounting']}
         onRetry={props.model.refresh}
-      />
-    </View>
+      />} />
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: theme.space.s12, minWidth: 0 },
-  blocks: { gap: theme.space.s20 },
-  row: { flexDirection: 'row', alignItems: 'flex-start' },
-  block: { gap: theme.space.s8, minWidth: 0 },
-  half: { flex: 1 },
   label: {
     ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,

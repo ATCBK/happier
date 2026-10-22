@@ -2,6 +2,7 @@ import * as React from 'react';
 import {
   PublicProfileOwnerReadV1Schema,
   type PublicProfileOwnerReadV1,
+  type PublicProfileOwnerRecordV1,
 } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -30,6 +31,7 @@ export function usePublicProfileOwnerRead(
 ): Readonly<{
   state: PublicProfileOwnerReadState;
   reload: () => Promise<void>;
+  acknowledge: (record: PublicProfileOwnerRecordV1 | null) => void;
 }> {
   const [state, setState] = React.useState<PublicProfileOwnerReadState>({
     kind: 'loading',
@@ -58,8 +60,13 @@ export function usePublicProfileOwnerRead(
     }
   }, []);
   const { ready } = execution;
+  const acknowledge = React.useCallback((record: PublicProfileOwnerRecordV1 | null) => {
+    setState(current => current.kind !== 'ready' ? current : { ...current,
+      read: record ? { kind: 'ready', record, context: current.read.context } : { kind: 'absent', context: current.read.context },
+    });
+  }, []);
   React.useEffect(() => {
     if (ready) void reload();
   }, [ready, reload]);
-  return { state, reload };
+  return { state, reload, acknowledge };
 }

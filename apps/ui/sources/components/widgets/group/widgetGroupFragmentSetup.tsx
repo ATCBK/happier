@@ -6,6 +6,7 @@ import {
   isSameWidgetDefinitionV1,
   resolveConfiguredWidgetInputs,
   widgetCandidateDefinitionV1,
+  translateWidgetPublicProfileCopyV1,
   type WidgetLayoutFragmentSummaryV1,
   type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
@@ -39,6 +40,8 @@ import { readWidgetGroupTitle } from './widgetGroupTitle';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
 import { resolveWidgetGroupWidthChoices, WIDGET_GROUP_ICON } from './widgetGroupMenu';
 import { buildWidgetGroupInputsCandidate } from './widgetGroupInputs';
+import { isPublicProfileWidgetSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { PublicProfileWidgetPreviewBoundary } from '@/components/settings/account/publicProfile/PublicProfileWidgetSurface';
 
 const NO_VIEWER_VALUES = Object.freeze({});
 
@@ -103,8 +106,22 @@ export function buildWidgetGroupFragmentEntry(
   const children = describeFragmentChildren(fragment, input.candidates);
   const names = children.map((child) => child.title).join(' · ');
   const setup = (): WidgetSetup => {
+    const publicArea = input.scope !== null && isPublicProfileWidgetSurfaceV1(input.scope);
+    let prepared = fragment;
+    let publicAvailable = true;
+    if (publicArea) {
+      const children = fragment.group.children.flatMap(child => {
+        const candidate = input.candidates.find(entry => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(entry), child.instance.definition));
+        const instance = candidate && translateWidgetPublicProfileCopyV1({ ...child.instance, id: 'preview' }, candidate);
+        if (!instance) { publicAvailable = false; return []; }
+        const { id: _previewId, ...copy } = instance;
+        return [{ ...child, instance: copy }];
+      });
+      const { context: _privateContext, ...group } = fragment.group;
+      prepared = { ...fragment, group: { ...group, children } };
+    }
     // The group's inputs as a widget's: the same field rows, value buttons and binder.
-    const descriptor = {
+    const descriptor = publicArea ? { inputs: { fields: [] }, inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false } } : {
       inputs: fragment.inputs,
       inputSchema: fragment.inputSchema,
     };
@@ -129,24 +146,27 @@ export function buildWidgetGroupFragmentEntry(
     );
     return {
       title: fragment.name,
-      hint: fragment.description ?? names,
+      hint: publicArea ? t('publicIdentity.editor.copyHint') : fragment.description ?? names,
       provenance: describeWidgetGroupFragmentProvenance(fragment),
       submitLabel: input.submitLabel,
       widget: { title: fragment.name, mark: WIDGET_GROUP_ICON },
       fields,
       initial: {
-        bindings: fragment.group.context ?? {},
+        bindings: publicArea ? {} : fragment.group.context ?? {},
         width: fragment.group.width,
       },
       widthChoices: widths,
-      resolve: (draft) =>
-        resolveConfiguredWidgetInputs({
+      resolve: (draft) => publicArea ? publicAvailable && Object.keys(draft.bindings).length === 0
+        ? { status: 'ready', input: {} }
+        : { status: 'denied', fields: [{ path: 'input', status: 'denied', reasonCode: 'widget_public_profile_presentation_unavailable' }] }
+        : resolveConfiguredWidgetInputs({
           instance: { v: 1, id: 'draft', definition, bindings: draft.bindings },
           descriptor,
           providedContext,
           viewerValues: NO_VIEWER_VALUES,
         }),
       optionsContext: (() => {
+        if (publicArea) return () => ({ draftInput: {} });
         const candidates = fragment.group.children.map(child => input.candidates.find(candidate =>
           isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), child.instance.definition)));
         const candidate = buildWidgetGroupInputsCandidate({ title: fragment.name, candidates });
@@ -161,15 +181,15 @@ export function buildWidgetGroupFragmentEntry(
           submit: draft => input.add(fragment, draft) }).optionsContext;
       })(),
       // The group as it will arrive: its widgets live, at the draft's inputs and width.
-      renderPreview: ({ draft }) => input.renderGroupPreview(fragment, draft),
+      renderPreview: ({ draft }) => publicArea && !publicAvailable ? null : input.renderGroupPreview(prepared, draft),
       // The group is its own frame: until its inputs are chosen, the same frame with each widget waiting.
-      renderWaitingPreview: ({ draft, waiting }) => input.renderGroupPreview(fragment, draft, waiting),
+      renderWaitingPreview: ({ draft, waiting }) => publicArea && !publicAvailable ? null : input.renderGroupPreview(prepared, draft, waiting),
       // One answer the widgets follow is worth naming ("following happier"); several are already on
       // screen above the line, and naming only the first would read as the group's one value.
       describeOutcome: ({ values }) => t('widgetFrame.groupAddsFollowing', {
         name: fragment.name, count: fragment.childCount, value: values.length === 1 ? values[0]! : null,
       }),
-      submit: (draft) => input.add(fragment, draft),
+      submit: (draft) => input.add(publicArea && publicAvailable ? prepared : fragment, draft),
     };
   };
   return {
@@ -206,7 +226,7 @@ export function WidgetGroupFragmentPreview(props: Readonly<{
   const children = fragment.group.children.map((child, index) => ({ id: String(index), child,
     candidate: props.candidates.find(entry => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(entry), child.instance.definition)) ?? null }));
   const cells = resolveWidgetGroupCells(props.scope.owner.kind, children.map(entry => ({ id: entry.id, size: entry.child.size })));
-  return (
+  const body = (
     <WidgetGroupFrame
       testID={props.testID}
       group={{ id: props.fragment.artifactId, frameStyle: fragment.group.frameStyle, dividers: fragment.group.dividers }}
@@ -239,6 +259,8 @@ export function WidgetGroupFragmentPreview(props: Readonly<{
       }}
     />
   );
+  return isPublicProfileWidgetSurfaceV1(props.scope)
+    ? <PublicProfileWidgetPreviewBoundary scope={props.scope}>{body}</PublicProfileWidgetPreviewBoundary> : body;
 }
 
 const styles = StyleSheet.create((theme) => ({

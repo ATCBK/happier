@@ -7,12 +7,14 @@ import {
   homePlanetGeometry,
   homePlanetSceneOptions,
 } from '../homePlanetPlacement';
-import { pictureBackdropProps } from '../pictureBackdrop';
+import { pictureBackdropProps, releaseLook } from '../pictureBackdrop';
 import { useAtmosphere, type AtmosphereTarget } from '../useAtmosphere';
 import { useAtmospherePictureCatalog } from '../useAtmospherePictureCatalog';
 import { atmospherePageRgb } from '../atmospherePage';
 import { effectivePictureLook } from './atmosphereEdits';
 import { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '@happier-dev/plugin-ui/presentation';
+import type { PublicProfilePictureDescriptorV1 } from '@happier-dev/protocol/account/publicProfileAtmosphere';
+import type { PictureRecord } from '../pictureStore.types';
 
 /** In a small window preview the Horizon band covers the top of the page, as it does on Home. */
 const PREVIEW_BAND_SHARE = 0.62;
@@ -27,11 +29,13 @@ const BAND_HORIZON_AT = HAPPIER_PUBLIC_PROFILE_HERO_METRICS.horizonAt;
  * draft and draws the whole box as its header band. The page, then the planet or the picture, exactly
  * as that target resolves on this device.
  */
-export const AtmospherePreview = React.memo(function AtmospherePreview(props: Readonly<{
-  target?: AtmosphereTarget;
-  /** `band`: a Horizon picture fills the whole box (a header band), not the top of a window. */
-  frame?: 'window' | 'band';
-}>) {
+export const AtmospherePreview = React.memo(function AtmospherePreview(
+  props: Readonly<{
+    target?: AtmosphereTarget;
+    /** `band`: a Horizon picture fills the whole box (a header band), not the top of a window. */
+    frame?: 'window' | 'band';
+  }>,
+) {
   const { theme } = useUnistyles();
   const mode = theme.dark ? 'dark' : 'light';
   const atmosphere = useAtmosphere(props.target ?? 'home');
@@ -84,9 +88,10 @@ export const AtmospherePreview = React.memo(function AtmospherePreview(props: Re
       const wallpaper = atmosphere.picture.layout === 'wallpaper';
       const band = {
         width: size.width,
-        height: wallpaper || bandFrame
-          ? size.height
-          : Math.round(size.height * PREVIEW_BAND_SHARE),
+        height:
+          wallpaper || bandFrame
+            ? size.height
+            : Math.round(size.height * PREVIEW_BAND_SHARE),
       };
       const backdrop = pictureBackdropProps({
         picture: atmosphere.builtinPicture,
@@ -115,6 +120,86 @@ export const AtmospherePreview = React.memo(function AtmospherePreview(props: Re
       aria-hidden
     >
       {art}
+    </View>
+  );
+});
+
+/**
+ * A public profile's reviewed picture copy (the applied edition, or the prepared copy under review)
+ * as a header band: its frozen descriptor through the same Brand paint as candidates and the cold
+ * public page, never the raw stored bytes.
+ */
+export const PublicPictureBand = React.memo(function PublicPictureBand(
+  props: Readonly<{
+    picture: Readonly<{
+      layout: 'horizon' | 'wallpaper';
+      descriptor: PublicProfilePictureDescriptorV1;
+    }>;
+    /** Local bytes as a `data:` URI; nothing while they are still being read. */
+    data: string | null;
+    /** Stable identity of these bytes, so the band's renders are cached per copy. */
+    copyId: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const [size, setSize] = React.useState<Readonly<{
+    width: number;
+    height: number;
+  }> | null>(null);
+  const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setSize((previous) =>
+      previous && previous.width === width && previous.height === height
+        ? previous
+        : { width, height },
+    );
+  }, []);
+  const pageColor = theme.colors.surface.base;
+  const page = React.useMemo(() => atmospherePageRgb(pageColor), [pageColor]);
+  const source = React.useMemo<PictureRecord | null>(
+    () =>
+      props.data
+        ? {
+            localId: `public-profile-copy:${props.copyId}`,
+            kind: 'user',
+            createdAtMs: 0,
+            size: props.data.length,
+            data: props.data,
+          }
+        : null,
+    [props.copyId, props.data],
+  );
+  const mode = theme.dark ? 'dark' : 'light';
+  const { descriptor, layout } = props.picture;
+  const backdrop = React.useMemo(
+    () =>
+      pictureBackdropProps({
+        picture: descriptor,
+        look: releaseLook(descriptor),
+        theme: mode,
+        page,
+        layout,
+        horizonAt: BAND_HORIZON_AT,
+      }),
+    [descriptor, layout, mode, page],
+  );
+  return (
+    <View
+      testID="public-picture-band"
+      style={styles.page}
+      onLayout={onLayout}
+      pointerEvents="none"
+      aria-hidden
+    >
+      {size && size.width > 0 && size.height > 0 && source ? (
+        <BackdropCanvas
+          resettle={false}
+          source={source}
+          size={size}
+          {...backdrop}
+          style={styles.band}
+        />
+      ) : null}
     </View>
   );
 });

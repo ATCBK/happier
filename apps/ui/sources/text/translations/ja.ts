@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ja as actionTitlesJa } from './actionTitles/ja';
@@ -15632,6 +15633,9 @@ settingsSession: {
           usage_constellation: "星座",
           usage_planet: "あなたの惑星",
           usage_run_length: "ターンの長さ",
+          usage_machines: "マシン",
+          usage_projects: "プロジェクト",
+          usage_atmosphere: "大気",
         },
         presets: {
           "overview": "概要",
@@ -16324,7 +16328,7 @@ settingsSession: {
             unavailableTitle: "この期間の Coach の根拠は読み込まれていません",
           },
           charts: {
-            ...usageChartInputTranslations.ja,
+            ...usageChartInputTranslations.ja, ...usageChartPlanetFamilyTranslations.ja,
             // usage-board:charts
             shippedUnavailableTitle: "マージ済みのプルリクエストを取得できません",
             collaborationNotRecorded: "この期間のエージェント間の協力はまだ記録されていません。各惑星はエージェントで、割合に応じた大きさです。",

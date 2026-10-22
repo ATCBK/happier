@@ -15,6 +15,8 @@ export type PublicProfileDraftChanges = Readonly<{ policy: boolean; layout: bool
 /** Whether an item is shared, and how many placed blocks need it to be drawn. */
 export type PublicFieldPlacement = Readonly<{ shown: boolean; blocks: number }>;
 
+export const DEFAULT_PUBLIC_PROFILE_QUERY = { period: { relative: '90days' } } as const;
+
 const DEFAULT_CANDIDATE_ATMOSPHERE: AtmospherePresentation = {
   source: 'planet', planet: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1.atmosphere.source === 'planet'
     ? DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1.atmosphere.planet : DEFAULT_HOME_ATMOSPHERE.planet,

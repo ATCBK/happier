@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { pt as actionTitlesPt } from './actionTitles/pt';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
@@ -15464,6 +15465,9 @@ settingsSession: {
           usage_constellation: "Constelação",
           usage_planet: "Seu planeta",
           usage_run_length: "Duração dos turnos",
+          usage_machines: "Máquinas",
+          usage_projects: "Projetos",
+          usage_atmosphere: "Atmosfera",
         },
         presets: {
           "overview": "Visão geral",
@@ -16154,7 +16158,7 @@ settingsSession: {
             unavailableTitle: "As evidências do Coach não foram carregadas para este período",
           },
           charts: {
-            ...usageChartInputTranslations.pt,
+            ...usageChartInputTranslations.pt, ...usageChartPlanetFamilyTranslations.pt,
             // usage-board:charts
             shippedUnavailableTitle: "Pull requests mescladas não estão disponíveis",
             collaborationNotRecorded: "A colaboração entre agentes ainda não foi registrada neste período; cada planeta é um agente, do tamanho da sua participação.",

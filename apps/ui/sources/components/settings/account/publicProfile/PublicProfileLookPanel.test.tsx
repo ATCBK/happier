@@ -11,6 +11,9 @@ import {
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { Modal } from '@/modal';
 import { pictureStore } from '@/components/atmosphere/pictureStore';
 import { pictureCreditLine } from '@/components/atmosphere/look/pictureCredit';
 import { nativePickImages } from '@/utils/files/nativePickImages';
@@ -107,6 +110,50 @@ describe('Public profile Look panel', () => {
     standardCleanup();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('admits real Look controls through Settings Off and Ask before changing the private candidate', async () => {
+    const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+      actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+    }) });
+    const initialHome = account.persistedSettings.homeAtmosphere;
+    const seen: AtmospherePresentation[] = [];
+    const alert = vi.spyOn(Modal, 'alert').mockImplementation(() => {});
+    try {
+      const screen = await renderScreen(<Draft serverId={account.scope.serverId}
+        initial={withRef({ kind: 'builtin', id: library.id })} seen={seen} />);
+      await screen.pressByTestIdAsync('look-layout:wallpaper');
+      expect(seen).toEqual([]);
+      await vi.waitFor(() => expect(alert).toHaveBeenCalled());
+
+      await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+      })); });
+      await screen.pressByTestIdAsync('look-source:planet');
+      await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+      expect(seen).toEqual([]);
+      await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+      expect(seen).toEqual([]);
+
+      await screen.pressByTestIdAsync('look-layout:wallpaper');
+      await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(2));
+      expect(seen).toEqual([]);
+      await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[1]!.id, 'approve');
+      await vi.waitFor(() => expect(seen.at(-1)?.picture.layout).toBe('wallpaper'));
+      expect(seen.at(-1)?.source).toBe('picture');
+
+      await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+      })); });
+      await screen.pressByTestIdAsync('look-source:planet');
+      await vi.waitFor(() => expect(seen.at(-1)?.source).toBe('planet'));
+      expect(seen.at(-1)?.picture.layout).toBe('wallpaper');
+      expect(account.persistedSettings.homeAtmosphere).toEqual(initialHome);
+      expect(account.settingsWrites).toEqual([]);
+      await screen.unmount();
+    } finally {
+      await account.dispose();
+    }
   });
 
   it('edits only the profile candidate with Home Look controls and no global glass rows', async () => {

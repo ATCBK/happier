@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { HappierDataMetric, HappierDataRows } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataMetric, UsageSourceCoverageBody } from '@happier-dev/plugin-ui/presentation';
 import type { UsageAnalyticsCoverage } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -31,18 +31,13 @@ export function UsageSourceCoverageWidget(props: UsageBodyProps) {
   const gaps = readUsageCoverageGaps(props.slice, ['accounting']);
   const description = usageCoverageDescription(props.slice, ['accounting']);
   const failed = gaps.some(gap => gap.status === 'error');
-  return <View testID={`${props.testID}.facts`}>
-    {rows.length ? <>
-      <HappierDataRows theme={theme} testID={`${props.testID}.rows`} label={t('usage.widgets.usage_source_coverage')}
-        columns={[{ label: t('usage.widgets.usage_sources') }, { label: t('usage.widgets.usage_source_coverage') }]}
-        rows={led.rows.map(row => [row.count > 1 ? `${row.title} ×${row.count}` : row.title, row.label])} />
-      <UsageShowAllRows label={t('usage.widgets.usage_source_coverage')} testID={`${props.testID}.showAll`} total={rows.length}
-        hidden={led.hidden} expanded={expanded} onToggle={() => setExpanded(value => !value)} />
-    </>
-      : <UsageBodyInsufficient testID={`${props.testID}.unknown`} replacesContent={false} title={t('usage.board.sources.coverageUnknown')} />}
-    {description ? <SurfaceFreshnessLine testID={`${props.testID}.detail`} reason={description} tone={failed ? 'warning' : 'neutral'}
-      {...(failed ? { action: { label: t('common.retry'), onPress: props.model.refresh } } : {})} /> : null}
-  </View>;
+  return <UsageSourceCoverageBody theme={theme} testID={props.testID} label={t('usage.widgets.usage_source_coverage')}
+    columns={[t('usage.widgets.usage_sources'), t('usage.widgets.usage_source_coverage')]} rows={led.rows}
+    showAll={<UsageShowAllRows label={t('usage.widgets.usage_source_coverage')} testID={`${props.testID}.showAll`} total={rows.length}
+      hidden={led.hidden} expanded={expanded} onToggle={() => setExpanded(value => !value)} />}
+    empty={<UsageBodyInsufficient testID={`${props.testID}.unknown`} replacesContent={false} title={t('usage.board.sources.coverageUnknown')} />}
+    detail={description ? <SurfaceFreshnessLine testID={`${props.testID}.detail`} reason={description} tone={failed ? 'warning' : 'neutral'}
+      {...(failed ? { action: { label: t('common.retry'), onPress: props.model.refresh } } : {})} /> : null} />;
 }
 
 /** One capture is read per machine, so a fleet repeats the same source and status: said once with its count. */

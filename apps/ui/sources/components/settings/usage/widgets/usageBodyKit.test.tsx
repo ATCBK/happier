@@ -131,6 +131,14 @@ describe('shared Usage identity and dependent coverage', () => {
         const phone = await at(320);
         expect(phone.findByTestId('rhythm.punchcard')).toBeNull();
         expect(phone.findByTestId('rhythm.hours')).not.toBeNull();
+        const unmeasured = await renderScreen(<UsageRhythmWidget query={query} slice={slice} model={model}
+            serverId="home" id="usage_rhythm" testID="rhythm" />);
+        expect(unmeasured.findByTestId('rhythm.punchcard')).not.toBeNull();
+        act(() => unmeasured.findHostByTestId('rhythm.rhythm')!.props.onLayout({
+            nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 200 } },
+        }));
+        expect(unmeasured.findByTestId('rhythm.punchcard')).toBeNull();
+        expect(unmeasured.findByTestId('rhythm.hours')).not.toBeNull();
     });
     it('does not invent a Legacy Agent for scalar reports with unknown attribution', () => {
         expect(usageAgentTitle('legacy')).toBe(t('usage.board.page.unattributed'));

@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHant as actionTitlesZhHant } from './actionTitles/zh-Hant';
@@ -12360,7 +12361,7 @@ settingsSession: {
     },
 
     usage: {
-        board: { charts: usageChartInputTranslations['zh-Hant'], recap: {
+        board: { charts: { ...usageChartInputTranslations['zh-Hant'], ...usageChartPlanetFamilyTranslations['zh-Hant'] }, recap: {
             deliveryUnconfirmed: "系統分享面板已開啟，但無法確認是否完成。重試前請檢查所選應用程式。",
             statMergedPrs: "已合併 PR",
         }, sources: {
@@ -12476,6 +12477,9 @@ settingsSession: {
           usage_sources: "來源",
           usage_source_coverage: "涵蓋情況",
           usage_unpriced: "未定價",
+          usage_machines: "機器",
+          usage_projects: "專案",
+          usage_atmosphere: "大氣層",
         },
         presets: {
           "overview": "概覽",

@@ -11,6 +11,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { runCopyWidgetGroupCommandV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
 import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 
 /** Where a group or widget can be copied: the Account's Home, its WorkBoards when offered, and each Project, never where it already is. */
 export type WidgetGroupCopyDestination = Readonly<{ key: string; label: string; surface: WidgetSurfaceRefV1; area?: WidgetProjectAreaV1 }>;
@@ -20,6 +21,7 @@ export function resolveWidgetGroupCopyDestinations(input: Readonly<{
     projects: readonly Readonly<{ projectId: string; label: string }>[];
     /** A single widget can also be placed on a WorkBoard; a group's copy cannot. */
     boards?: readonly Readonly<{ boardId: string; label: string }>[];
+    publicProfileEnabled?: boolean;
 }>): WidgetGroupCopyDestination[] {
     const account = { serverId: input.current.serverId, accountId: input.current.accountId };
     const owner = input.current.owner;
@@ -28,6 +30,9 @@ export function resolveWidgetGroupCopyDestinations(input: Readonly<{
         ...(input.boards ?? []).filter(board => !(owner.kind === 'workBoard' && owner.boardId === board.boardId)).map((board): WidgetGroupCopyDestination => ({
             key: `board:${board.boardId}`, label: board.label, surface: { ...account, owner: { kind: 'workBoard', boardId: board.boardId } },
         })),
+        ...(input.publicProfileEnabled && !(owner.kind === 'corePage' && owner.pageId === 'public-profile' && owner.area === 'main')
+            ? [{ key: 'public-profile', label: t('publicIdentity.profile.title'), surface: { ...account,
+                owner: { kind: 'corePage' as const, pageId: 'public-profile', area: 'main', layoutId: 'minimal' } } }] : []),
         ...input.projects.filter(project => !(owner.kind === 'project' && owner.projectId === project.projectId)).map((project): WidgetGroupCopyDestination => ({
             key: `project:${project.projectId}`, label: project.label, area: 'main',
             surface: { ...account, owner: { kind: 'project', projectId: project.projectId } },
@@ -115,7 +120,9 @@ export function WidgetGroupCopyChooser(props: Readonly<{
     testID: string;
 }>) {
     const projects = useCopyProjects(props.current.serverId);
-    const destinations = React.useMemo(() => resolveWidgetGroupCopyDestinations({ current: props.current, projects }), [projects, props.current]);
+    const publicProfile = useFeatureDecision('account.publicProfiles', { scopeKind: 'spawn', serverId: props.current.serverId });
+    const publicProfileEnabled = publicProfile?.state === 'enabled';
+    const destinations = React.useMemo(() => resolveWidgetGroupCopyDestinations({ current: props.current, projects, publicProfileEnabled }), [projects, props.current, publicProfileEnabled]);
     const { group, name, onClose } = props;
     const copy = React.useCallback((destination: WidgetGroupCopyDestination) => {
         onClose();

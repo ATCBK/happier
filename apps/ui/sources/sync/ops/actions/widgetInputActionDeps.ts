@@ -28,6 +28,7 @@ import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/s
 import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 import { readInputTypeOptionsProducer } from '@/sync/domains/plugins/ui/inputTypeOptionsProducer';
+import { isPublicProfileWidgetSurfaceV1 } from '@happier-dev/protocol/widgets';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -156,6 +157,17 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                 : reference.kind === 'artifact' ? await deps.widgetDefinitionArtifacts?.get(reference.artifactId, request.signal) : null;
             account.assertCurrent();
             if ((reference.kind === 'artifact' || reference.kind === 'inline') && !authored) return null;
+            if (isPublicProfileWidgetSurfaceV1(request.ref.surface)) {
+                const definition = authored?.body.kind === 'installed' ? authored.body : reference;
+                const candidates = definition.kind === 'installed'
+                    ? await readWidgetActionCandidatesV1(request.ref.surface, account, request.signal, undefined, deps) : [];
+                if ('ok' in candidates) return null;
+                const installed = candidates.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
+                const descriptor = authored && (reference.kind === 'artifact' || reference.kind === 'inline')
+                    ? describeAuthoredWidgetDefinitionV1(authored, reference, installed) : installed;
+                if (descriptor) descriptors.set(request, descriptor);
+                return descriptor ?? null;
+            }
             if (authored?.body.kind === 'builtin' && (reference.kind === 'artifact' || reference.kind === 'inline')) {
                 const native = readWidgetDescriptor(null, authored.body);
                 if (!native) return null;

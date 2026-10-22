@@ -1,0 +1,79 @@
+import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { compileWidgetAreaPublicProfileLayoutV1, flattenWidgetLayoutWidgetsV1,
+  WidgetDefinitionActionOutputSchemasV1, type BuiltinUsagePublicPresentationV1, type PublicProfileLayoutV1 } from '@happier-dev/protocol/widgets';
+import { createPublicProfileWidgetAreaPresetsV1, type PublicProfileLayoutPresetIdV1 } from '@happier-dev/protocol/widgets/publicProfileWidgetPresetsV1';
+
+import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useAppShellPluginUiDeclarationSources } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useCorePageWidgetAreaBinding } from '@/components/widgets/area/useCorePageWidgetAreaBinding';
+import { useWidgetAreaLayout, type WidgetAreaLayout, type WidgetAreaPort } from '@/components/widgets/area/useWidgetAreaLayout';
+import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
+import { storage } from '@/sync/domains/state/storage';
+
+const EMPTY_CONTEXT: WidgetSurfaceContext = Object.freeze({});
+const UNAVAILABLE_PORT: WidgetAreaPort = { execute: async () => ({ ok: false,
+  errorCode: 'widget_area_scope_retired', error: 'widget_area_scope_retired' }) };
+
+export type PublicProfileWidgetArea = Readonly<{
+  binding: ReturnType<typeof useCorePageWidgetAreaBinding>;
+  area: WidgetAreaLayout<WidgetSurfaceContext>;
+  candidate: Readonly<{ layout: PublicProfileLayoutV1; isCurrent(): boolean }> | null;
+  status: 'ready' | 'unavailable' | 'loading';
+}>;
+
+/** Private placement remains an Account Artifact; this is only its inert reviewed-copy adapter. */
+export function usePublicProfileWidgetArea(serverId: string,
+  execution: Pick<ReturnType<typeof useMountedActionExecution>, 'executeValue' | 'isCurrent'>,
+  title?: (presentation: BuiltinUsagePublicPresentationV1) => string | undefined,
+  /** The page's own context (its public period), so placed widgets read what the page covers. */
+  context: WidgetSurfaceContext = EMPTY_CONTEXT,
+  names?: Readonly<Record<PublicProfileLayoutPresetIdV1, string>>): PublicProfileWidgetArea {
+  const presets = React.useMemo(() => createPublicProfileWidgetAreaPresetsV1({ title, ...(names ? { names } : {}) }), [title, names]);
+  const binding = useCorePageWidgetAreaBinding({ serverId, pageId: 'public-profile', area: 'main', presets, context });
+  const area = useWidgetAreaLayout(binding.port ?? UNAVAILABLE_PORT, context);
+  const declarations = useAppShellPluginUiDeclarationSources();
+  const state = area.state;
+  const artifactIds = React.useMemo(() => state.status === 'ready'
+    ? [...new Set(flattenWidgetLayoutWidgetsV1(state.items).flatMap(item => item.instance.definition.kind === 'artifact'
+      ? [item.instance.definition.artifactId] : []))] : [], [state.status === 'ready' ? state.items : null]);
+  // Definition edits invalidate only copies using those definitions, never every Account Artifact.
+  const artifacts = storage(useShallow(store => artifactIds.map(id => store.artifacts[id] ?? null)));
+  const source = React.useMemo(() => ({ state, surface: binding.surface, declarations, artifacts }), [state, binding.surface, declarations, artifacts]);
+  const liveSource = React.useRef(source);
+  liveSource.current = source;
+  const execute = React.useRef(execution);
+  execute.current = execution;
+  const [compiled, setCompiled] = React.useState<Readonly<{ source: typeof source; layout: PublicProfileLayoutV1 }> | null>(null);
+  const [failure, setFailure] = React.useState<typeof source | null>(null);
+
+  const isCurrent = React.useCallback(() => liveSource.current === source && execute.current.isCurrent()
+    && state.status === 'ready' && state.isCurrent() && !state.isReadPending() && !state.readFailure
+    && binding.surface !== null && sameStrictJsonValue(state.surface.owner, binding.surface.owner), [source, state, binding.surface]);
+
+  React.useEffect(() => {
+    if (state.status !== 'ready' || !isCurrent()) return;
+    let active = true;
+    const controller = new AbortController();
+    void compileWidgetAreaPublicProfileLayoutV1({ v: 1, surface: state.surface, items: state.items }, {
+      resolveDefinition: async reference => {
+        if (!isCurrent()) return null;
+        const result = await execute.current.executeValue('widgets.definition.get', {
+          account: { serverId: state.surface.serverId, accountId: state.surface.accountId }, artifactId: reference.artifactId,
+        }, { signal: controller.signal });
+        return WidgetDefinitionActionOutputSchemasV1['widgets.definition.get'].parse(result).definition;
+      },
+      resolveInstalledView: surface => declarations.accountLifetime?.isCurrent()
+        ? readWidgetDescriptor(declarations.projection, surface) : null,
+    }).then(layout => {
+      if (active && isCurrent()) setCompiled({ source, layout });
+    }).catch(() => { if (active && isCurrent()) setFailure(source); });
+    return () => { active = false; controller.abort(); };
+  }, [source, isCurrent, state, declarations]);
+
+  const candidate = compiled?.source === source && isCurrent() ? { layout: compiled.layout, isCurrent } : null;
+  const unavailable = state.status === 'unavailable' || state.status === 'ready' && Boolean(state.readFailure) || failure === source;
+  return { binding, area, candidate, status: candidate ? 'ready' as const : unavailable ? 'unavailable' as const : 'loading' as const };
+}

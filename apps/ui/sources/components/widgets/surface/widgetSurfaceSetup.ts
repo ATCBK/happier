@@ -17,6 +17,7 @@ import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { normalizeWidgetSizeForSurfaceV1, resolveWidgetSizeChoicesV1 } from '@happier-dev/protocol/widgets';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { isPublicProfileWidgetSurfaceV1, projectWidgetPublicProfileDescriptorV1, translateWidgetPublicProfileCopyV1, resolveWidgetPublicProfileInputsV1 } from '@happier-dev/protocol/widgets';
 
 /**
  * One named slot a page or area fills (lab `dashboards` PG, P1): "This page" (a plugin page's
@@ -201,11 +202,18 @@ export function buildWidgetCandidateSetup(input: Readonly<{
     /** The qualified surface: option reads are admitted for this widget on this surface only. */
     scope?: WidgetSurfaceRefV1 | null;
 }>): WidgetSetup {
-    const { candidate, mode } = input;
-    const fields = widgetSetupFieldsForCandidate(candidate, input.context, input.audience);
+    const publicArea = input.scope && isPublicProfileWidgetSurfaceV1(input.scope);
+    const publicCandidate = publicArea ? projectWidgetPublicProfileDescriptorV1(widgetDefinitionOfCandidate(input.candidate), input.candidate) : null;
+    const candidate = publicCandidate ?? input.candidate;
+    const mode = input.mode;
+    const fields = publicArea && !publicCandidate ? [] : widgetSetupFieldsForCandidate(candidate, publicArea ? {} : input.context, input.audience);
+    const copied = publicArea && mode.kind === 'add' && mode.copiedInput ? translateWidgetPublicProfileCopyV1({ v: 1, id: 'draft',
+        definition: widgetDefinitionOfCandidate(candidate), bindings: Object.fromEntries(Object.entries(mode.copiedInput).map(([path, value]) => [path, { kind: 'value', value }])) }, candidate) : null;
+    const copiedInput = copied ? Object.fromEntries(Object.entries(copied.bindings).flatMap(([path, binding]) => binding.kind === 'value' ? [[path, binding.value]] : []))
+        : mode.kind === 'add' ? mode.copiedInput : undefined;
     const proposed: WidgetSetupDraft = mode.kind === 'edit'
         ? { bindings: proposeWidgetInputDefaultBindingsV1(candidate, mode.instance.bindings) }
-        : proposeWidgetCandidateSetupDraft(candidate, fields, mode.copiedInput);
+        : proposeWidgetCandidateSetupDraft(candidate, fields, copiedInput);
     // Input editing has its own mutation; size editing stays at the layout Action.
     const choices = mode.kind === 'add' && input.scope
         ? resolveWidgetSizeChoicesV1(input.scope.owner.kind, candidate.sizeDeclaration) : null;
@@ -215,7 +223,8 @@ export function buildWidgetCandidateSetup(input: Readonly<{
     const providedContext = widgetProvidedContext(input.context);
     return {
         title: mode.kind === 'edit' ? t('widgetAdd.editTitle', { widget: candidate.title }) : candidate.title,
-        ...(mode.kind === 'edit' ? { hint: t('widgetAdd.editHint') } : candidate.description ? { hint: candidate.description } : {}),
+        ...(publicArea ? { hint: t('publicIdentity.editor.copyHint') }
+            : mode.kind === 'edit' ? { hint: t('widgetAdd.editHint') } : candidate.description ? { hint: candidate.description } : {}),
         ...(mode.kind === 'add' ? { provenance: describeWidgetCandidateProvenance(candidate) } : {}),
         submitLabel: mode.kind === 'edit' ? t('common.save') : mode.submitLabel,
         widget: { title: (mode.kind === 'edit' ? mode.instance.displayName : undefined) ?? candidate.title, mark: candidate.icon,
@@ -226,7 +235,7 @@ export function buildWidgetCandidateSetup(input: Readonly<{
             ...(input.context.session ? [WIDGET_SESSION_CONTEXT_SLOT] : [])],
         initial,
         ...(choices?.sizes.length && input.scope ? { sizeChoices: { surface: input.scope.owner.kind, sizes: choices.sizes } } : {}),
-        resolve: (draft) => resolveConfiguredWidgetInputs({
+        resolve: (draft) => publicArea ? resolveWidgetPublicProfileInputsV1({ v: 1, id: instanceId, definition, bindings: draft.bindings }, input.candidate) : resolveConfiguredWidgetInputs({
             instance: { v: 1, id: instanceId, definition, bindings: draft.bindings },
             descriptor: candidate,
             providedContext,

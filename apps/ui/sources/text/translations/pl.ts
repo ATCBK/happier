@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { pl as actionTitlesPl } from './actionTitles/pl';
@@ -15192,8 +15193,11 @@ settingsSession: {
       usage_constellation: "Konstelacja",
       usage_planet: "Twoja planeta",
       usage_run_length: "Długość tur",
+      usage_machines: "Maszyny",
+      usage_projects: "Projekty",
+      usage_atmosphere: "Atmosfera",
     },
-    board: { charts: { ...usageChartInputTranslations.pl,
+    board: { charts: { ...usageChartInputTranslations.pl, ...usageChartPlanetFamilyTranslations.pl,
       shippedUnavailableTitle: "Scalone pull requesty są niedostępne",
       collaborationNotRecorded: "Nie zapisano jeszcze współpracy agentów w tym okresie; każda planeta to agent, którego wielkość odpowiada jego udziałowi.",
       coveragePartial: "Częściowe · niektóre źródła są niepełne",

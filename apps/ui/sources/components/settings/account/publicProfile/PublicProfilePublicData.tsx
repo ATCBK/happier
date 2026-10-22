@@ -94,11 +94,14 @@ export function PublicProfilePublicData(
     > | null;
     onToggle: (field: PublicProfileField, shown: boolean) => void;
     disabled?: boolean;
+    /** The latest published consent change, beside the switches that made it. */
+    status?: React.ReactNode;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
   return (
     <>
+      {props.status}
       {SECTIONS.map(([section, fields]) => (
         <ItemGroup
           key={section}

@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { de as actionTitlesDe } from './actionTitles/de';
@@ -15483,6 +15484,9 @@ settingsSession: {
           usage_constellation: "Sternbild",
           usage_planet: "Dein Planet",
           usage_run_length: "Laufzeit",
+          usage_machines: "Maschinen",
+          usage_projects: "Projekte",
+          usage_atmosphere: "Atmosphäre",
         },
         presets: {
           "overview": "Übersicht",
@@ -16173,7 +16177,7 @@ settingsSession: {
             unavailableTitle: "Coach-Belege sind für diesen Zeitraum nicht geladen",
           },
           charts: {
-            ...usageChartInputTranslations.de,
+            ...usageChartInputTranslations.de, ...usageChartPlanetFamilyTranslations.de,
             // usage-board:charts
             shippedUnavailableTitle: "Gemergte Pull Requests sind nicht verfügbar",
             collaborationNotRecorded: "Zusammenarbeit zwischen Agents ist für diesen Zeitraum noch nicht erfasst; jeder Planet ist ein Agent, so groß wie sein Anteil.",

@@ -16,7 +16,10 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
-export type PublicProfileEditorView = Omit<PublicProfileLocalPreviewViewV1, 'appearance'>;
+export type PublicProfileEditorView = Omit<
+  PublicProfileLocalPreviewViewV1,
+  'appearance'
+>;
 export type PublicProfileEditorProps = Readonly<{
   status: 'draft' | 'published' | 'paused';
   mode: 'edit' | 'preview';
@@ -34,6 +37,12 @@ export type PublicProfileEditorProps = Readonly<{
   singleColumn?: boolean;
   notice: string | null;
   submitting: boolean;
+  /** A pending or unavailable private-area copy cannot Apply an older local layout. */
+  canSubmit?: boolean;
+  /** The latest published consent change while its panel is closed. */
+  consentStatus?: React.ReactNode;
+  /** Edit arranges the owner's widget area in place of the projected blocks; Preview is the visitor page. */
+  renderEditBlocks?: () => React.ReactNode;
   onSubmit: () => void;
   /** Look and Public data, each anchored to its own control. */
   renderTools: () => React.ReactNode;
@@ -89,7 +98,11 @@ export function PublicProfileEditor(
                 ? t('publicIdentity.editor.apply')
                 : t('publicIdentity.editor.publish')
             }
-            disabled={props.submitting || (published && props.changes === 0)}
+            disabled={
+              props.submitting ||
+              props.canSubmit === false ||
+              (published && props.changes === 0)
+            }
             loading={props.submitting}
             onPress={props.onSubmit}
           />
@@ -117,6 +130,7 @@ export function PublicProfileEditor(
           title={props.notice}
         />
       ) : null}
+      {props.consentStatus}
       {view ? (
         <CorePluginUiPresentationScope>
           <HappierPublicProfile
@@ -130,11 +144,28 @@ export function PublicProfileEditor(
                   owner: {
                     hiddenBlockIds: props.hiddenBlockIds,
                     onlyYou: t('publicIdentity.editor.onlyYou'),
+                    ...(props.renderEditBlocks
+                      ? { renderBlocks: props.renderEditBlocks }
+                      : {}),
                   },
                 }
               : {})}
           />
         </CorePluginUiPresentationScope>
+      ) : props.mode === 'edit' && props.renderEditBlocks ? (
+        // Arranging blocks never waits for the page's preview; the notice above says why it is missing.
+        <>
+          {props.notice ? null : (
+            <SurfaceStateCard
+              testID="public-profile-editor-preparing"
+              kind="loading"
+              layout="inline"
+              size="line"
+              title={t('publicIdentity.editor.preparing')}
+            />
+          )}
+          {props.renderEditBlocks()}
+        </>
       ) : (
         <SurfaceStateCard
           testID="public-profile-editor-preparing"

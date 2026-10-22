@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { UsageAccountingMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
+import { UsageRecapBody } from '@happier-dev/plugin-ui/presentation';
 import { getUsageQueryKey } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageExportFieldSchema, UsageFileResultSchema, type UsageExportInput } from '@happier-dev/protocol/usage/usageExport';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -20,11 +21,12 @@ import {
   UsageBodyNoUsage,
   usagePeriodPhrase,
   useUsageAnalyticsView,
+  useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
 import { RecapStorySurface } from './recap/RecapStorySurface';
 import { UsageRecapComposer } from './recap/UsageRecapComposer';
-import { UsageRecapHighlights } from './recap/UsageRecapHighlights';
+import { formatIdentifierLabel } from '@/utils/format/usageNumbers';
 import { UsageWorkAutopsy } from './UsageWorkAutopsy';
 import { UsageRecordsStyleBody } from './UsageChartStyleBodies';
 
@@ -40,6 +42,8 @@ export function UsageRecapWidget(props: UsageBodyProps) {
  * exports stay here as quiet actions on the same facts.
  */
 function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
+  const theme = useUsagePluginTheme();
+  const { theme: appTheme } = useUnistyles();
   const shownQuery = props.slice.shownQuery;
   const shownKey = getUsageQueryKey(shownQuery);
   const delivery = React.useRef<AbortController | null>(null);
@@ -100,10 +104,10 @@ function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
   const sessionId =
     typeof shownQuery.session === 'string' ? shownQuery.session
       : shownQuery.session?.length === 1 ? shownQuery.session[0] : undefined;
-  const hasRecap = React.useMemo(
-    () =>
-      viewModel !== null &&
-      buildUsageRecapCardModels({ viewModel, filters, query: shownQuery }).length > 0,
+  const highlights = React.useMemo(
+    () => viewModel === null ? [] : buildUsageRecapCardModels({ viewModel, filters, query: shownQuery })
+      .map(highlight => ({ id: highlight.id, testID: highlight.testID, label: highlight.label,
+        value: formatIdentifierLabel(highlight.value), detail: highlight.subtitle })),
     [viewModel, filters, shownQuery],
   );
   useWidgetFrameBodyCaption(
@@ -157,33 +161,26 @@ function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
   }, [viewModel, filters, shownQuery, sessionId, openComposer]);
   if (!viewModel)
     return (
-      <View style={styles.root}>
-        <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />
-        <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
-      </View>
+      <UsageRecapBody theme={theme} model={{ highlights }} testID={props.testID}
+        state={<UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />}
+        autopsy={<UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />} />
     );
-  if (!hasRecap)
+  if (highlights.length === 0)
     return (
-      <View style={styles.root}>
-        <UsageBodyInsufficient
+      <UsageRecapBody theme={theme} model={{ highlights }} testID={props.testID}
+        state={<UsageBodyInsufficient
           testID={`${props.testID}.empty`}
           replacesContent={false}
           title={t('usage.board.recap.noRecapTitle')}
           reason={t('usage.board.recap.noRecapReason')}
-        />
-        <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
-      </View>
+        />}
+        autopsy={<UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />} />
     );
   return (
-    <View style={styles.root}>
-      <UsageRecapHighlights
-        viewModel={viewModel}
-        filters={filters}
-        query={shownQuery}
-        testID={`${props.testID}.highlights`}
-      />
-      <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
-      <View style={styles.actions}>
+    <UsageRecapBody theme={theme} model={{ highlights }} testID={props.testID}
+      highlightBorderColor={appTheme.colors.border.subtle} highlightSpacing={appTheme.space}
+      autopsy={<UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />}
+      actions={<>
         {/* The one primary: the private card is what this widget makes (lab urecap/s2card). */}
         <RoundButton
           size="small"
@@ -198,7 +195,7 @@ function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
           onPress={playStory}
           testID={`${props.testID}.play`}
         />
-        <View style={styles.grow} />
+        <View style={{ flexGrow: 1 }} />
         <RoundButton
           size="small"
           display="inverted"
@@ -226,24 +223,8 @@ function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
           disabled={exporting !== null}
           testID={`${props.testID}.csv`}
         />
-      </View>
-      {exportFailed ? <SurfaceFreshnessLine testID={`${props.testID}.exportNotice`} tone="warning"
-        reason={t('usage.board.recap.exportFailed')} /> : null}
-    </View>
+      </>}
+      notice={exportFailed ? <SurfaceFreshnessLine testID={`${props.testID}.exportNotice`} tone="warning"
+        reason={t('usage.board.recap.exportFailed')} /> : null} />
   );
 }
-
-const styles = StyleSheet.create(() => ({
-  root: {
-    gap: 16,
-  },
-  actions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
-  },
-  grow: {
-    flexGrow: 1,
-  },
-}));

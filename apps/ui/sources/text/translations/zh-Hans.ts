@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHans as actionTitlesZhHans } from './actionTitles/zh-Hans';
@@ -14990,6 +14991,9 @@ settingsSession: {
           usage_constellation: "星座",
           usage_planet: "你的星球",
           usage_run_length: "回合时长",
+          usage_machines: "机器",
+          usage_projects: "项目",
+          usage_atmosphere: "大气层",
         },
         presets: {
           "overview": "概览",
@@ -15682,7 +15686,7 @@ settingsSession: {
             unavailableTitle: "本期的 Coach 证据尚未加载",
           },
           charts: {
-            ...usageChartInputTranslations['zh-Hans'],
+            ...usageChartInputTranslations['zh-Hans'], ...usageChartPlanetFamilyTranslations['zh-Hans'],
             // usage-board:charts
             shippedUnavailableTitle: "已合并的拉取请求不可用",
             collaborationNotRecorded: "此期间尚未记录智能体之间的协作；每颗星球是一个智能体，大小对应其占比。",

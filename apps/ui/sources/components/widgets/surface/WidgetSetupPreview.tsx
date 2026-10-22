@@ -10,6 +10,8 @@ import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 import { WidgetSurface } from './WidgetSurface';
 import { widgetDefinitionOfCandidate } from './widgetSurfaceSetup';
+import { isPublicProfileWidgetSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { PublicProfileWidgetPreviewBoundary } from '@/components/settings/account/publicProfile/PublicProfileWidgetSurface';
 
 /**
  * The Set up / Edit inputs step's live preview: the same instance body every surface mounts, at the
@@ -32,7 +34,7 @@ export function WidgetSetupPreview(props: Readonly<{
         definition: widgetDefinitionOfCandidate(candidate),
         bindings: draft.bindings,
     }), [candidate, draft.bindings]);
-    return (
+    const body = (
         <UsageWidgetBatchBoundary><WidgetSurface
             scope={props.scope}
             providedContext={props.providedContext}
@@ -45,4 +47,5 @@ export function WidgetSetupPreview(props: Readonly<{
             testID={props.testID}
         /></UsageWidgetBatchBoundary>
     );
+    return isPublicProfileWidgetSurfaceV1(props.scope) ? <PublicProfileWidgetPreviewBoundary scope={props.scope}>{body}</PublicProfileWidgetPreviewBoundary> : body;
 }

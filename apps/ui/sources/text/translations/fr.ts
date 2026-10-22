@@ -1,5 +1,6 @@
 import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { usageChartInputTranslations } from './usageChartInputTranslations.shared';
+import { usageChartPlanetFamilyTranslations } from './usageChartPlanetFamilyTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { fr as actionTitlesFr } from './actionTitles/fr';
@@ -15229,6 +15230,9 @@ settingsSession: {
           usage_constellation: "Constellation",
           usage_planet: "Ta planète",
           usage_run_length: "Durée des tours",
+          usage_machines: "Machines",
+          usage_projects: "Projets",
+          usage_atmosphere: "Atmosphère",
         },
         presets: {
           "overview": "Vue d’ensemble",
@@ -15919,7 +15923,7 @@ settingsSession: {
             unavailableTitle: "Les preuves du Coach ne sont pas chargées pour cette période",
           },
           charts: {
-            ...usageChartInputTranslations.fr,
+            ...usageChartInputTranslations.fr, ...usageChartPlanetFamilyTranslations.fr,
             // usage-board:charts
             shippedUnavailableTitle: "Les pull requests fusionnées ne sont pas disponibles",
             collaborationNotRecorded: "La collaboration entre agents n'est pas encore enregistrée pour cette période ; chaque planète est un agent, à la taille de sa part.",

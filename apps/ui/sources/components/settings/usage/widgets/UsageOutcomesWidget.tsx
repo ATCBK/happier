@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { OutcomeFunnel, RankedRows } from '@happier-dev/plugin-ui/presentation';
+import { UsageOutcomesBody, type UsageOutcomesModel } from '@happier-dev/plugin-ui/presentation';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCountLong } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
@@ -107,16 +107,13 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
   const accent = usageSeriesColor(appTheme, 0);
   const byKey = new Map(summary.outcomes.map((row) => [row.key, row]));
   const moneyGroups = partitionUsageWorkMoneyRows(summary.outcomes, props.query.metric);
-  return (
-    <View style={styles.body} testID={`${props.testID}.outcomes`}>
-      <OutcomeFunnel
-        theme={theme}
-        label={t('usage.board.work.funnelLabel')}
-        size="tile"
-        testID={`${props.testID}.funnel`}
-        valueFormatter={formatTokenCountLong}
-        total={funnel.sessions}
-        steps={[
+  const model: UsageOutcomesModel = { kind: 'work',
+      funnel: {
+        label: t('usage.board.work.funnelLabel'),
+        testID: `${props.testID}.funnel`,
+        valueFormatter: formatTokenCountLong,
+        total: funnel.sessions,
+        steps: [
           {
             id: 'sessions',
             label: t('usage.board.work.funnelSessions'),
@@ -141,28 +138,16 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
             value: funnel.merged,
             color: accent,
           },
-        ]}
-      />
-      {summary.outcomes.length === 0 ? (
-        <UsageBodyInsufficient
-          testID={`${props.testID}.noPrs`}
-          replacesContent={false}
-          title={t('usage.board.work.noPrsTitle')}
-          reason={t('usage.board.work.noPrsReason')}
-        />
-      ) : (
-        <View style={styles.section}>
-          <UsageWorkSectionTitle>{t('usage.board.work.prLabel')}</UsageWorkSectionTitle>
-          {moneyGroups.map(group => <RankedRows
-            key={group.key}
-            theme={theme}
-            label={t('usage.board.work.prLabel')}
-            size="tile"
-            valueFormatter={value => format(value, group.moneyBasis)}
-            basis={basisLabel(group.moneyBasis)}
-            unknownLabel={format(null)}
-            testID={`${props.testID}.prs`}
-            leads={Object.fromEntries(
+        ],
+      },
+      groups: moneyGroups.map((group): Extract<UsageOutcomesModel, { kind: 'work' }>['groups'][number] => ({
+            id: group.key,
+            label: t('usage.board.work.prLabel'),
+            valueFormatter: value => format(value, group.moneyBasis),
+            basis: basisLabel(group.moneyBasis),
+            unknownLabel: format(null),
+            testID: `${props.testID}.prs`,
+            leads: Object.fromEntries(
               group.rows.map((row): [string, React.ReactNode] => [
                 row.key,
                 <UsageWorkRowLead
@@ -171,8 +156,8 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
                   color={row.outcome.pullRequest.state === 'merged' ? accent : undefined}
                 />,
               ]),
-            )}
-            trails={Object.fromEntries(
+            ),
+            trails: Object.fromEntries(
               group.rows.map((row): [string, React.ReactNode] => [
                 row.key,
                 <UsageWorkMarks
@@ -182,8 +167,8 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
                   testID={props.testID}
                 />,
               ]),
-            )}
-            rows={group.rows.map((row) => {
+            ),
+            rows: group.rows.map((row) => {
               const pullRequest = row.outcome.pullRequest;
               return {
                 id: row.key,
@@ -200,8 +185,8 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
                   .filter(Boolean)
                   .join(' · '),
               };
-            })}
-            renderRow={(ranked, visual) => {
+            }),
+            renderRow: (ranked, visual) => {
               const row = byKey.get(ranked.id)!;
               const testID = `${props.testID}.pr.${row.key}`;
               return (
@@ -226,26 +211,21 @@ function UsageOutcomesWidgetOriginal(props: UsageBodyProps) {
                   {visual}
                 </UsageWorkDisclosure>
               );
-            }}
-          />)}
-        </View>
-      )}
-      <UsageCoverageLine
+            },
+          })),
+  };
+  return <UsageOutcomesBody theme={theme} model={model} sectionGap={appTheme.space.s10} testID={`${props.testID}.outcomes`}
+      sectionTitle={<UsageWorkSectionTitle>{t('usage.board.work.prLabel')}</UsageWorkSectionTitle>}
+      empty={<UsageBodyInsufficient testID={`${props.testID}.noPrs`} replacesContent={false}
+        title={t('usage.board.work.noPrsTitle')} reason={t('usage.board.work.noPrsReason')} />}
+      coverage={<UsageCoverageLine
         slice={props.slice}
         sources={['work']}
         onRetry={props.model.refresh}
         testID={`${props.testID}.coverage`}
-      />
-    </View>
-  );
+      />} />;
 }
 
-const styles = StyleSheet.create((theme) => ({
+const styles = StyleSheet.create(() => ({
   body: { gap: 14, minWidth: 0 },
-  section: {
-    gap: theme.space.s10,
-    paddingTop: 14,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.default,
-  },
 }));
