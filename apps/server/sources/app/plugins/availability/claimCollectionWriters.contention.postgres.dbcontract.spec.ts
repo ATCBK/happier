@@ -6,14 +6,14 @@ import { withAuthenticatedTestApp as withAuthenticatedAppHarness } from "@/app/a
 import type { Fastify } from "@/app/api/types";
 import { materializePluginCollectionContractsFromManifestTx } from "@/app/plugins/data/collections/contracts";
 import { readCurrentPluginCollectionContract } from "@/app/plugins/data/collections/uiQuery";
-import { mutatePluginCollection } from "@/app/plugins/data/collections/mutation";
+import { forgetPluginCollection, mutatePluginCollection } from "@/app/plugins/data/collections/mutation";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { registerPluginAvailabilityRoutes } from "./routes";
 import { resolveCurrentPluginDeclarationsTx } from "./currentDeclaration";
 import { createPluginAvailabilityOperations } from "./operations";
-import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { acquireAccountSessionOwnerMetadataFenceInTx, acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { pagePluginCollectionCandidatePreparationSource, stagePluginCollectionCandidatePreparation } from "@/app/plugins/data/collections/candidatePreparation";
 
 const route = PluginAvailabilityActionHttpPathsV1["account.plugins.availability.collectionWriters.claim"];
@@ -122,10 +122,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
         } finally { await Promise.allSettled(pending); }
     });
 
-    it("pages candidate source content under shared admission while stage writes remain exclusive", async () => {
-        const { account, manifest } = await fixture();
+    it("pages and stages candidate content alongside unrelated content admission", async () => {
+        const { account, manifest, ref } = await fixture();
         const operations = createPluginAvailabilityOperations();
         await operations.claimCollectionWriters({ accountId: account.id, input: { manifest } });
+        await mutatePluginCollection({ accountId: account.id, authentication: createPresentUserSessionAccessAuthentication(), request: {
+            pluginId: manifest.id, collectionId: ref.collectionId,
+            writerContext: { schemaVersion: ref.schemaVersion, contractDigest: ref.contractDigest },
+            operations: [{ kind: "put", rowId: "source", expectedRevision: "absent", expectedAbsenceEpoch: 0,
+                content: { t: "plain", v: {} }, projection: { status: "open" } }],
+        } });
         const nextManifest = PluginManifestV2Schema.parse({ ...manifest, version: "2.0.0", contributes: {
             accountCollections: [{ ...manifest.contributes.accountCollections[0]!, schemaVersion: 2,
                 readableSchemaVersions: [1], migrations: [{ id: "upgrade", fromSchemaVersion: 1, toSchemaVersion: 2 }] }],
@@ -140,18 +146,104 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
                 await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
                 await commitOrBlock(tx, async () => {
                     expect(await pagePluginCollectionCandidatePreparationSource({ accountId: account.id,
-                        request: { binding, limit: 10 } })).toMatchObject({ rows: [] });
+                        request: { binding, limit: 10 } })).toMatchObject({ rows: [{ rowId: "source", revision: 1 }] });
                     paged = true;
                 }, pending);
                 expect(paged, "A source-page read must not queue an exclusive Account waiter").toBe(true);
                 let staged = false;
                 await commitOrBlock(tx, async () => {
-                    await stagePluginCollectionCandidatePreparation({ accountId: account.id,
-                        request: { binding, items: [{ source: { rowId: "absent", revision: 1 },
-                            target: { content: { t: "plain", v: {} }, projection: { status: "open" } } }] } });
+                    expect(await stagePluginCollectionCandidatePreparation({ accountId: account.id,
+                        request: { binding, items: [{ source: { rowId: "source", revision: 1 },
+                            target: { content: { t: "plain", v: {} }, projection: { status: "open" } } }] } }))
+                        .toEqual({ results: [{ status: "staged" }] });
                     staged = true;
                 }, pending);
-                expect(staged, "Quota-affecting stage writes must still wait for content admission").toBe(false);
+                expect(staged, "Stage admission must coexist with unrelated content admission").toBe(true);
+            });
+            await Promise.all(pending);
+        } finally { await Promise.allSettled(pending); }
+    });
+
+    it("serializes changed claims, mutations and staging before domain reads", async () => {
+        const { account, manifest, ref } = await fixture();
+        const operations = createPluginAvailabilityOperations();
+        await operations.claimCollectionWriters({ accountId: account.id, input: { manifest } });
+        const nextManifest = PluginManifestV2Schema.parse({ ...manifest, version: "2.0.0", contributes: {
+            accountCollections: [{ ...manifest.contributes.accountCollections[0]!, schemaVersion: 2,
+                readableSchemaVersions: [1], migrations: [{ id: "upgrade", fromSchemaVersion: 1, toSchemaVersion: 2 }] }],
+        } });
+        const prepared = await operations.claimCollectionWriters({ accountId: account.id,
+            input: { manifest: nextManifest, prepare: true } });
+        const binding = prepared.preparation![0]!.binding;
+        const pending: Promise<unknown>[] = [];
+        try {
+            await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "serializing");
+                for (const write of [
+                    () => stagePluginCollectionCandidatePreparation({ accountId: account.id,
+                        request: { binding, items: [{ source: { rowId: "absent", revision: 1 },
+                            target: { content: { t: "plain", v: {} }, projection: { status: "open" } } }] } }),
+                    () => mutatePluginCollection({ accountId: account.id, authentication: createPresentUserSessionAccessAuthentication(), request: {
+                        pluginId: manifest.id, collectionId: ref.collectionId,
+                        writerContext: { schemaVersion: ref.schemaVersion, contractDigest: ref.contractDigest },
+                        operations: [{ kind: "put", rowId: "one", expectedRevision: "absent", expectedAbsenceEpoch: 0,
+                            content: { t: "plain", v: {} }, projection: { status: "open" } }],
+                    } }),
+                    () => operations.claimCollectionWriters({ accountId: account.id, input: { manifest: nextManifest } }),
+                    () => forgetPluginCollection({ accountId: account.id, request: {
+                        pluginId: manifest.id, collectionId: ref.collectionId,
+                        writerContext: { schemaVersion: ref.schemaVersion, contractDigest: ref.contractDigest },
+                        rowId: "absent", expectedRevision: 1,
+                    } }),
+                ]) {
+                    let completed = false;
+                    await commitOrBlock(tx, async () => { await write(); completed = true; }, pending);
+                    expect(completed, "Every quota/currentness writer must join the same serializing cohort").toBe(false);
+                }
+            });
+        } finally { await Promise.allSettled(pending); }
+    });
+
+    it("mutates, forgets and changes Availability alongside unrelated content", async () => {
+        const { account, manifest, ref } = await fixture();
+        const operations = createPluginAvailabilityOperations();
+        await operations.claimCollectionWriters({ accountId: account.id, input: { manifest } });
+        const selection = await fixture(false);
+        const selectedManifest = PluginManifestV2Schema.parse({ ...selection.manifest, contributes: {} });
+        await operations.publishRelease({ accountId: selection.account.id, input: { sourceClass: "registryPackage", facts: {
+            ref: { pluginId: selectedManifest.id, version: selectedManifest.version }, archiveDigestSha256: `sha256:${"a".repeat(64)}`,
+            normalizedManifest: selectedManifest, collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${"b".repeat(64)}`, resources: [] },
+        } } });
+        const pending: Promise<unknown>[] = [];
+        try {
+            await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFencesInTx(tx, [account.id, selection.account.id], "content");
+                for (const write of [
+                    async () => expect(await mutatePluginCollection({ accountId: account.id,
+                        authentication: createPresentUserSessionAccessAuthentication(), request: {
+                            pluginId: manifest.id, collectionId: ref.collectionId,
+                            writerContext: { schemaVersion: ref.schemaVersion, contractDigest: ref.contractDigest },
+                            operations: [{ kind: "put", rowId: "one", expectedRevision: "absent", expectedAbsenceEpoch: 0,
+                                content: { t: "plain", v: {} }, projection: { status: "open" } }],
+                        } })).toMatchObject({ status: "updated" }),
+                    async () => expect(await forgetPluginCollection({ accountId: account.id, request: {
+                        pluginId: manifest.id, collectionId: ref.collectionId,
+                        writerContext: { schemaVersion: ref.schemaVersion, contractDigest: ref.contractDigest },
+                        rowId: "one", expectedRevision: 1,
+                    } })).toEqual({ status: "forgotten" }),
+                    () => operations.claimCollectionWriters({ accountId: account.id, input: {
+                        manifest: { ...manifest, version: "2.0.0" },
+                    } }),
+                    () => operations.setIntent({ accountId: selection.account.id, input: {
+                        pluginId: selectedManifest.id, desiredVersion: selectedManifest.version, enabled: true, offlineUiHosting: "disabled",
+                        writableCollections: [], expectedRevision: null,
+                    } }),
+                ]) {
+                    let completed = false;
+                    await commitOrBlock(tx, async () => { await write(); completed = true; }, pending);
+                    expect(completed, "Collection and Availability must coexist with unrelated content admission").toBe(true);
+                }
             });
             await Promise.all(pending);
         } finally { await Promise.allSettled(pending); }
@@ -252,7 +344,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
                     // Only the real database boundary is interleaved. Do not insert
                     // a target read or establish its snapshot before its actual fence.
                     const interleaveAdmission = async (sql: string, ...values: unknown[]) => {
-                        if (sql !== 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE' || values[0] !== account.id) {
+                        if (sql !== 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE' || values[0] !== account.id) {
                             return await query(sql, ...values);
                         }
                         let release!: () => void;

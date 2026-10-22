@@ -53,13 +53,14 @@ function fixtureArtifactDeletionGuard(store: Parameters<typeof createCliArtifact
   };
 }
 
-const { mockDelete, mockGet, mockPost } = vi.hoisted(() => ({
+const { mockDelete, mockGet, mockPost, mockPut } = vi.hoisted(() => ({
   mockDelete: vi.fn(),
   mockGet: vi.fn(),
   mockPost: vi.fn(),
+  mockPut: vi.fn(),
 }));
 
-vi.mock('axios', () => ({ default: { delete: mockDelete, get: mockGet, post: mockPost } }));
+vi.mock('axios', () => ({ default: { delete: mockDelete, get: mockGet, post: mockPost, put: mockPut } }));
 vi.mock('@/configuration', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configuration')>();
   // Preserve the harness-owned temporary Account paths for real Action composition.
@@ -150,6 +151,7 @@ describe('createAccountArtifactStore', () => {
     mockDelete.mockReset();
     mockGet.mockReset();
     mockPost.mockReset();
+    mockPut.mockReset();
   });
 
   it('retains the typed storage failure after the existing revision update retry budget is exhausted', async () => {
@@ -1096,6 +1098,26 @@ describe('createAccountArtifactStore', () => {
     await expect(store.accessGrants.remove({ artifactId: 'artifact', principal: { kind: 'account', accountId: 'admin' } }))
       .resolves.toEqual(revoked);
     expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it.each(['set', 'remove'] as const)('preserves a committed %s receipt when follow-up preparation is unavailable and recovers by reading', async operation => {
+    const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
+      getAccountEncryptionMode: async () => 'plain' });
+    const artifactId = '11111111-1111-4111-8111-111111111111';
+    const committed = { artifactId, ownerAccountId: 'owner', access: 'owner', grants: [], changed: true };
+    mockPut.mockResolvedValue({ status: 200, data: committed });
+    mockDelete.mockResolvedValue({ status: 200, data: committed });
+    mockGet.mockResolvedValue({ status: 503, data: { error: 'artifact_access_unavailable' } });
+    const principal = { kind: 'account' as const, accountId: 'recipient' };
+    const mutation = operation === 'set' ? store.accessGrants.set({ artifactId, principal, accessLevel: 'view' })
+      : store.accessGrants.remove({ artifactId, principal });
+    await expect(mutation).resolves.toEqual({ ...committed, preparation: { status: 'pending' } });
+    await expect(store.read(artifactId)).rejects.toBeDefined();
+    mockGet.mockResolvedValue({ status: 200, data: { id: artifactId, ownerAccountId: 'owner', access: 'owner',
+      publicAudience: 'none', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent({ title: 'Current' }), body: encodePlainArtifactStoredContent({ body: 'current' }),
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } });
+    await expect(store.read(artifactId, { includeSharedAudience: false })).resolves.toMatchObject({ body: 'current' });
   });
 
   it('uploads bytes beyond the JSON body boundary through the request-bound carrier', async () => {

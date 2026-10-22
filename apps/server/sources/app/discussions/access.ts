@@ -2,7 +2,7 @@ import * as privacyKit from "privacy-kit";
 import type { Prisma } from "@prisma/client";
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import { DiscussionAnchorV1Schema, type DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
-import { acquireArtifactPublicationLocksInTx, resolveArtifactAudienceInTx } from '@/app/artifacts/artifactAccessService';
+import { acquireArtifactPublicationLocksInTx, resolveArtifactAudienceInTx, resolveArtifactPublicationAdmissionIntent } from '@/app/artifacts/artifactAccessService';
 import { resolveDiscussionDocTargetInTx } from './docPassages';
 import type { ResourceContextStorageAdapter } from '@/app/session/access/sessionContextInjection';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol/storage/artifactStoredContent";
@@ -75,7 +75,11 @@ async function readDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutat
 
 async function fenceDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutationAudienceInput,
     { ownerAccountId, sessionIds, additionalAccountIds, artifactIds, audience }: Awaited<ReturnType<typeof readDiscussionMutationAudienceInTx>>) {
-    await fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds);
+    // Quoted Artifact admission must be selected before Session/resource locks;
+    // asking for stronger quota admission later would replay every attempt.
+    await fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds, {
+        intent: artifactIds.length > 0 ? resolveArtifactPublicationAdmissionIntent() : 'content',
+    });
     const admittedAccounts = new Set(audience.accountIds);
     const admittedSessions = new Set(sessionIds);
     const admittedProjectionSessions = new Set(audience.projectionSessionIds);

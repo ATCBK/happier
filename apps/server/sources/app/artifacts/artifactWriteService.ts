@@ -41,6 +41,7 @@ import {
     resolveArtifactAccessInTx,
     resolveArtifactAudienceInTx,
     acquireArtifactPublicationLocksInTx,
+    resolveArtifactPublicationAdmissionIntent,
     applyArtifactRecipientKeyEnvelopesInTx,
 } from "./artifactAccessService";
 import { admitArtifactMemoryDecisionInTx, type ArtifactMemoryDecisionWriteContext, type MemoryDecisionAdmissionError } from './artifactMemoryDecisionAdmission';
@@ -847,7 +848,7 @@ async function readArtifactCreateStateInTx(tx: Tx, params: CreateArtifactTxParam
 export async function createArtifactTx(tx: Tx, params: CreateArtifactTxParams): Promise<CreateArtifactResult> {
     await acquireAccountChangePublicationLocksInTx(tx, [params.actorUserId], {
         includeSingleAccount: true,
-        intent: !params.markChanged && readArtifactStorageEnv(process.env).accountLimitBytes !== null ? "exclusive" : "content",
+        intent: params.markChanged ? "content" : resolveArtifactPublicationAdmissionIntent(),
     });
     const state = await readArtifactCreateStateInTx(tx, params);
     if ("ok" in state) return state;

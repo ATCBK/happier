@@ -13,7 +13,7 @@ import { type UsageNoticeArtifactHeaderV1,
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createResourceDataKey, openResourceDataKey, ResourceDataKeyUnavailableError } from '@/api/encryption/resourceDataKey';
 import { ArtifactAccessErrorCodeV1Schema, ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { runArtifactRecipientKeyPreparationV1, prepareArtifactRecipientKeyEnvelopesV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
+import { completeArtifactAccessMutationPreparationV1, runArtifactRecipientKeyPreparationV1, prepareArtifactRecipientKeyEnvelopesV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
 import type { ArtifactCallerAccessV1, ArtifactAccessGrantSetInputV1, ArtifactAccessGrantRemoveInputV1, ArtifactPublicLinkActionIdV1, ArtifactPublicLinkIssuedV1, ArtifactSavedByV1, ArtifactWorkspaceSourceV1, ArtifactRevisionProvenanceV1, ArtifactBodyV1, ArtifactBlobWriteV1, ArtifactListSelectionOptionsV1 } from '@happier-dev/protocol';
 import { ArtifactHeaderMetadataV1Schema, ArtifactPublicAudienceV1ReadSchema, type ArtifactPublicAudienceV1, ArtifactQuotaExceededV1Schema, ArtifactRevisionListResponseV1Schema, ArtifactStorageUsageV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, prepareArtifactHeaderForBodyV1 } from '@happier-dev/protocol/artifacts/artifactHeaderRestorationV1';
@@ -924,14 +924,14 @@ export function createAccountArtifactStore(params: Readonly<{
       set: async (input: ArtifactAccessGrantSetInputV1, signal?: AbortSignal, options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
         const result = ArtifactAccessGrantMutationResponseV1Schema.parse(requireAccessResponse(await axios.put(accessUrl(input.artifactId, 'grants'), input,
           await authorizedAccessConfig(input.artifactId, 'grants', 'PUT', signal, options?.authorizationHeaders, input))));
-        if (result.access !== null) await prepareCurrent(input.artifactId, signal, options?.authorizationHeaders);
-        return result;
+        return completeArtifactAccessMutationPreparationV1({ result,
+          prepare: () => prepareCurrent(input.artifactId, signal, options?.authorizationHeaders) });
       },
       remove: async (input: ArtifactAccessGrantRemoveInputV1, signal?: AbortSignal, options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
         const result = ArtifactAccessGrantMutationResponseV1Schema.parse(requireAccessResponse(await axios.delete(accessUrl(input.artifactId, 'grants'), {
           ...await authorizedAccessConfig(input.artifactId, 'grants', 'DELETE', signal, options?.authorizationHeaders, input), data: input })));
-        if (result.access !== null) await prepareCurrent(input.artifactId, signal, options?.authorizationHeaders);
-        return result;
+        return completeArtifactAccessMutationPreparationV1({ result,
+          prepare: () => prepareCurrent(input.artifactId, signal, options?.authorizationHeaders) });
       },
     },
     revisions: {

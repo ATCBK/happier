@@ -148,7 +148,7 @@ export function createPrismaAccountPetLibraryPersistence(
         async persistAccountPet(params) {
             try {
                 return await inTx(async (tx): Promise<PersistAccountPetResult> => {
-                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "serializing");
                     const account = await tx.account.findUnique({
                         where: { id: params.accountId },
                         select: {
@@ -282,7 +282,7 @@ export function createPrismaAccountPetLibraryPersistence(
         async deleteAccountPet(accountId, petId) {
             try {
                 return await inTx(async (tx): Promise<DeletePersistedAccountPetResult> => {
-                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "serializing");
                     const row = await tx.accountPetPackage.findFirst({
                         where: {
                             id: petId,

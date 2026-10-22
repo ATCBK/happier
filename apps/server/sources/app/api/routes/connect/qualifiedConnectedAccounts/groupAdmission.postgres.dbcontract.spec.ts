@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { db, getDbProviderFromEnv, initDbPostgres } from '@/storage/db';
 import { initEncrypt } from '@/modules/encrypt';
+import { inTx, type Tx } from '@/storage/inTx';
+import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { TEAM_CHANGE_ENTITY_ID } from '@/app/teams/teamChanges';
 import { mutateQualifiedConnectedServiceCredential } from './credentialRepository';
 import {
@@ -31,6 +34,78 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
         await initEncrypt();
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it.each(['pool', 'member'] as const)('deletes a %s during Account publication without losing the committed result', async kind => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const service = { pluginId: 'example.pool-deletion', localId: 'service' };
+        const ref = { service, accountId: randomUUID() };
+        const groupRef = { service, groupId: randomUUID() };
+        const peerScope = new AsyncLocalStorage<boolean>();
+        const original = db.$transaction;
+        const peers: Promise<unknown>[] = [];
+        let publications = 0;
+        try {
+            expect(await mutateQualifiedConnectedServiceCredential({ accountId: owner.id, ref,
+                expectedCredentialRevision: null, authenticationModeId: 'api-key',
+                content: { t: 'plain', v: { token: 'disposable-fixture' } }, metadata: { scopes: [] },
+            })).toMatchObject({ status: 'written' });
+            const created = await createQualifiedConnectedAccountGroup({ accountId: owner.id, service, group: { groupId: groupRef.groupId } });
+            if (created.status !== 'written') throw new Error('Pool fixture creation failed');
+            const joined = await createQualifiedConnectedAccountGroupMember({ accountId: owner.id, mutation: {
+                group: groupRef, connectedAccountId: ref.accountId, expectedGeneration: created.group.generation, priority: 0,
+            } });
+            if (joined.status !== 'written') throw new Error('Pool fixture membership failed');
+            db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== 'function' || peerScope.getStore()) return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                    const query = tx.$queryRawUnsafe.bind(tx);
+                    let scheduled = false;
+                    const observed = new Proxy(tx, { get(transaction, property, receiver) {
+                        if (property !== '$queryRawUnsafe') return Reflect.get(transaction, property, receiver);
+                        return async (...values: Parameters<typeof query>) => {
+                            if (!scheduled && values[0].includes('FROM "Account"') && values[0].endsWith('FOR NO KEY UPDATE')) {
+                                scheduled = true;
+                                let settled = false;
+                                const peer = peerScope.run(true, () => inTx(async writer => {
+                                    await markAccountChanged(writer, { accountId: owner.id, kind: 'account', entityId: 'pool-delete-peer' });
+                                })).finally(() => { settled = true; });
+                                peers.push(peer);
+                                void peer.catch(() => undefined);
+                                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                                while (!settled) {
+                                    const [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                                            WHERE datname = current_database() AND ${pid} = ANY(pg_blocking_pids(pid))) AS blocked
+                                    `;
+                                    if (blocked) break;
+                                }
+                                publications++;
+                            }
+                            return query(...values);
+                        };
+                    } });
+                    return callback(observed);
+                }, ...args.slice(1)]);
+            } });
+            const expected = { accountId: owner.id, expectedIncarnation: joined.group.incarnation };
+            const result = kind === 'pool'
+                ? await deleteQualifiedConnectedAccountGroup({ ...expected, ...groupRef,
+                    expectedGeneration: joined.group.generation, expectedRuntimeStateRevision: joined.group.runtimeStateRevision })
+                : await deleteQualifiedConnectedAccountGroupMember({ ...expected, mutation: { group: groupRef,
+                    connectedAccountId: ref.accountId, expectedGeneration: joined.group.generation,
+                    expectedRuntimeStateRevision: joined.group.runtimeStateRevision } });
+            expect(result).toMatchObject({ status: kind === 'pool' ? 'deleted' : 'written' });
+            expect(publications).toBeGreaterThan(0);
+            expect(await db.connectedServiceAuthGroupMember.count({ where: { accountId: owner.id } })).toBe(0);
+            expect(await db.connectedServiceAuthGroup.count({ where: { accountId: owner.id } })).toBe(kind === 'pool' ? 0 : 1);
+        } finally {
+            db.$transaction = original;
+            const outcomes = await Promise.allSettled(peers);
+            await db.account.delete({ where: { id: owner.id } });
+            expect(outcomes.filter(result => result.status === 'rejected')).toEqual([]);
+        }
+    });
 
     it('commits after a concurrent Team audience change and publishes every sibling Pool mutation', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });

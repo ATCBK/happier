@@ -1125,7 +1125,7 @@ export async function promotePluginCollectionCandidatePreparationInTx(input: Rea
         // Collection, even when it currently has no live rows to promote.
         promotionNotReady();
     }
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "serializing");
     if (fence.status !== "ready") promotionNotReady();
 
     const changesByCollection = new Map<string, {
@@ -1678,7 +1678,7 @@ export async function stagePluginCollectionCandidatePreparation(input: Readonly<
             tx,
             accountId: input.accountId,
             binding: request.binding,
-            intent: "exclusive",
+            intent: "serializing",
         });
         const batchIncompatibility = findPluginCollectionBatchQuotaIncompatibility({
             deployment,

@@ -104,6 +104,35 @@ describe("Account Session owner-metadata fence database contract", () => {
         ))).resolves.toEqual(ids);
     });
 
+    it.skipIf(provider !== "postgres")("serializes aggregate writers while admitting unrelated content", async () => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        await inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "serializing");
+            // NOWAIT is a test-only conflict probe, not a production deadline.
+            await expect(db.$transaction(peer => peer.$queryRawUnsafe(
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR KEY SHARE NOWAIT', account.id,
+            ))).resolves.toEqual([{ id: account.id }]);
+            for (const mode of ["NO KEY UPDATE", "UPDATE"]) {
+                await expect(db.$transaction(peer => peer.$queryRawUnsafe(
+                    `SELECT "id" FROM "Account" WHERE "id" = $1 FOR ${mode} NOWAIT`, account.id,
+                ))).rejects.toMatchObject({ meta: { code: "55P03" } });
+            }
+        });
+    });
+
+    it.skipIf(provider !== "postgres").each([
+        ["content", "serializing"], ["serializing", "exclusive"],
+    ] as const)("replays %s to %s instead of upgrading after domain work", async (entry, stronger) => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        await expect(inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, entry);
+            await tx.account.update({ where: { id: account.id }, data: { settingsVersion: 99 } });
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, stronger);
+        })).rejects.toMatchObject({ code: "database_transaction_conflict_exhausted",
+            cause: { reason: "transaction-account-audience-changed" } });
+        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).settingsVersion).toBe(0);
+    });
+
     it.skipIf(provider !== "postgres")("publishes admitted Session writers while an exclusive lifecycle transition waits", async () => {
         const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
         process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
@@ -418,30 +447,36 @@ describe("Account Session owner-metadata fence database contract", () => {
         expect(created.ok).toBe(true);
         if (!created.ok) return;
         const discussionId = created.value.discussion.id;
-        const entered = deferred();
-        const release = deferred();
+        let grantCommitted = false;
+        // A grant shares the Discussion parent lock. Expand after the audience
+        // census but before that lock; expansion after domain entry is excluded.
         const writerOutcome = Promise.allSettled([inTx(async tx => {
-            await acquireDiscussionMutationAccountsInTx(tx, { actorAccountId: owner.id, discussionId });
+            const observed = new Proxy(tx, {
+                get(target, property) {
+                    if (property === "$queryRawUnsafe") return async (sql: string, ...values: unknown[]) => {
+                        if (!grantCommitted && sql.includes('FROM "Discussion"') && sql.includes("FOR NO KEY UPDATE")) {
+                            await inTx(async peer => {
+                                const result = await setDiscussionGrantInTx(peer, { actorAccountId: owner.id, authentication, discussionId,
+                                    request: { principal: { kind: "account", accountId: recipient.id }, accessLevel: "view" } });
+                                expect(result.ok).toBe(true);
+                            });
+                            grantCommitted = true;
+                        }
+                        return target.$queryRawUnsafe(sql, ...values);
+                    };
+                    return Reflect.get(target, property, target);
+                },
+            });
+            await acquireDiscussionMutationAccountsInTx(observed, { actorAccountId: owner.id, discussionId });
             await tx.discussion.update({ where: { id: discussionId }, data: {
                 titleContent: { t: 'plain', v: { v: 1, title: 'Must roll back' } },
             } });
-            entered.resolve();
-            await release.promise;
             await markDiscussionReadersChangedInTx({ tx, discussionId });
         })]);
-        try {
-            await Promise.race([entered.promise, writerOutcome.then(() => { throw new Error('Discussion writer did not enter'); })]);
-            await inTx(async tx => {
-                const result = await setDiscussionGrantInTx(tx, { actorAccountId: owner.id, authentication, discussionId,
-                    request: { principal: { kind: 'account', accountId: recipient.id }, accessLevel: 'view' } });
-                expect(result.ok).toBe(true);
-            });
-        } finally {
-            release.resolve();
-        }
         expect(await writerOutcome).toMatchObject([{ status: 'rejected', reason: {
             code: 'database_transaction_conflict_exhausted', cause: { reason: 'transaction-account-audience-changed' },
         } }]);
+        expect(grantCommitted).toBe(true);
         expect(await db.discussion.findUniqueOrThrow({ where: { id: discussionId }, select: { titleContent: true } }))
             .toEqual({ titleContent: { t: 'plain', v: { v: 1, title: 'Stable audience' } } });
         const beforeReplay = await db.account.findUniqueOrThrow({ where: { id: recipient.id }, select: { seq: true } });

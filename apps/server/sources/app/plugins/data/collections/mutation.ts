@@ -2020,7 +2020,7 @@ async function mutatePluginCollectionInTx(input: Readonly<{
     // mode-bound writer. The returned currentness is the sole encryption-mode
     // authority for this transaction; do not re-read Account through a second
     // local mode path after the fence.
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "serializing");
     if (fence.status === "account_not_found") {
         throw new PluginCollectionMutationOperationError("collection_unavailable");
     }
@@ -2082,7 +2082,7 @@ export async function forgetPluginCollection(input: Readonly<{
 }>): Promise<PluginCollectionForgetResultV1> {
     const request = PluginCollectionForgetRequestV1Schema.parse(input.request);
     return await inTx(async (tx) => {
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "exclusive");
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "serializing");
         if (fence.status === "account_not_found") {
             throw new PluginCollectionMutationOperationError("collection_unavailable");
         }

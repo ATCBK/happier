@@ -346,7 +346,12 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactAccessGrantMutationResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => setArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
+        // The Artifact owner admits and rechecks the audience before its parent
+        // lock, fencing mode/key changes. A Serializable snapshot instead goes
+        // stale whenever a peer publishes on those same Account rows.
+        const result = await inTx(tx => setArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), {
+            isolationLevel: "ReadCommitted", transactionClass: "artifact-access-grant-set",
+        });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.delete('/v1/artifacts/:id/access/grants', {
@@ -355,7 +360,9 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactAccessGrantMutationResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => removeArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
+        const result = await inTx(tx => removeArtifactAccessGrantInTx(tx, { ...request.body, actorAccountId: request.userId }), {
+            isolationLevel: "ReadCommitted", transactionClass: "artifact-access-grant-remove",
+        });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
     app.get('/v1/artifacts/:id/access/recipients', {
@@ -371,7 +378,9 @@ export function artifactsRoutes(app: Fastify) {
             response: { 200: ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, ...accessErrors } },
     }, async (request, reply) => {
         if (request.body.artifactId !== request.params.id) return reply.code(400).send({ error: "artifact_not_found" });
-        const result = await inTx(tx => commitArtifactRecipientKeyEnvelopesInTx(tx, { ...request.body, actorAccountId: request.userId }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable" });
+        const result = await inTx(tx => commitArtifactRecipientKeyEnvelopesInTx(tx, { ...request.body, actorAccountId: request.userId }), {
+            isolationLevel: "ReadCommitted", transactionClass: "artifact-recipient-key-envelopes-commit",
+        });
         return result.ok ? reply.send(result.value) : reply.code(accessErrorStatus(result.error)).send({ error: result.error });
     });
 

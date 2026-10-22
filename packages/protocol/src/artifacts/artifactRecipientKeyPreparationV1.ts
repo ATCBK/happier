@@ -1,10 +1,26 @@
 import { prepareVerifiedResourceRecipientEnvelopesV1, runResourceRecipientKeyPreparationV1 } from '../teams/resourceRecipientKeyPreparationV1.js';
 import type {
   ArtifactAccessRecipientCensusResponseV1,
+  ArtifactAccessGrantMutationResponseV1,
   ArtifactRecipientKeyEnvelopeInputV1,
   ArtifactRecipientKeyEnvelopeCommitInputV1,
   ArtifactRecipientKeyEnvelopeCommitResponseV1,
 } from './artifactAccessV1.js';
+
+/** Preparation cannot erase an acknowledged grant mutation or certify current content.
+ * The ordinary fresh-read path retains all access/key checks and retries preparation. */
+export async function completeArtifactAccessMutationPreparationV1(params: Readonly<{
+  result: ArtifactAccessGrantMutationResponseV1;
+  prepare: () => Promise<unknown>;
+}>): Promise<ArtifactAccessGrantMutationResponseV1> {
+  if (params.result.access === null) return params.result;
+  try {
+    await params.prepare();
+    return params.result;
+  } catch {
+    return { ...params.result, preparation: { status: 'pending' } };
+  }
+}
 
 /** Consumes an authorized audience; binding verification never grants access. */
 export function prepareArtifactRecipientKeyEnvelopesV1(params: Readonly<{

@@ -1152,7 +1152,7 @@ async function closeAccountEncryptionTransitionInTx(params: Readonly<{
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
         params.accountId,
-        "exclusive",
+        "serializing",
     );
     if (fence.status === "account_not_found") {
         return { closed: false, removedStageCount: 0 };
@@ -1298,7 +1298,14 @@ async function abandonAccountEncryptionTransitionInTx(
  * as audit facts; only unactivated target-stage data is removed.
  */
 export async function cleanupExpiredAccountEncryptionTransitionsInTx(
-    params: Readonly<{ tx: Tx; now?: Date; accountId?: string; additionalAccountIds?: readonly string[] }>,
+    params: Readonly<{
+        tx: Tx;
+        now?: Date;
+        accountId?: string;
+        additionalAccountIds?: readonly string[];
+        /** Composed transitions must enter their complete cohort exclusively. */
+        admissionIntent?: "exclusive";
+    }>,
 ): Promise<Readonly<{ expiredTransitionCount: number; removedStageCount: number }>> {
     const now = resolveTransitionNow(params.now);
     // Process the earliest eligible transition only. Repeated cleanup calls
@@ -1315,7 +1322,7 @@ export async function cleanupExpiredAccountEncryptionTransitionsInTx(
     await acquireAccountSessionOwnerMetadataFencesInTx(params.tx, [
         ...(params.additionalAccountIds ?? []),
         ...(expired ? [expired.accountId] : []),
-    ], "exclusive");
+    ], params.admissionIntent ?? "serializing");
     if (!expired) {
         return { expiredTransitionCount: 0, removedStageCount: 0 };
     }
@@ -1363,6 +1370,7 @@ export async function prepareAccountEncryptionTransitionCoordinatorInTx(
         tx: params.tx,
         now,
         additionalAccountIds: capturedAccountIds,
+        admissionIntent: "exclusive",
     });
     const fence = await acquireAccountEncryptionTransitionCoordinatorFenceInTx(
         params.tx,

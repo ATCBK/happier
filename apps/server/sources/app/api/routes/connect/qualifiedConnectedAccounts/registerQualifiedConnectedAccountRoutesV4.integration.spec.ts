@@ -172,11 +172,12 @@ describe("qualified Connected Account V4 route family (integration)", () => {
                 expect(result.statusCode, result.body).toBe(200);
             };
             await write(first);
-            // Real database guards reject physical writes as well as cursor
-            // changes; unchanged timestamp assignments still take row locks.
+            // Credentials remain physically untouched on idle observations.
+            // Account encryption admission uses a no-op settingsVersion fence
+            // (3c8b82b6e1); forbid publication writes without rejecting that lock.
             await db.$executeRawUnsafe(`CREATE TRIGGER usage_idle_credential_write BEFORE UPDATE ON ServiceAccountToken
                 BEGIN SELECT RAISE(ABORT, 'unchanged_usage_updated_credential'); END`);
-            await db.$executeRawUnsafe(`CREATE TRIGGER usage_idle_account_write BEFORE UPDATE ON Account
+            await db.$executeRawUnsafe(`CREATE TRIGGER usage_idle_account_write BEFORE UPDATE OF seq ON Account
                 BEGIN SELECT RAISE(ABORT, 'derived_usage_updated_account'); END`);
             const sourceTimestamp = new Date(1);
             await db.connectedServiceUsageSource.updateMany({ where: { accountId: account.id }, data: { updatedAt: sourceTimestamp } });

@@ -48,6 +48,8 @@ export const ArtifactAccessGrantsListResponseV1Schema = lazyZodSchema(() => z.st
 export const ArtifactAccessGrantMutationResponseV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactAccessGrantsListResponseV1Schema, {
   access: z.nullable(ArtifactCallerAccessV1Schema),
   changed: z.boolean(),
+  /** The grant receipt is committed; a fresh Artifact read retries key preparation. */
+  preparation: z.optional(z.strictObject({ status: z.literal('pending') })),
 })).check(z.refine((response) => response.access !== null || response.grants.length === 0, {
   message: 'A revoked caller cannot receive the grant roster', path: ['grants'],
 })));

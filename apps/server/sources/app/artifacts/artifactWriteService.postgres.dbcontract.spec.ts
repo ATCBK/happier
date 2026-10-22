@@ -6,17 +6,18 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { updateArtifactHttpMutation } from "./artifactMutationHttpResponse";
-import { createArtifact, deleteArtifact, updateArtifact, updateArtifactTx } from "./artifactWriteService";
+import { createArtifact, createArtifactTx, deleteArtifact, updateArtifact, updateArtifactTx } from "./artifactWriteService";
 import { readArtifactStorageUsageInTx } from "./artifactStorageService";
 import { inTx } from "@/storage/inTx";
 import { readArtifactForCaller, removeArtifactAccessGrantInTx, setArtifactAccessGrantInTx } from "./artifactAccessService";
 import { decideArtifactEditProposalInTx } from "./artifactEditProposalService";
-import { createDiscussion } from "@/app/discussions/mutations";
+import { createDiscussion, postDiscussionMessage } from "@/app/discussions/mutations";
 import { buildDiscussionMutationRequestBodyV1 } from "@happier-dev/protocol/discussions/api";
 import { createDiscussionMessageRefV1 } from "@happier-dev/protocol/discussions/messageRefs";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { admitTeamMemberInTx } from '@/app/teams/memberships/membershipService';
 import { publishTeamChangedInTx } from '@/app/teams/teamChanges';
+import { acquireAccountSessionOwnerMetadataFenceInTx } from '@/app/encryption/accountSessionOwnerMetadataFence';
 
 const bytes = (value: unknown) => privacyKit.decodeBase64(encodePlainArtifactStoredContent(value));
 
@@ -311,20 +312,166 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         expect(await db.artifactRevision.count({ where: { artifactId: artifact.id } })).toBe(1);
     });
 
+    it("admits independent content while an Artifact quota writer holds its Account admission", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const artifact = await plainArtifact(account.id);
+        vi.stubEnv("HAPPIER_ARTIFACT_ACCOUNT_LIMIT_BYTES", "100000");
+        let releaseWriter!: () => void;
+        const released = new Promise<void>(resolve => { releaseWriter = resolve; });
+        let writerReady!: () => void;
+        const ready = new Promise<void>(resolve => { writerReady = resolve; });
+        let writerPid = 0;
+        let contentPid = 0;
+        let contentAdmitted = false;
+        const writer = inTx(async tx => {
+            writerPid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+            return updateArtifactTx(new Proxy(tx, { get(inner, property, receiver) {
+                if (property !== "artifact") return Reflect.get(inner, property, receiver);
+                return new Proxy(inner.artifact, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== "updateMany") return operation;
+                    return async (...args: Parameters<typeof tx.artifact.updateMany>) => {
+                        writerReady();
+                        await released;
+                        return Reflect.apply(operation, delegate, args);
+                    };
+                } });
+            } }), { actorUserId: account.id, artifactId: artifact.id,
+                body: { bytes: bytes({ status: "approved" }), expectedVersion: 1 } });
+        });
+        let content: Promise<void> | undefined;
+        try {
+            await waitForDatabasePause(writer, ready);
+            content = inTx(async tx => {
+                contentPid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                contentAdmitted = true;
+            });
+            await vi.waitFor(async () => {
+                const blocked = contentPid === 0 ? [] : await db.$queryRawUnsafe<Array<{ pid: number }>>(
+                    'SELECT pid FROM pg_stat_activity WHERE pid = $1 AND $2 = ANY(pg_blocking_pids(pid))', contentPid, writerPid);
+                expect(contentAdmitted || blocked.length === 1).toBe(true);
+            }, { timeout: 10_000 });
+            const admittedBeforeQuotaWriterCompleted = contentAdmitted;
+            releaseWriter();
+            expect(await writer).toMatchObject({ ok: true });
+            await content;
+            expect(admittedBeforeQuotaWriterCompleted).toBe(true);
+        } finally {
+            releaseWriter();
+            await Promise.allSettled([writer, ...(content ? [content] : [])]);
+            vi.unstubAllEnvs();
+        }
+    });
+
     it("keeps Account quota admission atomic across concurrent Artifact creates", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
         const header = bytes({ kind: "document" });
         const body = bytes({ value: "content" });
         vi.stubEnv("HAPPIER_ARTIFACT_ACCOUNT_LIMIT_BYTES", String(header.byteLength + body.byteLength));
+        let releaseWriters!: () => void;
+        const released = new Promise<void>(resolve => { releaseWriters = resolve; });
+        let firstReady!: () => void;
+        const ready = new Promise<void>(resolve => { firstReady = resolve; });
+        let firstPid = 0;
+        let secondPid = 0;
+        let secondReachedInsert = false;
+        const create = (first: boolean) => inTx(async tx => {
+            const pid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+            if (first) firstPid = pid;
+            else secondPid = pid;
+            return createArtifactTx(new Proxy(tx, { get(inner, property, receiver) {
+                if (property !== "artifact") return Reflect.get(inner, property, receiver);
+                return new Proxy(inner.artifact, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== "create") return operation;
+                    return async (...args: Parameters<typeof tx.artifact.create>) => {
+                        if (first) firstReady();
+                        else secondReachedInsert = true;
+                        await released;
+                        return Reflect.apply(operation, delegate, args);
+                    };
+                } });
+            } }), { actorUserId: account.id, artifactId: randomUUID(), header, body,
+                dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) });
+        });
+        const first = create(true);
+        let second: ReturnType<typeof create> | undefined;
         try {
-            const outcomes = await Promise.all([randomUUID(), randomUUID()].map(artifactId => createArtifact({
-                actorUserId: account.id, artifactId, header, body,
-                dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
-            })));
+            await waitForDatabasePause(first, ready);
+            second = create(false);
+            // KEY SHARE is deliberately insufficient: it lets both real budget
+            // reads finish before either insert, admitting two full-size docs.
+            await vi.waitFor(async () => {
+                const blocked = secondPid === 0 ? [] : await db.$queryRawUnsafe<Array<{ pid: number }>>(
+                    'SELECT pid FROM pg_stat_activity WHERE pid = $1 AND $2 = ANY(pg_blocking_pids(pid))', secondPid, firstPid);
+                expect(secondReachedInsert || blocked.length === 1).toBe(true);
+            }, { timeout: 10_000 });
+            releaseWriters();
+            const outcomes = await Promise.all([first, second]);
             expect(outcomes.filter(result => result.ok)).toHaveLength(1);
             expect(outcomes.filter(result => !result.ok).map(result => result.error)).toEqual(["quota_exceeded"]);
             expect((await inTx(tx => readArtifactStorageUsageInTx(tx, account.id))).usedBytes).toBe(header.byteLength + body.byteLength);
-        } finally { vi.unstubAllEnvs(); }
+        } finally {
+            releaseWriters();
+            await Promise.allSettled([first, ...(second ? [second] : [])]);
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("orders a quota-configured grant before an Artifact update without a terminal Account inversion", async () => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { encryptionMode: "plain" } });
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: recipient.id,
+            accessLevel: "view", createdByAccountId: owner.id } });
+        vi.stubEnv("HAPPIER_ARTIFACT_ACCOUNT_LIMIT_BYTES", "100000");
+        vi.stubEnv("HAPPIER_DB_TX_MAX_RETRIES", "0");
+        let releaseGrant!: () => void;
+        const released = new Promise<void>(resolve => { releaseGrant = resolve; });
+        let grantReady!: () => void;
+        const ready = new Promise<void>(resolve => { grantReady = resolve; });
+        let grantPid = 0;
+        let updatePid = 0;
+        const grant = inTx(async tx => {
+            grantPid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+            return setArtifactAccessGrantInTx(new Proxy(tx, { get(inner, property, receiver) {
+                if (property !== "$queryRawUnsafe") return Reflect.get(inner, property, receiver);
+                return async (query: string, ...values: unknown[]) => {
+                    const result = await inner.$queryRawUnsafe(query, ...values);
+                    if (query.includes('FROM "Artifact"') && query.includes("FOR ")) {
+                        grantReady();
+                        await released;
+                    }
+                    return result;
+                };
+            } }), { actorAccountId: owner.id, artifactId: artifact.id,
+                principal: { kind: "account", accountId: recipient.id }, accessLevel: "edit" });
+        }).then(value => ({ value }), error => ({ error }));
+        let update: Promise<{ value: Awaited<ReturnType<typeof updateArtifactTx>> } | { error: unknown }> | undefined;
+        try {
+            await waitForDatabasePause(grant, ready);
+            update = inTx(async tx => {
+                updatePid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+                return updateArtifactTx(tx, { actorUserId: owner.id, artifactId: artifact.id,
+                    body: { bytes: bytes({ status: "approved" }), expectedVersion: 1 } });
+            }).then(value => ({ value }), error => ({ error }));
+            await vi.waitFor(async () => {
+                const blocked = updatePid === 0 ? [] : await db.$queryRawUnsafe<Array<{ pid: number }>>(
+                    'SELECT pid FROM pg_stat_activity WHERE pid = $1 AND $2 = ANY(pg_blocking_pids(pid))', updatePid, grantPid);
+                expect(blocked).toHaveLength(1);
+            }, { timeout: 10_000 });
+            releaseGrant();
+            const outcomes = await Promise.all([grant, update]);
+            expect(outcomes).toMatchObject([{ value: { ok: true } }, { value: { ok: true } }]);
+            expect((await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).bodyVersion).toBe(2);
+            expect((await db.artifactAccountGrant.findUniqueOrThrow({ where: { artifactId_accountId: {
+                artifactId: artifact.id, accountId: recipient.id } } })).accessLevel).toBe("edit");
+        } finally {
+            releaseGrant();
+            await Promise.allSettled([grant, ...(update ? [update] : [])]);
+            vi.unstubAllEnvs();
+        }
     });
 
     it("replays an overlapping create of the same Artifact without another write or cursor", async () => {
@@ -469,6 +616,37 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 body: { bytes: bytes({ status: "approved" }), expectedVersion: 1 } })).toMatchObject({ ok: false, error: "not-found" });
             expect((await db.artifact.findUniqueOrThrow({ where: { id: artifact.id }, select: { bodyVersion: true } })).bodyVersion).toBe(1);
         } finally { restore(); }
+    });
+
+    it("posts a quoted Artifact Discussion with quota admission and transaction recovery disabled", async () => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const artifactId = randomUUID();
+        expect(await createArtifact({ actorUserId: owner.id, artifactId, header: bytes({ title: "Doc", kind: "markdown" }),
+            body: bytes({ body: "Hello" }), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) }))
+            .toMatchObject({ ok: true });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const doc = { ref: { kind: "doc" as const, artifactId, serverId: "home" },
+            revision: { headerVersion: 1, bodyVersion: 1 } };
+        const passage = { ...doc, range: { start: 0, end: 5 }, quote: "Hello" };
+        const content = { kind: "doc_passage_comment" as const, passage,
+            content: { v: 1 as const, parts: [{ t: "text" as const, text: "Review this passage" }] } };
+        const request = buildDiscussionMutationRequestBodyV1({ kind: "create", creationLocalId: randomUUID(),
+            titleContent: { t: "plain", v: { v: 1, title: "Comments" } }, firstMessage: { localId: randomUUID(),
+                content: { t: "plain", v: content }, authoredContent: content, mentionedAccountIds: [],
+                replyTarget: { kind: "doc_passage", doc } } });
+        const discussion = await createDiscussion({ actorAccountId: owner.id, authentication, request });
+        if (!discussion.ok) throw new Error(discussion.error);
+        vi.stubEnv("HAPPIER_ARTIFACT_ACCOUNT_LIMIT_BYTES", "100000");
+        vi.stubEnv("HAPPIER_DB_TX_MAX_RETRIES", "0");
+        try {
+            const posted = await postDiscussionMessage({ actorAccountId: owner.id, authentication,
+                discussionId: discussion.value.discussion.id,
+                request: buildDiscussionMutationRequestBodyV1({ kind: "post", localId: randomUUID(),
+                    content: { t: "plain", v: content }, authoredContent: content, mentionedAccountIds: [],
+                    replyTarget: { kind: "doc_passage", doc } }) });
+            expect(posted).toMatchObject({ ok: true });
+            expect(await db.discussionMessage.count({ where: { discussionId: discussion.value.discussion.id } })).toBe(2);
+        } finally { vi.unstubAllEnvs(); }
     });
 
     it("admits the complete cross-owner proposal audience before locking either resource", async () => {

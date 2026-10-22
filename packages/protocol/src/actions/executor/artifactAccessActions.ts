@@ -41,7 +41,7 @@ export function createArtifactAccessActionsV1(params: Readonly<{
       case 'artifact.access.grants.set': result = await params.transport.set(ArtifactAccessActionInputSchemasV1[args.actionId].parse(input), args.signal); break;
       case 'artifact.access.grants.remove': result = await params.transport.remove(ArtifactAccessActionInputSchemasV1[args.actionId].parse(input), args.signal); break;
     }
-    args.signal?.throwIfAborted();
+    if (args.actionId === 'artifact.access.grants.list') args.signal?.throwIfAborted();
     return ArtifactAccessActionOutputSchemasV1[args.actionId].parse(result);
   };
 }

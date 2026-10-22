@@ -6,6 +6,7 @@ import { type ArtifactAccessErrorCodeV1, type ArtifactAccessGrantSetStorageInput
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
+import type { AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { artifactVisibleWhere } from "./artifactClassification";
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes, artifactProvenanceMatchesAccountMode } from "./artifactStoredContent";
@@ -68,13 +69,15 @@ function resolveArtifactAudienceFromFacts(row: ArtifactAccessFacts): string[] {
     return resolveResourceGrantAudienceFromFacts(artifactGrantFacts(row));
 }
 
-/**
- * Fence the complete publication audience before reading mode, head or storage budget.
- * Account storage quotas require exclusive admission before byte-budget writes.
- * Other mutations preserve mode/currentness through compatible content admission.
- */
+/** Quota readers and all Artifact parent holders enter the same ordered cohort. */
+export function resolveArtifactPublicationAdmissionIntent(intent: AccountAdmissionIntent = "content"): AccountAdmissionIntent {
+    return intent === "content" && readArtifactStorageEnv(process.env).accountLimitBytes !== null
+        ? "serializing" : intent;
+}
+
+/** Fence the complete publication audience before reading mode, head or storage budget. */
 export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: string, additionalAccountIds: readonly string[] = [], options: Readonly<{
-    intent?: "content" | "exclusive";
+    intent?: AccountAdmissionIntent;
     additionalGrantPrincipal?: ArtifactAccessGrantSetStorageInputV1["principal"];
 }> = {}): Promise<void> {
     // SQLite already admits one writer. PostgreSQL/MySQL use the same ordered
@@ -93,7 +96,10 @@ export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: st
     const accountIds = await readAudience();
     await acquireAccountChangePublicationLocksInTx(tx, accountIds, {
         includeSingleAccount: true,
-        intent: options.intent ?? (readArtifactStorageEnv(process.env).accountLimitBytes === null ? "content" : "exclusive"),
+        // Grant/envelope writers also hold the Artifact before terminal Account
+        // publication. Under quota, admitting them as content would invert the
+        // order against a quota writer holding Account and waiting for Artifact.
+        intent: resolveArtifactPublicationAdmissionIntent(options.intent),
     });
     // Head/budget writes and grant/envelope mutations share the parent lock.
     // Take it before child rows: physical deletion cascades to those rows and

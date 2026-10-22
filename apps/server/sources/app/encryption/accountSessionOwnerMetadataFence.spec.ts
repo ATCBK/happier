@@ -139,7 +139,9 @@ describe("acquireAccountSessionOwnerMetadataFenceInTx", () => {
         expect(admissionSql).toHaveBeenCalledOnce();
     });
 
-    it.each(["postgres", "mysql", "sqlite"] as const)("only forbids an actual held-lock upgrade on %s", async provider => {
+    it.each((["postgres", "mysql", "sqlite"] as const).flatMap(provider => ([
+        ["content", "serializing"], ["serializing", "exclusive"], ["exclusive", "serializing"],
+    ] as const).map(([entry, requested]) => ({ provider, entry, requested }))))("checks $entry to $requested admission strength on $provider", async ({ provider, entry, requested }) => {
         applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: provider });
         const admissionSql = vi.fn(async () => [{ id: "a" }]);
         const reserveWriter = vi.fn(async (_sql: string, ..._args: unknown[]) => 1);
@@ -149,10 +151,10 @@ describe("acquireAccountSessionOwnerMetadataFenceInTx", () => {
                 ? inTxPostgresControlStatementMock.$executeRawUnsafe(sql, ...args) : reserveWriter(sql, ...args),
         }));
         await inTx(async tx => {
-            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "content");
-            const stronger = acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "exclusive");
-            if (provider === "postgres") await expect(stronger).rejects.toMatchObject({ reason: "transaction-account-audience-changed" });
-            else await expect(stronger).resolves.toEqual(["a"]);
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], entry);
+            const nested = acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], requested);
+            if (provider === "postgres" && entry !== "exclusive") await expect(nested).rejects.toMatchObject({ reason: "transaction-account-audience-changed" });
+            else await expect(nested).resolves.toEqual(["a"]);
         });
         expect(provider === "sqlite" ? reserveWriter : admissionSql).toHaveBeenCalledTimes(provider === "sqlite" ? 2 : 1);
     });

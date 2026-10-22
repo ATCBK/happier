@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { encodeBase64 } from '../crypto/base64.js';
 import { computeContentPublicKeyFingerprint } from '../machines/identity/contentPublicKeyFingerprint.js';
-import { ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessGrantRowV1Schema, ArtifactAccessGrantsListResponseV1Schema,
+import { ArtifactAccessActionOutputSchemasV1, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessGrantRowV1Schema, ArtifactAccessGrantsListResponseV1Schema,
   ArtifactRecipientKeyEnvelopeInputV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from './artifactAccessV1.js';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '../storage/artifactStoredContent.js';
 
 describe('Artifact grant mutation contract', () => {
+  it('retains a committed mutation receipt with pending recipient preparation through the Action output', () => {
+    const receipt = { artifactId: 'artifact', ownerAccountId: 'owner', access: 'owner', grants: [], changed: true,
+      preparation: { status: 'pending' } };
+    for (const action of ['artifact.access.grants.set', 'artifact.access.grants.remove'] as const) {
+      expect(ArtifactAccessActionOutputSchemasV1[action].parse(receipt)).toEqual(receipt);
+      expect(ArtifactAccessActionOutputSchemasV1[action].safeParse({ ...receipt,
+        preparation: { status: 'pending', content: 'must not disclose a failed read' } }).success).toBe(false);
+    }
+    expect(ArtifactAccessGrantsListResponseV1Schema.safeParse(receipt).success).toBe(false);
+  });
   it('preserves the canonical nullable display label of an unnamed Account', () => {
     const grant = {
       principal: { kind: 'account', accountId: 'recipient' }, accessLevel: 'view', createdByAccountId: 'owner',

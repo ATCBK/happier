@@ -2,13 +2,15 @@ import { getTransactionContext, TransactionReplayRequiredError, type Tx } from "
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { resolveDbSqlDialect } from "@/config/databaseProvider";
 
-export type AccountAdmissionIntent = "content" | "exclusive";
+export type AccountAdmissionIntent = "content" | "serializing" | "exclusive";
+
+const admissionStrength = { content: 0, serializing: 1, exclusive: 2 } as const;
 
 const admissionSymbol = Symbol("account-admission");
-type AccountAdmission = { readonly exclusive: boolean; held: boolean };
+type AccountAdmission = { readonly strength: number; held: boolean };
 type AdmissionContext = { [admissionSymbol]?: ReadonlyMap<string, AccountAdmission> };
 
-function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusive: boolean) {
+function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], strength: number) {
     const context = getTransactionContext(tx, { optional: true });
     // Unmanaged callers retain the primitive SQL contract. Read snapshots do
     // not participate in a managed write transaction's publication ordering.
@@ -16,9 +18,9 @@ function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusiv
     const owner = context as typeof context & AdmissionContext;
     const admitted = owner[admissionSymbol];
     if (!admitted) {
-        return owner[admissionSymbol] = new Map(ids.map(id => [id, { exclusive, held: false }]));
+        return owner[admissionSymbol] = new Map(ids.map(id => [id, { strength, held: false }]));
     }
-    if (ids.some(id => !admitted.has(id) || exclusive && !admitted.get(id)?.exclusive)) {
+    if (ids.some(id => !admitted.has(id) || strength > admitted.get(id)!.strength)) {
         // The first batch must contain all prospective publication recipients.
         // Never acquire a newly discovered or stronger lock after domain work.
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
@@ -64,10 +66,10 @@ function assertExactlyOneAccountRow(
 }
 
 /**
- * Admits ordinary content before resource locking, or excludes those writers for
- * Account authority and aggregate mutations. PostgreSQL publication later takes
- * its compatible NO KEY UPDATE lock; callers must choose their strongest intent
- * at entry rather than upgrading content admission.
+ * Admits ordinary content before resource locking, serializes aggregate writers
+ * compatibly with content admission, or excludes content for Account authority
+ * changes. PostgreSQL publication later takes NO KEY UPDATE; callers must choose
+ * their strongest intent at entry rather than upgrading after domain work.
  *
  * PostgreSQL-compatible providers and MySQL lock the Account row directly. SQLite reserves
  * the database writer with a bound no-op column update so Prisma's `@updatedAt` behavior is
@@ -92,7 +94,7 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
     if (ids.length === 0) return [];
     const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
     const admitted = dialect !== "sqlite"
-        ? assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || dialect === "mysql") : undefined;
+        ? assertManagedAdmissionAudience(tx, ids, admissionStrength[dialect === "mysql" ? "exclusive" : intent]) : undefined;
     // Native row locks survive until the containing attempt ends. Nested
     // owners need no second SQL/budget refresh for an already-held cohort.
     // Missing rows and failed acquisitions must never count as held locks;
@@ -114,9 +116,9 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
         return present;
     }
 
-    const mode = intent === "content" ? "KEY SHARE" : "UPDATE";
+    const mode = intent === "content" ? "KEY SHARE" : intent === "serializing" ? "NO KEY UPDATE" : "UPDATE";
     // MySQL has no compatible key-share/non-key-update pair. Its approved
-    // admission contract retains the early exclusive fence for both intents.
+    // admission contract retains the early exclusive fence for every intent.
     const query = dialect === "mysql"
         ? ids.length === 1
             ? "SELECT `id` FROM `Account` WHERE `id` = ? FOR UPDATE"

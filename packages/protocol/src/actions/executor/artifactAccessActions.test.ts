@@ -13,6 +13,13 @@ const resource = { artifactId: 'workflow', access: 'owner' as const,
 const response = { artifactId: 'workflow', ownerAccountId: 'owner', access: 'owner' as const, grants: [], changed: true };
 
 describe('Artifact grant host owner', () => {
+  it('preserves the known mutation receipt when its invocation is canceled after commit', async () => {
+    const cancellation = new AbortController();
+    const owner = createArtifactAccessActionsV1({ read: async () => resource,
+      transport: { list: async () => response, set: async () => { cancellation.abort(); return response; },
+        remove: async () => response } });
+    await expect(owner({ actionId: 'artifact.access.grants.set', input, signal: cancellation.signal })).resolves.toEqual(response);
+  });
   it('lets owners inspect and revoke existing Home-layout grants without admitting new sharing', async () => {
     const principal = { kind: 'account' as const, accountId: 'recipient' };
     let grants: ArtifactAccessGrantRowV1[] = [{ principal, accessLevel: 'view', createdByAccountId: 'owner', createdAt: 1,

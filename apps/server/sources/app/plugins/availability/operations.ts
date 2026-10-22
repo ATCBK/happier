@@ -2181,7 +2181,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
 
         try {
             const outcome = await inTx(async (tx) => {
-                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "serializing" });
                 const release = input.desiredVersion === null
                     ? null
                     : await resolveReleaseTx(tx, params.accountId, {
@@ -2323,7 +2323,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 const observedIntent = observed ? intentFromRow(observed) : null;
                 // An exact rejoin is a read of the incumbent, with no quota,
                 // promotion or Account mutation. Linearize it at this read;
-                // changed claims still enter exclusively and reread below.
+                // changed claims still serialize and reread below.
                 if (observedIntent?.desiredVersion === null
                     && readCurrentReleaseLessDeclarationV1(observed, pluginId)?.manifestDigestSha256 === claimedDeclaration.manifestDigestSha256
                     && collectionContractsEqual(observedIntent.writableCollections, claimed)) {
@@ -2333,10 +2333,10 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 // them before occupying this Account's publication fence, in
                 // the same Contract→Account order as release publication.
                 // Preparation only reads the incumbent. Actual intent/quota
-                // promotion retains exclusive admission; failed admission
+                // promotion retains self-serializing admission; failed admission
                 // still rolls materialization back atomically.
                 await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], {
-                    includeSingleAccount: true, intent: prepare ? "content" : "exclusive",
+                    includeSingleAccount: true, intent: prepare ? "content" : "serializing",
                 });
                 const current = await readCurrent();
                 const currentIntent = current ? intentFromRow(current) : null;
