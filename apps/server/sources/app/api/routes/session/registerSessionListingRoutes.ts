@@ -81,47 +81,33 @@ async function findV2SessionByIdRowInTx(tx: Tx, params: Readonly<{
     authentication: SessionAccessAuthentication;
     accessProjectionVersion?: number;
 }>) {
-    if (params.accessProjectionVersion !== 1) {
-        const row = await runWithSessionListProjectionFallback<V2SessionListRowCompat | null>(
-            () => tx.session.findUnique({
-                where: { id: params.sessionId },
-                select: createV2SessionListRowSelect(params),
-            }),
+    const readCurrentRow = () => tx.session.findUnique({
+        where: { id: params.sessionId },
+        select: createV2SessionListRowSelect(params),
+    });
+    // Only the released adapter permits migration-skew fallback. Current detail
+    // must load its complete projection, including the canonical access facts.
+    const row = params.accessProjectionVersion === 1
+        ? await readCurrentRow()
+        : await runWithSessionListProjectionFallback<V2SessionListRowCompat | null>(
+            readCurrentRow,
             () => tx.session.findUnique({
                 where: { id: params.sessionId },
                 select: createV2SessionListLegacyRowSelect(params),
             }),
         );
-        if (!row) return { admission: { status: "unavailable" as const }, row: null };
-        // The released seam is a second presentation of one access decision, not a
-        // second admission. Routing it through the canonical owner with the row
-        // this route already loaded keeps runtime-credential capping and
-        // runtime-principal currentness identical on both projections.
-        const admission = await resolveSessionAccessForOperation(tx, {
-            accountId: params.userId,
-            sessionId: params.sessionId,
-            authentication: params.authentication,
-            accessMode: "legacy_owner_or_direct",
-            row,
-        });
-        return admission.status === "allowed"
-            ? { admission, row }
-            : { admission, row: null };
-    }
+    if (!row) return { admission: { status: "unavailable" as const }, row: null };
+    // Both projections admit the row already loaded in this snapshot. The
+    // resolver retains credential qualification and runtime-principal checks;
+    // readSessionDetail still performs its separate fresh final admission.
     const admission = await resolveSessionAccessForOperation(tx, {
         accountId: params.userId,
         sessionId: params.sessionId,
         authentication: params.authentication,
+        accessMode: params.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct",
+        row,
     });
-    if (admission.status !== "allowed") return { admission, row: null };
-    // Version-qualified current detail promises the complete current access,
-    // viewer and publication projection. The migration-skew fallback belongs
-    // only to released bare detail/list adapters.
-    const row = await tx.session.findUnique({
-        where: { id: params.sessionId },
-        select: createV2SessionListRowSelect(params),
-    });
-    return { admission, row };
+    return admission.status === "allowed" ? { admission, row } : { admission, row: null };
 }
 
 

@@ -816,16 +816,13 @@ describe("sessionRoutes v2 session by id", () => {
             new Error("Column SessionTurn.rollbackState does not exist"),
             { code: "P2022" },
         );
-        txSessionFindUnique
-            .mockResolvedValueOnce(row)
-            .mockRejectedValueOnce(missingColumn);
+        txSessionFindUnique.mockRejectedValueOnce(missingColumn).mockResolvedValueOnce(row);
 
         const route = await createSessionRouteTestBuilder("GET", "/v2/sessions/:sessionId");
         await expect(route.invoke({
             params: { sessionId: "strict-no-fallback" },
             query: { accessProjectionVersion: 1 },
         })).rejects.toBe(missingColumn);
-        expect(txSessionFindUnique).toHaveBeenCalledTimes(2);
     });
 
     it("returns shared session with share DEK and share info", async () => {
