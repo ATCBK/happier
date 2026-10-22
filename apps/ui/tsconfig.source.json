@@ -3318,7 +3318,6 @@
     "sources/sync/domains/accountDirectory/accountServiceSelection.ts",
     "sources/sync/domains/automations/automationExistingSessionTemplateUpdate.ts",
     "sources/sync/domains/automations/automationRecipeAuthoring.ts",
-    "sources/sync/domains/automations/encodeAutomationTemplateCiphertextForAccount.ts",
     "sources/sync/domains/automations/existingSessionAutomationAvailability.ts",
     "sources/sync/domains/automations/isAutomationSettingsDraftValid.ts",
     "sources/sync/domains/automations/normalizeAutomationTemplateLaunchProfileReference.ts",
