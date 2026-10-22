@@ -40,6 +40,16 @@ test('UI postinstall verifies installed artifacts without patch-package and find
       HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
   });
   assert.equal(result.status, 1, result.stderr);
-  assert.ok(result.stderr.includes(join(root, 'node_modules/@sentry/react-native')), result.stderr);
+  assert.match(result.stderr, /Could not find @sentry\/react-native iOS native start source/);
   assert.doesNotMatch(result.stderr, /patch-package CLI/);
+
+  const sentrySource = join(root, 'apps/node_modules/@sentry/react-native/ios/RNSentryStart.m');
+  await mkdir(dirname(sentrySource), { recursive: true });
+  await writeFile(sentrySource, '// unpatched native source\n');
+  const ancestorResult = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
+    cwd: ui, encoding: 'utf8', env: { ...process.env, HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
+      HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
+  });
+  assert.equal(ancestorResult.status, 1, ancestorResult.stderr);
+  assert.ok(ancestorResult.stderr.includes(sentrySource), ancestorResult.stderr);
 });

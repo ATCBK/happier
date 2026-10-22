@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import {
     REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
     REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
+    findReactNativeEnrichedMarkdownPackageDirs,
     formatReactNativeEnrichedMarkdownWebStreamingPatchFailure,
     verifyReactNativeEnrichedMarkdownWebStreamingPatch,
     verifyUiPatchedDependencies,
@@ -65,6 +66,53 @@ test('UI dependency preflight verifies both app-local and hoisted patched copies
         fs.cpSync(fixture, hoistedCopy, { recursive: true });
         fs.unlinkSync(path.join(appCopy, 'lib/module/web/streamingReveal.js'));
         assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }));
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(fixture, { recursive: true, force: true });
+    }
+});
+
+test('UI dependency preflight finds ancestor-hoisted packages and rejects their missing markers', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-ancestor-preflight-'));
+    const fixture = createPatchedPackageFixture();
+    const uiPackageDir = path.join(root, 'apps', 'ui');
+    const packageDir = path.join(root, 'apps', 'node_modules', 'react-native-enriched-markdown');
+    try {
+        fs.mkdirSync(uiPackageDir, { recursive: true });
+        fs.cpSync(fixture, packageDir, { recursive: true });
+        fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), 'patchedDependencies: {}\n');
+        assert.doesNotThrow(() => verifyUiPatchedDependencies({ uiPackageDir }));
+        fs.mkdirSync(path.join(uiPackageDir, 'node_modules'));
+        fs.symlinkSync(packageDir, path.join(uiPackageDir, 'node_modules/react-native-enriched-markdown'),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        assert.deepEqual(findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir: root, expoAppDir: uiPackageDir }),
+            [fs.realpathSync(packageDir)]);
+        fs.unlinkSync(path.join(packageDir, 'lib/module/web/streamingReveal.js'));
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /streamingReveal/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(fixture, { recursive: true, force: true });
+    }
+});
+
+test('UI dependency preflight verifies other patches resolved from an ancestor', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-ancestor-other-patch-'));
+    const fixture = createPatchedPackageFixture();
+    const uiPackageDir = path.join(root, 'apps', 'ui');
+    const packageDir = path.join(root, 'apps', 'node_modules', 'fixture-dependency');
+    try {
+        fs.cpSync(fixture, path.join(root, 'node_modules/react-native-enriched-markdown'), { recursive: true });
+        fs.mkdirSync(uiPackageDir, { recursive: true });
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.mkdirSync(path.join(root, 'patches'));
+        fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'),
+            'patchedDependencies:\n  fixture-dependency@1.0.0: patches/fixture.patch\n');
+        fs.writeFileSync(path.join(root, 'patches', 'fixture.patch'),
+            '--- a/index.js\n+++ b/index.js\n@@ -1 +1 @@\n-unpatched\n+patched\n');
+        fs.writeFileSync(path.join(packageDir, 'index.js'), 'unpatched\n');
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
+        fs.writeFileSync(path.join(packageDir, 'index.js'), 'patched\n');
+        assert.doesNotThrow(() => verifyUiPatchedDependencies({ uiPackageDir }));
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
         fs.rmSync(fixture, { recursive: true, force: true });

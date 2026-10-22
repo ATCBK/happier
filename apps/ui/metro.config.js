@@ -593,6 +593,43 @@ if (shouldNarrowWatchFolders) {
   }
 }
 
+// Captures mount installed entries into real, private node_modules directories.
+// Metro resolves those entries to their installed bytes, outside the capture.
+// Admit the installed modules roots for every resolution path (including app-
+// local and scoped packages), after narrowing, without adding live workspace
+// source roots or relying on a package-manager-specific layout/dependency list.
+const installedModuleWatchRoots = new Set();
+for (const modulesDir of new Set([appNodeModules, rootNodeModules, ...(config.resolver.nodeModulesPaths ?? [])])) {
+  if (!fs.existsSync(modulesDir)) continue;
+  const entries = fs.readdirSync(modulesDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name === '@happier-dev') continue;
+    const entryPath = path.join(modulesDir, entry.name);
+    const candidates = entry.name.startsWith('@')
+      ? fs.readdirSync(entryPath).map(name => path.join(entryPath, name)) : [entryPath];
+    for (const candidate of candidates) {
+      if (!fs.existsSync(candidate)) continue;
+      const target = fs.realpathSync(candidate);
+      if (target === candidate) continue; // An ordinary installed directory is already subject to the configured watch policy.
+      if (!fs.statSync(target).isDirectory()) continue;
+      let installedRoot = null;
+      for (let parent = path.dirname(target); parent !== path.dirname(parent); parent = path.dirname(parent)) {
+        if (path.basename(parent) === 'node_modules') installedRoot = parent;
+      }
+      // Links to authored workspaces are source roots, not installed modules.
+      // Their existing source-resolution/watch owner decides which are live.
+      if (installedRoot) installedModuleWatchRoots.add(installedRoot);
+    }
+  }
+}
+for (const folder of installedModuleWatchRoots) {
+  const covered = [config.projectRoot, ...config.watchFolders].some(root => {
+    const relative = path.relative(root, folder);
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  });
+  if (!covered) config.watchFolders.push(folder);
+}
+
 // Keep Expo's default workspace watch roots even when Watchman is disabled so the config stays aligned with Expo's
 // dependency graph expectations. Large artifact trees are excluded via Metro block lists above instead of removing
 // whole workspaces from the watch set.
