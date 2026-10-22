@@ -199,7 +199,6 @@ describe('Pi Happier tools extension', () => {
     const source = buildPiHappierToolsExtensionSource();
     expect(source).not.toContain('memory_search');
     expect(source).not.toContain('change_title');
-    expect(source).toContain('for (const tool of config.tools)');
     expect(source).not.toContain('TIMEOUT_MS');
     expect(source).toContain('BRIDGE_OUTPUT_MAX_BYTES');
   });

@@ -72,6 +72,51 @@ function readConfig(pi) {
   } catch { return null; }
 }
 
+// Check local references before registering any tool in a catalog. Keep the
+// original shared document: Pi's argument validator and preserving serializers
+// consume it directly. Literal JSON (default/const/enum/examples) is not walked.
+function assertToolParameters(document) {
+  const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const visited = new Set();
+  const schemaMaps = new Set(["$defs", "definitions", "properties", "patternProperties", "dependentSchemas"]);
+  const schemaArrays = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
+  const schemaValues = new Set(["not", "if", "then", "else", "items", "contains", "additionalItems",
+    "additionalProperties", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contentSchema"]);
+  const resolveReference = (reference) => {
+    let fragment;
+    try { fragment = decodeURIComponent(reference.slice(1)); } catch {}
+    if (fragment === undefined || (fragment !== "" && !fragment.startsWith("/"))) {
+      throw new Error("Pi tool schema has an unresolved document-local reference");
+    }
+    let target = document;
+    for (const token of fragment === "" ? [] : fragment.slice(1).split("/")) {
+      const key = token.split("~1").join("/").split("~0").join("~");
+      if ((!isObject(target) && !Array.isArray(target)) || !Object.hasOwn(target, key)) {
+        throw new Error("Pi tool schema has an unresolved document-local reference");
+      }
+      target = target[key];
+    }
+    if (typeof target !== "boolean" && !isObject(target)) {
+      throw new Error("Pi tool schema reference does not target a schema");
+    }
+    return target;
+  };
+  const visit = (schema) => {
+    if (!isObject(schema) || visited.has(schema)) return;
+    visited.add(schema);
+    if (typeof schema.$ref === "string" && schema.$ref.startsWith("#")) visit(resolveReference(schema.$ref));
+    for (const [key, value] of Object.entries(schema)) {
+      if (schemaMaps.has(key) && isObject(value)) Object.values(value).forEach(visit);
+      else if ((schemaArrays.has(key) || key === "items") && Array.isArray(value)) value.forEach(visit);
+      else if (schemaValues.has(key)) visit(value);
+      else if (key === "dependencies" && isObject(value)) {
+        for (const child of Object.values(value)) if (!Array.isArray(child)) visit(child);
+      }
+    }
+  };
+  visit(document);
+}
+
 function parseEnvelope(stdout) {
   for (const line of String(stdout || "").trim().split("\\n").reverse()) {
     try {
@@ -316,6 +361,24 @@ export default function happierPiToolsExtension(pi) {
       const base = typeof event?.systemPrompt === "string" ? event.systemPrompt.trim() : "";
       return { systemPrompt: base ? base + "\\n\\n" + addition : addition };
     });
+    // Non-strict Anthropic alone drops root keywords during serialization.
+    // Restore its complete registered document at Pi's supported request seam.
+    // getAllTools includes inactive definitions; only selected tools can supply schemas.
+    pi.on("before_provider_request", ({ payload }) => {
+      if (!Array.isArray(payload?.tools) || !payload.tools.some((tool) => tool.input_schema && tool.strict !== true)) return;
+      const activeNames = new Set(pi.getActiveTools());
+      const tools = pi.getAllTools().filter((tool) => activeNames.has(tool.name));
+      const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+      return { ...payload, tools: payload.tools.map((tool) => {
+        if (!tool.input_schema || tool.strict === true) return tool;
+        // OAuth has already changed native casing. Resolve exact selected
+        // identities first so an inactive case-colliding definition cannot win.
+        const source = toolsByName.get(tool.name)
+          || tools.find((entry) => entry.name.toLowerCase() === tool.name.toLowerCase());
+        return source ? { ...tool, input_schema: { type: "object", ...source.parameters } } : tool;
+      }) };
+    });
+    for (const tool of config.tools) assertToolParameters(tool.inputSchema);
     for (const tool of config.tools) {
       pi.registerTool({
         name: tool.name,
@@ -357,13 +420,17 @@ export default function happierPiToolsExtension(pi) {
             tools.push(...catalog.tools);
             cursor = catalog.nextCursor;
           } while (cursor);
-          // A failed later page must not leave tools bound to a closed server.
-          for (const tool of tools) {
-            if (server.enabledTools && !server.enabledTools.includes(tool.name)) continue;
+          // Check the complete selected catalog before registration: a failed
+          // later page or schema must not bind tools to a closed connection.
+          const selectedTools = tools.filter((tool) => {
+            if (server.enabledTools && !server.enabledTools.includes(tool.name)) return false;
             const policy = config.mcpToolPolicy && Object.hasOwn(config.mcpToolPolicy, serverName)
               ? config.mcpToolPolicy[serverName] : undefined;
             const decision = policy && Object.hasOwn(policy.tools, tool.name) ? policy.tools[tool.name] : policy?.unlisted;
-            if (decision === "off" || decision === "deny") continue;
+            return decision !== "off" && decision !== "deny";
+          });
+          for (const tool of selectedTools) assertToolParameters(tool.inputSchema);
+          for (const tool of selectedTools) {
             const name = "mcp__" + serverName + "__" + tool.name;
             names.push(name);
             pi.registerTool({ name, label: tool.title || tool.name,
