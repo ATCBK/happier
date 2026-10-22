@@ -13,7 +13,7 @@ type RouteActionAuthorityRequest = Pick<FastifyRequest,
     | "externalActionEffectActionId"
     | "externalActionExecutionTarget"
     | "params"
->;
+> & Readonly<{ body?: unknown }>;
 
 /**
  * Binds a verified external Action effect to its exact Session route. The
@@ -25,6 +25,15 @@ export function requireRouteActionAuthority(actionId: ActionId) {
     const spec = getActionSpec(actionId);
     return async (request: RouteActionAuthorityRequest, reply: FastifyReply): Promise<unknown> => {
         if (request.authTokenKind === "account" || request.authTokenKind === "terminal") {
+            // A lowered invocation ceiling is still sufficient for an
+            // automation Action. Human-only effects retain their catalog floor,
+            // including floors selected by the actual route input.
+            if (request.authAuthority === "account_automation" && resolveCredentialActionAdmissionV1({
+                spec,
+                authority: request.authAuthority,
+                grant: null,
+                actionInput: request.body,
+            }).ok) return undefined;
             return requirePresentUser(request, reply);
         }
         if (
