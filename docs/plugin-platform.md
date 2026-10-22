@@ -1282,6 +1282,25 @@ that holds the workspace reads its current admitted registry through
 use the same projection and qualified identity. Discovery does not activate
 plugin code. The host owns on-demand startup, document state, queries,
 diagnostics and disposal in `lsp/languageServerHost.ts`.
+Document sync acknowledgements report only that document's selected servers and
+capabilities; workspace-root watches still aggregate the root's live servers.
+For an acknowledged document, the next explicit query after daemon replacement
+resynchronizes its retained text, reopening its lost lease only when the host
+reports that it is missing. An acknowledged root-generation change also rebases
+diagnostic delivery; an old root's revision or late query cannot supply the new
+answer. This does not restart a crashed language server automatically.
+
+In this development catalog, `appliedGeneration` is a runtime-application fact,
+not an installation or descriptor-readiness flag. For a plugin with a daemon
+entrypoint, only descriptor contributions and no startup activation event,
+install validation may evaluate that entrypoint and report an applied
+generation. A fresh daemon leaves that target dormant, so its applied generation
+is `null`; language-server queries can still use its current admitted declarations
+and managed executable without activating plugin code. The contribution's
+`activation: notRequired` and projection state describe that path.
+A null applied generation alone proves
+neither healthy availability nor activation failure; inspect the affected
+contribution and its diagnostics.
 
 Each declaration supplies `title`, a `languageIds` map from UI/highlighter ids
 to LSP ids, `executable` and `args`. Optional `filePatterns` provide matching
@@ -1657,6 +1676,14 @@ available in the chooser. Every matching, currently available installed viewer
 is offered in the existing horizontally scrollable chooser; viewer count does
 not truncate the choices. Matching and runtime admission still apply to each
 viewer, including externally installed plugins.
+
+The File page hosts those viewers on phones as well as desktop/tablet. Runtime
+admission uses the same destination Registry predicate: the chooser identifies
+the existing viewer family, and the mounted singleton `detailsTab` receives its
+File-host purpose only from an exact current private `openableContent` handoff.
+Persisted destination/input and a viewer declaration do not supply that custody.
+Ordinary pane destinations retain their desktop/tablet admission policy; no
+author phone opt-in, new manifest field or transport shape is introduced.
 
 Public `StoredImage` supports the host's shared Media stage through an optional
 private presentation-host `mediaStage` port. When supplied, pressing a loaded
@@ -2561,11 +2588,12 @@ these bundled sources and Kilo declare positive content search.
 The prefilter recognizes literal and mixed JSON-escaped spellings of an ASCII
 query, including JavaScript's ASCII-producing Unicode folds. Unicode fallback
 uses only escape codes from the query's case-folded alphabet, so unrelated
-escape codes alone do not require decoding a file. A page owner can pass
-its physically admitted native root once and intersect the returned paths with
-its admitted candidates; Claude uses this instead of launching one process per
-file. Its JSONL glob and depth follow the existing top-level native candidate
-layout, excluding nested sidechains from the prefilter work.
+escape codes alone do not require decoding a file. Claude batches physically
+admitted, unvisited top-level native files using the caller's result-page size.
+It prefilters the next batch on demand, so completed files and later history do
+not delay every page. An unfinished transcript resumes decoding from its saved
+position without repeating the prefilter. Nested sidechains remain excluded by
+the native candidate enumerator.
 Non-ASCII/process-unsafe queries and truncated prefilter output exclude no files.
 Native decoders still reauthorize and re-match every published hit.
 Decoders still own branch/rollback selection and native item identity. The
