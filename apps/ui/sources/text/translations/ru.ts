@@ -9545,6 +9545,12 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     output: "Результат",
     showFullContent: "Показать полностью",
     showLessContent: "Показать меньше",
+    outcome: {
+      completed: "Выполнено",
+      running: "Выполняется",
+      waiting: "Ждёт подтверждения",
+      blocked: "Не разрешено",
+    },
     actionOutcome: {
       refused: "Отклонено",
       failed: "Не удалось",

@@ -9527,6 +9527,12 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     output: "Sortie",
     showFullContent: "Afficher tout le contenu",
     showLessContent: "Afficher moins",
+    outcome: {
+      completed: "Terminé",
+      running: "En cours",
+      waiting: "En attente d'approbation",
+      blocked: "Non autorisé",
+    },
     actionOutcome: {
       refused: "Refusé",
       failed: "Échec",

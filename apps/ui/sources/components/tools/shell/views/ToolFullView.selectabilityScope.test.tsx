@@ -44,6 +44,7 @@ const DummyFullView = () => {
 };
 
 vi.mock('@/components/tools/renderers/core/_registry', () => ({
+  usesStructuredToolDetailsPage: () => false,
   getToolViewComponent: (toolName: string) => {
     if (toolName === 'execute') {
       return () => React.createElement(DummyFullView);

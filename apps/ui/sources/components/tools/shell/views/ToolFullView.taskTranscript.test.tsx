@@ -110,6 +110,7 @@ const renderedToolSourceSpy = vi.fn();
 vi.mock('@/components/tools/renderers/core/_registry', async () => {
     const { useSessionTranscriptSource } = await import('@/components/sessions/transcript/source/SessionTranscriptSourceContext');
     return ({
+    usesStructuredToolDetailsPage: () => false,
     getToolViewComponent: (toolName: string) => {
         if (toolName === 'Read' || toolName === 'read') {
             return () => {

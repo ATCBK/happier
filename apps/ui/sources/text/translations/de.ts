@@ -9619,6 +9619,12 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         output: 'Ausgabe',
         showFullContent: 'Vollständigen Inhalt zeigen',
         showLessContent: 'Weniger zeigen',
+        outcome: {
+          completed: "Abgeschlossen",
+          running: "Läuft",
+          waiting: "Wartet auf Freigabe",
+          blocked: "Nicht erlaubt",
+        },
         actionOutcome: {
           refused: "Abgelehnt",
           failed: "Fehlgeschlagen",

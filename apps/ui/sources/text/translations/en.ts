@@ -11447,6 +11447,12 @@ const enToolView = {
   output: 'Output',
   showFullContent: 'Show full content',
   showLessContent: 'Show less',
+  outcome: {
+    completed: "Completed",
+    running: "Running",
+    waiting: "Waiting for approval",
+    blocked: "Not allowed",
+  },
   actionOutcome: {
     refused: 'Refused',
     failed: 'Failed',

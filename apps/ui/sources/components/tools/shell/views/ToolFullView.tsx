@@ -1,22 +1,25 @@
-import { Typography } from '@/constants/Typography';
 import * as React from 'react';
-import { View, ScrollView, useWindowDimensions } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
 import { ToolCall, Message } from "@happier-dev/session-core/messages";
 import { CodeView } from '@/components/ui/media/CodeView';
-import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
 import { Metadata } from '@happier-dev/session-core/state';
 import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/state/storageTypes';
-import { getToolViewComponent } from '@/components/tools/renderers/core/_registry';
+import { getToolViewComponent, usesStructuredToolDetailsPage } from '@/components/tools/renderers/core/_registry';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
+import { ToolCallDetailsSections } from './ToolCallDetailsSections';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
-import { StructuredResultView } from '@/components/tools/renderers/system/StructuredResultView';
 import { normalizeToolCallForRendering } from "@happier-dev/session-core/tools";
 import { PermissionFooter } from '../permissions/PermissionFooter';
 import { useSetting } from '@/sync/domains/state/storage';
-import { useUnistyles } from 'react-native-unistyles';
-import { Text, TextSelectabilityScope } from '@/components/ui/text/Text';
+import { TextSelectabilityScope } from '@/components/ui/text/Text';
 import { resolveToolHeaderTextPresentation } from '@/components/tools/shell/presentation/resolveToolHeaderTextPresentation';
 import { resolvePermissionPromptSurface, shouldShowGenericPermissionPromptForRequest } from '@/utils/sessions/permissions/permissionPromptPolicy';
 import {
@@ -36,7 +39,6 @@ import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveIna
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
 import { resolveToolPermissionTerminalErrorMessage } from '../permissions/resolveToolPermissionTerminalErrorMessage';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
-import { Icon } from '@/components/ui/icons/Icon';
 import { useHistoricalTranscriptAgentId } from '@/components/sessions/transcript/attribution/SessionTranscriptAgentAttributionContext';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 
@@ -61,6 +63,8 @@ interface ToolFullViewProps {
     discardedMessages?: readonly DiscardedPendingMessage[] | null;
     /** The exact destination those rows belong to; omitted means the main Session. */
     pendingRecipient?: PendingMessage['recipient'];
+    /** The page's own header when this view is the whole tool-details page; hosts with their own header omit it. */
+    header?: React.ReactNode;
 }
 
 export function ToolFullView(props: ToolFullViewProps) {
@@ -71,10 +75,9 @@ export function ToolFullView(props: ToolFullViewProps) {
     return <SessionTranscriptSourceProvider source={detailSource}><ToolFullViewContent {...props} /></SessionTranscriptSourceProvider>;
 }
 
-function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metadata, messages = [], jumpChildId, forcePermissionFooterInTranscript = false, pendingMessages, discardedMessages, pendingRecipient }: ToolFullViewProps) {
+function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metadata, messages = [], jumpChildId, forcePermissionFooterInTranscript = false, pendingMessages, discardedMessages, pendingRecipient, header }: ToolFullViewProps) {
     const source = useSessionTranscriptSource();
     const interaction = source.useInteraction();
-    const { theme } = useUnistyles();
     // This view opens one historical row on its own screen, so the row's own
     // Agent — published by the opener — outranks the Session's current one.
     const historicalAgentId = useHistoricalTranscriptAgentId();
@@ -199,41 +202,43 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
             />
         ) : null;
 
+    // The raw record (with its transport envelope) stays one deliberate press away, as its own quiet section.
     const debugSection = (
-        <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-                <Icon name="code" size={20} color={theme.colors.accent.orange} />
-                <Text style={styles.sectionTitle}>{t('tools.fullView.debug')}</Text>
-                <Text
-                    style={[styles.toolId, { marginLeft: theme.space.s8 }]}
-                    onPress={() => setShowDebug((v) => !v)}
-                >
-                    {showDebug ? t('tools.fullView.hide') : t('tools.fullView.show')}
-                </Text>
-            </View>
-            {showDebug && (
-                <CodeView
-                    code={JSON.stringify({
-                        name: tool.name,
-                        normalizedName: normalizedToolName,
-                        state: toolForRendering.state,
-                        description: toolForRendering.description,
-                        input: toolForRendering.input,
-                        result: toolForRendering.result,
-                        createdAt: toolForRendering.createdAt,
-                        startedAt: toolForRendering.startedAt,
-                        completedAt: toolForRendering.completedAt,
-                        permission: toolForRendering.permission,
-                        messages,
-                        jumpChildId: normalizedJumpChildId,
-                    }, null, 2)}
-                />
-            )}
-        </View>
+        <ItemGroup testID="tool-details-debug">
+            <Item
+                testID="tool-details-debug-toggle"
+                title={t('tools.fullView.debug')}
+                detail={showDebug ? t('tools.fullView.hide') : t('tools.fullView.show')}
+                accessibilityState={{ expanded: showDebug }}
+                onPress={() => setShowDebug((v) => !v)}
+                showChevron={false}
+            />
+            {showDebug ? (
+                <SectionContentRow testID="tool-details-debug-body">
+                    <CodeView
+                        wrap
+                        code={JSON.stringify({
+                            name: tool.name,
+                            normalizedName: normalizedToolName,
+                            state: toolForRendering.state,
+                            description: toolForRendering.description,
+                            input: toolForRendering.input,
+                            result: toolForRendering.result,
+                            createdAt: toolForRendering.createdAt,
+                            startedAt: toolForRendering.startedAt,
+                            completedAt: toolForRendering.completedAt,
+                            permission: toolForRendering.permission,
+                            messages,
+                            jumpChildId: normalizedJumpChildId,
+                        }, null, 2)}
+                    />
+                </SectionContentRow>
+            ) : null}
+        </ItemGroup>
     );
 
     if (canRenderTaskTranscript && normalizedSessionId) {
-        const transcriptHeader =
+        const toolTranscriptHeader =
             (messages.length === 0 || normalizedToolName === 'SubAgentRun' && toolForRendering.state !== 'running')
                 && (SpecializedFullView || showSidechainHydrationStatus) ? (
                 <TextSelectabilityScope selectable>
@@ -257,6 +262,9 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                     </>
                 </TextSelectabilityScope>
             ) : null;
+        // The page header stands a section apart from the conversation it names.
+        const pageHeader = header ? <View style={styles.transcriptPageHeader}>{header}</View> : null;
+        const transcriptHeader = pageHeader && toolTranscriptHeader ? <>{pageHeader}{toolTranscriptHeader}</> : pageHeader ?? toolTranscriptHeader;
 
         return (
             <View style={[styles.container, { paddingHorizontal: screenWidth > 700 ? 16 : 0 }]}>
@@ -293,11 +301,16 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
         );
     }
 
+    const structuredPage = usesStructuredToolDetailsPage(normalizedToolName);
     return (
-        <ScrollView style={[styles.container, { paddingHorizontal: screenWidth > 700 ? 16 : 0 }]}>
-            <View style={[styles.contentWrapper, contentMaxWidthStyle]}>
-                {/* Tool-specific content or generic fallback */}
-                {SpecializedFullView ? (
+        <ItemList testID="tool-details-page">
+            {header}
+            {structuredPage || !SpecializedFullView ? (
+                <TextSelectabilityScope selectable>
+                    <ToolCallDetailsSections tool={toolForRendering} serverId={serverId} />
+                </TextSelectabilityScope>
+            ) : (
+                <PageContentColumn>
                     <TextSelectabilityScope selectable>
                         <SpecializedFullView
                             tool={toolForRendering}
@@ -308,90 +321,16 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                             interaction={interaction}
                         />
                     </TextSelectabilityScope>
-                ) : (
-                    <TextSelectabilityScope selectable>
-                        <>
-                            {/* Generic fallback for tools without specialized views */}
-                            {/* Tool Description */}
-                            {toolForRendering.description && (
-                                <View style={styles.section}>
-                                    <View style={styles.sectionHeader}>
-                                        <Icon name="info" size={20} color={theme.colors.accent.indigo} />
-                                        <Text style={styles.sectionTitle}>{t('tools.fullView.description')}</Text>
-                                    </View>
-                                    <Text style={styles.description}>{toolForRendering.description}</Text>
-                                </View>
-                            )}
-                            {/* Input Parameters */}
-                            {toolForRendering.input && (
-                                <View style={styles.section}>
-                                    <View style={styles.sectionHeader}>
-                                        <Icon name="sign-in" size={20} color={theme.colors.accent.indigo} />
-                                        <Text style={styles.sectionTitle}>{t('tools.fullView.inputParams')}</Text>
-                                    </View>
-                                    <CodeView code={JSON.stringify(toolForRendering.input, null, 2)} />
-                                </View>
-                            )}
-
-                            {/* Result/Output */}
-                            {toolForRendering.state === 'completed' && toolForRendering.result && (
-                                <View style={styles.section}>
-                                    <View style={styles.sectionHeader}>
-                                        <Icon name="sign-out" size={20} color={theme.colors.state.success.foreground} />
-                                        <Text style={styles.sectionTitle}>{t('tools.fullView.output')}</Text>
-                                    </View>
-                                    <CodeView
-                                        code={typeof toolForRendering.result === 'string' ? toolForRendering.result : JSON.stringify(toolForRendering.result, null, 2)}
-                                    />
-                                </View>
-                            )}
-
-                            {toolForRendering.state === 'running' && toolForRendering.result && (
-                                <View style={styles.section}>
-                                    <View style={styles.sectionHeader}>
-                                        <Icon name="sign-out" size={20} color={theme.colors.state.success.foreground} />
-                                        <Text style={styles.sectionTitle}>{t('tools.fullView.output')}</Text>
-                                    </View>
-                                    <StructuredResultView tool={toolForRendering} metadata={metadata || null} messages={messages} sessionId={sessionId} />
-                                </View>
-                            )}
-
-                            {/* Error Details */}
-                            {toolForRendering.state === 'error' && toolForRendering.result && (
-                                <View style={styles.section}>
-                                    <View style={styles.sectionHeader}>
-                                        <Icon name="x-circle" size={20} color={theme.colors.state.danger.foreground} />
-                                        <Text style={styles.sectionTitle}>{t('tools.fullView.error')}</Text>
-                                    </View>
-                                    <View style={styles.errorContainer}>
-                                        <Text style={styles.errorText}>
-                                            {typeof toolForRendering.result === 'string'
-                                                ? toolForRendering.result
-                                                : JSON.stringify(toolForRendering.result, null, 2)}
-                                        </Text>
-                                    </View>
-                                </View>
-                            )}
-
-                            {/* No Output Message */}
-                            {toolForRendering.state === 'completed' && !toolForRendering.result && (
-                                <View style={styles.section}>
-                                    <View style={styles.emptyOutputContainer}>
-                                        <Icon name="check-circle" size={48} color={theme.colors.state.success.foreground} />
-                                        <Text style={styles.emptyOutputText}>{t('tools.fullView.completed')}</Text>
-                                        <Text style={styles.emptyOutputSubtext}>{t('tools.fullView.noOutput')}</Text>
-                                    </View>
-                                </View>
-                            )}
-                        </>
-                    </TextSelectabilityScope>
-                )}
-
-                {permissionTerminalError}
-                {permissionFooter}
-                {debugSection}
-            </View>
-        </ScrollView>
+                </PageContentColumn>
+            )}
+            {permissionTerminalError || permissionFooter ? (
+                <PageContentColumn>
+                    {permissionTerminalError}
+                    {permissionFooter}
+                </PageContentColumn>
+            ) : null}
+            {debugSection}
+        </ItemList>
     );
 }
 
@@ -405,63 +344,13 @@ const styles = StyleSheet.create((theme) => ({
         alignSelf: 'center',
         width: '100%',
     },
-    section: {
-        marginBottom: 28,
-        paddingHorizontal: theme.space.s4,
-    },
-    sectionFullWidth: {
-        marginBottom: 28,
-        paddingHorizontal: 0,
+    transcriptPageHeader: {
+        paddingBottom: HAPPIER_PAGE_METRICS.sectionGapPx,
     },
     transcriptSection: {
         flex: 1,
         minHeight: 0,
         paddingHorizontal: 0,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: theme.space.s12,
-        gap: theme.space.s8,
-    },
-    sectionTitle: {
-        ...Typography.variant('heading'),
-        color: theme.colors.text.primary,
-    },
-    description: {
-        fontSize: 14,
-        lineHeight: 20,
-        color: theme.colors.text.secondary,
-    },
-    toolId: {
-        fontSize: 12,
-        fontFamily: resolveCodeMonoFontFamily(),
-        color: theme.colors.text.secondary,
-    },
-    errorContainer: {
-        backgroundColor: theme.colors.state.danger.background,
-        borderRadius: 8,
-        padding: theme.space.s16,
-        borderWidth: 1,
-        borderColor: theme.colors.state.danger.border,
-    },
-    errorText: {
-        fontSize: 14,
-        color: theme.colors.state.danger.foreground,
-        lineHeight: 20,
-    },
-    emptyOutputContainer: {
-        alignItems: 'center',
-        paddingVertical: theme.space.s48,
-        gap: theme.space.s12,
-    },
-    emptyOutputText: {
-        ...Typography.variant('heading'),
-        color: theme.colors.text.primary,
-    },
-    emptyOutputSubtext: {
-        fontSize: 14,
-        color: theme.colors.text.secondary,
     },
 }));
 

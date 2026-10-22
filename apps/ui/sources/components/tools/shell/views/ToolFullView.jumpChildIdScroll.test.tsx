@@ -32,6 +32,7 @@ vi.mock('react-native-device-info', () => ({
 }));
 
 vi.mock('@/components/tools/renderers/core/_registry', () => ({
+    usesStructuredToolDetailsPage: () => false,
     getToolViewComponent: () => null,
 }));
 

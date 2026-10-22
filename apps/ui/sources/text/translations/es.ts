@@ -9689,6 +9689,12 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     output: "Salida",
     showFullContent: "Mostrar contenido completo",
     showLessContent: "Mostrar menos",
+    outcome: {
+      completed: "Completada",
+      running: "En curso",
+      waiting: "Esperando aprobación",
+      blocked: "No permitida",
+    },
     actionOutcome: {
       refused: "Rechazada",
       failed: "Fallida",

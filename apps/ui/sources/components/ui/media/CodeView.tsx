@@ -8,12 +8,15 @@ interface CodeViewProps {
     code: string;
     language?: string;
     findRanges?: readonly FindTextRange[];
+    /** Wrap long lines in place (a details page reads the whole value); scrolls sideways by default. */
+    wrap?: boolean;
 }
 
 export const CodeView = React.memo<CodeViewProps>(({ 
     code, 
     language,
     findRanges,
+    wrap = false,
 }) => {
     const jsonInferenceMaxBytes = useSetting('filesCodeViewJsonInferenceMaxBytes') as number | null;
 
@@ -41,7 +44,7 @@ export const CodeView = React.memo<CodeViewProps>(({
             code={code}
             language={resolvedLanguage}
             selectable={true}
-            wrap={false}
+            wrap={wrap}
             showCopyButton={true}
             findRanges={findRanges}
         />

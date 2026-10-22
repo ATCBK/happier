@@ -144,6 +144,7 @@ function ToolCallDetailsView(props: Readonly<{
     recipientOverride?: ParticipantRecipientV1;
     composerInitialLocalId?: string;
     browserContextState?: BrowserContextState | null;
+    header?: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -274,6 +275,7 @@ function ToolCallDetailsView(props: Readonly<{
                 pendingMessages={executionRunRecipient ? targetPending.messages : null}
                 discardedMessages={executionRunRecipient ? targetPending.discarded : null}
                 pendingRecipient={executionRunRecipient}
+                header={props.header}
             />
 
             {shouldShowComposer ? (
@@ -303,6 +305,8 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
     recipientOverride?: ParticipantRecipientV1;
     composerInitialLocalId?: string;
     browserContextState?: BrowserContextState | null;
+    /** The tool-details page's own header; hosts that draw their own (a Run's page) omit it. */
+    header?: React.ReactNode;
 }>) => {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -326,6 +330,7 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
                         recipientOverride={props.recipientOverride}
                         composerInitialLocalId={props.composerInitialLocalId}
                         browserContextState={props.browserContextState}
+                        header={props.header}
                     />
                 ) : props.message.kind === 'agent-text' || props.message.kind === 'user-text' ? (
                     <TextFullView text={prepareTranscriptMessageBody(props.message).text ?? ''} />

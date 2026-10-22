@@ -9909,6 +9909,12 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     output: "Uscita",
     showFullContent: "Mostra contenuto completo",
     showLessContent: "Mostra meno",
+    outcome: {
+      completed: "Completata",
+      running: "In corso",
+      waiting: "In attesa di approvazione",
+      blocked: "Non consentita",
+    },
     actionOutcome: {
       refused: "Rifiutata",
       failed: "Non riuscita",

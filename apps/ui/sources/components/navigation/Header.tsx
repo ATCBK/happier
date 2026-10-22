@@ -6,7 +6,7 @@ import { useLayoutMaxWidth } from '../ui/layout/layout';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -77,6 +77,8 @@ export const Header = React.memo((props: HeaderProps) => {
         styles.subtitle,
         headerSubtitleStyle,
     ];
+    const leading = headerLeft ? headerLeft() : null;
+    const hasLeading = leading !== null && leading !== undefined && leading !== false;
 
     return (
         <View
@@ -94,14 +96,16 @@ export const Header = React.memo((props: HeaderProps) => {
                     pointerEvents="box-none"
                     style={[styles.content, { height: headerHeight, maxWidth }, headerContentStyle]}
                 >
-                    <View pointerEvents="box-none" style={styles.leftContainer}>
-                        {headerLeft && headerLeft()}
-                    </View>
+                    {hasLeading ? (
+                        <View pointerEvents="box-none" style={styles.leftContainer}>
+                            {leading}
+                        </View>
+                    ) : null}
 
                     <View
                         testID="desktop-route-header-center"
                         pointerEvents="box-none"
-                        style={styles.centerContainer}
+                        style={[styles.centerContainer, !hasLeading && styles.centerContainerAtPageEdge]}
                     >
                         {title}
                         {subtitle && <Text style={subtitleStyle} numberOfLines={1}>{subtitle}</Text>}
@@ -244,6 +248,8 @@ export const createHeader = (props: NativeStackHeaderProps) => {
     return <AppStackHeader {...props} />;
 };
 
+const HEADER_CONTENT_PADDING_PX = Platform.select({ ios: 8, default: 16 });
+
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     // The actions of a page with no page header, above it at the trailing edge, in no header chrome.
     shellActionsBar: {
@@ -273,7 +279,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: Platform.select({ ios: 8, default: 16 }),
+        paddingHorizontal: HEADER_CONTENT_PADDING_PX,
         width: '100%',
     },
     leftContainer: {
@@ -290,6 +296,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         justifyContent: Platform.OS === 'ios' ? 'center' : 'flex-start',
         paddingHorizontal: theme.space.s12,
+    },
+    // With nothing before it (a deep link with no Back), a leading-aligned title starts on the page's own
+    // text edge, the line its purpose and sections start on, not a back button's width in.
+    centerContainerAtPageEdge: Platform.OS === 'ios' ? {} : {
+        paddingLeft: HAPPIER_PAGE_METRICS.pageTextInsetPx - HEADER_CONTENT_PADDING_PX,
     },
     // The page title is the page's identity; its trailing controls are secondary. They take what they
     // need up to three fifths of the bar (a page's one filled action, its overflow and a glyph chip

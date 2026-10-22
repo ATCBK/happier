@@ -9524,6 +9524,12 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     output: "Wyjście",
     showFullContent: "Pokaż całą treść",
     showLessContent: "Pokaż mniej",
+    outcome: {
+      completed: "Zakończone",
+      running: "W toku",
+      waiting: "Czeka na zatwierdzenie",
+      blocked: "Niedozwolone",
+    },
     actionOutcome: {
       refused: "Odrzucone",
       failed: "Nieudane",

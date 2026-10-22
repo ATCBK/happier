@@ -105,10 +105,21 @@ const toolViewDescriptors: Record<KnownCanonicalToolNameV2, ToolViewDescriptor> 
 export const toolViewRegistry = Object.fromEntries(Object.entries(toolViewDescriptors)
     .map(([name, descriptor]) => [name, descriptor.component])) as Record<KnownCanonicalToolNameV2, ToolViewComponent>;
 
+// MCP and unknown calls have no renderer richer than their input and result, so their details page
+// reads those structured (`ToolCallDetailsSections`) instead of the transcript card's raw blocks.
+const mcpToolViewDescriptor: ToolViewDescriptor = { component: MCPToolView, projectDisplayText: projectMCPDisplayText };
+const unknownToolViewDescriptor: ToolViewDescriptor = { component: UnknownToolView, projectDisplayText: projectUnknownDisplayText };
+
 function getToolViewDescriptor(toolName: string): ToolViewDescriptor {
-    if (toolName.startsWith('mcp__')) return { component: MCPToolView, projectDisplayText: projectMCPDisplayText };
+    if (toolName.startsWith('mcp__')) return mcpToolViewDescriptor;
     const parsed = KnownCanonicalToolNameV2Schema.safeParse(normalizeToolNameForView(toolName));
-    return parsed.success ? toolViewDescriptors[parsed.data] : { component: UnknownToolView, projectDisplayText: projectUnknownDisplayText };
+    return parsed.success ? toolViewDescriptors[parsed.data] : unknownToolViewDescriptor;
+}
+
+/** Whether the tool-details page shows this call as structured input and result rather than through its renderer. */
+export function usesStructuredToolDetailsPage(toolName: string): boolean {
+    const descriptor = getToolViewDescriptor(toolName);
+    return descriptor === mcpToolViewDescriptor || descriptor === unknownToolViewDescriptor;
 }
 
 export function getToolDisplayTextProjector(toolName: string): ToolDisplayTextProjector {

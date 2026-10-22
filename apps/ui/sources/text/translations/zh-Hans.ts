@@ -9347,6 +9347,12 @@ export const zhHans: TranslationStructure = {
     output: "输出",
     showFullContent: "显示完整内容",
     showLessContent: "收起",
+    outcome: {
+      completed: "已完成",
+      running: "运行中",
+      waiting: "等待批准",
+      blocked: "不允许",
+    },
     actionOutcome: {
       refused: "已拒绝",
       failed: "失败",

@@ -1,16 +1,19 @@
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
 import * as React from 'react';
-import { useLocalSearchParams, Stack, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { View } from 'react-native';
-import type { ViewStyle } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 import { useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
 import { sync } from '@/sync/sync';
 import { Deferred } from "@/components/ui/forms/Deferred";
-import { ToolHeader } from '@/components/tools/shell/presentation/ToolHeader';
 import { resolveToolHeaderTextPresentation } from '@/components/tools/shell/presentation/resolveToolHeaderTextPresentation';
 import { normalizeToolCallForRendering } from '@happier-dev/session-core/tools';
-import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { ToolStatusIndicator } from '@/components/tools/shell/presentation/ToolStatusIndicator';
+import { useDestinationFocus, useDestinationInstanceKey, useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { DefaultBackButton } from '@/components/navigation/Header';
+import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { ToolDetailsPageHeader } from '@/components/tools/shell/presentation/ToolDetailsPageHeader';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -92,24 +95,25 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
     const tool = message?.kind === 'tool-call' ? message.tool : null;
     useDestinationPageTitle(tool ? resolveToolHeaderTextPresentation({ tool: normalizeToolCallForRendering(tool), metadata: null }).title
         : message ? t('common.message') : null);
-    const toolHeaderTitle = React.useCallback(() => {
-        return tool ? <ToolHeader tool={tool} /> : null;
-    }, [tool]);
-    const toolHeaderRight = React.useCallback(() => {
-        return tool ? <ToolStatusIndicator tool={tool} /> : null;
-    }, [tool]);
+    const ownerMetadata = React.useMemo(() => session ? readSessionOwnerMetadataView(session) : null, [session]);
+    // The page names the call and its outcome itself, in the transcript row's vocabulary, for every tool kind.
+    const toolPageHeader = React.useMemo(
+        () => tool ? <ToolDetailsPageHeader tool={tool} metadata={ownerMetadata} /> : null,
+        [ownerMetadata, tool],
+    );
 
-    const toolScreenOptions = React.useMemo(() => {
-        return {
-            headerTitle: toolHeaderTitle,
-            headerRight: toolHeaderRight,
-            headerStyle: {
-                backgroundColor: theme.colors.chrome.header.background,
-            },
-            headerTintColor: theme.colors.chrome.header.foreground,
-            headerShadowVisible: false,
-        } as const;
-    }, [theme.colors.chrome.header.background, theme.colors.chrome.header.foreground, toolHeaderRight, toolHeaderTitle]);
+    // A call's page is opened from its Session: Back returns there, even on a deep link with no history. A hosted
+    // destination puts it on the page header's title line (the phone bar or the page's own gutter), as a Run does.
+    const hosted = useDestinationInstanceKey() !== null;
+    const focused = useDestinationFocus();
+    const inheritedBack = useNavigationBackControl();
+    const { routeScope, sessionId } = props;
+    const goBack = React.useCallback(() => {
+        safeRouterBack({ router, fallbackHref: routeScope.buildHref(sessionId) });
+    }, [routeScope, router, sessionId]);
+    const pageBack = React.useCallback(({ style }: Readonly<{ style: StyleProp<ViewStyle> }>) => (
+        focused ? <View style={style}><DefaultBackButton testID="tool-details-back" tintColor={theme.colors.text.primary} onPress={goBack} /></View> : null
+    ), [focused, goBack, theme.colors.text.primary]);
 
     // Trigger session visibility when component mounts
     React.useEffect(() => {
@@ -196,13 +200,6 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         }
     }, [messageBackfillComplete, messagesLoaded, message, props.routeScope, props.sessionId, router]);
     
-    // Configure header for tool messages
-    React.useLayoutEffect(() => {
-        if (message && message.kind === 'tool-call' && message.tool) {
-            // Header is configured in the Stack.Screen options
-        }
-    }, [message]);
-    
     // Show loader while waiting for session and messages to load
     if (sessionMissingAfterHydration) {
         return <SessionInvalidLinkFallback />;
@@ -228,20 +225,18 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
     
     return (
         <>
-            {tool && (
-                <Stack.Screen
-                    options={toolScreenOptions}
-                />
-            )}
             <View style={{ ...styles.routeContent, paddingBottom: bottomChromeHeight }}>
-                <Deferred>
-                    <SessionMessageDetailsView
-                        message={message}
-                        sessionId={props.sessionId}
-                        session={session}
-                        jumpChildId={jumpChildId}
-                    />
-                </Deferred>
+                <NavigationBackChromeProvider control={hosted ? pageBack : inheritedBack}>
+                    <Deferred>
+                        <SessionMessageDetailsView
+                            message={message}
+                            sessionId={props.sessionId}
+                            session={session}
+                            jumpChildId={jumpChildId}
+                            header={toolPageHeader}
+                        />
+                    </Deferred>
+                </NavigationBackChromeProvider>
             </View>
         </>
     );

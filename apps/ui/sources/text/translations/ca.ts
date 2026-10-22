@@ -8921,6 +8921,12 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         output: 'Sortida',
         showFullContent: 'Mostra el contingut complet',
         showLessContent: 'Mostra menys',
+        outcome: {
+          completed: "Completada",
+          running: "En curs",
+          waiting: "Esperant l'aprovació",
+          blocked: "No permesa",
+        },
         actionOutcome: {
           refused: "Rebutjada",
           failed: "Fallida",

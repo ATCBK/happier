@@ -62,6 +62,7 @@ const getToolViewComponentSpy = vi.fn((toolName: string) => {
 
 vi.mock('@/components/tools/renderers/core/_registry', () => ({
     getToolViewComponent: getToolViewComponentSpy,
+    usesStructuredToolDetailsPage: () => false,
 }));
 
 vi.mock('@/components/tools/catalog', () => ({

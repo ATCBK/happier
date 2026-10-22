@@ -9995,6 +9995,12 @@ localTailscale: {
     output: "出力",
     showFullContent: "全文を表示",
     showLessContent: "表示を減らす",
+    outcome: {
+      completed: "完了",
+      running: "実行中",
+      waiting: "承認待ち",
+      blocked: "許可されていません",
+    },
     actionOutcome: {
       refused: "拒否",
       failed: "失敗",

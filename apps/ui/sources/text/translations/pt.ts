@@ -9807,6 +9807,12 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     output: "Saída",
     showFullContent: "Mostrar conteúdo completo",
     showLessContent: "Mostrar menos",
+    outcome: {
+      completed: "Concluída",
+      running: "Em execução",
+      waiting: "Aguardando aprovação",
+      blocked: "Não permitida",
+    },
     actionOutcome: {
       refused: "Recusada",
       failed: "Falhou",
