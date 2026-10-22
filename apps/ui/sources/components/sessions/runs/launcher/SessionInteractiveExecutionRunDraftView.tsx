@@ -11,7 +11,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildRolesRailPickerOption, ROLES_RAIL_PICKER_OPTION_ID } from '@/components/roles/rail/buildRolesRailPickerOption';
 import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
@@ -101,6 +101,38 @@ import { executionRunLauncherDraftKey } from '@/components/sessions/agents/launc
 import { ExecutionRunChildChoiceCard } from './ExecutionRunChildChoiceCard';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useExecutionRunLauncherDraft } from './useExecutionRunLauncherDraft';
+
+/** Mount the exact Agent's Team demand only while its model detail is open. */
+function ExecutionRunAgentModelPicker(props: Readonly<{
+    choice: ExecutionRunLauncherBackendChoice;
+    sessionId: string | null;
+    serverId: string | null;
+    machineId: string | null;
+    actionInput: Record<string, unknown>;
+    selected: ProviderBoundModelRef | null;
+    selectBackend: (targetKey: string) => void;
+    setActionInput: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
+}>) {
+    const setSelection = React.useCallback<React.Dispatch<React.SetStateAction<Record<string, unknown>>>>(update => {
+        props.selectBackend(props.choice.targetKey);
+        props.setActionInput(update);
+    }, [props.choice.targetKey, props.selectBackend, props.setActionInput]);
+    const team = useExecutionRunTeamCredentialModel({ ...props, selectedBackendChoice: props.choice,
+        // Browsing another Agent does not normalize or commit the draft.
+        hasBackendChoices: false, setActionInput: setSelection });
+    return <ExactModelChoicePicker
+        agentTargetKey={buildBackendTargetKeyV2(props.choice.backendTarget)}
+        agentId={props.choice.agentId}
+        machineId={props.machineId}
+        serverId={props.serverId}
+        selected={props.selected}
+        teamModelChoice={team.pickerProps}
+        title={t('agentInput.model.title')}
+        fallbackLabel={t('runPage.menu.selectionChoose')}
+        onSelect={ref => setSelection(previous => ref
+            ? applyExecutionRunChildSelection(previous, ref) : clearExecutionRunChildSelection(previous))}
+    />;
+}
 
 type DraftIdentity = Readonly<{ correlationId: string; inputLocalId: string }>;
 
@@ -796,24 +828,19 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         onSelectImmediate: () => selectBackend(choice.targetKey),
         closeOnSelectImmediate: false,
         ...(!choice.disabled ? {
-            renderDetailContent: () => <ExactModelChoicePicker
-                agentTargetKey={buildBackendTargetKeyV2(choice.backendTarget)}
-                agentId={choice.agentId}
+            renderDetailContent: () => <ExecutionRunAgentModelPicker
+                choice={choice}
+                sessionId={props.sessionId}
                 machineId={machineId}
                 serverId={serverId}
+                actionInput={actionInput}
                 selected={[draftModelSelection, options.inheritedDraftSelection].find(ref => ref
                     && choiceRunsAgent(choice, ref.agentTargetKey)) ?? null}
-                title={t('agentInput.model.title')}
-                fallbackLabel={t('runPage.menu.selectionChoose')}
-                onSelect={(ref) => {
-                    selectBackend(choice.targetKey);
-                    setActionInput(previous => ref
-                        ? applyExecutionRunChildSelection(previous, ref)
-                        : clearExecutionRunChildSelection(previous));
-                }}
+                selectBackend={selectBackend}
+                setActionInput={setActionInput}
             />,
         } : {}),
-    })), [draftModelSelection, machine.name, machineId, options.backendChoices, options.inheritedDraftSelection, selectBackend, serverId, setActionInput]);
+    })), [actionInput, draftModelSelection, machine.name, machineId, options.backendChoices, options.inheritedDraftSelection, props.sessionId, selectBackend, serverId, setActionInput]);
     const roleName = chosenRoleId ? roleItem?.name ?? (rolesStatus === 'loading' ? null : chosenRoleId) : null;
     // One exact-model chooser serves both asks: D9's after a refusal (the refused Agent's default or an
     // exact model), and the Run's own model from the route chip. The route's list loads once asked for.
@@ -831,6 +858,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         machineId,
         serverId,
         selected: pendingChildChoice ? null : draftModelSelection ?? options.inheritedDraftSelection,
+        ...(!pendingChildChoice ? { teamModelChoice: teamCredential.pickerProps } : {}),
         title: pendingChildChoice ? t('session.agentContinuation.childChoice.chooseModel') : t('agentInput.model.title'),
         fallbackLabel: t('runPage.menu.selectionChoose'),
         enabled: pendingChildChoice !== null || routeModelDemanded,
@@ -855,7 +883,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             ? {
                 agentType: engineChoice.agentId,
                 label: roleName ?? engineChoice.title,
-                ...(!roleName && (draftModelSelection || options.inheritedDraftSelection)
+                ...(!roleName && (draftModelSelection || options.inheritedDraftSelection || teamCredential.selected)
                     ? { modelLabel: exactModelPresentation.subtitle } : {}),
                 title: t('agentStart.chips.engineTitle'),
                 options: [rolesRail, ...engineOptions],
@@ -866,7 +894,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 },
             }
             : null
-    ), [draftModelSelection, engineChoice, engineOptions, exactModelPresentation.subtitle, intent, options.inheritedDraftSelection, roleName, rolesRail, selectBackend]);
+    ), [draftModelSelection, engineChoice, engineOptions, exactModelPresentation.subtitle, intent, options.inheritedDraftSelection, roleName, rolesRail, selectBackend, teamCredential.selected]);
 
     const reportToSession = actionInput.notifyParentOnCompletion === true;
     const onPatch = options.onPatch;
@@ -1035,7 +1063,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             && !(path === 'modelId' && intent !== 'review');
         const hasAdvancedFields = options.fields.some((field) => field.visible !== false && isAdvancedFieldPath(field.path)
             && !['backendTargetKeys', 'engineIds', 'instructions', 'notifyParentOnCompletion', 'secretReferenceOverlay', 'teamCredentialModel', 'teamCredentialSessionBindingConsent'].includes(field.path));
-        if (options.profileChoices.length > 0 || hasAdvancedFields || teamCredential.picker) {
+        if (options.profileChoices.length > 0 || hasAdvancedFields || (intent === 'review' && teamCredential.picker)) {
             chips.push(createExecutionRunStartContentChip({
                 key: 'execution-run-start-advanced',
                 icon: 'sliders-horizontal',
@@ -1047,7 +1075,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 renderContent: () => (
                     <View style={{ gap: theme.space.s16 }}>
                         {renderOptions(['profiles', 'fields'], isAdvancedFieldPath)}
-                        {teamCredential.picker}
+                        {intent === 'review' ? teamCredential.picker : null}
                     </View>
                 ),
             }));

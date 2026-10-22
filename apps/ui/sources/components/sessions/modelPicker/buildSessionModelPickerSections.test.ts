@@ -94,6 +94,13 @@ describe('buildSessionModelPickerSections', () => {
         });
         expect(sections.map(section => section.options.map(option => option.value?.modelId)))
             .toEqual([['gpt-5.5'], ['gpt-5.5']]);
+        const selectedTeam = resource.providerModels.find(model => model.descriptor.id === 'gpt-5.5')!;
+        const triggerInput = { agentTargetKey, nativeModels: [], providerGroups: [], hiddenNativeModelKeys: new Set<string>(),
+            providerProjectionAuthoritative: true, selected: null, selectedTeamCredentialModel: selectedTeam.selection,
+            teamCredentialResources: [resource], fallbackLabel: 'Choose', fieldLabel: 'Model' };
+        expect(buildSessionModelSelectedTriggerPresentation(triggerInput)).toMatchObject({
+            subtitle: selectedTeam.descriptor.name, detail: expect.stringContaining(resource.displayName),
+        });
         // Preserve an already-selected model's identity without offering a repair
         // action that could re-admit a model known to lack required capabilities.
         const retained = buildSessionModelPickerSections({

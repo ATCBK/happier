@@ -26,6 +26,9 @@ type ProjectionGroups = NonNullable<
 
 const EMPTY_GROUPS: ProjectionGroups = [];
 
+type TeamModelChoiceProps = Pick<SessionModelPickerProps, 'teamCredentialResources' | 'teamNameById' | 'homeNameByTeamId'
+  | 'currentTeamCredentialResourceKeys' | 'selectedTeamCredentialModel' | 'onSelectTeamCredentialModel' | 'experimentalConfirmation'>;
+
 function ExactModelChoiceModal(
   props: Readonly<{
     agentTargetKey: string;
@@ -47,7 +50,7 @@ function ExactModelChoiceModal(
     experimentalConfirmation: SessionModelPickerExperimentalConfirmationController;
     onSelect: (selection: ProviderBoundModelRef | null) => void;
     onClose: () => void;
-  }>,
+  }> & Omit<TeamModelChoiceProps, 'experimentalConfirmation'>,
 ) {
   return (
     <SessionModelPicker
@@ -64,6 +67,12 @@ function ExactModelChoiceModal(
       selected={props.selected}
       effectiveLabel={props.effectiveLabel}
       experimentalConfirmation={props.experimentalConfirmation}
+      teamCredentialResources={props.teamCredentialResources}
+      teamNameById={props.teamNameById}
+      homeNameByTeamId={props.homeNameByTeamId}
+      currentTeamCredentialResourceKeys={props.currentTeamCredentialResourceKeys}
+      selectedTeamCredentialModel={props.selectedTeamCredentialModel}
+      onSelectTeamCredentialModel={props.onSelectTeamCredentialModel}
       onSelect={(selection) => {
         props.onSelect(selection);
         props.onClose();
@@ -91,6 +100,8 @@ export function useExactModelChoice(
     clearOptionLabel?: string;
     clearOptionDescription?: string;
     enabled?: boolean;
+    /** Team-capable callers supply the same catalog and selection owner as Session authoring. */
+    teamModelChoice?: TeamModelChoiceProps;
   }>,
 ) {
   const providersEnabled = useFeatureEnabled('providers', {
@@ -171,6 +182,7 @@ export function useExactModelChoice(
         hiddenNativeModelKeys,
         providerProjectionAuthoritative,
         selected: params.selected,
+        ...params.teamModelChoice,
         currentSelectionRecovery,
         fallbackLabel: params.selected?.modelId ?? params.fallbackLabel,
         fieldLabel: params.title,
@@ -183,6 +195,7 @@ export function useExactModelChoice(
       params.fallbackLabel,
       params.selected,
       params.title,
+      params.teamModelChoice,
       providerGroups,
       providerProjectionAuthoritative,
     ],
@@ -203,7 +216,9 @@ export function useExactModelChoice(
       hiddenNativeModelKeys,
       selected: params.selected,
       effectiveLabel: params.selected?.modelId ?? params.fallbackLabel,
-      experimentalConfirmation: confirmExperimentalModel,
+      ...params.teamModelChoice,
+      experimentalConfirmation: params.teamModelChoice?.experimentalConfirmation?.pending || params.teamModelChoice?.experimentalConfirmation?.error
+        ? params.teamModelChoice.experimentalConfirmation : confirmExperimentalModel,
     }),
     [
       confirmExperimentalModel,
@@ -213,6 +228,7 @@ export function useExactModelChoice(
       probe,
       params.fallbackLabel,
       params.selected,
+      params.teamModelChoice,
       providerGroups,
       providerProjectionAuthoritative,
       projection.error,

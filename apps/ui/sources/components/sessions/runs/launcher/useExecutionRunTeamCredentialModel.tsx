@@ -2,7 +2,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { TeamCredentialProviderModelSelectionV1Schema, type TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import * as React from 'react';
 
-import { SessionModelPicker } from '@/components/sessions/modelPicker/SessionModelPicker';
+import { SessionModelPicker, type SessionModelPickerProps } from '@/components/sessions/modelPicker/SessionModelPicker';
 import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/sessions/teamCredentials/teamCredentialProviderModelCurrentness';
 import { useTeamCredentialSelectionCoordinator } from '@/components/sessions/teamCredentials/useTeamCredentialSelectionCoordinator';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -23,6 +23,8 @@ export type ExecutionRunTeamCredentialModel = Readonly<{
     picker: React.ReactNode;
     /** Pending approval and refusal state for this Run's model choice. */
     confirmation: ReturnType<typeof useConfirmExperimentalProviderModel>;
+    pickerProps: Pick<SessionModelPickerProps, 'teamCredentialResources' | 'teamNameById' | 'homeNameByTeamId'
+        | 'currentTeamCredentialResourceKeys' | 'selectedTeamCredentialModel' | 'onSelectTeamCredentialModel' | 'experimentalConfirmation'>;
 }>;
 
 /**
@@ -56,6 +58,7 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
     const catalog = useHomeTeamCredentialModelCatalog({
         serverId,
         enabled: credentialResourcesEnabled && Boolean(serverId && selectedAgentTargetKey),
+        agentTargetKey: selectedAgentTargetKey,
     });
     const catalogRef = React.useRef(catalog);
     catalogRef.current = catalog;
@@ -164,25 +167,28 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
         });
     }, [onSelectionChange, setActionInput]);
 
+    const pickerProps = React.useMemo<ExecutionRunTeamCredentialModel['pickerProps']>(() => ({
+        teamCredentialResources: catalog.resources,
+        teamNameById: catalog.teamNameById,
+        homeNameByTeamId: catalog.homeNameByTeamId,
+        currentTeamCredentialResourceKeys: catalog.currentResourceKeys,
+        selectedTeamCredentialModel: selected,
+        onSelectTeamCredentialModel,
+        experimentalConfirmation: confirmation,
+    }), [catalog.resources, catalog.teamNameById, catalog.homeNameByTeamId, catalog.currentResourceKeys, selected, onSelectTeamCredentialModel, confirmation]);
     const picker = selectedAgentTargetKey && (catalog.resources.length > 0 || selected) ? (
         <SessionModelPicker
             agentTargetKey={selectedAgentTargetKey}
             nativeModels={[{ value: 'default', label: t('settingsAgents.defaultModelTitle') }]}
             providerGroups={[]}
-            teamCredentialResources={catalog.resources}
-            teamNameById={catalog.teamNameById}
-            homeNameByTeamId={catalog.homeNameByTeamId}
-            currentTeamCredentialResourceKeys={catalog.currentResourceKeys}
-            selectedTeamCredentialModel={selected}
+            {...pickerProps}
             providerProjectionAuthoritative
-            experimentalConfirmation={confirmation}
             selected={null}
             effectiveLabel=""
             showTitle={false}
             onSelect={onSelectNonTeamModel}
-            onSelectTeamCredentialModel={onSelectTeamCredentialModel}
         />
     ) : null;
 
-    return { selected, available, picker, confirmation };
+    return { selected, available, picker, pickerProps, confirmation };
 }

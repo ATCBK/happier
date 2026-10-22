@@ -30,7 +30,10 @@ export function useExecutionRunSourceLabel(
     }, [connectedServices]);
     const { presentationsByKey } = useProjectedQualifiedConnectedAccountTargetPresentations(resolvedServerId, targets);
     const teamModel = selection?.teamCredentialModel;
-    const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: resolvedServerId, enabled: teamModel !== undefined });
+    const teamBindings = Object.values(connectedServices?.bindingsByServiceId ?? {}).filter(binding => binding.source === 'team_resource');
+    const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: resolvedServerId,
+        agentTargetKey: teamModel?.agentTargetKey,
+        enabled: teamModel !== undefined || teamBindings.length > 0 });
     if (teamModel) {
         return presentConnectedAccountPurposeTeamResource({
             teamResource: { teamId: teamModel.teamId, selection: teamModel },
@@ -39,6 +42,15 @@ export function useExecutionRunSourceLabel(
             serviceTitle: null,
         }).accessibilityLabel;
     }
-    const labels = [...new Set(targets.map(target => presentationsByKey[target.key]?.accessibilityLabel).filter(Boolean))];
+    const teamLabels = teamBindings.map(binding => {
+        const resource = teamCatalog.resources.find(resource => resource.id === binding.resourceId);
+        return presentConnectedAccountPurposeTeamResource({
+            teamResource: { teamId: resource?.teamId ?? '', selection: binding },
+            teamResources: teamCatalog.resources,
+            teamNameById: teamCatalog.teamNameById,
+            serviceTitle: null,
+        }).accessibilityLabel;
+    });
+    const labels = [...new Set([...targets.map(target => presentationsByKey[target.key]?.accessibilityLabel), ...teamLabels].filter(Boolean))];
     return labels.join(' · ') || null;
 }

@@ -466,35 +466,48 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
     hiddenNativeModelKeys: ReadonlySet<string>;
     providerProjectionAuthoritative: boolean;
     selected: SessionModelPickerValue;
+    selectedTeamCredentialModel?: TeamCredentialProviderModelSelectionV1 | null;
+    teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
+    teamNameById?: Readonly<Record<string, string>>;
+    homeNameByTeamId?: Readonly<Record<string, string>>;
+    currentTeamCredentialResourceKeys?: ReadonlySet<string>;
     currentSelectionRecovery?: DaemonProviderCurrentSelectionRecoveryV1 | null;
     fallbackLabel: string;
     fieldLabel: string;
 }>): SessionModelSelectedTriggerPresentation {
-    const selected = input.selected;
+    const selected = input.selectedTeamCredentialModel ?? input.selected;
     if (selected === null) {
         return { subtitle: input.fallbackLabel };
     }
 
     const selectedKey = sessionModelSelectionKey(selected);
-    const nativeModels = selected.providerConnectionId === null
+    const teamSelection = isTeamCredentialProviderModelPickerValue(selected) ? selected : null;
+    const providerSelection = isTeamCredentialProviderModelPickerValue(selected) ? null : selected;
+    const nativeModels = providerSelection?.providerConnectionId === null
         ? input.nativeModels.filter((model) => (
             sessionModelSelectionKey(nativeModelRef(input.agentTargetKey, model.value)) === selectedKey
         ))
         : [];
-    const providerGroups = selected.providerConnectionId === null
-        ? []
-        : input.providerGroups.flatMap((group): SessionModelProjectionGroup[] => {
-            if (group.connectionId !== selected.providerConnectionId) return [];
+    const providerGroups = providerSelection?.providerConnectionId
+        ? input.providerGroups.flatMap((group): SessionModelProjectionGroup[] => {
+            if (group.connectionId !== providerSelection.providerConnectionId) return [];
             const rows = group.rows.filter((row) => sessionModelSelectionKey(row.ref) === selectedKey);
             return rows.length > 0 ? [{ ...group, rows }] : [];
-        });
+        }) : [];
     const sections = buildSessionModelPickerSections({
         agentTargetKey: input.agentTargetKey,
         nativeModels,
         providerGroups,
         hiddenNativeModelKeys: input.hiddenNativeModelKeys,
         providerProjectionAuthoritative: input.providerProjectionAuthoritative,
-        selected,
+        selected: providerSelection,
+        selectedTeamCredentialModel: teamSelection,
+        teamCredentialResources: teamSelection ? input.teamCredentialResources?.filter(resource => resource.id === teamSelection.resourceId
+            && resource.teamId === teamSelection.teamId).map(resource => ({ ...resource,
+                providerModels: resource.providerModels.filter(model => sessionModelSelectionKey(model.selection) === selectedKey) })) : [],
+        teamNameById: input.teamNameById,
+        homeNameByTeamId: input.homeNameByTeamId,
+        currentTeamCredentialResourceKeys: input.currentTeamCredentialResourceKeys,
         currentSelectionRecovery: input.currentSelectionRecovery,
     });
     const selectedSection = sections.find((section) => section.options.some((option) => (
@@ -507,7 +520,7 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
         // Provider discovery is demanded by the open picker. Until it has an
         // authoritative row, the saved exact id still names the selection;
         // absence of a demanded projection is not a failed machine catalog.
-        return { subtitle: selected.providerConnectionId !== null && !input.providerProjectionAuthoritative
+        return { subtitle: providerSelection?.providerConnectionId && !input.providerProjectionAuthoritative
             ? selected.modelId
             : input.fallbackLabel };
     }
@@ -517,7 +530,7 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
 
     const detail = selectedSection.id === 'current-selection-recovery'
         ? selectedOption.description
-        : selectedSection.title;
+        : teamSelection ? selectedOption.description : selectedSection.title;
     const accessibilityLabel = selectedOption.accessibilityLabel
         ? buildActionRowAccessibilityLabel([
             input.fieldLabel,
