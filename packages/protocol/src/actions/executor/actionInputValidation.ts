@@ -26,24 +26,25 @@ function isJsonPrimitive(value: unknown): value is JsonPrimitive {
     || typeof value === 'number' && Number.isFinite(value);
 }
 
-function projectIssue(issue: core.$ZodIssue): ActionInputIssue[] {
+function projectIssue(issue: core.$ZodIssue, parentPath: readonly (string | number)[] = []): ActionInputIssue[] {
   const values = issue.code === 'invalid_value' ? issue.values
     : issue.code === 'invalid_union' && 'options' in issue ? issue.options : undefined;
   const acceptedValues = values?.filter(isJsonPrimitive);
+  const path = [...parentPath, ...issue.path.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number')];
   return [{
     code: issue.code,
-    path: issue.path.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number'),
+    path,
     ...(issue.code === 'invalid_type' ? { expected: issue.expected } : {}),
     ...(issue.code === 'invalid_format' && issue.format === 'starts_with'
       && 'prefix' in issue && typeof issue.prefix === 'string'
       ? { expected: `starts_with ${JSON.stringify(issue.prefix)}` } : {}),
     ...(acceptedValues?.length ? { acceptedValues } : {}),
-  }, ...(issue.code === 'invalid_union' ? issue.errors.flatMap(branch => branch.flatMap(projectIssue)) : [])];
+  }, ...(issue.code === 'invalid_union' ? issue.errors.flatMap(branch => branch.flatMap(child => projectIssue(child, path))) : [])];
 }
 
 /** Never echo rejected values, unknown-key lists, or custom issue prose. */
 export function actionInputValidationFailure(error: core.$ZodError): ActionExecuteFailure {
-  return actionInputIssueFailure(...error.issues.flatMap(projectIssue));
+  return actionInputIssueFailure(...error.issues.flatMap(issue => projectIssue(issue)));
 }
 
 /** Read the canonical compiler's last failure; never revalidate or copy input/prose. */

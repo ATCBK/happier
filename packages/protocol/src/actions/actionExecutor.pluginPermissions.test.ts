@@ -192,6 +192,7 @@ describe('createActionExecutor (plugin permission grants)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(pluginPermissionGrantAction).toHaveBeenCalledTimes(1);
 

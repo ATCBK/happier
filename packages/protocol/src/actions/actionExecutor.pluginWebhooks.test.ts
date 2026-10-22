@@ -183,6 +183,7 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(pluginWebhookAction).not.toHaveBeenCalled();
   });
@@ -423,6 +424,7 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
         ok: false,
         errorCode: 'invalid_parameters',
         error: 'invalid_parameters',
+        details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
       });
       expect(pluginWebhookAction).not.toHaveBeenCalled();
     });

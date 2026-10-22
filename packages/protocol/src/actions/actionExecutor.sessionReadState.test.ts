@@ -170,6 +170,7 @@ describe('Session read-state Action vertical', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(sessionReadStateAction).not.toHaveBeenCalled();
 

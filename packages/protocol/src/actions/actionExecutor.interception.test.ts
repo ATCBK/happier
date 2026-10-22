@@ -224,6 +224,10 @@ describe('createActionExecutor execution interception', () => {
     });
     expect(result).toHaveProperty('details', {
       executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+      ...(expectedErrorCode === 'invalid_parameters' ? { issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'invalid_value', path: ['retentionPolicy'],
+          acceptedValues: ['ephemeral', 'resumable'] }),
+      ]) } : {}),
     });
     expect(executionRunStart).not.toHaveBeenCalled();
   });

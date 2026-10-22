@@ -327,15 +327,36 @@ describe('createActionExecutor (Session Board family)', () => {
       isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
-    for (const input of [
-      { itemId: 'note', expectedItemRevision: null, item: { ...item, source: { kind: 'invalid' } } },
-      { itemId: 'note', expectedItemRevision: revision, item, serverId: 'home-2' },
-      { itemId: 'note', expectedItemRevision: 'not-a-revision', item },
+    for (const { input, issues } of [
+      {
+        input: { itemId: 'note', expectedItemRevision: null, item: { ...item, source: { kind: 'invalid' } } },
+        issues: [
+          { code: 'invalid_union', path: [] },
+          { code: 'invalid_union', path: ['item'] },
+          { code: 'invalid_union', path: ['item', 'source', 'kind'], acceptedValues: ['walkthrough', 'declarative', 'hostedHtml', 'widget'] },
+          { code: 'invalid_value', path: ['item', 'source', 'kind'], acceptedValues: ['hostedHtml'] },
+          { code: 'invalid_type', path: ['item', 'source', 'publicationSource'], expected: 'object' },
+          { code: 'invalid_type', path: ['copySource'], expected: 'object' },
+          { code: 'unrecognized_keys', path: [] },
+        ],
+      },
+      {
+        input: { itemId: 'note', expectedItemRevision: revision, item, serverId: 'home-2' },
+        issues: [{ code: 'unrecognized_keys', path: [] }],
+      },
+      {
+        input: { itemId: 'note', expectedItemRevision: 'not-a-revision', item },
+        issues: [
+          { code: 'invalid_format', path: ['expectedItemRevision'] },
+          { code: 'custom', path: ['expectedItemRevision'] },
+        ],
+      },
     ]) {
       await expect(executor.execute('session.board.item.upsert', input, { surface: 'agent' })).resolves.toEqual({
         ok: false,
         errorCode: 'invalid_parameters',
         error: 'invalid_parameters',
+        details: { issues },
       });
     }
     expect(sessionBoardAction).not.toHaveBeenCalled();

@@ -233,6 +233,7 @@ describe('createActionExecutor (plugin Settings administration)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(pluginSettingsAdministrationAction).not.toHaveBeenCalled();
   });

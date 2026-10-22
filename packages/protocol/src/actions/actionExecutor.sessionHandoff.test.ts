@@ -56,7 +56,12 @@ describe('createActionExecutor (session.handoff)', () => {
       expect(schema.safeParse({ ...input, sourceMachineId: 'forged' }).success).toBe(false);
     }
     const executor = createActionExecutor(createDeps());
-    expect(await executor.execute('session.handoff', copying, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await executor.execute('session.handoff', copying, { surface: 'ui', authority: 'present_user' })).toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+      details: { issues: [{ code: 'custom', path: ['workspaceAction'] }] },
+    });
   });
 
   it.each(['ui', 'cli', 'voice'] as const)('carries existing-state policy through %s and preserves target absence', async (surface) => {
@@ -156,6 +161,7 @@ describe('createActionExecutor (session.handoff)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(sessionHandoffStart).not.toHaveBeenCalled();
   });

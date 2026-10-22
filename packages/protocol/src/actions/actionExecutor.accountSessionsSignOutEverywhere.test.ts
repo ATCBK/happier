@@ -64,6 +64,7 @@ describe('createActionExecutor (account.sessions.signOutEverywhere)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(accountSessionsSignOutEverywhereAction).toHaveBeenCalledTimes(1);
   });

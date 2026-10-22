@@ -77,6 +77,7 @@ describe('createActionExecutor (account.plugins.data.erase)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(accountPluginDataEraseAction).toHaveBeenCalledTimes(1);
   });

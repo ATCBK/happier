@@ -510,6 +510,12 @@ describe('createActionExecutor plugin caller policy', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: {
+        issues: [
+          { code: 'invalid_value', path: ['capability'], acceptedValues: ['reviews.comments.write.direct', 'credentials.materialize.raw'] },
+          { code: 'unrecognized_keys', path: [] },
+        ],
+      },
     });
 
     expect(pluginPermissionGrantAction).not.toHaveBeenCalled();

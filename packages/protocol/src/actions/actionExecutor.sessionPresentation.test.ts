@@ -104,6 +104,7 @@ describe('current-Session presentation Action', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(presentationApply).not.toHaveBeenCalled();
 

@@ -97,6 +97,22 @@ function createDeps(): ActionExecutorDeps {
   };
 }
 
+it('discovers Run intent purpose and allowed combinations consistently for native, UI and CLI callers', async () => {
+  const executor = createRawActionExecutor(createDeps());
+  const discovered = await executor.execute('action.options.resolve', {
+    actionId: 'execution.run.start', fieldPath: 'intent',
+  }, { surface: 'mcp', authority: 'account_automation', actionCaller: { kind: 'host' } });
+  expect(discovered).toMatchObject({ ok: true });
+  if (!discovered.ok) return;
+  const options = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(discovered.result).options;
+  const voice = options.find(option => option.value === 'voice_agent');
+  expect(voice?.description).toEqual(expect.stringMatching(/retentionPolicy: resumable.*runClass: long_lived.*ioMode: streaming/u));
+  expect(options.find(option => option.value === 'delegate')?.description).toMatch(/ordinary bounded child work/u);
+  const spec = getActionSpec('execution.run.start');
+  expect(spec.inputHints?.fields.find(field => field.path === 'intent')?.options).toEqual(options);
+  expect(spec.cli?.inputHints?.fields.find(field => field.path === 'intent')?.options).toEqual(options);
+});
+
 const emptyCapabilityPreview = SpawnCapabilitiesPreviewSuccessV1Schema.parse({
   ok: true, machinePlatform: 'posix',
   mcp: { strictMode: false, items: [], detected: [] },

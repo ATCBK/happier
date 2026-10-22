@@ -216,6 +216,7 @@ describe('createActionExecutor (account.apiTokens)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(accountApiTokensCreateAction).toHaveBeenCalledTimes(1);
   });
@@ -389,22 +390,44 @@ describe('createActionExecutor (account.apiTokens)', () => {
 
     // The wrapping record is the only material input; no raw key, wrapping
     // secret or caller-selected Account may reach the issuance owner.
-    for (const invalid of [
-      { tokenId: token.tokenId, label: token.label, encryption: {} },
-      { label: token.label, encryption: { access: encryptionAccess } },
-      { tokenId: token.tokenId, label: token.label, encryption: { access: encryptionAccess }, accountId: 'caller-selected' },
-      { tokenId: token.tokenId, label: token.label, encryption: { access: encryptionAccess }, wrappingSecret: 'C'.repeat(43) },
-      { tokenId: 'not-a-uuid', label: token.label, encryption: { access: encryptionAccess } },
+    for (const { input, issues } of [
       {
-        tokenId: token.tokenId,
-        label: token.label,
-        encryption: { access: { ...encryptionAccess, wrappedContentPrivateKey: 'B'.repeat(95) } },
+        input: { tokenId: token.tokenId, label: token.label, encryption: {} },
+        issues: [{ code: 'invalid_type', path: ['encryption', 'access'], expected: 'object' }],
+      },
+      {
+        input: { label: token.label, encryption: { access: encryptionAccess } },
+        issues: [{ code: 'invalid_type', path: ['tokenId'], expected: 'string' }],
+      },
+      {
+        input: { tokenId: token.tokenId, label: token.label, encryption: { access: encryptionAccess }, accountId: 'caller-selected' },
+        issues: [{ code: 'unrecognized_keys', path: [] }],
+      },
+      {
+        input: { tokenId: token.tokenId, label: token.label, encryption: { access: encryptionAccess }, wrappingSecret: 'C'.repeat(43) },
+        issues: [{ code: 'unrecognized_keys', path: [] }],
+      },
+      {
+        input: { tokenId: 'not-a-uuid', label: token.label, encryption: { access: encryptionAccess } },
+        issues: [{ code: 'invalid_format', path: ['tokenId'] }],
+      },
+      {
+        input: {
+          tokenId: token.tokenId,
+          label: token.label,
+          encryption: { access: { ...encryptionAccess, wrappedContentPrivateKey: 'B'.repeat(95) } },
+        },
+        issues: [
+          { code: 'too_small', path: ['encryption', 'access', 'wrappedContentPrivateKey'] },
+          { code: 'custom', path: ['encryption', 'access', 'wrappedContentPrivateKey'] },
+        ],
       },
     ]) {
-      await expect(executor.execute(CREATE_ACTION_ID, invalid, context)).resolves.toEqual({
+      await expect(executor.execute(CREATE_ACTION_ID, input, context)).resolves.toEqual({
         ok: false,
         errorCode: 'invalid_parameters',
         error: 'invalid_parameters',
+        details: { issues },
       });
     }
     expect(accountApiTokensCreateAction).toHaveBeenCalledTimes(1);
@@ -454,6 +477,7 @@ describe('createActionExecutor (account.apiTokens)', () => {
         ok: false,
         errorCode: 'invalid_parameters',
         error: 'invalid_parameters',
+        details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
       });
     }
     expect(accountApiTokensListAction).toHaveBeenCalledTimes(1);
