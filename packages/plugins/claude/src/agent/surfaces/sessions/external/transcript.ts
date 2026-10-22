@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { BigIntStats } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { z } from 'zod/mini';
 
@@ -17,6 +18,7 @@ import {
     type ExternalSessionContentSearchControl,
     searchExternalSessionContent,
     ExternalSessionContentSearchYield,
+    prefilterExternalSessionContentPaths,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
@@ -26,6 +28,7 @@ import {
     projectClaudeJsonlLineRecord,
     projectClaudeJsonlLineToDirectMessages,
     readClaudeJsonlLineIdentity,
+    claudeContentSearchLinePatterns,
 } from '../../../transcripts/projection.js';
 
 import { ClaudeCandidateSourceChangedError, readClaudeJsonlFileSize, resolveClaudeJsonlSessionFile } from './files.js';
@@ -240,6 +243,8 @@ const ClaudeContentSearchProgressSchema = z.strictObject({
     branchParentUuid: z.union([z.string(), z.null(), z.literal(false)]),
     count: z.number().check(z.int(), z.nonnegative()),
     partial: z.boolean(),
+    candidateEndOffsetBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    candidateMatched: z.optional(z.boolean()),
     title: z.strictObject({ customTitle: z.nullable(ClaudeContentSearchRowSchema), aiTitle: z.nullable(ClaudeContentSearchRowSchema), fallbackTitle: z.nullable(ClaudeContentSearchRowSchema),
         customTitleSeen: z.optional(z.boolean()), aiTitleSeen: z.optional(z.boolean()) }),
     match: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ClaudeContentSearchRowSchema, { itemIndex: z.number().check(z.int(), z.nonnegative()), newerItems: z.number().check(z.int(), z.nonnegative()) }))),
@@ -256,6 +261,9 @@ export class ClaudeContentSearchYield extends ExternalSessionContentSearchYield 
     constructor(readonly progress: ClaudeContentSearchProgress) { super(); }
 }
 
+export type ClaudeContentSearchFileMetadata = Readonly<Pick<BigIntStats,
+    'dev' | 'ino' | 'birthtimeNs' | 'size' | 'mtimeNs' | 'ctimeNs'>>;
+
 export async function searchClaudeExternalTranscript(params: Readonly<{
     filePath: string;
     fileRelPath: string;
@@ -267,6 +275,10 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     progress?: ClaudeContentSearchProgress;
     /** The candidate page already ran the shared prefilter over this source. */
     prefiltered?: boolean;
+    /** Facts captured before rg; a concurrent write forces exact decoding. */
+    prefilterMetadata?: ClaudeContentSearchFileMetadata;
+    /** Query-local positions, never decoded match or source identity authority. */
+    candidateByteOffsets?: readonly number[];
 }>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean; title?: string; cwd?: string; messageCount?: number }>> {
     const sourceSize = params.progress?.sourceSize ?? await readClaudeJsonlFileSize(params.filePath, params.signal);
     const evidence = await readSourceAnchorEvidence(params.filePath, sourceSize, params.signal);
@@ -292,6 +304,81 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
             query: params.query, ...(params.progress || params.prefiltered ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: params.control,
             isScanComplete: () => progress.endOffsetBytes === 0,
             decode: async (matchText) => {
+                const linePatterns = claudeContentSearchLinePatterns(matchText);
+                let offsets: readonly number[] | null = params.candidateByteOffsets ?? null;
+                if (offsets !== null && params.prefilterMetadata) {
+                    const current = await stat(params.filePath, { bigint: true });
+                    // Positions are advisory. A native write during the batched
+                    // rg read falls back to the original exact scan, under the
+                    // same captured-prefix identity and final revalidation.
+                    if ((['dev', 'ino', 'birthtimeNs', 'size', 'mtimeNs', 'ctimeNs'] as const)
+                        .some(key => current[key] !== params.prefilterMetadata![key])) offsets = null;
+                }
+                const resumedCandidates = progress.candidateEndOffsetBytes !== undefined;
+                // Capture source identity before asking rg for byte positions.
+                // Final evidence rejects replacement/rewrite during either pass.
+                if (resumedCandidates && linePatterns !== null && params.ripgrep) {
+                    const filtered = await prefilterExternalSessionContentPaths({ query: params.query,
+                        paths: [params.filePath], ripgrep: params.ripgrep!, signal: params.signal,
+                        lineOffsets: true, additionalLinePatterns: linePatterns });
+                    offsets = filtered?.get(params.filePath) ?? (filtered === null ? null : []);
+                }
+                if (linePatterns !== null && offsets !== null && (!params.progress || resumedCandidates)) {
+                    const candidateOffsets = offsets;
+                    let offsetIndex = candidateOffsets.length - 1;
+                    progress = { ...progress, candidateEndOffsetBytes: progress.candidateEndOffsetBytes ?? sourceSize };
+                    // The scanner already unwinds descriptor custody on callback
+                    // interruption. Stop this phase as soon as exact scanning is
+                    // required, rather than reading the whole body twice.
+                    const candidateFound = new Error('Decoded candidate requires exact scanning');
+                    try { await params.control.prepare(async () => {
+                        const end = progress.candidateEndOffsetBytes!;
+                        if (end === 0 || progress.candidateMatched) return true;
+                        const consumed = (start: number, _end: number, tail: number | null) => {
+                            progress = { ...progress, candidateEndOffsetBytes: start,
+                                partial: progress.partial || (tail !== null && tail < end) };
+                            if (start === 0) params.control.assertNotYielded();
+                            else params.control.checkWork();
+                        };
+                        const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: end,
+                            maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), signal: params.signal,
+                            includeMalformedRecords: true,
+                            shouldParseLine: (start, lineEnd) => {
+                                while (offsetIndex >= 0 && candidateOffsets[offsetIndex]! >= lineEnd) offsetIndex--;
+                                return offsetIndex >= 0 && candidateOffsets[offsetIndex]! >= start;
+                            },
+                            onSkippedLine: consumed,
+                            onDiagnostic: () => { progress = { ...progress, partial: true }; },
+                            onLine: (line, tail) => {
+                                const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
+                                    lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value,
+                                    projection: 'content_search', matchText });
+                                // An admitted unsupported row is a coverage gap;
+                                // only decoded text justifies the full branch,
+                                // title and ordinal scan.
+                                progress = { ...progress, candidateMatched: progress.candidateMatched
+                                    || projected.match !== null,
+                                    partial: progress.partial || projected.disposition === 'unsupported' };
+                                consumed(line.startOffsetBytes, line.endOffsetBytes, tail);
+                                if (progress.candidateMatched) throw candidateFound;
+                            },
+                        });
+                        progress = { ...progress, candidateEndOffsetBytes: page.nextEndOffsetBytes,
+                            partial: progress.partial || Boolean(page.diagnostics?.length)
+                                || (page.tailOffsetBytes !== null && page.tailOffsetBytes < end) };
+                        return page.reachedStart;
+                    }); } catch (error) {
+                        if (error !== candidateFound) throw error;
+                    }
+                    if (!progress.candidateMatched) {
+                        progress = { ...progress, endOffsetBytes: 0 };
+                        return { records: [], partial: progress.partial };
+                    }
+                    // Only decoded text can justify branch/title/ordinal work.
+                    // The original scan remains the single authority for them.
+                    const { candidateEndOffsetBytes: _end, candidateMatched: _matched, ...selected } = progress;
+                    progress = selected;
+                }
                 await params.control.prepare(async () => {
                     if (progress.endOffsetBytes === 0) return true;
                     throwIfAborted(params.signal);

@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import { deriveExternalSessionActivity } from '@happier-dev/plugin-sdk/sessions/external';
 import {
   createExternalSessionContentSearchControl,
@@ -20,7 +21,8 @@ import {
 } from './metadata.js';
 import type { ClaudeExternalSessionSource } from './source.js';
 import type { AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
-import { ClaudeContentSearchYield, parseClaudeContentSearchProgress, searchClaudeExternalTranscript, type ClaudeContentSearchProgress } from './transcript.js';
+import { ClaudeContentSearchYield, parseClaudeContentSearchProgress, searchClaudeExternalTranscript, type ClaudeContentSearchProgress, type ClaudeContentSearchFileMetadata } from './transcript.js';
+import { claudeContentSearchLinePatterns } from '../../../transcripts/projection.js';
 import { readClaudeJsonlFileSize } from './files.js';
 import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/sessions/external';
 
@@ -628,7 +630,11 @@ export async function listClaudeExternalSessionCandidates(
       : undefined
     : undefined;
   const page: ClaudeExternalSessionCandidate[] = [];
-  let prefilteredPaths: ReadonlySet<string> | null = null;
+  let prefilteredPaths: ReadonlySet<string> | ReadonlyMap<string, readonly number[]> | null = null;
+  let prefilteredLineOffsets: ReadonlyMap<string, readonly number[]> | null = null;
+  let prefilterMetadata = new Map<string, ClaudeContentSearchFileMetadata>();
+  const linePatterns = search.searchTarget === 'content'
+    ? claudeContentSearchLinePatterns(text => findExternalSessionContentMatchRange(text, searchTerm) ? text : null) : null;
   let prefilteredThroughIndex = 0;
   let previousScanPosition = scanPosition;
   let previousSourceGeneration = traversed.sourceGeneration;
@@ -710,11 +716,17 @@ export async function listClaudeExternalSessionCandidates(
         // unvisited frontier. Scanning the root rereads every completed file
         // and delays the first hit behind all later history on every page.
         prefilteredThroughIndex = traversalIndex + limit;
-        prefilteredPaths = await prefilterExternalSessionContentPaths({
+        const entries = traversed.entries.slice(traversalIndex, prefilteredThroughIndex);
+        prefilterMetadata = new Map(await Promise.all(entries.map(async entry =>
+          [entry.filePath, await stat(entry.filePath, { bigint: true })] as const)));
+        const prefilter = {
           query: searchTerm,
-          paths: traversed.entries.slice(traversalIndex, prefilteredThroughIndex).map(entry => entry.filePath),
+          paths: entries.map(entry => entry.filePath),
           ripgrep: params.ripgrep!, signal: params.signal,
-        });
+        };
+        prefilteredLineOffsets = linePatterns === null ? null
+          : await prefilterExternalSessionContentPaths({ ...prefilter, lineOffsets: true, additionalLinePatterns: linePatterns });
+        prefilteredPaths = linePatterns === null ? await prefilterExternalSessionContentPaths(prefilter) : prefilteredLineOffsets;
       }
       if (prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)) continue;
     }
@@ -743,6 +755,8 @@ export async function listClaudeExternalSessionCandidates(
           signal: params.signal,
           ripgrep: params.ripgrep!,
           control: contentFileSystem!,
+          ...(prefilterMetadata.has(session.filePath) ? { prefilterMetadata: prefilterMetadata.get(session.filePath) } : {}),
+          ...(prefilteredLineOffsets ? { candidateByteOffsets: prefilteredLineOffsets.get(session.filePath) ?? [] } : {}),
           ...(traversalIndex === 0 && contentCursor?.contentProgress
             ? { progress: contentCursor.contentProgress } : {}),
         });

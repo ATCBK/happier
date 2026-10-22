@@ -483,6 +483,9 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   includeMalformedRecords?: boolean;
   /** Consume parsed lines newest first, preserving progress before a read yields. */
   onLine?: (line: JsonlParsedLineV1, tailOffsetBytes: number | null) => void;
+  /** Query-local byte admission; excluded rows consume boundaries without decoding or diagnostics. */
+  shouldParseLine?: (startOffsetBytes: number, endOffsetBytes: number) => boolean;
+  onSkippedLine?: (startOffsetBytes: number, endOffsetBytes: number, tailOffsetBytes: number | null) => void;
   onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
 }>): Promise<Readonly<{
   items: readonly JsonlParsedLineV1[];
@@ -564,18 +567,30 @@ async function scanJsonlBackwardPage(
       index = index > 0 ? chunk.lastIndexOf(0x0a, index - 1) : -1) {
       const segmentStartIndex = index + 1;
       const prefix = chunk.subarray(segmentStartIndex, segmentEndIndex);
-      const segment = carryLength > 0
-        ? Buffer.concat([prefix, ...carryChunks.reverse()], prefix.length + carryLength)
-        : prefix;
       // Carry belongs to the requested end boundary even if this read is short.
       const startOffsetAbs = segmentStartIndex < chunk.length ? start + segmentStartIndex : end;
       const endOffsetAbs = segmentEndIndex < chunk.length ? start + segmentEndIndex : end + carryLength;
+      const admitted = params.shouldParseLine?.(startOffsetAbs, endOffsetAbs) !== false;
+      if (!admitted) {
+        carryChunks = [];
+        carryLength = 0;
+        segmentEndIndex = index;
+        oldestConsumedOffsetBytes = startOffsetAbs;
+        // Admission proves this query cannot match even a damaged EOF row.
+        // Ordinary transcript readers omit admission and retain tail checks.
+        tailOffsetBytes ??= initialEnd;
+        if (endOffsetAbs > startOffsetAbs) params.onSkippedLine?.(startOffsetAbs, endOffsetAbs, tailOffsetBytes);
+        continue;
+      }
+      const segment = carryLength > 0
+        ? Buffer.concat([prefix, ...carryChunks.reverse()], prefix.length + carryLength)
+        : prefix;
       carryChunks = [];
       carryLength = 0;
       segmentEndIndex = index;
       oldestConsumedOffsetBytes = startOffsetAbs;
       const decoded = decodeSourceLine(segment);
-      const parsed = decoded.ok ? parseJsonLine(decoded.value) : null;
+      const parsed: unknown = decoded.ok ? parseJsonLine(decoded.value) : null;
       if (tailOffsetBytes === null) {
         tailOffsetBytes = segment.length === 0 || parsed !== null || (decoded.ok && decoded.value.trim() === 'null')
           ? initialEnd
@@ -601,11 +616,16 @@ async function scanJsonlBackwardPage(
     end = start;
 
     if (end === 0 && carryLength > 0 && itemCount < maxItems) {
+      oldestConsumedOffsetBytes = 0;
+      if (params.shouldParseLine?.(0, carryLength) === false) {
+        tailOffsetBytes ??= initialEnd;
+        params.onSkippedLine?.(0, carryLength, tailOffsetBytes);
+        break;
+      }
       const carry = carryChunks.length === 1
         ? carryChunks[0]!
         : Buffer.concat(carryChunks.reverse(), carryLength);
       const decoded = decodeSourceLine(carry);
-      oldestConsumedOffsetBytes = 0;
       if (!decoded.ok) {
         malformedCount += 1;
         params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1, positions: [decoded.malformedOffsetBytes] });
@@ -613,7 +633,7 @@ async function scanJsonlBackwardPage(
           malformedPositions.push(decoded.malformedOffsetBytes);
         }
       } else {
-        const parsed = parseJsonLine(decoded.value);
+        const parsed: unknown = parseJsonLine(decoded.value);
         if (tailOffsetBytes === null) {
           tailOffsetBytes = parsed !== null || decoded.value.trim() === 'null' ? initialEnd : 0;
         }

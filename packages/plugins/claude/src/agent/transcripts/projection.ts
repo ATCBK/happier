@@ -150,6 +150,20 @@ type ClaudeJsonlContentSearchProjection = Readonly<{
     match: Readonly<{ itemIndex: number; sourceItemId: string; snippet: string }> | null;
 }>;
 
+/** Raw-query admission must also retain spellings transformed by this codec. */
+export function claudeContentSearchLinePatterns(matchText: (text: string) => string | null): readonly string[] | null {
+    if (matchText(unsupportedContentMessage('content')) !== null
+        || matchText(unsupportedContentMessage('image')) !== null
+        || projectClaudeJsonlLineRecord({ fileRelPath: '', lineStartOffsetBytes: 0, lineValue: null,
+            projection: 'content_search', matchText }).match !== null) return null;
+    // Adjacent text blocks coalesce, ANSI is removed, XML command/peer wrappers
+    // are projected, and peer origins supply a display prefix. These are
+    // conservative candidates, never a second text matcher.
+    return ['"text"\\s*:[^\\n]*"text"\\s*:',
+        '<(?:command-name|local-command-stdout|cross-session-message)\\b',
+        '"(?:origin|isCompactSummary)"\\s*:'];
+}
+
 export function projectClaudeJsonlLineRecord(params: ClaudeJsonlLineRecordParams & Readonly<{
     projection: 'content_search';
     matchText: (text: string) => string | null;

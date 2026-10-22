@@ -60,6 +60,155 @@ async function corpus() {
 }
 
 describe('Claude candidate conversation search', () => {
+    it.each([
+        ['malformed JSON', Buffer.from('{"type":"assistant","message":invalid}'), false],
+        ['malformed UTF-8', Buffer.from([0xff]), false],
+        ['unknown record', Buffer.from('{"type":"future_record","content":"unrelated"}'), false],
+        ['admitted malformed JSON', Buffer.from('{"type":"assistant","message":invalid,"text":"needle"}'), true],
+        ['admitted malformed UTF-8', Buffer.concat([Buffer.from('needle'), Buffer.from([0xff])]), true],
+        ['admitted unknown record', Buffer.from('{"type":"future_record","content":"needle"}'), true],
+    ] as const)('reports query-local coverage for %s', async (_name, damagedRow, admitted) => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        await writeFile(path, Buffer.concat([
+            Buffer.from(JSON.stringify({ type: 'user', uuid: 'start', parentUuid: null, message: { role: 'user', content: 'Ordinary title' } }) + '\n'),
+            damagedRow, Buffer.from('\n'),
+            Buffer.from(JSON.stringify({ type: 'user', uuid: 'tool', parentUuid: 'start', message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: 'call', content: 'tool-only needle' },
+            ] } }) + '\n'),
+        ]));
+        // The same proof applies to excluded files and excluded rows. A
+        // truncated process result cannot exclude either and must decode.
+        const run = params.ripgrep.run.getMockImplementation()!;
+        const unfiltered = { run: async (request: Parameters<typeof run>[0]) => ({ ...await run(request), stdoutTruncated: true }) };
+        await expect(listClaudeExternalSessionCandidates({ ...params, ripgrep: unfiltered, searchTerm: 'needle' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: 'partial' });
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'needle' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: admitted ? 'partial' : 'complete' });
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'absent phrase' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: 'complete' });
+    });
+    it('leaves decoded-hit ancestry with the full scan', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        for (const visible of [false, true]) {
+            await writeFile(path, JSON.stringify({ type: 'assistant', uuid: 'orphan', parentUuid: 'missing',
+                message: { role: 'assistant', content: visible ? [{ type: 'text', text: 'needle' }]
+                    : [{ type: 'tool_use', id: 'call', name: 'Read', input: { query: 'needle' } }] } }) + '\n');
+            const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'needle' });
+            expect(page.candidates).toHaveLength(visible ? 1 : 0);
+            expect(page.contentCoverage).toBe(visible ? 'partial' : 'complete');
+            if (visible) expect(page.candidates[0]?.match).toMatchObject({ snippet: 'needle', messageIndex: 0 });
+        }
+    });
+    it('excludes an unadmitted damaged EOF from query coverage', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const row = JSON.stringify({ type: 'assistant', uuid: 'tool', parentUuid: null,
+            message: { role: 'assistant', content: [{ type: 'tool_use', id: 'call', name: 'Read', input: { query: 'needle' } }] } });
+        await writeFile(path, row + '\n{"unfinished":');
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'needle' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: 'complete' });
+    });
+    it('stops candidate decoding at a visible hit before the exact ordinal scan', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const rows = [JSON.stringify({ type: 'user', uuid: 'prompt', parentUuid: null,
+            message: { role: 'user', content: 'Ordinary title' } })];
+        for (let index = 0; index < 300; index++) rows.push(JSON.stringify({ type: 'user', uuid: `tool-${index}`,
+            parentUuid: index ? `tool-${index - 1}` : 'prompt', message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: `call-${index}`, content: 'synthetic output '.repeat(500) },
+            ] } }));
+        rows.push(JSON.stringify({ type: 'user', uuid: 'hit', parentUuid: 'tool-299',
+            message: { role: 'user', content: 'Visible candidate needle' } }));
+        await writeFile(path, rows.join('\n') + '\n');
+        let readBytes = 0;
+        const open = vi.mocked(fileSystem.open).getMockImplementation()!;
+        vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            if (args[0] === path) {
+                const read = handle.read.bind(handle);
+                handle.read = (async (...readArgs: Parameters<typeof read>) => {
+                    const result = await read(...readArgs);
+                    readBytes += result.bytesRead;
+                    return result;
+                }) as typeof handle.read;
+            }
+            return handle;
+        });
+        const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'candidate needle' });
+        expect(page.candidates).toMatchObject([{ match: { messageIndex: 301, snippet: 'Visible candidate needle' } }]);
+        // The exact ordinal pass owns a full read; candidate discovery must not
+        // charge a second complete body read after already finding real text.
+        expect(readBytes).toBeLessThan(2 * (await fileSystem.stat(path)).size);
+    });
+    it('marks an admitted unsupported row partial without a second full body read', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const rows = [JSON.stringify({ type: 'future_record', content: 'candidate needle' })];
+        for (let index = 0; index < 300; index++) rows.push(JSON.stringify({ type: 'user', uuid: `tool-${index}`,
+            parentUuid: index ? `tool-${index - 1}` : null, message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: `call-${index}`, content: 'synthetic output '.repeat(500) },
+            ] } }));
+        await writeFile(path, rows.join('\n') + '\n');
+        let readBytes = 0;
+        const open = vi.mocked(fileSystem.open).getMockImplementation()!;
+        vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            if (args[0] === path) {
+                const read = handle.read.bind(handle);
+                handle.read = (async (...readArgs: Parameters<typeof read>) => {
+                    const result = await read(...readArgs);
+                    readBytes += result.bytesRead;
+                    return result;
+                }) as typeof handle.read;
+            }
+            return handle;
+        });
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'candidate needle' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: 'partial' });
+        // One boundary traversal plus bounded source anchors, not two body
+        // scans merely to rediscover an already known coverage gap.
+        expect(readBytes).toBeLessThan(1.5 * (await fileSystem.stat(path)).size);
+    });
+    it.each(['replacement', 'rewrite'])('re-decodes a native %s between line admission and decoding', async mode => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const run = params.ripgrep.run.getMockImplementation()!;
+        params.ripgrep.run.mockImplementation(async request => {
+            const result = await run(request);
+            if (request.args.includes('--byte-offset')) {
+                const replacement = { type: 'user', uuid: 'replacement', parentUuid: null,
+                    message: { role: 'user', content: 'Body-only replacement' }, padding: '' };
+                const originalSize = (await fileSystem.stat(path)).size;
+                replacement.padding = ' '.repeat(originalSize - Buffer.byteLength(JSON.stringify(replacement) + '\n'));
+                await writeFile(mode === 'replacement' ? `${path}.replacement` : path, JSON.stringify(replacement) + '\n');
+                if (mode === 'replacement') await fileSystem.rename(`${path}.replacement`, path);
+            }
+            return result;
+        });
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'Body-only' }))
+            .resolves.toMatchObject({ candidates: [{ match: { snippet: 'Body-only replacement', messageIndex: 0 } }] });
+    });
+    it('keeps decoded coalescing, ANSI and generated fallback matches after tool-only line admission', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        for (const [query, type, content] of [
+            ['needle', 'assistant', [{ type: 'text', text: 'nee' }, { type: 'text', text: 'dle' }]],
+            ['needle', 'user', '<local-command-stdout>nee\u001b[31mdle</local-command-stdout>'],
+            ['unsupported image', 'assistant', [{ type: 'image', source: { type: 'unknown' } }]],
+        ] as const) {
+            await writeFile(path, [
+                { type: 'user', uuid: 'start', parentUuid: null, message: { role: 'user', content: 'Ordinary title' } },
+                { type, uuid: 'visible', parentUuid: 'start', message: { role: type, content } },
+                { type: 'user', uuid: 'tool', parentUuid: 'visible', message: { role: 'user', content: [
+                    { type: 'tool_result', tool_use_id: 'call', content: query },
+                ] } },
+            ].map(row => JSON.stringify(row)).join('\n') + '\n');
+            const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: query });
+            expect(page.candidates).toMatchObject([{ match: { messageIndex: 1, snippet: expect.stringContaining(query) } }]);
+        }
+    });
     it('keeps native descriptor acquisition independent of decoded chunk count', async () => {
         const params = await corpus();
         const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
@@ -75,9 +224,9 @@ describe('Claude candidate conversation search', () => {
         const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: query });
         expect(page.candidates).toMatchObject([{ remoteSessionId: 'session', match: { snippet: query, messageIndex: 0 } }]);
         expect(page.contentCoverage).toBe('complete');
-        // Two source-evidence captures, one scan and two locator re-reads. The
+        // Two source-evidence captures, candidate + exact scans and two locator re-reads. The
         // 3+ MiB tool-heavy body must not open/close a descriptor for every chunk.
-        expect(vi.mocked(fileSystem.open).mock.calls.length).toBeLessThanOrEqual(5);
+        expect(vi.mocked(fileSystem.open).mock.calls.length).toBeLessThanOrEqual(6);
     });
     it('publishes a hit page without prefiltering later or already visited native bodies', async () => {
         const params = await corpus();
@@ -97,18 +246,18 @@ describe('Claude candidate conversation search', () => {
         expect(first.contentCoverage).toBe('partial');
         // The process boundary must only read this result page's native work.
         // Eagerly scanning the root charges every future page before a hit can publish.
-        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(0, 2));
+        expect([...new Set(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths]))]).toEqual(paths.slice(0, 2));
         params.ripgrep.run.mockClear();
         const second = await listClaudeExternalSessionCandidates({ ...request, cursor: first.nextCursor! });
         expect(second.candidates.map(row => row.remoteSessionId)).toEqual(['page-2', 'page-3']);
         expect(second.contentCoverage).toBe('partial');
-        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(2, 4));
+        expect([...new Set(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths]))]).toEqual(paths.slice(2, 4));
         params.ripgrep.run.mockClear();
         const last = await listClaudeExternalSessionCandidates({ ...request, cursor: second.nextCursor! });
         expect(last.candidates.map(row => row.remoteSessionId)).toEqual(['page-4']);
         expect(last.contentCoverage).toBe('complete');
         expect(last.nextCursor).toBeNull();
-        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(4));
+        expect([...new Set(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths]))]).toEqual(paths.slice(4));
     });
     it('finds readable assistant text after a NUL record in a directory-prefiltered native transcript', async () => {
         const params = await corpus();
@@ -156,8 +305,7 @@ describe('Claude candidate conversation search', () => {
         expect(page.candidates).toMatchObject([{ remoteSessionId: 'encoded-hit',
             match: { snippet: 'VIOLET harbor lantern', sourceItemId: expect.any(String), messageIndex: 0 } }]);
         expect(page.nextCursor).toBeNull();
-        // One source-scoped OS prefilter covers the page's native files.
-        expect(params.ripgrep.run).toHaveBeenCalledTimes(1);
+        // The page's file prefilter excludes unrelated bodies before line admission.
         expect((await params.ripgrep.run.mock.results[0]!.value).stdout).not.toContain(sidechain);
         // Two existing 16-KiB source-anchor reads are legitimate; reading the
         // entire miss proves it crossed the prefilter into native decoding.
@@ -560,9 +708,8 @@ describe('Claude candidate conversation search', () => {
         expect(hits.map(hit => hit.remoteSessionId)).toEqual(['session', 'older']);
         expect(hits[0]?.match).toMatchObject({ snippet: 'First file deadline needle earliest', messageIndex: 100 });
         expect(hits[0]?.title).toBe('Latest native title');
-        const resumedPath = await realpath(join(params.source.configDir, 'projects', 'project', 'session.jsonl'));
-        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])
-            .filter(path => path === resumedPath)).toHaveLength(1);
+        // Query-local line offsets are reconstructed on a candidate-phase
+        // continuation; the cursor retains byte progress, never a corpus cache.
         await writeFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), text.replace('Obsolete', 'Replaced'));
         // Keep ordering unchanged: the captured prefix anchor must reject a
         // rewrite, including an edited EOF continuation.

@@ -93,12 +93,7 @@ function escapePattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Source-scoped native prefilter, shared by individual decoders and page owners.
- * Null means no file can safely be excluded. Paths may be admitted native roots,
- * avoiding an argv proportional to the corpus (including on Windows).
- */
-export async function prefilterExternalSessionContentPaths(params: Readonly<{
+type ContentPrefilterParams = Readonly<{
   query: string;
   paths: readonly string[];
   ripgrep: NonNullable<AgentExternalSessionsInvocation['ripgrep']>;
@@ -106,10 +101,26 @@ export async function prefilterExternalSessionContentPaths(params: Readonly<{
   /** Native layout selectors, supplied by the same owner that enumerates candidates. */
   glob?: string;
   maxDepth?: number;
-}>): Promise<ReadonlySet<string> | null> {
+}>;
+
+/**
+ * Source-scoped native prefilter, shared by decoders and page owners. Null
+ * excludes nothing. The default returns paths; lineOffsets returns match byte
+ * positions without source text. Paths may also be admitted native roots.
+ */
+export function prefilterExternalSessionContentPaths(params: ContentPrefilterParams & Readonly<{
+  lineOffsets: true;
+  /** Decoder-owned spellings which may produce text absent from a raw query. */
+  additionalLinePatterns?: readonly string[];
+}>): Promise<ReadonlyMap<string, readonly number[]> | null>;
+export function prefilterExternalSessionContentPaths(params: ContentPrefilterParams): Promise<ReadonlySet<string> | null>;
+export async function prefilterExternalSessionContentPaths(params: ContentPrefilterParams & Readonly<{
+  lineOffsets?: boolean;
+  additionalLinePatterns?: readonly string[];
+}>): Promise<ReadonlySet<string> | ReadonlyMap<string, readonly number[]> | null> {
   params.signal?.throwIfAborted();
   if (!params.query || /[^\x01-\x7F]/.test(params.query.toLowerCase())) return null;
-  if (params.paths.length === 0) return new Set();
+  if (params.paths.length === 0) return params.lineOffsets ? new Map() : new Set();
   // A mixed JSON spelling either contains the literal/named-escaped query or
   // at least one Unicode escape for a character in it. Bound the alternatives
   // by the ASCII alphabet, not query length: expanding every query character
@@ -122,11 +133,14 @@ export async function prefilterExternalSessionContentPaths(params: Readonly<{
   const patterns = [...new Set([escapePattern(params.query), escapePattern(JSON.stringify(params.query).slice(1, -1)),
     `\\\\u(?:${[...codes].map(code => code.toString(16).padStart(4, '0')).join('|')})`,
     ...(folded.includes('i') ? ['İ'] : []), ...(folded.includes('k') ? ['K'] : []),
-    ...(params.query.includes('/') ? [escapePattern('\\/')] : [])])];
+    ...(params.query.includes('/') ? [escapePattern('\\/')] : []),
+    ...(params.lineOffsets ? params.additionalLinePatterns ?? [] : [])])];
   const result = await params.ripgrep.run({
     // A raw NUL in a damaged native record must not hide readable messages
     // elsewhere in the file. The decoder owns record validity and coverage.
-    args: ['--no-config', '--files-with-matches', '--null', '--ignore-case', '--multiline', '--text',
+    args: ['--no-config', ...(params.lineOffsets
+      ? ['--with-filename', '--only-matching', '--byte-offset', '--replace', '-', '--no-heading', '--color', 'never']
+      : ['--files-with-matches']), '--null', '--ignore-case', '--multiline', '--text',
       '--hidden', '--no-ignore',
       ...(params.glob === undefined ? [] : ['--glob', params.glob]),
       ...(params.maxDepth === undefined ? [] : ['--max-depth', String(params.maxDepth)]),
@@ -137,6 +151,28 @@ export async function prefilterExternalSessionContentPaths(params: Readonly<{
   params.signal?.throwIfAborted();
   if (result.stdoutTruncated) return null;
   if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('Conversation content prefilter failed.');
+  if (params.lineOffsets) {
+    const offsets = new Map<string, number[]>();
+    // --null frames filenames independently of colons/newlines. A fixed replaced
+    // match reveals only byte offsets, never native transcript bodies. rg can
+    // suppress empty replacements with a multi-pattern regex search.
+    for (let start = 0; start < result.stdout.length;) {
+      const separator = result.stdout.indexOf('\0', start);
+      if (separator < start) return null;
+      const end = result.stdout.indexOf('\n', separator + 1);
+      if (end < 0) return null;
+      const position = result.stdout.slice(separator + 1, end);
+      if (!/^\d+:-\r?$/.test(position)) return null;
+      const offset = Number(position.replace(/:-\r?$/, ''));
+      if (!Number.isSafeInteger(offset)) return null;
+      const path = result.stdout.slice(start, separator);
+      const entries = offsets.get(path) ?? [];
+      if (entries.at(-1) !== offset) entries.push(offset);
+      offsets.set(path, entries);
+      start = end + 1;
+    }
+    return result.exitCode === 0 && offsets.size === 0 ? null : offsets;
+  }
   return new Set(result.stdout.split('\0').filter(Boolean));
 }
 
