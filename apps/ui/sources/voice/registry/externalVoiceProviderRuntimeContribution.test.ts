@@ -69,6 +69,8 @@ const { createPlainArtifactHomeFixture } = await import("@/dev/testkit/harness/a
 const { createConnectedPurposeCatalogHttpBoundary } = await import("@/dev/testkit/harness/connectedAccountCatalogBoundary");
 const { captureLazyActionAccountContext } = await import("@/sync/ops/actions/actionAccountContext");
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } = await import("@/sync/runtime/orchestration/appliedActiveServerRuntime");
 const { createBundledConversationRuntimeHostLease } = await import("./bundledConversationRuntimeHost");
 const { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } = await import("./generatedBundledVoiceEntries");
@@ -83,7 +85,8 @@ beforeEach(async () => {
   const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) => createPlainMachineReadHttpResponseFixture(path, init) ??
     await preparationPurposes.handle(new URL(path, 'https://voice-preparation.example'), init)
-      ?? (path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
+      ?? (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` ? response(createPlainProjectAccountRowListFixture())
+      : path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
       : path === PROMPT_LIBRARY_ROWS_ROUTE_V1 ? response({ status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
         key, revision: 1, content: key === 'voice' ? { t: 'plain', v: { key, value: { v: 1, scope: { kind: 'voice' }, entries: [] } } } : null,
       })) }) : null) });

@@ -25,6 +25,8 @@ import { parsePendingDeliveryStatusV1, pendingDeliveryStatusV1ToPersistedFields,
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { PartialOptions } from '@elevenlabs/client';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
 
@@ -131,6 +133,7 @@ async function restorePendingHttpAccount() {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }));
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { voice: composerVoiceSettings } }, version: 1 });
+            if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(createPlainProjectAccountRowListFixture());
             if (path === '/v1/machines') return Response.json([machine]);
             if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
               id => id === machine.id ? machine : null);

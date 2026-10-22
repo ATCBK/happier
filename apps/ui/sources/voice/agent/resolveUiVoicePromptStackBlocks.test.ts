@@ -16,6 +16,8 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/pr
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 
 const entry = (id: string): PromptStackEntryV1 => ({ id, ref: { kind: 'doc', artifactId: id }, enabled: true, placement: 'system_append' });
 const canonicalSessionMetadata = createSessionFixture().metadata;
@@ -32,6 +34,39 @@ describe('qualified UI Voice prompt preparation', () => {
     it('composes explicit bound four-layer inputs without borrowing ambient Account settings', async () => {
         expect(await resolveUiVoicePromptStackBlocks({ accountEntries: [entry('account')], profileEntries: [entry('profile')],
             projectEntries: [entry('project')], sessionEntries: [entry('session')], readArtifact })).toEqual(['account', 'profile', 'project', 'session']);
+    });
+
+    it('prepares a plain Codex Session without a Project before local association hydration and recovers after an unavailable census', async () => {
+        const catalog = createPromptLibraryCatalogBoundary();
+        let projectStatus = 200;
+        fixture = await createPlainArtifactHomeFixture('https://voice-no-project.example', { handleRequest: async (path, init) => {
+            if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(
+                projectStatus === 200 ? createPlainProjectAccountRowListFixture() : { error: 'unavailable' },
+                { status: projectStatus });
+            return catalog.handle(path, init);
+        } });
+        const account = await captureLazyActionAccountContext(fixture.home.id);
+        try {
+            await account.createArtifactDocument({ artifactId: 'session', header: { v: 1, kind: 'prompt_doc.v2', title: 'Session' },
+                body: JSON.stringify({ v: 1, markdown: 'session', createdAtMs: 1, updatedAtMs: 1 }) });
+            const session = createSessionFixture({ id: 'plain-codex', serverId: account.serverId });
+            if (!session.metadata) throw new Error('Expected canonical Session metadata');
+            const metadata = { ...session.metadata, flavor: 'codex', work: { promptStack: [entry('session')] } };
+            storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: { ...session, metadata } } });
+            storage.getState().activateProjectAccountRowsScope({ serverId: account.serverId, accountId: account.accountId });
+            storage.getState().setProjectAccountRowsStatusForScope({ serverId: account.serverId, accountId: account.accountId }, 'loading');
+            const input = { targetSessionAddress: { serverId: account.serverId, sessionId: session.id }, accountContext: account };
+            expect(await resolveUiVoicePromptStackBlocks(input)).toEqual(['session']);
+            // A missing HTTP fixture is unavailable evidence, not proof that no Project exists.
+            projectStatus = 404;
+            await expect(resolveUiVoicePromptStackBlocks(input)).rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
+            projectStatus = 200;
+            expect(await resolveUiVoicePromptStackBlocks(input)).toEqual(['session']);
+            // Explicit, unresolved association markers still fail closed.
+            storage.setState({ sessions: { ...storage.getState().sessions,
+                [session.id]: { ...session, metadata: { ...metadata, workspaceId: 'not-yet-available', projectId: 'project' } } } });
+            await expect(resolveUiVoicePromptStackBlocks(input)).rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
+        } finally { account.dispose(); }
     });
 
     it.each(['destination', 'legacy'] as const)('admits a visible rowless built-in under %s authority and refuses hidden, unknown and disabled selections', async authority => {
