@@ -1,11 +1,10 @@
 import { vi } from 'vitest';
-import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS, SocketRpcCancellationPayloadSchema, SocketRpcRequestIdSchema, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { storage as sessionStorage } from '@/sync/domains/state/storage';
 import type { HomeGovernanceHarness } from './homeGovernanceHarness';
-import { createSessionFixture } from '../fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture } from '../fixtures/sessionFixtures';
 import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
 
 /** Real Session Action clients behind the Socket.IO serialization/response boundary. */
@@ -74,11 +73,7 @@ export function installSessionActionFixture(params: Readonly<{
     storage.setState({ sessions: { ...storage.getState().sessions, [session.id]: session },
         sessionListRowsByServerId: { ...storage.getState().sessionListRowsByServerId,
             [serverId]: { ...storage.getState().sessionListRowsByServerId[serverId], [session.id]: session } } });
-    const wire = SessionCurrentProjectionRecordV1Schema.parse({ ...session,
-        metadata: JSON.stringify(session.metadata), metadataLayoutVersion: 0,
-        effectiveAccess: { v: 1, level: session.access!.level, sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
-        responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
-        agentState: null, dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0 });
+    const wire = createPlainSessionByIdResponseFixture(session).session;
     homes.answer(serverId, `/v2/sessions/${session.id}`, { body: { session: wire } });
     homes.answer(serverId, `/v2/sessions/${session.id}?accessProjectionVersion=1`, { body: { session: wire } });
     return session;

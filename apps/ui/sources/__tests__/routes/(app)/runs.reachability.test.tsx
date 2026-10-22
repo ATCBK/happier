@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createStackOptionsCapture } from '@/dev/testkit/mocks/router';
@@ -42,13 +42,15 @@ beforeEach(async () => {
     const home = await adoptHomeProfile({ descriptor: { serverUrl: account.serverUrl, homeServerIdentityId: 'srv_runs_reachability' }, source: 'manual' });
     serverId = home.id;
     connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: account.accountId,
-        credentials: { token: account.token }, request: async input => {
+        credentials: { token: account.token }, request: async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
             if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'studio', accountId: account.accountId })]);
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                machineId => machineId === 'studio' ? createPlainMachineRowFixture({ id: machineId, accountId: account.accountId }) : null);
             if (path === '/v1/machines/studio') return Response.json({ machine: createPlainMachineRowFixture({ id: 'studio', accountId: account.accountId }) });
             return null;
         } });

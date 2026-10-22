@@ -14,6 +14,7 @@ import { createExpoRouterMock, createStackOptionsCapture } from '@/dev/testkit/m
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -40,6 +41,7 @@ const daemonListRpc = vi.fn(async (..._args: [string, Record<string, unknown>?])
 const sessionStopRpc = vi.fn(async (..._args: [string, { runId: string }, { serverId: string }]) => ({ ok: true as const }));
 const machineStopRpc = vi.fn(async (..._args: [string, string, { serverId: string }]) => ({ ok: true as const }));
 const detachedStopRpc = vi.fn(async (..._args: [string, { runId: string }, { serverId: string }]) => ({ ok: true as const }));
+const daemonListSignals: AbortSignal[] = [];
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -50,6 +52,7 @@ installSessionActionRpcBoundary(async (request, context) => {
     const targetId = request.method.slice(0, separator);
     const method = request.method.slice(separator + 1);
     if (method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST) {
+        daemonListSignals.push(context.signal);
         expect(request.params).toEqual({});
         return DaemonExecutionRunListResponseSchema.parse(await daemonListRpc(targetId, { serverId }));
     }
@@ -138,6 +141,7 @@ describe('Runs screen', () => {
         routerPushSpy.mockClear();
         stackOptionsCapture.reset();
         daemonListRpc.mockReset();
+        daemonListSignals.length = 0;
         daemonListRpc.mockResolvedValue({ runs: [] });
         sessionStopRpc.mockClear();
         machineStopRpc.mockClear();
@@ -157,7 +161,7 @@ describe('Runs screen', () => {
         const credentials = await TokenStorage.getCredentialsForServerUrl(homeUrls[HOME_A]!);
         if (!credentials) throw new Error('Runs Home credentials are missing');
         connection = await restoreServerAccountForTest({ serverUrl: homeUrls[HOME_A]!, serverIdentityId: HOME_A,
-            accountId: ACCOUNT, credentials, additionalRequestOrigins: [homeUrls[HOME_B]!], request: homes.request });
+            accountId: ACCOUNT, credentials, additionalRequestOrigins: [homeUrls[HOME_B]!], request: createSessionReadBatchFetchBoundary(homes.request) });
         await sync.awaitBootstrapForegroundAcquisition();
         installSessionActionFixture({ homes, storage, serverId: homeProfileIds[HOME_A]!,
             session: { id: 'sess-1', serverId: HOME_A, metadata: { path: '/repo', host: 'a.local', machineId: 'machine-1' } } });
@@ -176,7 +180,7 @@ describe('Runs screen', () => {
         }
     });
 
-    async function renderRunsScreen() {
+    async function renderRunsScreen(waitForLoaded = true) {
         // Home census and the canonical inventory producer agree, including empty Homes.
         for (const serverId of [HOME_A, HOME_B]) {
             const machines = machineListState.byServerId[serverId] ?? [];
@@ -191,9 +195,45 @@ describe('Runs screen', () => {
             }) });
         await waitForHomeGovernance(() => expect(scopesReady).toBe(true));
         await flushHookEffects({ cycles: 2 });
-        await waitForHomeGovernance(() => expect(screen.findAllByType(Item).some(item => item.props.title === 'common.loading')).toBe(false));
+        if (waitForLoaded) await waitForHomeGovernance(() => expect(screen.findAllByType(Item).some(item => item.props.title === 'common.loading')).toBe(false));
         return screen;
     }
+
+    it('keeps the exact native Run read alive across Machine presence and metadata publications', async () => {
+        routerMock.state.router.setParams({ serverId: HOME_A, machineId: 'machine-1', runId: 'run-live' });
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        daemonListRpc.mockImplementation(async () => {
+            await pending;
+            return { runs: [createExecutionRun({ runId: 'run-live', happySessionId: null })] };
+        });
+        const screen = await renderRunsScreen(false);
+        try {
+            await waitForHomeGovernance(() => expect(daemonListSignals.length).toBeGreaterThan(0));
+            const originalRead = daemonListSignals[0]!;
+            const machine = machineListState.byServerId[HOME_A]![0]!;
+            await act(async () => {
+                storage.getState().applyMachines([{ ...machine, activeAt: machine.activeAt + 1,
+                    metadataVersion: machine.metadataVersion + 1,
+                    metadata: { ...machine.metadata!, displayName: 'Renamed machine' },
+                }], true, { sourceServerId: HOME_A, sourceAccountId: ACCOUNT });
+            });
+            await flushHookEffects({ cycles: 2 });
+            expect(originalRead.aborted).toBe(false);
+            await act(async () => { release(); });
+            await waitForHomeGovernance(() => expect(screen.findAllByType(ExecutionRunRow)).toHaveLength(1));
+            const row = screen.findByType(ExecutionRunRow);
+            expect(row.props.selected).toBe(true);
+            expect(row.props.run.runId).toBe('run-live');
+            expect(row.props.rightAccessory).toBeTruthy();
+            expect(screen.findAllByType(Item).some(item => item.props.title === 'common.loading')).toBe(false);
+        } finally {
+            await act(async () => {
+                release();
+                await flushHookEffects({ cycles: 2 });
+            });
+        }
+    });
 
     async function renderHeaderRight() {
         const options = stackOptionsCapture.getResolved();
