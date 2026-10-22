@@ -1,4 +1,5 @@
 import './utils/env/env.mjs';
+import { watchStackRunnerLogRetention } from './utils/stack/runner_log_retention.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree } from './utils/proc/proc.mjs';
 import { spawnProc } from './utils/proc/proc.mjs';
@@ -120,6 +121,8 @@ import { isBorrowedExpoConsumer, projectBorrowedExpoWebappEnv } from './runtime/
  */
 
 async function main() {
+  watchStackRunnerLogRetention({ logPath: process.env.HAPPIER_STACK_RUNNER_LOG_PATH });
+  delete process.env.HAPPIER_STACK_RUNNER_LOG_PATH;
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });

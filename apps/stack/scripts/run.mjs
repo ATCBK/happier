@@ -90,6 +90,7 @@ import { readJsonIfExists } from './utils/fs/json.mjs';
 import { resolvePreservedDaemonTargetPlans, startStackDevTargets } from './utils/dev_targets/supervisor.mjs';
 import { resolveRemoteServerRuntimeConfig } from './utils/dev_targets/remote_commands.mjs';
 import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
+import { watchStackRunnerLogRetention } from './utils/stack/runner_log_retention.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -101,6 +102,8 @@ import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
  */
 
 async function main() {
+  watchStackRunnerLogRetention({ logPath: process.env.HAPPIER_STACK_RUNNER_LOG_PATH });
+  delete process.env.HAPPIER_STACK_RUNNER_LOG_PATH;
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
   const preparedBorrowedWebappOrigin = String(kv.get('--prepared-borrowed-webapp-origin') ?? '').trim();

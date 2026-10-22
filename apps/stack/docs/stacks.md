@@ -144,6 +144,12 @@ selection too. `stack info` reports `runtime.sourceReload`, including the failur
 and its `run.reload.*.log` path. Selection and loaded process identity remain
 separate facts.
 
+Finite web exports capture authored inputs and share installed dependencies.
+Metro includes the real installed module roots, including workspace-local
+dependencies mounted into the capture. A failed export counts as source drift
+only when input bytes changed during that attempt; an unchanged-input failure
+returns its diagnostic instead of waiting for source edits.
+
 A remote source worker failure retries through this preparation path against
 the synchronized current source. Readiness must come from the successor runtime
 owner, even when it uses the same bundle. Transport-only SSH or tunnel loss
@@ -445,6 +451,34 @@ hstack stack daemon <stack> stop  --identity=account-a
 - Logs live under:
   - default identity: `~/.happier/stacks/<stack>/cli/logs/`
   - named identities: `~/.happier/stacks/<stack>/cli-identities/<identity>/logs/`
+
+## Runner log disk budget (0.3 development)
+
+Background `start` and `dev` runners watch their own `logs/run.<timestamp>.log`
+or `logs/dev.<timestamp>.log`. The retention owner rotates when a file grows
+past 64 MiB, half its existing 128 MiB historical-log budget. It saves the most
+recent 64 MiB in `<runner>.log.1`, truncates the active file in place and writes
+a `runner log rotated` marker. Existing inherited stdout/stderr descriptors and
+`hstack logs --follow` keep the same file and inode.
+
+The same retention owner counts rotated segments in its eight-file / 128 MiB
+history budget, giving one active runner a 192 MiB steady-state disk budget.
+Writes arriving before the filesystem notification is handled can temporarily
+exceed the threshold. Copy/truncate is diagnostic best effort: output written
+during the copy/truncate window can be lost. History is not a transcript or an
+audit trail. Unrelated logs and explicitly preserved live runner files remain
+outside this budget. The existing exception retaining one oversized newest
+historical file still applies until bounded rotation produces newer history.
+
+Rotation starts with newly launched runners; restarting existing stacks is an
+operator decision. Watcher or rotation errors emit a warning and stop that
+watcher rather than interrupting the Stack. Inspect the warning and resolve the
+filesystem problem before the next launch.
+
+Stack server logging defaults to `warn`, honors explicit logging overrides,
+and uses the server's configured `HAPPIER_SERVER_LOG_FORMAT`. Enabling
+`HAPPIER_WEB_LATENCY_TRACE=1` with debug logging retains request/Action summaries
+and failed spans; successful database span detail requires `trace` logging.
 
 ## JSON mode
 
