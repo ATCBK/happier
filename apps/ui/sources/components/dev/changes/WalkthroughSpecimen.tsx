@@ -13,10 +13,13 @@ import type { ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffS
 import { ScmDiffSummaryStartOptions } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
-import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { ChangedFilesReviewFindButton } from '@/components/workspaces/scm/review/ChangedFilesReviewFind';
+import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
     SPECIMEN_ANALYSIS_COMPLETE,
@@ -46,8 +49,13 @@ function reviewed(count: number): WalkthroughReadingInput['reviewed'] {
 
 const PENDING = { kind: 'workingTree' } as const;
 
-function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: boolean; offline?: boolean; pending?: boolean }>) {
+function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: boolean; offline?: boolean; pending?: boolean; findSurfaceId?: string }>) {
     const reason = props.offline ? t('walkthrough.notice.offlineA11y') : null;
+    const findRuntime = useFindSurfaceRuntime();
+    const findId = props.findSurfaceId;
+    const find = findId ? <ChangedFilesReviewFindButton surfaceId={findId} /> : null;
+    const findSections = findId ? [{ id: 'find', items: [{ id: 'open', testID: 'scm-review-find', title: t('find.surface.changes'),
+        icon: <Icon name="magnifying-glass" size={ICON_SIZE.sm} /> }], onSelect: () => { findRuntime.open(findId); } }] : undefined;
     if (props.pending && !props.phone) return (
         <ScmComparisonBar
             leading={(
@@ -56,12 +64,12 @@ function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: bo
                     <ScmComparisonScopePicker options={SCOPE_OPTIONS} current={PENDING} currentLabel={resolveFilesComparisonLabel(PENDING, null)} fileCount={9} onSelect={noop} />
                 </>
             )}
-            trailing={<><ScmComparisonStartReview onPress={noop} /><ScmComparisonProposeCommits onPress={noop} /></>}
+            trailing={<>{find}<ScmComparisonStartReview onPress={noop} /><ScmComparisonProposeCommits onPress={noop} /></>}
         />
     );
     if (props.phone) return <ScmComparisonPhoneHeader view={props.view} views={['files', 'walkthrough']}
         scope={{ options: SCOPE_OPTIONS, current: SESSION, currentLabel: t('scmComparison.scope.session'), fileCount: 9, onSelect: noop }}
-        onSelectView={noop} onBack={noop} onStartReview={noop} reviewDisabled={props.offline} reviewDisabledReason={reason} />;
+        onSelectView={noop} onBack={noop} onStartReview={noop} reviewDisabled={props.offline} reviewDisabledReason={reason} sections={findSections} />;
     return (
         <ScmComparisonBar
             leading={(
@@ -70,7 +78,7 @@ function SpecimenBar(props: Readonly<{ view: 'files' | 'walkthrough'; phone?: bo
                     <ScmComparisonScopePicker options={SCOPE_OPTIONS} current={SESSION} currentLabel={t('scmComparison.scope.session')} fileCount={9} onSelect={noop} />
                 </>
             )}
-            trailing={<ScmComparisonStartReview onPress={noop} disabled={props.offline} disabledReason={reason} />}
+            trailing={<>{find}<ScmComparisonStartReview onPress={noop} disabled={props.offline} disabledReason={reason} /></>}
         />
     );
 }
@@ -84,21 +92,26 @@ function LiveMarks(props: Readonly<{
     pending?: boolean;
 }>) {
     const [refs, setRefs] = React.useState(() => specimenReviewedRefs(props.reviewedCount));
+    const findSurfaceId = `specimen-walkthrough:${React.useId()}`;
     const reading = React.useMemo(() => buildWalkthroughReading({
         ...props.input,
         reviewed: applyScmReviewedMarkIntent(SPECIMEN_COMPARISON, null, refs, true),
     }), [props.input, refs]);
+    // The pane owner supplies focus eligibility in the product; this frame stands in for it so Find can open.
     return (
+        <PluginSurfaceFocusEligibilityProvider active>
         <View style={styles.fill}>
-            {props.bar === false && props.view.layout !== 'phone' ? null : <SpecimenBar view="walkthrough" phone={props.view.layout === 'phone'} offline={Boolean(props.view.offline)} pending={props.pending} />}
+            {props.bar === false && props.view.layout !== 'phone' ? null : <SpecimenBar view="walkthrough" phone={props.view.layout === 'phone'} offline={Boolean(props.view.offline)} pending={props.pending} findSurfaceId={findSurfaceId} />}
             <WalkthroughView
                 {...props.view}
+                findSurfaceId={findSurfaceId}
                 reading={reading}
                 onToggleReviewed={(stop) => setRefs((current) => (stop.reviewed
                     ? current.filter((ref) => !stop.changeRefs.includes(ref))
                     : [...current, ...stop.changeRefs]))}
             />
         </View>
+        </PluginSurfaceFocusEligibilityProvider>
     );
 }
 

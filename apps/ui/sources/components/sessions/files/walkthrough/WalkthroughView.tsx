@@ -39,7 +39,10 @@ import {
   WalkthroughInventory,
   WalkthroughOtherChanges,
 } from './WalkthroughLifecycle';
-import { WalkthroughStopSection } from './WalkthroughStopSection';
+import { WalkthroughStopSection, type WalkthroughFindProps } from './WalkthroughStopSection';
+import { isWalkthroughOtherFindKey, useWalkthroughFind } from './walkthroughFind';
+import { ChangedFilesReviewFindSurface } from '@/components/workspaces/scm/review/ChangedFilesReviewFind';
+import type { ReviewFindTarget } from '@/components/workspaces/scm/review/useChangedFilesReviewFind';
 import type { WalkthroughReading, WalkthroughStop } from './walkthroughReading';
 
 export type WalkthroughViewLayout = 'wide' | 'narrow' | 'phone';
@@ -134,6 +137,8 @@ export type WalkthroughViewProps = Readonly<{
   review?: WalkthroughReviewSlots | null;
   /** The notification offer for a walkthrough still being written; shown only while it is. */
   notify?: React.ReactNode;
+  /** The Find surface id the comparison bar's Find control opens; keyboard Find works without it. */
+  findSurfaceId?: string;
 }>;
 
 /**
@@ -163,6 +168,9 @@ export const WalkthroughView = React.memo(function WalkthroughView(
   const othersOffset = React.useRef<number | null>(null);
   const findingsOffset = React.useRef<number | null>(null);
   const streamOffset = React.useRef(0);
+  const scrollTop = React.useRef(0);
+  // The phone column's Find focus root; the wide root also scopes the review keys.
+  const phoneRootRef = React.useRef<View>(null);
   const firstUnread =
     reading.stops.find((stop) => !stop.reviewed) ?? reading.stops[0];
   const [currentStopId, setCurrentStopId] = React.useState<string | null>(
@@ -188,6 +196,32 @@ export const WalkthroughView = React.memo(function WalkthroughView(
     firstUnread ??
     null;
   const currentIndex = currentStop ? reading.stops.indexOf(currentStop) : -1;
+
+  // Find over every stop's code and the changes outside stops, through the Files review's Find owner. A step
+  // into an other change opens its code in place of its row; those stay open until Find closes, so nothing above the
+  // reader jumps as they step on.
+  const [findTarget, setFindTarget] = React.useState<ReviewFindTarget | null>(null);
+  const [revealedOthers, setRevealedOthers] = React.useState<ReadonlySet<string>>(EMPTY_KEYS);
+  const revealFindTarget = React.useCallback((target: ReviewFindTarget | null) => {
+    setFindTarget((previous) => previous?.filePath === target?.filePath && previous?.lineId === target?.lineId ? previous : target);
+    if (target && isWalkthroughOtherFindKey(target.filePath))
+      setRevealedOthers((previous) => previous.has(target.filePath) ? previous : new Set([...previous, target.filePath]));
+  }, []);
+  const find = useWalkthroughFind(reading, revealFindTarget);
+  const findOpen = React.useSyncExternalStore(find.subscribe, () => find.getSnapshot().open, () => find.getSnapshot().open);
+  React.useEffect(() => { if (!findOpen) setRevealedOthers(EMPTY_KEYS); }, [findOpen]);
+  const fallbackFindSurfaceId = React.useId();
+  const findSurfaceId = props.findSurfaceId ?? `walkthrough:${fallbackFindSurfaceId}`;
+  // Native renderers report the target's window offset; the reading's one scroll owner lands it.
+  const scrollToFindLine = React.useCallback((windowY: number) => {
+    const scroll = scrollRef.current as unknown as { measureInWindow?: (callback: (x: number, y: number) => void) => void } | null;
+    scroll?.measureInWindow?.((_x, viewportY) => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, scrollTop.current + windowY - viewportY - (phone ? 52 : 0) - CURRENT_STOP_READING_LINE_PX), animated: false });
+    });
+  }, [phone]);
+  const findProps = React.useMemo<WalkthroughFindProps>(() => ({
+    model: find, active: findOpen, target: findOpen ? findTarget : null, onScrollToLine: scrollToFindLine,
+  }), [find, findOpen, findTarget, scrollToFindLine]);
 
   // An edit chosen from the comparison menu opens under the header: bring it into view, wherever the reader is.
   const headerOffset = React.useRef(0);
@@ -248,6 +282,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
 
   const onScroll = React.useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      scrollTop.current = event.nativeEvent.contentOffset.y;
       const line =
         event.nativeEvent.contentOffset.y +
         CURRENT_STOP_READING_LINE_PX -
@@ -619,6 +654,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
         findingCards={findings?.cards}
         proseReferences={findings?.proseReferences}
         explanation={findings?.explanation}
+        find={findProps}
       />
     );
     // Only a stop written while the reader watches fades in; a restored saved reading is hydrated data and
@@ -679,6 +715,8 @@ export const WalkthroughView = React.memo(function WalkthroughView(
           others={reading.others}
           phone={phone}
           onOpenFile={props.onOpenFile}
+          find={findProps}
+          revealed={revealedOthers}
         />
       </View>
       {props.review?.afterStops ? (
@@ -740,7 +778,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
       <View />
     );
     return (
-      <View testID="walkthrough-view" style={styles.root}>
+      <View ref={phoneRootRef} collapsable={false} testID="walkthrough-view" style={styles.root}>
         {notices}
         <ScrollView
           ref={scrollRef}
@@ -831,6 +869,8 @@ export const WalkthroughView = React.memo(function WalkthroughView(
             />
           </PagePinnedBar>
         ) : null}
+        <ChangedFilesReviewFindSurface model={find} surfaceId={findSurfaceId} surfaceRef={phoneRootRef}
+          presented={props.active !== false} />
       </View>
     );
   }
@@ -888,11 +928,16 @@ export const WalkthroughView = React.memo(function WalkthroughView(
               </View>
             </View>
           </ScrollView>
+          {/* Find floats over the reading, under the comparison bar, like the Files view's. */}
+          <ChangedFilesReviewFindSurface model={find} surfaceId={findSurfaceId} surfaceRef={rootRef}
+            presented={props.active !== false} />
         </View>
       </View>
     </View>
   );
 });
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 function PhoneBarButton(
   props: Readonly<{

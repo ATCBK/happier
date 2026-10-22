@@ -34,6 +34,8 @@ import { useWalkthroughReview } from '@/components/sessions/reviews/walkthrough/
 import { ReviewExplainFindingsButton, useSessionWalkthroughReviewPresentation } from '@/components/sessions/reviews/walkthrough/SessionWalkthroughReview';
 import { ReviewWalkthroughSteps } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts';
 import { requestExplainReviewFindings } from '@/sync/ops/reviews/reviewWalkthrough';
+import { ChangedFilesReviewFindButton } from '@/components/workspaces/scm/review/ChangedFilesReviewFind';
+import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 
 export type ScmWalkthroughViewProps = Readonly<{
     sessionId?: string;
@@ -246,6 +248,18 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         onResult: (result) => { if (bound.isCurrent()) applySavedScmDiffSummaryResult(key, result); },
         onError: (failure) => { if (bound.isCurrent()) setError(failure.error); },
     } : null);
+    // Find over the reading: the Files view's control, as the wide bar's icon and a phone menu row.
+    const findSurfaceInstance = React.useId();
+    const findSurfaceId = `walkthrough:${findSurfaceInstance}`;
+    const findRuntime = useFindSurfaceRuntime();
+    const findAvailable = Boolean(reading && reading.stops.length + reading.others.length > 0);
+    const findAction = findAvailable && !phone ? <ChangedFilesReviewFindButton surfaceId={findSurfaceId} /> : null;
+    const findSection = React.useMemo<ScmComparisonMenuSection | null>(() => (findAvailable && phone ? {
+        id: 'find',
+        items: [{ id: 'open', testID: 'scm-review-find', title: t('find.surface.changes'),
+            icon: <Icon name="magnifying-glass" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }],
+        onSelect: () => { findRuntime.open(findSurfaceId); },
+    } : null), [findAvailable, findRuntime, findSurfaceId, phone, theme.colors.text.secondary]);
     const conversationSection = React.useMemo<ScmComparisonMenuSection | null>(() => (conversationHref && phone ? {
         id: 'conversation',
         items: [{ id: 'open', testID: 'walkthrough-open-conversation', title: t('walkthrough.openConversation'),
@@ -253,13 +267,13 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         onSelect: () => router.push(conversationHref as never),
     } : null), [conversationHref, phone, router, theme.colors.text.secondary]);
     const savedSections = React.useMemo(() => {
-        const sections = [conversationSection, savedActions.section].filter((section): section is ScmComparisonMenuSection => Boolean(section));
+        const sections = [findSection, conversationSection, savedActions.section].filter((section): section is ScmComparisonMenuSection => Boolean(section));
         return sections.length > 0 ? sections : undefined;
-    }, [conversationSection, savedActions.section]);
+    }, [findSection, conversationSection, savedActions.section]);
 
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
-            {props.renderBar(<>{explainAction}{conversationAction}</>, savedSections, reviewStatus)}
+            {props.renderBar(<>{explainAction}{findAction}{conversationAction}</>, savedSections, reviewStatus)}
             {modelChoice.choosing ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
             <WalkthroughView
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
@@ -304,6 +318,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                         selectedOutput={{ output: 'walkthrough', comparisonId: capturedComparison.id, resultId: viewModel.resultId,
                             message: t('sessionWork.notify.walkthroughUpdate') }} /> : null}
                 savedActions={savedActions.panel}
+                findSurfaceId={findSurfaceId}
             />
         </View>
     );

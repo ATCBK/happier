@@ -23,6 +23,18 @@ import { WalkthroughStopNumber } from './WalkthroughAtoms';
 import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 import { scmFileStatusFromChange } from '@/scm/scmStatusFiles';
 import type { WalkthroughStop, WalkthroughStopFile } from './walkthroughReading';
+import type { ChangedFilesReviewFindModel } from '@/components/workspaces/scm/review/useChangedFilesReviewFind';
+import { ChangedFilesReviewFindCount } from '@/components/workspaces/scm/review/ChangedFilesReviewFind';
+import { walkthroughStopFindKey } from './walkthroughFind';
+
+/** Find over the reading: the review Find model, whether it is open, and the place its current match is in. */
+export type WalkthroughFindProps = Readonly<{
+    model: ChangedFilesReviewFindModel;
+    active: boolean;
+    target: Readonly<{ filePath: string; lineId: string }> | null;
+    /** Native: lands a find target's window offset in the reading's one scroll owner. */
+    onScrollToLine?: (windowY: number) => void;
+}>;
 
 function fileName(path: string): string {
     const slash = path.lastIndexOf('/');
@@ -59,12 +71,26 @@ function reservedDiffRows(unifiedDiff: string): number {
 
 /** One file's exact hunks for a stop, as a quiet card: path, range, counts and the shared diff renderer. */
 export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props: Readonly<{
-    file: WalkthroughStopFile;
+    file: Pick<WalkthroughStopFile, 'path' | 'changeKind' | 'unifiedDiff' | 'rangeLabel' | 'added' | 'removed' | 'unavailableReason'> & Partial<Pick<WalkthroughStopFile, 'previousPath'>>;
     phone?: boolean;
     onOpenFile?: (path: string) => void;
+    /** This card's Find key and the reading's Find state; absent draws the code without Find. */
+    findKey?: string;
+    find?: WalkthroughFindProps | null;
+    testID?: string;
 }>) {
     const { theme } = useUnistyles();
     const file = props.file;
+    const find = props.find && props.findKey ? props.find : null;
+    const findKey = props.findKey ?? '';
+    const findModel = find?.model;
+    const findSnapshot = React.useSyncExternalStore(
+        React.useCallback((listener: () => void) => findModel?.subscribeFile(findKey, listener) ?? (() => {}), [findModel, findKey]),
+        () => findModel?.getFileSnapshot(findKey),
+    );
+    const registerFindRefold = React.useCallback((refold: Parameters<ChangedFilesReviewFindModel['registerRefold']>[1]) =>
+        findModel?.registerRefold(findKey, refold), [findModel, findKey]);
+    const findTargetLineId = find?.target?.filePath === findKey ? find.target.lineId : undefined;
     const rows = React.useMemo(() => file.unifiedDiff ? reservedDiffRows(file.unifiedDiff) : 0, [file.unifiedDiff]);
     const reservedHeight = rows * CODE_LINE_BASE_HEIGHT;
     // Web code typography follows the canonical font-scale variable; native rows use the same base metric.
@@ -84,14 +110,15 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
         </View>
     );
     return (
-        <View testID={`walkthrough-hunk-${file.path}`} style={[styles.card, props.phone ? styles.cardPhone : null]}>
+        <View testID={props.testID ?? `walkthrough-hunk-${file.path}`} style={[styles.card, props.phone ? styles.cardPhone : null]}>
             <ScmChangeRow theme={theme} file={scmFileStatusFromChange(file)} style={styles.cardHeader}
                 showChangeMark={false} phone={props.phone} density="compact"
                 leadingElement={<FileIcon fileName={fileName(file.path)} size={16} />}
                 tag={file.changeKind === 'added' ? t('walkthrough.newFile') : file.changeKind === 'deleted' ? t('walkthrough.deletedFile') : null}
                 pathAccessory={file.rangeLabel ? <Text style={styles.range}>{file.rangeLabel}</Text> : null}
-                trailingElement={props.onOpenFile ? (
-                    <IconButton
+                trailingElement={find || props.onOpenFile ? (<>
+                    {find ? <ChangedFilesReviewFindCount model={find.model} path={findKey} /> : null}
+                    {props.onOpenFile ? <IconButton
                         testID={`walkthrough-open-${file.path}`}
                         variant="plain"
                         iconName="arrow-square-out"
@@ -99,8 +126,8 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
                         size={26}
                         accessibilityLabel={t('walkthrough.openInFiles', { file: fileName(file.path) })}
                         onPress={() => props.onOpenFile?.(file.path)}
-                    />
-                ) : null} />
+                    /> : null}
+                </>) : null} />
             {file.unifiedDiff ? (
                 <View style={bodyStyle}>
                     <HunkEvidenceBoundary key={file.unifiedDiff} fallback={evidence('render_failed')}>
@@ -113,6 +140,13 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
                             wrapLines={props.phone === true}
                             presentationStyleOverride="unified"
                             errorFallback={evidence('render_failed')}
+                            findActive={find?.active}
+                            precomputedLines={find?.active ? findSnapshot?.lines : undefined}
+                            registerFindRefold={find ? registerFindRefold : undefined}
+                            findRangesByLineId={findSnapshot?.ranges}
+                            scrollToLineId={findTargetLineId}
+                            highlightLineId={findTargetLineId}
+                            onScrollToLine={findTargetLineId ? find?.onScrollToLine : undefined}
                         />
                     </HunkEvidenceBoundary>
                 </View>
@@ -144,6 +178,8 @@ export type WalkthroughStopSectionProps = Readonly<{
     proseReferences?: MarkdownInlineReferences;
     /** An explanation asked for explicitly, above the code (lab WT5-R2). */
     explanation?: React.ReactNode;
+    /** Find over the whole reading, painted into this stop's code. */
+    find?: WalkthroughFindProps | null;
 }>;
 
 /** A stop: number, title and reading hint, the prose, then exactly its hunks, then the person's controls. */
@@ -197,7 +233,8 @@ export const WalkthroughStopSection = React.memo(function WalkthroughStopSection
                                 <Text style={styles.crossFileText}>{t('walkthrough.andIn', { file: fileName(file.path) })}</Text>
                             </View>
                         ) : null}
-                        <WalkthroughHunkCard file={file} phone={phone} onOpenFile={props.onOpenFile} />
+                        <WalkthroughHunkCard file={file} phone={phone} onOpenFile={props.onOpenFile}
+                            findKey={walkthroughStopFindKey(stop.id, file.path)} find={props.find} />
                     </React.Fragment>
                 ))}
                 {props.findingCards}
@@ -247,6 +284,27 @@ export const WalkthroughStopSection = React.memo(function WalkthroughStopSection
                                 <Text style={styles.actionText}>{t('walkthrough.askAboutThis')}</Text>
                             </HappierPressable>
                         ) : null}
+                    </View>
+                ) : null}
+                {props.onAsk && stop.suggestedQuestions?.length ? (
+                    <View testID={`walkthrough-questions-${stop.id}`} style={[styles.questions, phone ? styles.questionsPhone : null]}>
+                        {stop.suggestedQuestions.map((question, index) => (
+                            <HappierPressable
+                                key={`${index}:${question}`}
+                                testID={`walkthrough-question-${stop.id}-${index}`}
+                                accessibilityRole="button"
+                                accessibilityLabel={t('walkthrough.askQuestionA11y', { question })}
+                                onPress={() => props.onAsk?.(stop, question)}
+                                style={(state) => [
+                                    styles.question,
+                                    state.pressed ? styles.actionPressed : null,
+                                    focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
+                                ]}
+                            >
+                                {/* Plain text: a suggested question is prose the person may choose to ask, never markup. */}
+                                <Text style={styles.questionText}>{question}</Text>
+                            </HappierPressable>
+                        ))}
                     </View>
                 ) : null}
             </View>
@@ -313,4 +371,18 @@ const styles = StyleSheet.create((theme) => ({
     actionText: { ...Typography.variant('body', 'medium'), color: theme.colors.text.secondary,  },
     actionTextStrong: { color: theme.colors.text.primary },
     actionTextMarked: { color: theme.colors.state.success.foreground, ...Typography.default('semiBold') },
+    // Questions sit under the stop's Ask, in its rhythm: quiet ink-edged controls that wrap, never a second toolbar.
+    questions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s6, marginTop: theme.space.s2, marginBottom: theme.space.s6 },
+    questionsPhone: { marginTop: theme.space.s12 },
+    question: {
+        maxWidth: '100%',
+        minHeight: 30,
+        justifyContent: 'center',
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s10,
+        borderRadius: 8,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: theme.colors.border.default,
+    },
+    questionText: { ...Typography.variant('body'), color: theme.colors.text.secondary },
 }));

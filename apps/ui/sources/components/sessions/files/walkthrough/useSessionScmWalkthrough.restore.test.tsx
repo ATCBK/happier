@@ -6,7 +6,8 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
-const boundary = vi.hoisted(() => ({ inventory: null as unknown, results: {} as Record<string, unknown>, reads: [] as string[], methods: [] as string[] }));
+const boundary = vi.hoisted(() => ({ inventory: null as unknown, results: {} as Record<string, unknown>, reads: [] as string[], methods: [] as string[],
+    draft: null as (() => Promise<unknown>) | null }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
@@ -15,6 +16,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     const rpc = async (request: { method: string; payload: unknown }) => {
         boundary.methods.push(request.method);
+        if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST && boundary.draft) return boundary.draft();
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) return boundary.inventory;
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ) {
             const id = (request.payload as { resultId: string }).resultId;
@@ -31,7 +33,7 @@ await import('@/sync/syncEngine');
 const { useSessionScmWalkthrough, useScmWalkthroughState } = await import('./useSessionScmWalkthrough');
 const { useScmDiffSummaryBinding } = await import('../comparison/useScmDiffSummaryBinding');
 const { useMachinePresenceSummary } = await import('@/components/sessions/model/useMachinePresenceSummary');
-const { retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
+const { retireScmDiffSummaryScope, getScmDiffSummaryState } = await import('@/sync/ops/scmDiffSummary/generate');
 let serverId: string;
 const accountId = 'restore-account';
 const sessionId = 'restore-session';
@@ -55,6 +57,7 @@ function inventory(results: ReturnType<typeof saved>[], sessionScoped = true) {
 beforeEach(async () => {
     boundary.reads = [];
     boundary.methods = [];
+    boundary.draft = null;
     installHomeGovernanceBoundaries(homes);
     serverId = await homes.addHome({ name: 'Restore', serverUrl: 'https://restore.example.test', accountId });
     const machine = createMachineFixture({ id: 'restore-machine', activeAt: Date.now() });
@@ -69,6 +72,43 @@ afterEach(async () => {
 });
 
 describe('saved output restoration', () => {
+    it.each([false, true])('retains a PR draft acknowledgement across remount only while its Account is current (retired: %s)', async retired => {
+        const original = saved('before-description', { summary: { state: 'complete', value: {
+            summaryMarkdown: 'Previous summary', suggestedPrBody: 'Previous description',
+        } } }, ['summary']);
+        inventory([original]);
+        const request = createDeferred<unknown>();
+        boundary.draft = () => request.promise;
+        const mount = () => renderHook(() => useScmDiffSummaryBinding({ host: { sessionId }, serverId,
+            machine: { machineId: 'restore-machine', basePath: '/repo/exact' }, machineReachable: true,
+            canControl: true, canSend: true, launch: { canLaunchExecutionRuns: true },
+            comparison: { kind: 'workingTree' }, output: 'summary' }));
+        const sidebar = await mount();
+        await vi.waitFor(() => expect(sidebar.getCurrent().viewModel?.resultId).toBe(original.resultId));
+        let pending: Promise<boolean> | undefined;
+        await act(async () => { pending = sidebar.getCurrent().onStart(['summary'], { pullRequestDraft: {} }); });
+        await vi.waitFor(() => expect(boundary.methods).toContain(RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST));
+        await sidebar.unmount();
+        const details = await mount();
+        if (retired) {
+            boundary.inventory = { success: false, errorCode: 'result_unavailable', error: 'Retired Account' };
+            await act(async () => homes.switchAccount(serverId, 'replacement-account'));
+        }
+        const arrived = saved('after-description', { summary: { state: 'complete', value: {
+            summaryMarkdown: 'New summary', suggestedPrBody: 'New description',
+        } } }, ['summary']);
+        if (!retired) inventory([arrived]);
+        await act(async () => { request.resolve(arrived.output); await pending; });
+        if (retired) {
+            expect(details.getCurrent().viewModel).toBeNull();
+            expect(Object.values(getScmDiffSummaryState().entriesByKey).some(entry => entry.latestOutput?.resultId === arrived.resultId)).toBe(false);
+        } else {
+            await vi.waitFor(() => expect(details.getCurrent().viewModel).toMatchObject({
+                status: 'succeeded', resultId: arrived.resultId, suggestedPrBody: 'New description',
+            }));
+        }
+    });
+
     it('rechecks uncertain admission against the exact saved result without starting another Run', async () => {
         const original = saved('uncertain-start', { walkthrough: { state: 'pending' } }, ['walkthrough']);
         const uncertain = ScmDiffSummaryResultSchema.parse({ ...original, output: { ...original.output, admission: 'outcomeUnknown' } });

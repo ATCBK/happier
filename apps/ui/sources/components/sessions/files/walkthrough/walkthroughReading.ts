@@ -64,6 +64,8 @@ export type WalkthroughOtherChange = Readonly<{
     generated: boolean;
     binary: boolean | null;
     unavailableReason: string | null;
+    /** The file's hunks this walkthrough leaves outside its stops, as a unified diff; empty when unavailable. */
+    unifiedDiff: string;
 }>;
 
 export type WalkthroughInventoryRow = Readonly<{
@@ -244,6 +246,29 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         if (fullReason !== null) unavailableCount += 1;
     }
 
+    /** A selection's exact hunks as one patch: the same boundary for a stop's code and the hunks left outside stops. */
+    const selectedPatch = (file: ScmComparisonFile, entries: readonly LocatedOccurrence[], selected: readonly string[]) => {
+        const evidence = evidenceByPath.get(file.path)!;
+        if (evidence.declaredAvailable && selected.length > 0) {
+            // Fully valid files need no repeated parsing per selection. If another hunk is
+            // malformed, retain this complete selected subset rather than hide useful code.
+            const patch = evidence.unavailableReason === null
+                ? [fileDiffHeader(file), ...selected].join('\n') + '\n'
+                : completeFilePatch(file, selected);
+            return patch !== null ? { unifiedDiff: patch, unavailableReason: null } : { unifiedDiff: '', unavailableReason: 'invalid_diff' };
+        }
+        if (evidence.declaredAvailable && entries.some((entry) => !isMetadataOccurrence(entry.occurrence))) {
+            return { unifiedDiff: '', unavailableReason: 'invalid_diff' };
+        }
+        return { unifiedDiff: '', unavailableReason: evidence.unavailableReason };
+    };
+    const selectedHunks = (path: string, entries: readonly LocatedOccurrence[]) => {
+        const hunks = hunksByPath.get(path) ?? [];
+        return [...new Set(entries.map((entry) => entry.hunkIndex).filter((hunkIndex): hunkIndex is number => hunkIndex !== null))]
+            .sort((left, right) => left - right)
+            .map((hunkIndex) => hunks[hunkIndex]!);
+    };
+
     const value = input.walkthrough?.value ?? null;
     const provenanceById = new Map(input.provenance?.stops.map((stop) => [stop.stopId, stop] as const));
     const stopIdsByHunk = new Map<string, string[][]>(
@@ -263,12 +288,7 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         }
         const files = [...byPath.values()].map((entries): WalkthroughStopFile => {
             const file = entries[0]!.file;
-            const hunks = hunksByPath.get(file.path) ?? [];
-            const selected = entries
-                .map((entry) => entry.hunkIndex)
-                .filter((hunkIndex): hunkIndex is number => hunkIndex !== null)
-                .sort((left, right) => left - right)
-                .map((hunkIndex) => hunks[hunkIndex]!);
+            const selected = selectedHunks(file.path, entries);
             const lines = selected.reduce((sum, hunk) => {
                 const body = parseUnifiedDiffHunks(hunk).flatMap((entry) => entry.lines);
                 const next = { added: body.filter((line) => line.kind === 'add').length, removed: body.filter((line) => line.kind === 'remove').length };
@@ -276,20 +296,7 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
             }, { added: 0, removed: 0 });
             const numbers = stopNumbersByPath.get(file.path) ?? [];
             if (!numbers.includes(number)) stopNumbersByPath.set(file.path, [...numbers, number]);
-            let unifiedDiff = '';
-            const evidence = evidenceByPath.get(file.path)!;
-            let unavailableReason = evidence.unavailableReason;
-            if (evidence.declaredAvailable && selected.length > 0) {
-                // Fully valid files need no repeated parsing per stop. If another hunk is
-                // malformed, retain this complete selected subset rather than hide useful code.
-                const patch = evidence.unavailableReason === null
-                    ? [fileDiffHeader(file), ...selected].join('\n') + '\n'
-                    : completeFilePatch(file, selected);
-                if (patch !== null) { unifiedDiff = patch; unavailableReason = null; }
-                else unavailableReason = 'invalid_diff';
-            } else if (evidence.declaredAvailable && entries.some((entry) => !isMetadataOccurrence(entry.occurrence))) {
-                unavailableReason = 'invalid_diff';
-            }
+            const { unifiedDiff, unavailableReason } = selectedPatch(file, entries, selected);
             return {
                 path: file.path,
                 previousPath: file.previousPath ?? null,
@@ -334,11 +341,15 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         }));
     }
 
-    const otherPaths: string[] = [];
+    const otherEntriesByPath = new Map<string, LocatedOccurrence[]>();
     for (const ref of value?.otherChangeRefs ?? []) {
         const entry = located.get(ref);
-        if (entry && !otherPaths.includes(entry.file.path)) otherPaths.push(entry.file.path);
+        if (!entry) continue;
+        const group = otherEntriesByPath.get(entry.file.path);
+        if (group) group.push(entry);
+        else otherEntriesByPath.set(entry.file.path, [entry]);
     }
+    const otherPaths = [...otherEntriesByPath.keys()];
     const filesByPath = new Map(comparison.inventory.files.map((file) => [file.path, file]));
     const fileLines = (file: ScmComparisonFile) => (hunksByPath.get(file.path) ?? []).reduce((sum, hunk) => {
         const body = parseUnifiedDiffHunks(hunk).flatMap((entry) => entry.lines);
@@ -355,6 +366,7 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
             generated: file.generated,
             binary: file.binary,
             unavailableReason: evidenceByPath.get(file.path)!.unavailableReason,
+            unifiedDiff: selectedPatch(file, otherEntriesByPath.get(path)!, selectedHunks(path, otherEntriesByPath.get(path)!)).unifiedDiff,
         };
     });
 

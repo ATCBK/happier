@@ -78,6 +78,7 @@ import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { resolveScmDiffAreaLabels, resolveScmDiffAreaVocabulary } from '@/scm/diff/diffAreaLabels';
 import { useChangedFilesReviewFind, type ReviewFindTarget } from './useChangedFilesReviewFind';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
+import { useFindBarPresentation } from '@/components/ui/find/FindBarPlacement';
 import { ChangedFilesReviewFindSurface, ChangedFilesReviewFindButton, ChangedFilesReviewFindCount } from './ChangedFilesReviewFind';
 
 const ViewWithClick = View as unknown as React.ComponentType<
@@ -120,6 +121,11 @@ type ChangedFilesReviewProps = {
     }> | null;
     /** Room kept under the stream for a tray floating over its foot. */
     bottomInsetPx?: number;
+    /**
+     * The tray floating over the stream's foot. On a phone the open Find bar is seated in the tray's place
+     * (as it takes the composer's), so the tray is told to `yield` until Done gives the foot back.
+     */
+    renderBottomTray?: (state: Readonly<{ yielded: boolean }>) => React.ReactNode;
     /**
      * A comparison view's chrome (Walkthrough lab WT8) in place of the Details header: one bar (the
      * caller's scope and actions around Review's own controls), an editorial header heading the
@@ -555,6 +561,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const reviewFind = useChangedFilesReviewFind();
     const intraLineDiff = useIntraLineWordDiffConfig();
     const findOpen = React.useSyncExternalStore(reviewFind.subscribe, () => reviewFind.getSnapshot().open);
+    const findSeated = useFindBarPresentation() === 'keyboardSeated';
     const [findTarget, setFindTarget] = React.useState<ReviewFindTarget | null>(null);
     const findSurfaceRef = React.useRef<View | null>(null);
     const findSurfaceInstance = React.useId();
@@ -1617,6 +1624,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             {/* Find floats over the review body, under the comparison header (Find lab F1d), never behind it. */}
             <ChangedFilesReviewFindSurface model={reviewFind} surfaceId={findSurfaceId} surfaceRef={findSurfaceRef}
                 presented={props.activeReviewFile?.presented !== false} />
+            {props.renderBottomTray?.({ yielded: findOpen && findSeated })}
             </View>
         </View>
     );

@@ -185,10 +185,12 @@ export const SPECIMEN_WALKTHROUGH: ScmDiffSummaryWalkthrough = {
         {
             id: 'why', title: 'Why the modal remounted', importance: 'high', changeRefs: [ref(MODAL, 1)],
             explanationMarkdown: 'React keys the modal with `key`. It combined the route path with the window width, so every resize produced a new key and React threw the modal away, along with the draft, scroll position and focus. The key now comes from the route alone.',
+            suggestedQuestions: ['Was the width ever needed in the key?', 'What else did a remount throw away?'],
         },
         {
             id: 'key', title: 'One key per route', importance: 'high', changeRefs: [ref(KEY, 0), ref(ROUTES_PATH, 0), ref(MODAL, 0)],
             explanationMarkdown: 'A small hook turns a route into a key that only changes when the destination does. It depends on the new `kind` field on `SettingsRoute`, so a search and a section can never share a key.',
+            suggestedQuestions: ['Why does the key need the route kind?'],
         },
         {
             id: 'sheet', title: 'The phone sheet uses the same key', importance: 'high', changeRefs: [ref(SHEET_PATH, 0)],

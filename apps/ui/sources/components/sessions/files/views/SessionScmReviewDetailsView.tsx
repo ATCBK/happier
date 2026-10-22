@@ -983,6 +983,16 @@ const SessionWorkingScmReviewDetailsView = React.memo(
             detailsHeader={reviewDetailsHeader}
             activeReviewFile={activeReviewFile}
             bottomInsetPx={reviewTrayVisible ? REVIEW_TRAY_RESERVED_PX : 0}
+            renderBottomTray={({ yielded }) => (
+              <ReviewDraftSummary
+                enabled={reviewCommentsEnabled}
+                drafts={reviewCommentDrafts}
+                yielded={yielded}
+                onGoToComposer={goToComposer}
+                onDetachDraft={detachDraftFromNextMessage}
+                composer={askComposer}
+              />
+            )}
             theme={theme}
             sessionId={props.sessionId}
             snapshot={effectiveSnapshot ?? null}
@@ -1031,13 +1041,6 @@ const SessionWorkingScmReviewDetailsView = React.memo(
             color={theme.colors.text.secondary}
             size={14}
             opacity={0.35}
-          />
-          <ReviewDraftSummary
-            enabled={reviewCommentsEnabled}
-            drafts={reviewCommentDrafts}
-            onGoToComposer={goToComposer}
-            onDetachDraft={detachDraftFromNextMessage}
-            composer={askComposer}
           />
         </View>
       );

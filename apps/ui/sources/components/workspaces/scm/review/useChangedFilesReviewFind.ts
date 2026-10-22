@@ -15,6 +15,8 @@ type Input = Readonly<{
     intraLineDiff?: Parameters<typeof buildCodeLinesFromUnifiedDiff>[0]['intraLineDiff'];
     diffStateSource: ChangedFilesReviewDiffStateSource;
     reveal(target: ReviewFindTarget | null): void;
+    /** When one file is shown in several places (a walkthrough's stops), each place is its own key; this names its file. */
+    filePathOf?(key: string): string;
 }>;
 const EMPTY_FILE: FileSnapshot = { count: 0, ranges: new Map() };
 type Match = ReviewFindTarget & Readonly<{ start: number; end: number }>;
@@ -81,7 +83,7 @@ export function createChangedFilesReviewFind() {
         if (snapshot.open && snapshot.query && input) {
             invalid = 'invalidPattern' in matchFindText('', snapshot.query, snapshot.options);
             if (!invalid) for (const path of input.paths) {
-                const viewer = resolveFileViewerKind({ path, isBinaryContent: input.binaryPaths?.has(path) });
+                const viewer = resolveFileViewerKind({ path: input.filePathOf?.(path) ?? path, isBinaryContent: input.binaryPaths?.has(path) });
                 if (viewer.kind !== 'code' && viewer.kind !== 'markdown' && viewer.kind !== 'svg') { partial = true; continue; }
                 const state = input.diffStateSource.getDiffState(path);
                 if (state.status === 'idle' || state.status === 'loading') { pending = true; continue; }
@@ -119,7 +121,7 @@ export function createChangedFilesReviewFind() {
         const status: FindStatus = !snapshot.open || !snapshot.query ? { kind: 'idle' } : invalid ? { kind: 'invalidPattern' }
             : pending ? { kind: 'searching', current: current ? matches.indexOf(current) + 1 : null, total: matches.length }
             : { kind: 'results', total: matches.length, current: current ? matches.indexOf(current) + 1 : null,
-                files: new Set(matches.map((match) => match.filePath)).size, coverage: partial ? 'partialErrors' : 'complete' };
+                files: new Set(matches.map((match) => input?.filePathOf?.(match.filePath) ?? match.filePath)).size, coverage: partial ? 'partialErrors' : 'complete' };
         snapshot = { ...snapshot, status };
         decorate(); publish();
         if (previousCurrent && !current) input?.reveal(null);
@@ -175,6 +177,6 @@ export function createChangedFilesReviewFind() {
 export type ChangedFilesReviewFindModel = ReturnType<typeof createChangedFilesReviewFind>;
 export function useChangedFilesReviewFind(input?: Input) {
     const [model] = React.useState(createChangedFilesReviewFind);
-    React.useEffect(() => input ? model.connect(input) : undefined, [model, input?.paths, input?.binaryPaths, input?.intraLineDiff, input?.diffStateSource, input?.reveal]);
+    React.useEffect(() => input ? model.connect(input) : undefined, [model, input?.paths, input?.binaryPaths, input?.intraLineDiff, input?.diffStateSource, input?.reveal, input?.filePathOf]);
     return model;
 }
