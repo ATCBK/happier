@@ -24,6 +24,38 @@ installApprovalCommonModuleMocks();
 afterEach(() => { retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); });
 
 describe('managed Machine inventory', () => {
+    it('keeps a hydrated same-Home inventory ready while its revalidation is in flight', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-inventory-revalidate.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_inventory_revalidate');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner') });
+        const machine = ManagedMachineV1Schema.parse({ id: 'pending', homeId: 'srv_inventory_revalidate', custodianAccountId: 'owner',
+            launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'may-exist', creationState: 'active',
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+        const revalidation = createDeferred<Response>();
+        let reads = 0;
+        setRuntimeFetch(async input => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/machines/managed/actions/list') return reads++ === 0
+                ? Response.json({ machines: [machine] }) : revalidation.promise;
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const execute = createDefaultActionExecutor().execute;
+        const hook = await renderHook(() => useManagedMachineInventory([target.id], undefined,
+            execute), { flushOptions: { cycles: 20 } });
+        expect(hook.getCurrent().entries.srv_inventory_revalidate?.status).toBe('ready');
+        await act(async () => publishHomeAccountChange(target.id));
+        await flushHookEffects({ cycles: 5 });
+        expect(reads).toBe(2);
+        expect(hook.getCurrent().entries.srv_inventory_revalidate).toMatchObject({ status: 'ready', machines: [{ id: 'pending' }] });
+        expect(hook.getCurrent().loading).toBe(false);
+        await act(async () => revalidation.resolve(Response.json({ machines: [machine] })));
+        await flushHookEffects({ cycles: 20 });
+        expect(hook.getCurrent().entries.srv_inventory_revalidate?.status).toBe('ready');
+        await hook.unmount();
+    });
     it('isolates shared demand by Home and retires old Account reads before accepting a replacement', async () => {
         const oldReply = createDeferred<Response>();
         let delayAlice = false;

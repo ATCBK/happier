@@ -111,6 +111,8 @@ export function canRetryManagedInstallation(machine: ManagedMachineV1, operation
     operation = currentManagedCreationOperation(machine, operation, context);
     if (!operation) return false;
     const snapshot = operation?.snapshot;
+    // A refused native credential recovers through Reconnect, whichever operation reported it.
+    if (snapshot.error?.errorCode === 'credential_unavailable') return false;
     // Power, retention and inspection operations can become the newest visible
     // receipt after a failed install. They do not enroll the retained resource
     // and must not erase its same-resource Retry install affordance.
@@ -119,7 +121,6 @@ export function canRetryManagedInstallation(machine: ManagedMachineV1, operation
     return operation?.observation === 'available' && !operation.isUnavailableProjection
         && snapshot?.state === 'failed' && snapshot.scope.machineId === machine.controller.machineId
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
-        && snapshot.error?.errorCode !== 'credential_unavailable'
         && snapshot.domainRef?.kind === 'managedMachine' && snapshot.domainRef.id === machine.id;
 }
 

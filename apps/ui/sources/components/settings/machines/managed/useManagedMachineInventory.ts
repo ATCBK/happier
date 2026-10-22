@@ -53,7 +53,10 @@ function createInventoryReader(serverId: string, accountId: string, homeId: stri
         const cancellation = new AbortController();
         controller = cancellation;
         awaitingApproval = false;
-        publish({ accountId, homeId, managedId, includeArchived, machines: entry.machines,
+        // Revalidating the same live binding does not make a hydrated answer
+        // non-current. Keep its authority and mutations stable until the new
+        // read either replaces it or returns a terminal failure.
+        if (entry.status !== 'ready') publish({ accountId, homeId, managedId, includeArchived, machines: entry.machines,
             ...(entry.asOf !== undefined ? { asOf: entry.asOf } : {}), status: 'loading' });
         void (async () => {
                 try {
@@ -74,7 +77,7 @@ function createInventoryReader(serverId: string, accountId: string, homeId: stri
                                     onSucceeded: value => callbacks.onApprovalSucceeded('machines' in value ? value.machines : [value]),
                                     onFailed: callbacks.onApprovalFailed,
                                 });
-                                if (isCurrent() && !cancellation.signal.aborted) publish({ ...entry, approval });
+                                if (isCurrent() && !cancellation.signal.aborted) publish({ ...entry, status: 'loading', approval });
                                 return { approvalPending: true };
                             }
                             const machines = managedId

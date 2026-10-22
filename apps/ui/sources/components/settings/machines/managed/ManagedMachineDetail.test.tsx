@@ -2102,9 +2102,12 @@ describe('managed Machine detail', () => {
         storage.getState().applyMachines([createMachineFixture({ id: machine.controller.machineId,
             installationId: machine.controller.installationId, activeAt: Date.now() })], true,
             { sourceServerId: resolveServerProfileScopeIdForIdentifier(target.id) });
+        const revalidation = createDeferred<Response>();
+        let inventoryReads = 0;
         setRuntimeFetch(async input => {
             const url = new URL(String(input));
-            if (url.pathname === '/v1/machines/managed/actions/list') return Response.json({ machines: [machine] });
+            if (url.pathname === '/v1/machines/managed/actions/list') return inventoryReads++ === 0
+                ? Response.json({ machines: [machine] }) : revalidation.promise;
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             return Response.json({ error: 'not_found' }, { status: 404 });
@@ -2114,10 +2117,21 @@ describe('managed Machine detail', () => {
             executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 20 });
         expect(policyParentBoundary.reads).toBe(1);
+        const operationReads = () => operationRpcBoundary.requests.filter(request => request.method === ACTION_OPERATION_RPC_METHODS_V2.list).length;
+        const readsBeforeRevalidation = operationReads();
+        const checkNow = () => screen.tree.findAllByType(ManagedCreationProgress)[0]?.props.handlers?.checkNow;
+        expect(checkNow()).toBeTypeOf('function');
         // Busy Homes publish changes constantly; a revalidation of the same row must not abort and restart the read.
         await act(async () => publishHomeAccountChange(target.id));
-        await flushHookEffects({ cycles: 20 });
+        await flushHookEffects({ cycles: 5 });
+        expect(inventoryReads).toBe(2);
         expect(policyParentBoundary.reads).toBe(1);
+        expect(operationReads()).toBe(readsBeforeRevalidation);
+        expect(checkNow()).toBeTypeOf('function');
+        await act(async () => revalidation.resolve(Response.json({ machines: [machine] })));
+        await flushHookEffects({ cycles: 20 });
+        expect(operationReads()).toBe(readsBeforeRevalidation);
+        expect(checkNow()).toBeTypeOf('function');
         await screen.unmount();
     });
     it('mounts the enrolled association with the immutable receipt and removes it on read refusal', async () => {
