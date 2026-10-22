@@ -36,9 +36,6 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     // Pierre has no per-line gutter slot (only hover utilities and after-line annotations), so a caller
     // that asks for one is served by the renderer that draws it: the same column View shows.
     const pierreAllowed = wantsPierre
-        // Find uses the canonical line corpus and reversible context folds, including
-        // revision text absent from a patch. Pierre's patch-only corpus cannot reveal it.
-        && !(props.findActive && props.mode === 'unified' && props.precomputedLines)
         && !props.renderLeadingLane
         && isPierreDiffKillSwitchEnabled()
         && supportsPierreRuntime();
@@ -70,9 +67,7 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     }
 
     if (props.mode === 'unified') {
-        // While Find holds Pierre's place, hunk bands read as Pierre draws them ("N unchanged lines"), not raw `@@`.
-        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines}
-            lineInfoSeparators={props.lineInfoSeparators ?? (wantsPierre && props.findActive && props.precomputedLines ? true : undefined)} />;
+        return <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
     }
     return <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;
 });

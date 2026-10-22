@@ -229,6 +229,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const blockTestId = `scm-review-diff-${testIdSafePath}`;
 
     const diffLoaded = state.status === 'loaded';
+    const findContextBaseText = props.findActive && state.context?.status === 'loaded' ? state.context.baseText : undefined;
     const hunkTable = useDiffHunkTable({ mode: 'unified', filePath, unifiedDiff: state.diff }, Boolean(props.hunkNotes || props.scrollToLineId));
     const columnNotes = props.hunkNotes?.placement === 'column' ? props.hunkNotes : null;
     const frameRef = React.useRef<View>(null);
@@ -416,6 +417,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     precomputedLines={findLines}
+                    contextBaseText={findContextBaseText}
                     registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}
@@ -446,6 +448,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                 <DiffViewer
                     findActive={props.findActive}
                     precomputedLines={findLines}
+                    contextBaseText={findContextBaseText}
                     registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     hunks={reviewHunks}

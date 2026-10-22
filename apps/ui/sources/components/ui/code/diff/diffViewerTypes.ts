@@ -113,6 +113,11 @@ export type UnifiedDiffViewerProps = DiffViewerBaseProps & Readonly<{
     unifiedDiff: string;
     precomputedLines?: readonly CodeLine[];
     /**
+     * Find: this patch's before revision, the text its omitted unchanged rows come from. A renderer that
+     * folds against the patch alone (Pierre) completes its diff from it to reveal a match in omitted text.
+     */
+    contextBaseText?: string;
+    /**
      * Host-private: draw each hunk header as Pierre's quiet "N unchanged lines · heading" band rather than
      * the raw `@@` header, so the Happier renderer standing in while Pierre initializes reads like Pierre.
      */

@@ -7,7 +7,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { createTwoFilesPatch } from 'diff';
 
-import { parseDiffFromFile, parsePatchFiles, VirtualizedFileDiff, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
+import { hydratePartialDiff, parseDiffFromFile, parsePatchFiles, VirtualizedFileDiff, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
+import { applyHunks, parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineClickProps, FileDiff as PierreFileDiffInstance, SelectedLineRange } from '@pierre/diffs';
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
@@ -574,6 +575,20 @@ export function resolvePierreSelectionStyle(theme: { dark?: boolean; colors?: Re
     };
 }
 
+/**
+ * A patch alone omits the unchanged text between its hunks. Completing the parsed patch from its before revision
+ * (the hunks stay the patch's own) lets Pierre reveal that text, so Find can reach a match inside it.
+ */
+function completePatchFromBase(parsed: FileDiffMetadata, patch: string, baseText: string): FileDiffMetadata | null {
+    if (!parsed.isPartial || (parsed.type !== 'change' && parsed.type !== 'rename-changed')) return null;
+    const applied = applyHunks(baseText, parseUnifiedDiffHunks(patch));
+    if (!applied.ok) return null;
+    return hydratePartialDiff('clone', parsed, {
+        oldFile: { name: parsed.prevName ?? parsed.name, contents: baseText },
+        newFile: { name: parsed.name, contents: applied.text },
+    });
+}
+
 export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const { theme } = useUnistyles();
     const isDark = theme.dark === true;
@@ -692,8 +707,11 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         || props.intelligence
     );
 
+    // Find searches the canonical corpus: the patch's rows plus the omitted unchanged rows its model filled in.
+    const findLines = props.findActive && props.mode === 'unified' ? props.precomputedLines : undefined;
     const codeLines: readonly CodeLine[] | null = React.useMemo(() => {
         if (!needsCodeLines) return null;
+        if (findLines) return findLines;
         if (props.mode === 'text') return buildCodeLinesFromTextDiff({
             oldText: props.oldText,
             newText: props.newText,
@@ -703,8 +721,27 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             unifiedDiff: sanitizedPatch,
             hideFilePrelude: true,
         });
-    }, [needsCodeLines, sanitizedPatch, props.mode, props.mode === 'text' ? props.oldText : null,
+    }, [findLines, needsCodeLines, sanitizedPatch, props.mode, props.mode === 'text' ? props.oldText : null,
         props.mode === 'text' ? props.newText : null, props.mode === 'text' ? props.contextLines : null]);
+
+    // A match in omitted text opens its fold in place; Find's refold command (or stepping on) closes it again.
+    const [refoldedFindLine, setRefoldedFindLine] = React.useState<string | null>(null);
+    React.useEffect(() => { setRefoldedFindLine(null); }, [props.scrollToLineId, props.findActive, props.findRangesByLineId]);
+    const contextBaseText = props.mode === 'unified' ? props.contextBaseText : undefined;
+    const findTargetOmitted = Boolean(props.scrollToLineId && refoldedFindLine !== props.scrollToLineId
+        && findLines?.some((line) => line.id === props.scrollToLineId && line.hunkIndex === null && !line.renderIsHeaderLine));
+    const completedPatch = React.useMemo(() => {
+        if (!findTargetOmitted || contextBaseText === undefined || !parsedPatch) return null;
+        try { return completePatchFromBase(parsedPatch, sanitizedPatch, contextBaseText); } catch { return null; }
+    }, [contextBaseText, findTargetOmitted, parsedPatch, sanitizedPatch]);
+    const refoldFind = React.useCallback(() => {
+        if (!completedPatch) return 'noRevealedFold' as const;
+        setRefoldedFindLine(props.scrollToLineId ?? null);
+        return 'refolded' as const;
+    }, [completedPatch, props.scrollToLineId]);
+    const registerFindRefold = props.registerFindRefold;
+    React.useEffect(() => props.findActive ? registerFindRefold?.(refoldFind) : undefined,
+        [props.findActive, refoldFind, registerFindRefold]);
 
     // Text comparisons can expand unchanged rows outside the patch. Reuse file-row identities there;
     // patch rows retain their existing diff identities and all callbacks carry the new source line.
@@ -842,7 +879,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     }, [annotationContent]);
 
     const fileDiff: FileDiffMetadata = React.useMemo(() => {
-        const parsed = parsedPatch;
+        const parsed = completedPatch ?? parsedPatch;
         if (!parsed) {
             // This value is only used if we end up rendering <FileDiff>. When the patch is invalid,
             // we render a fallback state instead of crashing Pierre.
@@ -855,13 +892,14 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return {
             ...parsed,
             ...(languageOverride ? { lang: languageOverride } : {}),
-            cacheKey: buildPierreInitialPresentationCacheKey({
+            // The completed diff paints different rows from the same patch: its own key, so it mounts afresh.
+            cacheKey: `${buildPierreInitialPresentationCacheKey({
                 fileName: name,
                 language: languageOverride,
                 patch: sanitizedPatch,
-            }),
+            })}${completedPatch ? ':complete' : ''}`,
         };
-    }, [parsedPatch, props.filePath, sanitizedPatch]);
+    }, [completedPatch, parsedPatch, props.filePath, sanitizedPatch]);
     const initialPresentationForceFallback = usePierreInitialPresentation({
         cacheKey: fileDiff.cacheKey ?? buildPierreInitialPresentationCacheKey({
             fileName: typeof fileDiff.name === 'string' ? fileDiff.name : 'diff',

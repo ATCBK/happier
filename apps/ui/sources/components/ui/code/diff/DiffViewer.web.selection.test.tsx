@@ -1,4 +1,5 @@
 import * as React from 'react';
+import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
@@ -77,21 +78,44 @@ describe('DiffViewer (web renderer selection)', () => {
         expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeTruthy();
     });
 
-    it('reveals and refolds a Find match while Pierre is the preferred renderer', async () => {
+    it('reveals a Find match in omitted text inside Pierre and refolds it, without handing the page to another renderer', async () => {
         const { DiffViewer } = await import('./DiffViewer.web');
         const { buildCodeLinesFromUnifiedDiff } = await import('../model/buildCodeLinesFromUnifiedDiff');
-        const unifiedDiff = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, i) => ` context ${i}`), '-old', '+new'].join('\n');
-        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff }).find(line => line.renderCodeText === 'context 5')!;
-        storage.setState({ settings: { ...storage.getState().settings, filesDiffFoldingEnabled: true,
-            filesDiffFoldingContextThreshold: 4, filesDiffFoldingContextRadius: 1 } });
-        const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={unifiedDiff} findActive virtualized={false}
-            precomputedLines={buildCodeLinesFromUnifiedDiff({ unifiedDiff })}
-            filePath="a.ts" scrollToLineId={target.id}
-            findRangesByLineId={new Map([[target.id, [{ start: 0, end: 9, current: true }]]])} />);
-        expect(screen.findByTestId('find-match-current')).not.toBeNull();
-        await screen.pressByTestIdAsync('diff-find-fold-again');
-        expect(screen.findByTestId('find-match-current')).toBeNull();
+        const { expandUnifiedDiffContext } = await import('../model/expandUnifiedDiffContext');
+        const baseText = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+        const unifiedDiff = ['--- a/a.ts', '+++ b/a.ts', '@@ -10,3 +10,3 @@', ' line 10', ' line 11', '-line 12', '+line twelve'].join('\n') + '\n';
+        const patchLines = buildCodeLinesFromUnifiedDiff({ unifiedDiff, hideFilePrelude: true });
+        const lines = expandUnifiedDiffContext({ unifiedDiff, baseText, lines: patchLines })!;
+        const target = lines.find(line => line.renderCodeText === 'line 3')!;
+        let refold: (() => string) | undefined;
+        const props = {
+            mode: 'unified', unifiedDiff, filePath: 'a.ts', findActive: true, virtualized: false, precomputedLines: lines,
+            contextBaseText: baseText, scrollToLineId: target.id,
+            findRangesByLineId: new Map([[target.id, [{ start: 0, end: 6, current: true }]]]),
+            registerFindRefold: (next: () => string) => { refold = next; return () => { refold = undefined; }; },
+        } as const;
+        const screen = await renderScreen(<DiffViewer {...props} />);
+
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeNull();
+        const revealed = screen.findAllByType('pierre-file-diff')[0]!.props.fileDiff;
+        expect(revealed.isPartial).toBe(false);
+        expect(revealed.additionLines[2]).toBe('line 3\n');
+
+        await renderer.act(async () => { expect(refold?.()).toBe('refolded'); });
+        expect(screen.findAllByType('pierre-file-diff')[0]!.props.fileDiff.isPartial).toBe(true);
         expect(storage.getState().settings.filesDiffRendererMode).toBe('pierre');
+    });
+
+    it('keeps the patch-only Pierre diff for a Find match the patch already shows', async () => {
+        const { DiffViewer } = await import('./DiffViewer.web');
+        const { buildCodeLinesFromUnifiedDiff } = await import('../model/buildCodeLinesFromUnifiedDiff');
+        const unifiedDiff = ['--- a/a.ts', '+++ b/a.ts', '@@ -1,2 +1,2 @@', ' keep', '-old', '+new'].join('\n') + '\n';
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff, hideFilePrelude: true });
+        const target = lines.find(line => line.renderCodeText === 'new')!;
+        const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={unifiedDiff} filePath="a.ts" findActive virtualized={false}
+            precomputedLines={lines} contextBaseText={'keep\nold\n'} scrollToLineId={target.id}
+            findRangesByLineId={new Map([[target.id, [{ start: 0, end: 3, current: true }]]])} />);
+        expect(screen.findAllByType('pierre-file-diff')[0]!.props.fileDiff.isPartial).toBe(true);
     });
 
     it('wraps virtualized Pierre diffs in LazyMountOnScreen for lazy mounting', async () => {
