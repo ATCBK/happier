@@ -4,6 +4,7 @@ import type { WorkflowActionExecute, WorkflowActionExecuteArgs } from './types.j
 import type { WorkflowActionIdV1, WorkflowIngressContextV1 } from '../../workflows/index.js';
 import type { WorkflowTriggerActions } from './workflowTriggerActions.js';
 import { WorkflowActionFailureV1Schema, type WorkflowActionFailureV1 } from '../../workflows/workflowProgressV1.js';
+import { getActionSpec } from '../actionSpecs.js';
 
 export type WorkflowActionFailureDiagnosticV1 = Readonly<{
   event: 'workflow_action_failure';
@@ -19,9 +20,14 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   operation: string;
   durationMs: number;
   emit: (diagnostic: WorkflowActionFailureDiagnosticV1) => void;
-}>): WorkflowActionFailureV1 {
-  const rawCode = error !== null && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+}>, preEffect = false): WorkflowActionFailureV1 {
+  const thrownCode = error !== null && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
     ? error.code : 'storage_unavailable';
+  // An aborted observer cannot prove that an issued write did not commit.
+  // Native cancellation is conclusive only during preparation or a read.
+  const rawCode = preEffect && (thrownCode === 'ERR_CANCELED'
+    || (error !== null && typeof error === 'object' && 'name' in error && error.name === 'AbortError'))
+    ? 'cancelled' : thrownCode;
   // The template codec's reasons also drive locked-row listing inside the
   // trigger owner. At the Action boundary they describe unreadable content,
   // not a failure to reach storage.
@@ -132,137 +138,136 @@ export function createWorkflowActionExecutor(deps: Readonly<{
   resolveIngressContext?: (args: WorkflowActionExecuteArgs) => Promise<WorkflowIngressContextV1 | undefined>;
   resolveTargetValidation?: (args: WorkflowActionExecuteArgs<'workflow.validate'>) => Promise<WorkflowTargetValidation>;
 }>): WorkflowActionExecute {
-  const execute: WorkflowActionExecute = async (rawArgs) => {
-    // A failed observation reaches the shared failure classifier. It grants
-    // no availability, but is distinct from a settled disabled decision.
-    const featureEnabled = await deps.isWorkflowFeatureEnabled();
-    if (!featureEnabled) {
-      return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-
-    const actionId = rawArgs.actionId;
-    if (actionId === 'workflow.run.wait'
-      && (rawArgs.context.surface === 'agent' || rawArgs.context.surface === 'mcp')
-      && rawArgs.context.defaultSessionId
-      && rawArgs.input.timeoutSeconds === undefined) {
-      return { ok: false, errorCode: 'invalid_input', error: 'invalid_input' };
-    }
-    const resolvesIngress = actionId === 'workflow.validate'
-      || actionId === 'workflow.run.start'
-      || actionId === 'workflow.run.resume'
-      || actionId === 'workflow.run.invocations.retry'
-      || actionId === 'workflow.run.invocations.complete_review'
-      || actionId === 'workflow.definition.create'
-      || actionId === 'workflow.definition.update'
-      || actionId === 'workflow.definition.edit'
-      || actionId === 'workflow.definition.import';
-    const context = resolvesIngress
-      ? await deps.resolveIngressContext?.(rawArgs)
-      : undefined;
-    if (actionId === 'workflow.validate') {
-      const input = parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input);
-      const target = input.target
-        ? await deps.resolveTargetValidation?.({ ...rawArgs, actionId, input })
-          ?? { targetValidation: 'unavailable' as const }
-        : { targetValidation: 'not_requested' as const };
-      return WorkflowActionOutputSchemasV1[actionId].parse(validateWorkflowDefinition(input.definition, {
-        ...(context ? { context } : {}),
-        ...target,
-      }));
-    }
-    if (actionId === 'workflow.definition.list') {
-      return await deps.definitions.list(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
-    }
-    if (actionId === 'workflow.definition.get') {
-      return await deps.definitions.get(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
-    }
-    if (actionId === 'workflow.definition.import') {
-      return await deps.definitions.importDocument(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context);
-    }
-    if (actionId === 'workflow.definition.export') {
-      return await deps.definitions.exportDocument(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
-    }
-    if (actionId === 'workflow.definition.create') {
-      return await deps.definitions.create(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
-    }
-    if (actionId === 'workflow.definition.update') {
-      return await deps.definitions.update(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
-    }
-    if (actionId === 'workflow.definition.edit') {
-      return await deps.definitions.edit(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
-    }
-    if (actionId === 'workflow.definition.delete') {
-      return await deps.definitions.delete(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context);
-    }
-    if (actionId === 'workflow.trigger.list') {
-      return deps.triggers ? deps.triggers.list(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'workflow.trigger.run_now') {
-      return deps.triggers ? deps.triggers.runNow(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'workflow.trigger.add') {
-      return deps.triggers ? deps.triggers.add(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'workflow.trigger.update') {
-      return deps.triggers ? deps.triggers.update(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'workflow.trigger.remove') {
-      return deps.triggers ? deps.triggers.remove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'session.trigger.list') {
-      return deps.triggers ? deps.triggers.sessionList(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'session.trigger.add') {
-      return deps.triggers ? deps.triggers.sessionAdd(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'session.trigger.update') {
-      return deps.triggers ? deps.triggers.sessionUpdate(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (actionId === 'session.trigger.remove') {
-      return deps.triggers ? deps.triggers.sessionRemove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
-        : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    if (!isWorkflowRunActionArgs(rawArgs)) {
-      return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
-    }
-    switch (rawArgs.actionId) {
-      case 'workflow.run.start':
-      case 'workflow.run.list':
-      case 'workflow.run.summaries':
-      case 'workflow.run.get':
-      case 'workflow.run.wait':
-      case 'workflow.run.pause':
-      case 'workflow.run.resume':
-      case 'workflow.run.cancel':
-      case 'workflow.run.invocations.list':
-      case 'workflow.run.invocations.get':
-      case 'workflow.run.invocations.retry':
-      case 'workflow.run.invocations.publish_draft':
-      case 'workflow.run.invocations.complete_review':
-      case 'workflow.run.delete':
-        parseWorkflowActionInput<unknown>(WorkflowActionInputSchemasV1[rawArgs.actionId], rawArgs.input);
-        return await deps.runs.execute(rawArgs, context);
-      default:
-        rawArgs satisfies never;
-        throw new Error('unreachable_workflow_run_action');
-    }
-  };
-  return async (args) => {
+  return async (rawArgs) => {
     const startedAtMs = Date.now();
+    let preparing = true;
     try {
-      return await execute(args);
+      // A failed observation reaches the shared failure classifier. It grants
+      // no availability, but is distinct from a settled disabled decision.
+      const featureEnabled = await deps.isWorkflowFeatureEnabled();
+      if (!featureEnabled) {
+        return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+
+      const actionId = rawArgs.actionId;
+      if (actionId === 'workflow.run.wait'
+        && (rawArgs.context.surface === 'agent' || rawArgs.context.surface === 'mcp')
+        && rawArgs.context.defaultSessionId
+        && rawArgs.input.timeoutSeconds === undefined) {
+        return { ok: false, errorCode: 'invalid_input', error: 'invalid_input' };
+      }
+      const resolvesIngress = actionId === 'workflow.validate'
+        || actionId === 'workflow.run.start'
+        || actionId === 'workflow.run.resume'
+        || actionId === 'workflow.run.invocations.retry'
+        || actionId === 'workflow.run.invocations.complete_review'
+        || actionId === 'workflow.definition.create'
+        || actionId === 'workflow.definition.update'
+        || actionId === 'workflow.definition.edit'
+        || actionId === 'workflow.definition.import';
+      const context = resolvesIngress
+        ? await deps.resolveIngressContext?.(rawArgs)
+        : undefined;
+      preparing = false;
+      if (actionId === 'workflow.validate') {
+        const input = parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input);
+        const target = input.target
+          ? await deps.resolveTargetValidation?.({ ...rawArgs, actionId, input })
+            ?? { targetValidation: 'unavailable' as const }
+          : { targetValidation: 'not_requested' as const };
+        return WorkflowActionOutputSchemasV1[actionId].parse(validateWorkflowDefinition(input.definition, {
+          ...(context ? { context } : {}),
+          ...target,
+        }));
+      }
+      if (actionId === 'workflow.definition.list') {
+        return await deps.definitions.list(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
+      }
+      if (actionId === 'workflow.definition.get') {
+        return await deps.definitions.get(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
+      }
+      if (actionId === 'workflow.definition.import') {
+        return await deps.definitions.importDocument(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context);
+      }
+      if (actionId === 'workflow.definition.export') {
+        return await deps.definitions.exportDocument(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
+      }
+      if (actionId === 'workflow.definition.create') {
+        return await deps.definitions.create(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
+      }
+      if (actionId === 'workflow.definition.update') {
+        return await deps.definitions.update(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
+      }
+      if (actionId === 'workflow.definition.edit') {
+        return await deps.definitions.edit(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
+      }
+      if (actionId === 'workflow.definition.delete') {
+        return await deps.definitions.delete(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context);
+      }
+      if (actionId === 'workflow.trigger.list') {
+        return deps.triggers ? await deps.triggers.list(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'workflow.trigger.run_now') {
+        return deps.triggers ? await deps.triggers.runNow(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'workflow.trigger.add') {
+        return deps.triggers ? await deps.triggers.add(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'workflow.trigger.update') {
+        return deps.triggers ? await deps.triggers.update(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'workflow.trigger.remove') {
+        return deps.triggers ? await deps.triggers.remove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'session.trigger.list') {
+        return deps.triggers ? await deps.triggers.sessionList(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'session.trigger.add') {
+        return deps.triggers ? await deps.triggers.sessionAdd(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'session.trigger.update') {
+        return deps.triggers ? await deps.triggers.sessionUpdate(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (actionId === 'session.trigger.remove') {
+        return deps.triggers ? await deps.triggers.sessionRemove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
+          : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      if (!isWorkflowRunActionArgs(rawArgs)) {
+        return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+      }
+      switch (rawArgs.actionId) {
+        case 'workflow.run.start':
+        case 'workflow.run.list':
+        case 'workflow.run.summaries':
+        case 'workflow.run.get':
+        case 'workflow.run.wait':
+        case 'workflow.run.pause':
+        case 'workflow.run.resume':
+        case 'workflow.run.cancel':
+        case 'workflow.run.invocations.list':
+        case 'workflow.run.invocations.get':
+        case 'workflow.run.invocations.retry':
+        case 'workflow.run.invocations.publish_draft':
+        case 'workflow.run.invocations.complete_review':
+        case 'workflow.run.delete':
+          parseWorkflowActionInput<unknown>(WorkflowActionInputSchemasV1[rawArgs.actionId], rawArgs.input);
+          return await deps.runs.execute(rawArgs, context);
+        default:
+          rawArgs satisfies never;
+          throw new Error('unreachable_workflow_run_action');
+      }
     } catch (error) {
       return normalizeWorkflowActionThrownError(error, deps.onFailureDiagnostic ? {
-        operation: args.actionId, durationMs: Date.now() - startedAtMs, emit: deps.onFailureDiagnostic,
-      } : undefined);
+        operation: rawArgs.actionId, durationMs: Date.now() - startedAtMs, emit: deps.onFailureDiagnostic,
+      } : undefined, preparing || getActionSpec(rawArgs.actionId).sideEffectClass === 'read');
     }
   };
 }

@@ -197,7 +197,8 @@ describe('createActionExecutor (Workflow family)', () => {
       runId: '11111111-1111-4111-8111-111111111111',
       source: {
         kind: 'inline',
-        definition: { version: 1, inputs: [], defaults: {}, blocks: [] },
+        definition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'wait', id: 'wait',
+          document: { text: 'Continue', references: [], attachments: [] } }] },
       },
       authorization: {
         admittedPermissionCeiling: 'yolo',
@@ -216,6 +217,7 @@ describe('createActionExecutor (Workflow family)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(workflowAction).not.toHaveBeenCalled();
   });

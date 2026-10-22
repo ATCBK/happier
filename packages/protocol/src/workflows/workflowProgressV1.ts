@@ -890,6 +890,9 @@ export type WorkflowTargetUnavailableDetailsV1 = z.infer<typeof WorkflowTargetUn
 /** Closed semantic failure returned by the Workflow Action family dependency. */
 export const WorkflowActionFailureV1Schema = lazyZodSchema(() => z.discriminatedUnion('errorCode', [
   z.strictObject({
+    ok: z.literal(false), errorCode: z.literal('cancelled'), error: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     ok: z.literal(false), errorCode: z.literal('workflow_http_error'), error: z.string().check(z.trim(), z.minLength(1)),
     details: WorkflowHttpErrorDetailsV1Schema,
   }),

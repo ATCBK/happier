@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
 import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError, type WorkflowActionFailureDiagnosticV1 } from './workflowAccountActions.js';
-import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
+import { createWorkflowDefinitionActions, type WorkflowDefinitionArtifactOperations } from './workflowDefinitions.js';
 import { createWorkflowAccountRunActionOwner } from './workflowRunActions.js';
 import { parseWorkflowDocumentJsonIngressV1 } from '../../workflows/workflowDocumentV1.js';
 import { WorkflowActionFailureV1Schema } from '../../workflows/workflowProgressV1.js';
@@ -11,7 +11,8 @@ const definition = { version: 1 as const, inputs: [], defaults: {}, blocks: [{ k
   document: { text: 'Continue', references: [], attachments: [] } }] };
 
 function executor(invalidStoredHeader = false, readFailure?: unknown,
-  isWorkflowFeatureEnabled: () => boolean | Promise<boolean> = () => true) {
+  isWorkflowFeatureEnabled: () => boolean | Promise<boolean> = () => true,
+  artifactStore: Partial<WorkflowDefinitionArtifactOperations> = {}) {
   const unexpected = (): never => { throw new Error('unexpected_effect'); };
   // Artifact and Run persistence are the only boundaries; all family, reader,
   // validation and admission logic stays real.
@@ -26,6 +27,7 @@ function executor(invalidStoredHeader = false, readFailure?: unknown,
       body: JSON.stringify({ kind: 'workflow-definition.v1', definition }) };
     },
     list: unexpected, create: unexpected, update: unexpected, delete: unexpected,
+    ...artifactStore,
   } });
   const runs = createWorkflowAccountRunActionOwner({ definitions, storage: { execute: unexpected },
     resolveAccountId: async () => 'account', resolveEncryption: async () => ({ kind: 'available',
@@ -35,6 +37,62 @@ function executor(invalidStoredHeader = false, readFailure?: unknown,
 }
 
 describe('workflow Action refusal classification', () => {
+  it.each([
+    new DOMException('Read cancelled', 'AbortError'),
+    Object.assign(new Error('Read cancelled'), { code: 'ERR_CANCELED' }),
+    Object.assign(new Error('Read cancelled'), { code: 'cancelled' }),
+  ])('preserves pre-effect Artifact read cancellation through the strict Action consumer (%s)', async error => {
+    const controller = new AbortController();
+    const workflowAction = executor(false, undefined, () => true, { read: async () => {
+      expect(controller.signal.aborted).toBe(false);
+      controller.abort(error);
+      throw error;
+    } });
+    const actions = createActionExecutor({ workflowAction } as unknown as ActionExecutorDeps);
+    const result = await actions.execute('workflow.definition.get', { definitionId }, { surface: 'ui', signal: controller.signal });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'cancelled' });
+  });
+
+  it('preserves cancellation during feature preparation before a write owner is entered', async () => {
+    const controller = new AbortController();
+    const workflowAction = executor(false, undefined, async () => {
+      expect(controller.signal.aborted).toBe(false);
+      controller.abort();
+      controller.signal.throwIfAborted();
+      return true;
+    });
+    const actions = createActionExecutor({ workflowAction } as unknown as ActionExecutorDeps);
+    const result = await actions.execute('workflow.definition.create', { definitionId, metadata: { title: 'Saved Wait' }, definition },
+      { surface: 'ui', signal: controller.signal });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'cancelled' });
+  });
+
+  it('preserves a typed currentness conflict and its revision through both failure boundaries', async () => {
+    const error = Object.assign(new Error('Stale revision'), { code: 'currentness_conflict', details: { revision: 7 } });
+    const actions = createActionExecutor({ workflowAction: executor(false, error) } as unknown as ActionExecutorDeps);
+    const result = await actions.execute('workflow.definition.get', { definitionId }, { surface: 'ui' });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toEqual({ ok: false, errorCode: 'currentness_conflict',
+      error: error.message, details: { revision: 7 } });
+  });
+
+  it('does not prove cancellation when an Artifact delete commits but its receipt is aborted', async () => {
+    const controller = new AbortController();
+    let deletedArtifactId: string | undefined;
+    const workflowAction = executor(false, undefined, () => true, { delete: async (artifactId, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      deletedArtifactId = artifactId;
+      controller.abort();
+      throw controller.signal.reason;
+    } });
+    const actions = createActionExecutor({ workflowAction } as unknown as ActionExecutorDeps);
+    const result = await actions.execute('workflow.definition.delete', { definitionId }, { surface: 'ui', signal: controller.signal,
+      // The human has confirmed this exact dangerous Action at the host boundary.
+      authority: 'present_user', actionCaller: { kind: 'host' },
+      presentUserConfirmation: { actionId: 'workflow.definition.delete' } });
+    expect(deletedArtifactId, JSON.stringify(result)).toBe(definitionId);
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+  });
+
   it('keeps a failed feature observation retryable through the real Action failure consumer', async () => {
     const workflowAction = executor(false, undefined, async () => {
       throw Object.assign(new Error('Feature request timed out'), { code: 'ECONNABORTED' });
