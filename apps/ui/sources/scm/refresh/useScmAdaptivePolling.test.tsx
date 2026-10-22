@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -31,6 +33,35 @@ describe('useScmAdaptivePolling', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it('withdraws hidden pane polling and revalidates once when the pane returns', async () => {
+        const { useScmAdaptivePolling } = await import('./useScmAdaptivePolling');
+        let active = false;
+        let reads = 0;
+        const invalidateAndAwait = async () => { reads += 1; };
+        const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(
+            PluginSurfaceFocusEligibilityProvider, { active, children },
+        );
+        const hook = await renderHook(() => useScmAdaptivePolling({ enabled: true,
+            baseIntervalMs: 1000, stepIntervalMs: 1000, maxIntervalMs: 4000,
+            invalidateAndAwait, getSignature: () => 'cached-snapshot',
+        }), { wrapper, flushOptions: { cycles: 0 } });
+        expect(reads).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+        active = true;
+        await hook.rerender();
+        expect(reads).toBe(1);
+        active = false;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 1, advanceTimersMs: 60_000 });
+        expect(reads).toBe(1);
+        expect(vi.getTimerCount()).toBe(0);
+        active = true;
+        await hook.rerender();
+        expect(reads).toBe(2);
+        await hook.unmount();
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it.each(['disable', 'background', 'unmount', 'restart'] as const)(

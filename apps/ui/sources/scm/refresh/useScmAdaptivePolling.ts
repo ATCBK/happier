@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { AppState, Platform } from 'react-native';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 export type ScmAdaptivePollingInput = Readonly<{
     enabled: boolean;
@@ -12,7 +13,8 @@ export type ScmAdaptivePollingInput = Readonly<{
 }>;
 
 export function useScmAdaptivePolling(input: ScmAdaptivePollingInput) {
-    const enabled = input.enabled === true;
+    const presented = useLayoutPresentationActive();
+    const enabled = input.enabled === true && presented;
 
     const baseIntervalMs = React.useMemo(() => {
         const raw = Number.isFinite(input.baseIntervalMs) ? input.baseIntervalMs : 0;
