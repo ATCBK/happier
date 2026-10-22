@@ -8210,6 +8210,22 @@ describe('Channels connection lifecycle actions', () => {
 });
 
 describe('Channels offline Account-local binding policy', () => {
+  it('does not present an unread Resource as retained binding details after its first read fails', async () => {
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'channels-unread', mountNonce: 'channels-unread' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(emptyDataClient),
+      handlers: { readResource: async () => {
+        throw new PluginError({ code: 'unavailable', message: 'Resource transport is unavailable' });
+      } },
+    });
+    try {
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-bindings-error"]')).not.toBeNull());
+      expect(document.querySelector('[data-testid="channels-bindings-resource-stale"]')).toBeNull();
+    } finally { await fixture.dispose(); }
+  });
   it.each([false, true])('explains unavailable linking and keeps Account conversations reachable (Resource method installed: %s)', async (resourceMethodInstalled) => {
     const account = createOfflineChannelStateFixture();
     const openedSurfaces: string[] = [];

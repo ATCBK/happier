@@ -1835,6 +1835,9 @@ function validObservationAge(value: string): number | undefined {
  * disclose.
  */
 function resourceFreshnessNoticeApplies(resource: ResourcePresentation): boolean {
+  // Unknown freshness has no retained read to describe. Its ordinary error
+  // state already explains the failure and offers recovery.
+  if (resource.freshness === 'unknown') return false;
   // A requested reread marks retained values stale while pending; that alone
   // is ordinary refresh work, not a degraded-content notice.
   return (resource.freshness === 'stale' && resource.pending !== 'refresh')
