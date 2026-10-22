@@ -95,7 +95,6 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
 import type { ResolveSharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import { readCurrentManagedChildMachineMetadata, refreshMachineMetadataForCurrentDaemon } from './metadata';
-import { projectMachineAgentInventoryFromCliSnapshot } from '@/capabilities/snapshots/machineAgentInventory';
 import { detectCliSnapshotOnDaemonPath } from '@/capabilities/snapshots/cliSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createLegacyProfileMigrationRpcServices } from '@/providers/migrations/rpc';
@@ -2100,11 +2099,9 @@ export async function bootstrapMachineSyncRuntime(
               happyHomeDir: params.happyHomeDir,
               happyLibDir: params.happyLibDir,
               ...(cliUpdate ? { cliUpdate } : {}),
-              agentInventory: projectMachineAgentInventoryFromCliSnapshot({ snapshot: cliSnapshot,
-                checkedAt: agentInventoryCheckedAt, current: base.agentInventory }),
               ...(devcontainerChild !== undefined ? { devcontainerChild } : {}),
             });
-          });
+          }, { agentInventoryObservation: { snapshot: cliSnapshot, checkedAt: agentInventoryCheckedAt } });
           if (outcome !== 'suppressed') {
             didRefreshMachineMetadata = true;
             publishedCliUpdateFacts = JSON.stringify(cliUpdate ?? null);

@@ -1104,9 +1104,12 @@ In 0.3 development source, Session chrome reads identity through
 resolver, while privacy layout 1 uses only the shared `agentPresentation` fact.
 Compact list rows resolve legacy identity before discarding runtime descriptors
 and vendor resume keys, storing the result in their existing `flavor` field.
+`readSessionRowPresentationAgentId` consumes that compact identity as an open
+Agent id, preserving contributed Agents and normalizing retained bundled aliases;
+it delegates full Sessions back to the layout-aware reader.
 A matching hydrated Session outranks an older compact cache even at the same
-metadata revision. Lists, header and lateral navigation retain that presentation
-identity; absent evidence stays neutral. Composer policy defaults do not brand
+metadata revision. Lists, Project and Follow rows, headers, lateral navigation,
+process owners and terminal marks retain that presentation identity; absent evidence stays neutral. Composer policy defaults do not brand
 an unknown existing Session, while an explicit new-session selection or armed
 continuation target supplies the outbound control's identity.
 
@@ -1372,7 +1375,11 @@ purpose-default catalog remains Native; availability alone does not select a def
 ### Agent CLI install and update jobs (0.3 development)
 
 Current development Machine metadata publishes `agentInventory`: the installed
-Agent IDs and their observation time. The daemon's reconnect metadata refresh and
+Agent IDs and the observation time of the published install facts. Equal probes
+do not republish metadata; the Machine publisher still retains their newer
+observation time locally so an older contradictory probe cannot replace them.
+Failed metadata writes do not acknowledge unpublished install facts, and a later
+probe can retry their publication. The daemon's reconnect metadata refresh and
 demanded capability reads reuse `detectCliSnapshotOnDaemonPath`; no homepage probe
 or second detector is involved. The shared strict Machine publication schema
 excludes executable paths, dependencies and authentication facts from this

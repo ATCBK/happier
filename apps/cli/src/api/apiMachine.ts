@@ -18,7 +18,7 @@ import type { MachineMetadataFieldReadV1, MachineMetadataFieldPortV1 } from '@ha
 import type { MountedAccountPluginExecutionSelectionResolver } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import { registerDaemonMachineResourcesPolicyRpcHandlers, type DaemonMachineResourcesPolicyRoutes } from '@/rpc/handlers/daemonMachineResourcesPolicy';
 import { registerDaemonMachineGuardRpcHandlers, type DaemonMachineGuardRoutes } from '@/rpc/handlers/daemonMachineGuard';
-import { projectMachineAgentInventoryFromCliSnapshot } from '@/capabilities/snapshots/machineAgentInventory';
+import { createMachineAgentInventoryPublication, type MachineAgentInventoryObservation } from '@/capabilities/snapshots/machineAgentInventory';
 import { dispatchActionFromRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { registerDaemonStorageRpcHandlers, type DaemonStorageRoutes } from '@/rpc/handlers/storage';
 import { parseMachinePublishedMetadataV1, parseMachinePublishedDaemonStateV1, StoredMachinePublishedMetadataV1Schema, StoredMachinePublishedDaemonStateV1Schema, projectMachinePublishedMetadataFromRowV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
@@ -777,6 +777,7 @@ export class ApiMachineClient {
     private providerBrokerIngressAdvertised = false;
     private providerBrokerAccountConnectionIngressLive = false;
     private agentCatalogObservation: AgentProviderCatalogObservationService | null = null;
+    private readonly projectAgentInventoryPublication = createMachineAgentInventoryPublication();
     private activeTransportGeneration = 0;
     private sessionMessageReplyRecovery: {
         socket: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
@@ -1666,11 +1667,8 @@ export class ApiMachineClient {
                     await this.updateMachineMetadata(metadata => {
                         const current = metadata ?? this.machine.metadata;
                         if (!current) throw new Error('Machine metadata is unavailable for Agent install facts.');
-                        if ((current.agentInventory?.checkedAt ?? -1) > observation.checkedAt) return current;
-                        return { ...current, agentInventory: projectMachineAgentInventoryFromCliSnapshot({
-                            ...observation, current: current.agentInventory,
-                        }) };
-                    });
+                        return current;
+                    }, { agentInventoryObservation: observation });
                 },
                 sessionHandoffPreflight: {
                     readCredentials: readExecutionRunAccountCredentials,
@@ -3892,6 +3890,7 @@ export class ApiMachineClient {
 
     async updateMachineMetadata(
         handler: (metadata: MachineMetadata | null) => MachineMetadata,
+        options?: Readonly<{ agentInventoryObservation?: MachineAgentInventoryObservation }>,
     ): Promise<MachinePublicationOutcome> {
         if (this.shouldSuppressMachinePublication()) {
             return 'suppressed';
@@ -3910,7 +3909,10 @@ export class ApiMachineClient {
             }
             const expectedVersion = this.machine.metadataVersion;
             const currentMetadata = this.machine.metadata === null ? null : StoredMachinePublishedMetadataV1Schema.parse(this.machine.metadata);
-            const updated = parseMachinePublishedMetadataV1(handler(currentMetadata));
+            let candidate = handler(currentMetadata);
+            if (options?.agentInventoryObservation) candidate = { ...candidate,
+                agentInventory: this.projectAgentInventoryPublication(options.agentInventoryObservation, currentMetadata?.agentInventory) };
+            const updated = parseMachinePublishedMetadataV1(candidate);
 
             // No-op: don't write if nothing changed.
             if (this.machine.metadata && JSON.stringify(updated) === JSON.stringify(this.machine.metadata)) {
