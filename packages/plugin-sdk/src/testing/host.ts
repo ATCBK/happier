@@ -1192,6 +1192,12 @@ export async function createPluginTestkit(
             });
         };
         return Object.freeze({
+            async getCurrentExecutionRouting(options?: PluginCancellationOptions): Promise<PluginMachineExecutionRoutingV1 | null> {
+                const signal = composeActionSignal(source.signal, options?.signal);
+                if (signal.aborted || state !== 'active') return null;
+                const caller = resolvePluginActionCaller(source);
+                return caller?.executionOrigin === undefined ? null : Object.freeze(getPluginMachineExecutionRouting(caller.executionOrigin));
+            },
             execute,
             executeAdmittedTargetedOperation,
             executeWithExecutionOrigin,

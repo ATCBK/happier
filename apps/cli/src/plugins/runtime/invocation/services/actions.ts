@@ -27,7 +27,7 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionExecuteResult, ActionExecutorContext, ActionPluginCaller, ActionCaller, ActionId } from '@happier-dev/protocol/actions';
-import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual, PluginMachineExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionRouting, PluginMachineExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { QualifiedConnectedAccountRef, PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
@@ -290,7 +290,7 @@ function executorFailure(
 ): PluginError {
     const normalizedDetails = actionId === 'execution.run.start'
         ? withExecutionRunStartFailureDetails(
-            undefined,
+            result.details,
             readExecutionRunStartRunCreation(result.details),
         )
         : undefined;
@@ -734,6 +734,15 @@ export function createPluginInvocationActionsService(params: Readonly<{
     };
 
     return Object.freeze({
+        async getCurrentExecutionRouting(options?: PluginCancellationOptions): Promise<PluginMachineExecutionRoutingV1 | null> {
+            const signal = composeActionSignal(params.seed.signal, options?.signal);
+            if (signal.aborted || !params.seed.isOccurrenceCurrent()) return null;
+            const caller = resolveInvocationActionCaller(params.seed);
+            if (!caller) return null;
+            const origin = await resolvePluginInvocationCallerExecutionOrigin(caller, params.seed.resolveCurrentPluginExecutionOrigin, signal);
+            if (!origin || signal.aborted || !params.seed.isOccurrenceCurrent()) return null;
+            return Object.freeze(getPluginMachineExecutionRouting(origin));
+        },
         execute,
         executeAdmittedTargetedOperation,
         executeWithExecutionOrigin,

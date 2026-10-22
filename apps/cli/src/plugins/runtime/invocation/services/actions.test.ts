@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/protocol';
 import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol/teams';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 
 import { createBrowserDaemonRuntimeActionExecutor } from '@/daemon/browser/actions/runtimeActionExecutor';
 import { createBrowserDaemonControlBroker } from '@/daemon/browser/control/broker';
@@ -194,12 +195,20 @@ describe('plugin invocation ActionsService', () => {
                     pluginId: 'acme.caller', machineId, materializationId: 'caller-materialization',
                 }) } : {}),
             }, owners.createOrdinaryServiceBinding('caller-occurrence', 'source-origin-callback')).actions;
+            await expect(service.getCurrentExecutionRouting?.()).resolves.toEqual({
+                serverIdentityId: 'srv_home-1', machineId, pluginId: 'acme.caller',
+            });
+            await expect(service.getCurrentExecutionRouting?.({ signal: AbortSignal.abort() })).resolves.toBeNull();
             await expect(service.execute({ pluginId: 'acme.provider', localId: 'read-caller' }, {}))
                 .resolves.toMatchObject({ executionOrigin: resolveOrigin(),
                     contribution: { id: 'caller', qualifiedId: 'acme.caller/caller' }, originSurface: 'background' });
             changeDuringHandler = true;
             await expect(service.execute({ pluginId: 'acme.provider', localId: 'read-caller' }, {}))
                 .rejects.toMatchObject({ code: 'plugin_action_caller_unavailable' });
+            await expect(service.getCurrentExecutionRouting?.()).resolves.toEqual(
+                kind === 'source' || kind === 'source-with-materialization' ? null
+                    : { serverIdentityId: 'srv_home-1', machineId: 'replacement-machine', pluginId: 'acme.caller' },
+            );
         } finally {
             targets.dispose();
             await owners.dispose();
@@ -904,7 +913,7 @@ describe('plugin invocation ActionsService', () => {
         await expect(service.execute('session.list', {})).rejects.toMatchObject({ code: 'unsupported_action' });
         expect(sessionList).not.toHaveBeenCalled();
     });
-    it('preserves strict execution-run start certainty in the public PluginError', async () => {
+    it('preserves canonical execution-run repair issues and certainty in the public PluginError', async () => {
         const service = createPluginInvocationActionsService({
             seed: {
                 plugin: { id: 'acme.automations', version: '1.0.0' },
@@ -915,33 +924,27 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: {
-                execute: vi.fn(async () => ({
-                    ok: false as const,
-                    errorCode: 'execution_run_target_unavailable',
-                    error: 'execution_run_target_unavailable',
-                    details: {
-                        executionRunStart: { v: 1, runCreation: 'noRunCreated' },
-                        secret: 'must-not-cross-the-plugin-boundary',
-                    },
-                })),
-            },
+            actionExecutor: createActionExecutorForTest(),
             invokeContributedAction: vi.fn(),
         });
 
         const error = await service.execute('execution.run.start', {
-            sessionId: null,
-            intent: 'task',
+            sessionId: 'session-1',
+            intent: 'delegate',
             backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
             instructions: 'Summarize the occurrence.',
             permissionMode: 'read_only',
             retentionPolicy: 'ephemeral',
             runClass: 'bounded',
             ioMode: 'request_response',
+            configOptions: { reasoning_effort: 'low' },
+            sessionConfigOptionOverrides: buildAcpConfigOptionOverridesV1({ updatedAt: 1,
+                overrides: { reasoning_effort: { value: 'high', updatedAt: 1 } } }),
         }).catch((caught: unknown) => caught);
-        expect(error).toMatchObject({ code: 'execution_run_target_unavailable' });
+        expect(error).toMatchObject({ code: 'invalid_parameters' });
         expect(error).toHaveProperty('details', {
             executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+            issues: expect.arrayContaining([expect.objectContaining({ path: ['configOptions', 'reasoning_effort'] })]),
         });
     });
 

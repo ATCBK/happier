@@ -172,6 +172,14 @@ export function isPluginActionApprovalRequestCreated(
  * @realm daemon
  */
 export interface ActionsService {
+  /**
+   * Current routing of this invocation's own plugin, stamped by the same host
+   * owner as contributed-Action callers. Null means unavailable or retired.
+   * Older hosts omit this read; placement-sensitive work must then stay inert.
+   * This is evidence only, never a selector or permission to invoke a target.
+   */
+  getCurrentExecutionRouting?(options?: PluginCancellationOptions): Promise<PluginMachineExecutionRoutingV1 | null>;
+
   execute<K extends PluginInvocableActionId>(
     actionId: K,
     input: PluginActionInputById[K],
