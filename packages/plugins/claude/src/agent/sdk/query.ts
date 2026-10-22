@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { redactBugReportSensitiveText } from '@happier-dev/plugin-sdk';
 import { createClaudeManagedMcpPolicyConflictError } from '../mcp/managedPolicy.js';
 
@@ -231,7 +233,7 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
     if (typeof prompt === 'string') {
         toolPolicyArgs.push('--print', prompt.trim());
     } else {
-        toolPolicyArgs.push('--input-format', 'stream-json');
+        toolPolicyArgs.push('--input-format', 'stream-json', '--replay-user-messages');
     }
     return toolPolicyArgs;
 }
@@ -367,6 +369,8 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
     private handle: ClaudeSdkExecClientHandle | null = null;
     private exitResult: ClaudeSdkExecResult | null = null;
     private unsubscribe: (() => void) | null = null;
+    private readonly pendingUserPrompts = new Map<string, (outcome: ClaudeSdkPromptTransportOutcome) => void>();
+    private promptSubmissionClosed: Error | null = null;
     private promptTransportAttempted = false;
     private promptTransportSettled = false;
     private removePromptTransportAbortListener: (() => void) | null = null;
@@ -391,12 +395,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
         this.handlePromise = this.start();
         this.handlePromise.catch((error: unknown) => {
             const failure = error instanceof Error ? error : new Error(String(error));
-            this.settlePromptTransport({
-                kind: this.promptTransportAttempted
-                    ? 'effect_may_have_occurred'
-                    : 'rejected_before_effect',
-                error: failure,
-            });
+            this.closePromptSubmissions(failure);
             this.messages.fail(failure);
         });
     }
@@ -442,28 +441,80 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
                 error: error instanceof Error ? error : new Error(String(error)),
             };
         }
-        try {
-            const outcome = await handle.client.writeRecord({
-                type: 'user',
-                ...(uuid ? { uuid } : {}),
-                message: {
-                    role: 'user',
-                    content: text,
-                },
-            }, { signal: this.config.options?.abort });
-            if (outcome.kind === 'written') return { kind: 'accepted' };
-            return {
-                kind: outcome.kind === 'rejected_before_write'
-                    ? 'rejected_before_effect'
-                    : 'effect_may_have_occurred',
-                error: outcome.error,
-            };
-        } catch (error) {
-            return {
+        return await this.submitUserPrompt(handle.client, {
+            type: 'user',
+            ...(uuid ? { uuid } : {}),
+            message: { role: 'user', content: text },
+        });
+    }
+
+    /** Claude's stdout acknowledgment, rather than a successful write, establishes custody. */
+    private async submitUserPrompt(
+        client: ClaudeSdkJsonStreamClient,
+        message: SDKMessage,
+        onOutcome?: (outcome: ClaudeSdkPromptTransportOutcome) => void,
+    ): Promise<ClaudeSdkPromptTransportOutcome> {
+        const publishOutcome = (outcome: ClaudeSdkPromptTransportOutcome): ClaudeSdkPromptTransportOutcome => {
+            onOutcome?.(outcome);
+            return outcome;
+        };
+        const signal = this.config.options?.abort;
+        if (this.promptSubmissionClosed || signal?.aborted || message.type !== 'user') {
+            return publishOutcome({
+                kind: 'rejected_before_effect',
+                error: this.promptSubmissionClosed ?? new Error(signal?.aborted
+                    ? 'Claude SDK prompt was aborted before submission.'
+                    : 'Claude SDK prompt input must be a user record.'),
+            });
+        }
+        const uuid = typeof message.uuid === 'string' && message.uuid.length > 0 ? message.uuid : randomUUID();
+        if (this.pendingUserPrompts.has(uuid)) {
+            return publishOutcome({ kind: 'rejected_before_effect', error: new Error('Claude SDK prompt UUID is already awaiting acknowledgment.') });
+        }
+        const acknowledged = new Promise<ClaudeSdkPromptTransportOutcome>(resolve => {
+            this.pendingUserPrompts.set(uuid, outcome => { resolve(publishOutcome(outcome)); });
+        });
+        const failWrite = (error: unknown): void => {
+            this.settleUserPrompt(uuid, {
                 kind: 'effect_may_have_occurred',
                 error: error instanceof Error ? error : new Error(String(error)),
-            };
+            });
+        };
+        try {
+            void client.writeRecord({ ...message, uuid }, { signal }).then(outcome => {
+                if (outcome.kind !== 'written') {
+                    this.settleUserPrompt(uuid, {
+                        kind: outcome.kind === 'rejected_before_write'
+                            ? 'rejected_before_effect'
+                            : 'effect_may_have_occurred',
+                        error: outcome.error,
+                    });
+                }
+            }, failWrite);
+        } catch (error) {
+            failWrite(error);
         }
+        return await acknowledged;
+    }
+
+    private settleUserPrompt(uuid: string, outcome: ClaudeSdkPromptTransportOutcome): void {
+        const resolve = this.pendingUserPrompts.get(uuid);
+        if (!resolve) return;
+        this.pendingUserPrompts.delete(uuid);
+        resolve(outcome);
+    }
+
+    private closePromptSubmissions(error: Error): void {
+        this.promptSubmissionClosed ??= error;
+        for (const uuid of this.pendingUserPrompts.keys()) {
+            this.settleUserPrompt(uuid, { kind: 'effect_may_have_occurred', error });
+        }
+        this.settlePromptTransport({
+            kind: this.promptTransportAttempted ? 'effect_may_have_occurred' : 'rejected_before_effect',
+            error,
+        });
+        this.removePromptTransportAbortListener?.();
+        this.removePromptTransportAbortListener = null;
     }
 
     async getContextUsage(): Promise<ClaudeSdkContextUsageResponse> {
@@ -499,6 +550,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
     }
 
     async dispose(): Promise<void> {
+        this.closePromptSubmissions(new Error('Claude SDK query disposed before prompt acknowledgment.'));
         if (this.unsubscribe) {
             this.unsubscribe();
             this.unsubscribe = null;
@@ -518,12 +570,6 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
         } finally {
             await this.cleanupSpawnArtifacts?.().catch(() => undefined);
         }
-        this.settlePromptTransport({
-            kind: this.promptTransportAttempted
-                ? 'effect_may_have_occurred'
-                : 'rejected_before_effect',
-            error: new Error('Claude SDK query disposed before prompt transport completed.'),
-        });
         this.messages.finish();
     }
 
@@ -585,32 +631,23 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             async (result) => {
                 await cleanup().catch(() => undefined);
                 this.exitResult = result;
+                const failure = formatProcessExitFailure(result);
+                this.closePromptSubmissions(failure ?? createClaudeSdkNoResultError(result));
                 this.config.onProcessExited?.(result);
                 this.rejectPendingControlResponses(
                     new Error('Claude SDK process exited before control response.'),
                 );
-                const failure = formatProcessExitFailure(result);
                 if (failure) {
-                    if (!this.promptTransportAttempted) {
-                        this.settlePromptTransport({
-                            kind: 'rejected_before_effect',
-                            error: failure,
-                        });
-                    }
                     this.messages.fail(failure);
                     return;
-                }
-                if (!this.promptTransportAttempted) {
-                    this.settlePromptTransport({
-                        kind: 'rejected_before_effect',
-                        error: createClaudeSdkNoResultError(result),
-                    });
                 }
                 this.messages.finish();
             },
             async (error) => {
                 await cleanup().catch(() => undefined);
-                this.messages.fail(error instanceof Error ? error : new Error(String(error)));
+                const failure = error instanceof Error ? error : new Error(String(error));
+                this.closePromptSubmissions(failure);
+                this.messages.fail(failure);
             },
         );
         return handle;
@@ -642,17 +679,10 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
                 }
                 attemptedMessage = message;
                 this.promptTransportAttempted = true;
-                const writeOutcome = await client.writeRecord(message, { signal });
-                if (writeOutcome.kind === 'written') {
-                    this.settlePromptTransport({ kind: 'accepted' });
-                } else {
-                    this.settlePromptTransport({
-                        kind: writeOutcome.kind === 'rejected_before_write'
-                            ? 'rejected_before_effect'
-                            : 'effect_may_have_occurred',
-                        error: writeOutcome.error,
-                    });
-                    this.messages.fail(writeOutcome.error);
+                const outcome = await this.submitUserPrompt(client, message,
+                    outcome => this.settlePromptTransport(outcome));
+                if (outcome.kind !== 'accepted') {
+                    this.messages.fail(outcome.error);
                     return;
                 }
                 attemptedMessage = null;
@@ -683,8 +713,6 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
     private settlePromptTransport(outcome: ClaudeSdkPromptTransportOutcome): void {
         if (this.promptTransportSettled) return;
         this.promptTransportSettled = true;
-        this.removePromptTransportAbortListener?.();
-        this.removePromptTransportAbortListener = null;
         this.resolvePromptTransportOutcome(outcome);
     }
 
@@ -694,12 +722,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             const error = signal.reason instanceof Error
                 ? signal.reason
                 : new Error('Claude SDK prompt transport was aborted.');
-            this.settlePromptTransport({
-                kind: this.promptTransportAttempted
-                    ? 'effect_may_have_occurred'
-                    : 'rejected_before_effect',
-                error,
-            });
+            this.closePromptSubmissions(error);
         };
         if (signal.aborted) {
             settleAbortedTransport();
@@ -734,6 +757,12 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             return;
         }
         if (!isSdkMessage(record)) return;
+        if (record.type === 'user' && record.isSynthetic !== true && record.parent_tool_use_id == null
+            && typeof record.uuid === 'string') {
+            this.settleUserPrompt(record.uuid, { kind: 'accepted' });
+        }
+        // Preserve protocol observations; runtime projection owns visibility and distinguishes
+        // stdout acknowledgments from ordered native transcript facts.
         if (record.type === 'system' && record.subtype === 'commands_changed') {
             for (const waiter of this.commandsChangedWaiters) waiter.resolve();
         }

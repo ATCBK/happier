@@ -317,6 +317,56 @@ describe('Claude agent-SDK session work-state ingress', () => {
     }
   });
 
+  it('does not let a stdout acknowledgment move Goal settlement ahead of the ordered native command echo', async () => {
+    const exec = createSdkExecFixture();
+    const providerSessionId = 'claude-goal-ordering';
+    const baseDir = await mkdtemp(join(tmpdir(), 'claude-sdk-goal-ordering-'));
+    const configDir = join(baseDir, '.claude');
+    const cwd = join(baseDir, 'project');
+    await mkdir(cwd, { recursive: true });
+    const transcriptPath = join(getClaudeProjectPath(cwd, configDir), `${providerSessionId}.jsonl`);
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await writeFile(transcriptPath, '');
+    const snapshots: SessionWorkStateV1[] = [];
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx: createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service }),
+      directory: cwd, launchEnv: { CLAUDE_CONFIG_DIR: configDir }, permissionMode: 'default',
+      happierSessionId: 'goal-ordering', enableSessionWorkState: true,
+      publishGoalWorkState: snapshot => { snapshots.push(snapshot); },
+    });
+    try {
+      await operations.sendProviderTurnPrompt('Establish native Goal capability');
+      await exec.emit({ type: 'system', subtype: 'init', session_id: providerSessionId, slash_commands: ['goal'] });
+      await exec.emit({ type: 'result', subtype: 'success', session_id: providerSessionId });
+      await operations.waitForProviderTurnCompletion();
+      if (!operations.setGoal) throw new Error('Expected native Goal control');
+      let settled = false;
+      const goal = operations.setGoal('Same objective').then(result => { settled = true; return result; });
+      await vi.waitFor(() => expect(exec.written.filter(record =>
+        record && typeof record === 'object' && Reflect.get(record, 'type') === 'user')).toHaveLength(2));
+      const command = exec.written.findLast(record =>
+        record && typeof record === 'object' && Reflect.get(record, 'type') === 'user');
+      if (!command || typeof command !== 'object') throw new Error('Expected Goal user record');
+      const uuid: unknown = Reflect.get(command, 'uuid');
+      if (typeof uuid !== 'string') throw new Error('Expected Goal native UUID');
+      await exec.emit({ ...command, uuid, type: 'user', isReplay: true, parent_tool_use_id: null, session_id: providerSessionId });
+      const sentinel = (id: string) => ({ type: 'attachment', uuid: id, sessionId: providerSessionId,
+        attachment: { type: 'goal_status', sentinel: true, met: false, condition: 'Same objective' } });
+      await appendFile(transcriptPath, `${JSON.stringify(sentinel('old-sentinel'))}\n`);
+      await vi.waitFor(() => expect(snapshots.some(snapshot => snapshot.items.some(item => item.vendorRef === 'old-sentinel'))).toBe(true));
+      expect(settled).toBe(false);
+      await appendFile(transcriptPath, [sentinel('new-sentinel'), {
+        type: 'user', uuid, sessionId: providerSessionId, parentUuid: 'new-sentinel',
+        message: { role: 'user', content: '<command-name>/goal</command-name><command-args>Same objective</command-args>' },
+      }].map(row => JSON.stringify(row)).join('\n') + '\n');
+      await expect(goal).resolves.toBeUndefined();
+      expect(snapshots.at(-1)?.items).toEqual([expect.objectContaining({ vendorRef: 'new-sentinel', title: 'Same objective' })]);
+    } finally {
+      await operations.disposeProviderSession();
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces the goal work-state item from a goal_status attachment tailed off the persisted transcript JSONL', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();

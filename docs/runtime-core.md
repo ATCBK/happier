@@ -491,6 +491,16 @@ as `input-rejected` with its original code, which the shared Execution Run adapt
 projects as `run-failed`; errors after native input dispatch remain outcome unknown.
 This contract applies to host Exec services for bundled and installed Agents.
 
+In 0.3 development source, Claude's SDK query correlates initial and in-flight
+user input with native UUID acknowledgments requested through
+[`--replay-user-messages`](https://code.claude.com/docs/en/cli-reference).
+A successful stdin write alone leaves acceptance pending. A submitted record
+without its matching nonsynthetic main-chain user acknowledgment at exit,
+abort or disposal remains outcome unknown, preserving the existing Pending and
+replay-seed custody without automatically resending it. The host's correlated
+acceptance outcome retires the seed; native transcript resume proof remains
+separate.
+
 The new conversation operation also enforces each input's resolved public
 `permissionIntent` before native input effects. The host derives it through the
 same Run authority owner from the Run mode, original causal ceiling and current
@@ -1063,8 +1073,13 @@ contract does not replace physical Stop settlement or authorize a launch from
 
 In development source, the hosting daemon can observe pending Session follows
 without a receiver host. The existing exact-Session Account-change callback and
-startup/reconnect visitor use the strict inactive observation and the same
-`shouldWakeForSessionFollowObservation` selector as live intake. The probe checks
+startup/reconnect visitor pass the strict inactive observation to
+`sessionFollowOccurrenceDispatcher`. Original-backed events enter Pending there;
+an unavailable dispatcher or source range cannot fall through to another wake.
+Only a fully traversed source may offer a manager's no-original Turn outcome,
+using the same `shouldWakeForSessionFollowWorkerUpdate` selector as live intake.
+Transcript Goal changes and human messages cannot select that Turn-only wake.
+The probe checks
 the committed Home, Account, Machine and installation, opens the source under
 the captured requester's Home, and delegates eligible launches to
 `requestInactiveSessionResume`. An unrelated Session change does not start an

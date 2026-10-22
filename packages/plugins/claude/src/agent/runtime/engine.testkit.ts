@@ -298,6 +298,10 @@ export function createSdkExecFixture(options: Readonly<{ providerExitOwnership?:
       async writeRecord(record) {
         written.push(record);
         processWritten.push(record);
+        if (record && typeof record === 'object' && Reflect.get(record, 'type') === 'user') {
+          // Native input acknowledgment; tests emit session identity separately through init.
+          await Promise.all([...listeners].map(listener => listener({ ...record, isReplay: true, parent_tool_use_id: null })));
+        }
         return { kind: 'written' };
       },
     };
