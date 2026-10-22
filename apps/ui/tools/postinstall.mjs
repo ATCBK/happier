@@ -8,6 +8,7 @@ import { buildCryptoWorker } from './crypto/buildCryptoWorker.mjs';
 import { buildAtmosphereRenderers } from './atmosphere/buildAtmosphereRenderers.mjs';
 import { runCommandBestEffort, runCommandOrExit } from './postinstall/runCommand.mjs';
 import { verifyNativePatchCompilation } from './postinstall/verifyNativePatchCompilation.mjs';
+import { findUiInstalledPackageDirs } from './postinstall/installedPackageDirs.mjs';
 import {
     formatVendoredLegendPatchFailure,
     verifyVendoredLegendPatchMarkers,
@@ -24,31 +25,11 @@ import {
 } from './postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 
 // Workspace installs can execute this script via a symlinked path (e.g. repoRoot/node_modules/happy/...).
-// Resolve symlinks so repoRootDir/expoAppDir are computed from the real filesystem location.
+// Resolve symlinks so expoAppDir is computed from the real filesystem location.
 const toolsDir = path.dirname(fs.realpathSync(url.fileURLToPath(import.meta.url)));
 const expoAppDir = path.resolve(toolsDir, '..');
 
-function findRepoRoot(startDir) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-        if (
-            fs.existsSync(path.resolve(dir, 'package.json')) &&
-            fs.existsSync(path.resolve(dir, 'pnpm-workspace.yaml')) &&
-            fs.existsSync(path.resolve(dir, 'pnpm-lock.yaml'))
-        ) {
-            return dir;
-        }
-        const parent = path.dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
-    }
-    // Fallback: historic layout had the app at repoRoot/expo-app.
-    return path.resolve(startDir, '..');
-}
-
-const repoRootDir = findRepoRoot(expoAppDir);
-const repoRootNodeModulesDir = path.resolve(repoRootDir, 'node_modules');
-const expoAppNodeModulesDir = path.resolve(expoAppDir, 'node_modules');
+const installedPackageDirs = (packageName) => findUiInstalledPackageDirs(packageName, { uiPackageDir: expoAppDir });
 
 const tasks = resolveUiPostinstallTasks({ env: process.env });
 const wants = (id) => tasks.includes(id);
@@ -70,12 +51,10 @@ prepareEnrichedMarkdownOutputs();
 
 if (wants('verify-sentry-native-replay-postinit-patch')) {
     const marker = 'HAPPIER PATCH(sentry-native-replay-postinit-guard)';
-    const sentryNativeStartCandidatePaths = [
-        path.resolve(repoRootNodeModulesDir, '@sentry', 'react-native', 'ios', 'RNSentryStart.m'),
-        path.resolve(repoRootNodeModulesDir, '@sentry', 'react-native', 'ios', 'RNSentry.mm'),
-        path.resolve(expoAppNodeModulesDir, '@sentry', 'react-native', 'ios', 'RNSentryStart.m'),
-        path.resolve(expoAppNodeModulesDir, '@sentry', 'react-native', 'ios', 'RNSentry.mm'),
-    ];
+    const sentryNativeStartCandidatePaths = installedPackageDirs('@sentry/react-native').flatMap((packageDir) => [
+        path.resolve(packageDir, 'ios', 'RNSentryStart.m'),
+        path.resolve(packageDir, 'ios', 'RNSentry.mm'),
+    ]);
     const existingSentryNativeStartPaths = sentryNativeStartCandidatePaths.filter((candidatePath) =>
         fs.existsSync(candidatePath),
     );
@@ -128,10 +107,7 @@ if (wants('verify-native-patch-compilation')) {
 // positions. Verify it after pnpm installs the patches: regeneration from an incomplete
 // edit directory can still omit the fix while producing a syntactically valid patch.
 if (wants('verify-vendored-reanimated-patch')) {
-    const reanimatedPackageDirs = [
-        path.resolve(repoRootNodeModulesDir, 'react-native-reanimated'),
-        path.resolve(expoAppNodeModulesDir, 'react-native-reanimated'),
-    ];
+    const reanimatedPackageDirs = installedPackageDirs('react-native-reanimated');
     const appPackageJsonPath = path.resolve(expoAppDir, 'package.json');
 
     const failureReports = [];
@@ -153,10 +129,7 @@ if (wants('verify-vendored-reanimated-patch')) {
 // Like the reanimated guard, verify the installed behavior rather than trusting
 // successful patch generation or application to prove that every fix survived.
 if (wants('verify-vendored-legend-patch')) {
-    const legendPackageDirs = [
-        path.resolve(repoRootNodeModulesDir, '@legendapp', 'list'),
-        path.resolve(expoAppNodeModulesDir, '@legendapp', 'list'),
-    ];
+    const legendPackageDirs = installedPackageDirs('@legendapp/list');
 
     const failureReports = [];
     for (const packageDir of legendPackageDirs) {
@@ -182,7 +155,7 @@ if (wants('verify-vendored-legend-patch')) {
 
 function prepareEnrichedMarkdownOutputs() {
     if (wants('install-react-native-enriched-markdown-web-wasm')) {
-        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
+        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ expoAppDir });
         const vendoredWasmModulePath = path.resolve(
             toolsDir,
             'react-native-enriched-markdown',
@@ -205,7 +178,7 @@ function prepareEnrichedMarkdownOutputs() {
     }
 
     if (wants('verify-react-native-enriched-markdown-web-streaming-patch')) {
-        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
+        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ expoAppDir });
 
         if (packageDirs.length === 0) {
             console.error('Could not find react-native-enriched-markdown under repo or UI node_modules.');
@@ -230,10 +203,7 @@ function prepareEnrichedMarkdownOutputs() {
 if (wants('verify-patched-dependencies')) verifyUiPatchedDependencies({ uiPackageDir: expoAppDir });
 
 if (wants('verify-expo-router-web-modal-patch')) {
-    const expoRouterPackageRoots = [
-        path.resolve(repoRootDir, 'node_modules', 'expo-router'),
-        path.resolve(expoAppDir, 'node_modules', 'expo-router'),
-    ];
+    const expoRouterPackageRoots = installedPackageDirs('expo-router');
     const expoRouterPatchTargets = [
         {
             relativePath: ['build', 'layouts', '_web-modal.js'],
@@ -331,10 +301,8 @@ if (wants('verify-expo-router-web-modal-patch')) {
 }
 
 if (wants('setup-skia-web')) {
-    const skiaSetupCliCandidatePaths = [
-        path.resolve(expoAppNodeModulesDir, '@shopify', 'react-native-skia', 'scripts', 'setup-canvaskit.js'),
-        path.resolve(repoRootNodeModulesDir, '@shopify', 'react-native-skia', 'scripts', 'setup-canvaskit.js'),
-    ];
+    const skiaSetupCliCandidatePaths = installedPackageDirs('@shopify/react-native-skia')
+        .map((packageDir) => path.resolve(packageDir, 'scripts', 'setup-canvaskit.js'));
     const skiaSetupCliPath = skiaSetupCliCandidatePaths.find((candidatePath) =>
         fs.existsSync(candidatePath),
     );
@@ -359,10 +327,7 @@ if (wants('setup-skia-web')) {
 // the minified `vs/` directory as static files and load via AMD loader at runtime.
 if (wants('vendor-monaco')) {
     try {
-        const monacoCandidateDirs = [
-            path.resolve(expoAppDir, 'node_modules', 'monaco-editor'),
-            path.resolve(repoRootDir, 'node_modules', 'monaco-editor'),
-        ];
+        const monacoCandidateDirs = installedPackageDirs('monaco-editor');
         const monacoDir = monacoCandidateDirs.find((p) => fs.existsSync(p));
         if (monacoDir) {
             const src = path.resolve(monacoDir, 'min', 'vs');

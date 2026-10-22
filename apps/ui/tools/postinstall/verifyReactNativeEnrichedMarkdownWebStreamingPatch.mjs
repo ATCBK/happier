@@ -3,12 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyPatch, parsePatch, reversePatch } from 'diff';
 import { readPnpmPatches } from './pnpmPatches.mjs';
+import { findUiInstalledPackageDirs } from './installedPackageDirs.mjs';
 
 export function verifyUiPatchedDependencies({
     uiPackageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
 } = {}) {
     const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({
-        repoRootDir: path.resolve(uiPackageDir, '../..'),
         expoAppDir: uiPackageDir,
     });
     if (packageDirs.length === 0) {
@@ -22,10 +22,8 @@ export function verifyUiPatchedDependencies({
         return result.status === 'ok' ? [] : [`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`];
     });
     const patches = readPnpmPatches(path.resolve(uiPackageDir, '../..'));
-    for (const cwd of [path.resolve(uiPackageDir, '../..'), uiPackageDir]) {
-        for (const { packageName, patchFile } of patches) {
-            const packageDir = path.join(cwd, 'node_modules', packageName);
-            if (!fs.existsSync(packageDir)) continue;
+    for (const { packageName, patchFile } of patches) {
+        for (const packageDir of findUiInstalledPackageDirs(packageName, { uiPackageDir })) {
             try {
                 for (const effect of parsePatch(fs.readFileSync(patchFile, 'utf8'))) {
                     const name = effect.newFileName === '/dev/null' ? effect.oldFileName : effect.newFileName;
@@ -42,7 +40,7 @@ export function verifyUiPatchedDependencies({
                     }
                 }
             } catch (error) {
-                failures.push(`${cwd}: ${patchFile}\n${error instanceof Error ? error.message : String(error)}`);
+                failures.push(`${packageDir}: ${patchFile}\n${error instanceof Error ? error.message : String(error)}`);
             }
         }
     }
@@ -142,11 +140,8 @@ export const REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_FORBIDDEN_MARKERS = 
     ['lib/module/web/wasm/md4c.js', 'import.meta'],
 ]);
 
-export function findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir }) {
-    return [
-        path.resolve(repoRootDir, 'node_modules', 'react-native-enriched-markdown'),
-        path.resolve(expoAppDir, 'node_modules', 'react-native-enriched-markdown'),
-    ].filter((packageDir) => fs.existsSync(packageDir));
+export function findReactNativeEnrichedMarkdownPackageDirs({ expoAppDir }) {
+    return findUiInstalledPackageDirs('react-native-enriched-markdown', { uiPackageDir: expoAppDir });
 }
 
 function readFile(packageDir, relativePath) {
