@@ -3,11 +3,48 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionAwarenessListResultV1Schema, parseSessionListQueryActionResultV1 } from '@happier-dev/protocol';
 
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createSessionListActionDeps } from '@/session/actions/sessionListActionDependency';
 import { listSessions } from './listSessions';
+import { createRestrictedCurrentSessionListActionDependency } from '@/session/actions/sessionListActionDependency';
+import { encrypt, encodeBase64 } from '@/api/encryption';
 
 describe('Session awareness Action acquisition', () => {
+  it('keeps encrypted workers unreadable with the coordinator key and retains the server continuation', async () => {
+    const key = new Uint8Array(32).fill(7);
+    const { viewer: _viewer, ...worker } = createSessionNotificationContextFixture('encrypted-worker');
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: {
+      sessions: [{ ...worker, encryptionMode: 'e2ee', metadata: encodeBase64(encrypt(key, 'dataKey', {
+        summary: { text: 'Must not open with the coordinator key' },
+      })) }], nextCursor: 'next-worker', hasNext: true, attentionNextCursor: null, attentionHasNext: false,
+    } });
+    vi.spyOn(axios, 'get').mockImplementation(async () => { throw new Error('Restricted listing must not read Account state'); });
+    const sessionList = createRestrictedCurrentSessionListActionDependency({ credentials: { token: 'runtime-token', encryption: null },
+      sessionId: 'coordinator', serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      material: { mode: 'e2ee', dataEncryptionKey: key } });
+    await expect(sessionList({ context: { surface: 'agent', authority: 'account_automation',
+      defaultSessionId: 'coordinator', sessionListAccess: 'current_session' }, view: 'awareness',
+      query: { v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
+        audiences: [], tagIds: [], underSessionId: 'coordinator' } }))
+      .resolves.toMatchObject({ sessions: [{ sessionId: 'encrypted-worker', encryption: 'unknown' }],
+        nextCursor: 'next-worker', hasNext: true, view: 'awareness', projectionVersion: 1 });
+  });
+  it('uses the Home subtree query for Under-self even when the credentialed host admits a current-Session corpus', async () => {
+    const worker = { ...createSessionNotificationContextFixture('worker'), encryptionMode: 'plain', metadata: '{}' };
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) {
+        return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      }
+      throw new Error(`Unexpected detail/Account read: ${url}`);
+    });
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { sessions: [worker], nextCursor: null, hasNext: false,
+      attentionNextCursor: null, attentionHasNext: false } });
+    const { sessionList } = createSessionListActionDeps({ credentials: { token: 'token', encryption: null } });
+    await expect(sessionList({ context: { surface: 'agent', authority: 'account_automation', defaultSessionId: 'coordinator',
+      sessionListAccess: 'current_session' }, query: { v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible',
+        attention: 'any', audiences: [], tagIds: [], underSessionId: 'coordinator' } }))
+      .resolves.toMatchObject({ sessions: [{ id: 'worker' }], queryVersion: 1 });
+  });
   beforeEach(() => {
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'never');
     resetInMemoryAccountSettingsContextForTests();

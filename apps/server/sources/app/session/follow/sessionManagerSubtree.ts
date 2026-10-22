@@ -9,6 +9,7 @@ import {
     isSessionTranscriptShareable,
     SESSION_TRANSCRIPT_PUBLICATION_SELECT,
 } from '@/app/session/sessionTranscriptPublicationPolicy';
+import { verifyCurrentMaterializedRunnerPrincipalInTx } from '@/app/ephemeralRunner/materializedRunnerPrincipalCurrentness';
 
 /** Structural reachability is not an access grant. Only readable IDs leave this owner. */
 export async function readSessionManagedSubtreeSessionIdsInTx(tx: Tx, input: Readonly<{
@@ -16,13 +17,25 @@ export async function readSessionManagedSubtreeSessionIdsInTx(tx: Tx, input: Rea
     rootSessionId: string;
     authentication: SessionAccessAuthentication;
     collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot;
+    /** Only the list owner requests a read of this runtime's own tree. */
+    allowSessionRuntimeManagedSubtreeRead?: true;
 }>): Promise<string[]> {
+    let authentication = input.authentication;
+    if (input.allowSessionRuntimeManagedSubtreeRead && authentication.sessionRuntimePrincipal) {
+        const principal = authentication.sessionRuntimePrincipal;
+        if (principal.accountId !== input.accountId || principal.sessionId !== input.rootSessionId
+            || !await verifyCurrentMaterializedRunnerPrincipalInTx(tx, principal)) return [];
+        // Evaluate readable descendants with the existing Account access predicate
+        // only inside this proof. The caller receives IDs, never Account authority.
+        const { sessionRuntimePrincipal: _principal, ...accountAuthentication } = authentication;
+        authentication = accountAuthentication;
+    }
     const access = await resolveEffectiveSessionAccessWhere({
         tx,
         accountId: input.accountId,
         capability: 'readTranscript',
         mode: 'effective_access_v1',
-        authentication: input.authentication,
+        authentication,
         collectiveAccessSnapshot: input.collectiveAccessSnapshot,
     });
     const root = await tx.session.findFirst({

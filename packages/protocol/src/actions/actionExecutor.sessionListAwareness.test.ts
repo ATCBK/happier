@@ -69,6 +69,19 @@ const agentContext = {
 } as const;
 
 describe('session.list execution', () => {
+  it('admits Under-self on current-Session credentials while refusing a foreign subtree', async () => {
+    const executor = createExecutor({ sessionList: async ({ query }) => markSessionListQueryResultV1({
+      sessions: query?.underSessionId === 'coordinator' ? [{ id: 'worker', createdAt: 1, updatedAt: 1,
+        active: true, activeAt: 1, encryptionMode: 'plain', encryption: null }] : [],
+      nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    }) });
+    const context = { surface: 'agent', authority: 'account_automation', bypassApprovals: true,
+      defaultSessionId: 'coordinator', sessionListAccess: 'current_session' } as const;
+    await expect(executor.execute('session.list', { underSessionId: 'coordinator' }, context))
+      .resolves.toMatchObject({ ok: true, result: { sessions: [{ id: 'worker' }] } });
+    await expect(executor.execute('session.list', { underSessionId: 'another-coordinator' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  });
   it.each(['srv_widget_home', 'local-profile'])('keeps %s Session pins comparable to options across proven Home aliases', async selectedHome => {
     const surface = { serverId: 'srv_widget_home', accountId: 'viewer', owner: { kind: 'home' as const } };
     const sessionList = async () => buildSessionAwarenessListResultV1({ sessions: [{

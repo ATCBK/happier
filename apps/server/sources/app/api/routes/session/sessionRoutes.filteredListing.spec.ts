@@ -17,7 +17,7 @@ describe('POST /v2/sessions/query activation', () => {
             response: Record<number, unknown>;
         }).response;
 
-        expect(Object.keys(response).sort()).toEqual(['200', '400', '404', '409']);
+        expect(Object.keys(response).sort()).toEqual(['200', '400', '403', '404', '409']);
     });
 
     it('admits only a proof-bound session.list PAT effect through the canonical auth owner', () => {

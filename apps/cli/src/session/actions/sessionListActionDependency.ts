@@ -13,10 +13,10 @@ import {
   resolveAdmittedSessionListQueryAdmission,
   SessionListAdmittedQueryUnsupportedError,
 } from '@/session/services/listSessions';
-import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, fetchSessionRuntimeManagedSubtreeQueryPage } from '@/session/transport/http/sessionsHttp';
 import { buildCliSessionRowModel } from '@/cli/output/session/buildCliSessionRowModel';
 import { summarizeSessionRecord } from '@/cli/output/session/sessionSummary';
-import { projectCliSessionAwarenessFromMaterialV1 } from '@/cli/output/session/sessionAwareness';
+import { projectCliSessionAwarenessFromMaterialV1, projectCliSessionAwarenessUnavailableMaterialV1 } from '@/cli/output/session/sessionAwareness';
 import type { SessionTransportEncryptionMaterial } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
@@ -38,9 +38,9 @@ function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
 }
 
 /**
- * The restricted runtime's exact current-Session list reader. It deliberately
- * uses only the detail route admitted by the restricted server token; Account
- * listing, query, settings and encryption-currentness remain unreachable.
+ * The restricted runtime reads its exact Session or a server-proved Under-self
+ * page. Account listing, private query facets, settings and encryption
+ * currentness remain unreachable.
  */
 export function createRestrictedCurrentSessionListActionDependency(params: Readonly<{
   credentials: StoredCredentials;
@@ -51,7 +51,8 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
 }>): ActionExecutorDeps['sessionList'] {
   return async (input) => {
     if (input.project) return { ok: false, errorCode: 'session_list_project_filter_unsupported', error: 'session_list_project_filter_unsupported' };
-    if (input.query?.underSessionId !== undefined) {
+    const underSelf = input.query?.underSessionId === params.sessionId;
+    if (input.query?.underSessionId !== undefined && !underSelf) {
       return unsupportedSessionListQueryArmsResult(['underSessionId']);
     }
     if (
@@ -69,7 +70,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
     if (input.activeOnly === true && input.archivedOnly === true) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
-    if (input.cursor != null && input.cursor.length > 0) {
+    if (!underSelf && input.cursor != null && input.cursor.length > 0) {
       if (input.view === 'awareness') {
         return buildSessionAwarenessListResultV1({
           sessions: [],
@@ -85,83 +86,87 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
       };
     }
 
-    const rawSession = await fetchSessionById({
+    const query = input.query;
+    const page = underSelf && query
+      ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => fetchSessionRuntimeManagedSubtreeQueryPage({
+          token: params.credentials.token, query, ...(input.signal ? { signal: input.signal } : {}),
+        }))
+      : null;
+    const detail = page ? null : await fetchSessionById({
       token: params.credentials.token,
       sessionId: params.sessionId,
       serverUrl: params.serverHttpBaseUrl,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    const admission = input.query && rawSession
-      ? resolveAdmittedSessionListQueryAdmission(input.query, rawSession)
+    const admission = !underSelf && input.query && detail
+      ? resolveAdmittedSessionListQueryAdmission(input.query, detail)
       : null;
     if (admission?.kind === 'unsupported') {
       return unsupportedSessionListQueryArmsResult(admission.arms);
     }
     const queryMatches = admission === null || admission.kind === 'match';
     const accountEncryptionMode = params.material.mode;
-    const row = rawSession && queryMatches
-      ? buildCliSessionRowModel({
-          credentials: params.credentials,
-          rawSession,
-          accountEncryptionMode,
-          accountSettings: null,
-        })
-      : null;
-    const presentationMatches = row !== null
-      && (input.includeSystem === true || row.isSystem !== true)
-      && (input.activeOnly !== true || row.active === true)
-      && (input.archivedOnly !== true || row.archivedAt !== null)
-      && (input.resumableOnly !== true || (
-        row.vendorResume.eligible === true
-        && row.archivedAt === null
-        && row.active !== true
-      ));
+    const entries = (queryMatches ? page?.sessions ?? (detail ? [detail] : []) : []).flatMap(rawSession => {
+      // The current Session key is never a worker's key. Encrypted workers stay
+      // locked unless their own material is admitted by the existing key owner.
+      const credentials = rawSession.id === params.sessionId ? params.credentials
+        : { token: params.credentials.token, encryption: null };
+      const row = buildCliSessionRowModel({
+        credentials,
+        rawSession,
+        accountEncryptionMode,
+        accountSettings: null,
+      });
+      const presentationMatches = (input.includeSystem === true || row.isSystem !== true)
+        && (input.activeOnly !== true || row.active === true)
+        && (input.archivedOnly !== true || row.archivedAt !== null)
+        && (input.resumableOnly !== true || (
+          row.vendorResume.eligible === true
+          && row.archivedAt === null
+          && row.active !== true
+        ));
+      return presentationMatches ? [{ rawSession, row, credentials }] : [];
+    });
+    const continuation = page ? { nextCursor: page.nextCursor, hasNext: page.hasNext,
+      attentionNextCursor: page.attentionNextCursor, attentionHasNext: page.attentionHasNext,
+      ...(page.metadataUpgradeRequiredCount !== undefined ? { metadataUpgradeRequiredCount: page.metadataUpgradeRequiredCount } : {}) }
+      : { nextCursor: null, hasNext: false };
 
     if (input.view === 'awareness') {
-      const page = {
-        sessions: rawSession && presentationMatches
-          ? [projectCliSessionAwarenessFromMaterialV1({
+      const awarenessPage = {
+        sessions: entries.map(({ rawSession }) => rawSession.encryptionMode === 'plain' || rawSession.id === params.sessionId
+          ? projectCliSessionAwarenessFromMaterialV1({
               row: rawSession,
-              material: params.material,
+              material: rawSession.encryptionMode === 'plain' ? { mode: 'plain' } : params.material,
               nowMs: Date.now(),
-            })]
-          : [],
-        nextCursor: null,
-        hasNext: false,
+            })
+          : projectCliSessionAwarenessUnavailableMaterialV1({ row: rawSession, nowMs: Date.now() })),
+        ...continuation,
       };
       return input.query
         ? buildSessionAwarenessListResultV1({
-            ...page,
-            attentionNextCursor: null,
-            attentionHasNext: false,
+            ...awarenessPage,
+            attentionNextCursor: page?.attentionNextCursor ?? null,
+            attentionHasNext: page?.attentionHasNext ?? false,
           })
-        : buildSessionAwarenessListResultV1(page);
+        : buildSessionAwarenessListResultV1(awarenessPage);
     }
 
     const result = {
-      sessions: rawSession && row && presentationMatches
-        ? [{
-            ...summarizeSessionRecord({
-              credentials: params.credentials,
-              accountEncryptionMode,
-              session: rawSession,
-            }),
-            agentId: row.agentId,
-            vendorResumeEligible: row.vendorResume.eligible,
-            ...(row.vendorResume.eligible
-              ? {}
-              : { vendorResumeReasonCode: row.vendorResume.reasonCode }),
-          }]
-        : [],
-      nextCursor: null,
-      hasNext: false,
-      ...(input.includeRows === true ? { rows: row && presentationMatches ? [row] : [] } : {}),
+      sessions: entries.map(({ rawSession, row, credentials }) => ({
+        ...summarizeSessionRecord({ credentials, accountEncryptionMode, session: rawSession }),
+        agentId: row.agentId,
+        vendorResumeEligible: row.vendorResume.eligible,
+        ...(row.vendorResume.eligible ? {} : { vendorResumeReasonCode: row.vendorResume.reasonCode }),
+      })),
+      ...continuation,
+      ...(input.includeRows === true ? { rows: entries.map(entry => entry.row) } : {}),
     };
     return input.query
       ? markSessionListQueryResultV1({
           ...result,
-          attentionNextCursor: null,
-          attentionHasNext: false,
+          attentionNextCursor: page?.attentionNextCursor ?? null,
+          attentionHasNext: page?.attentionHasNext ?? false,
         })
       : result;
   };
@@ -204,10 +209,15 @@ export function createSessionListActionDeps(params: Readonly<{
     if (normalizedActiveOnly && normalizedArchivedOnly) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
+    if (context.sessionListAccess === 'current_session' && query?.underSessionId !== undefined
+      && query.underSessionId !== context.defaultSessionId) {
+      return unsupportedSessionListQueryArmsResult(['underSessionId']);
+    }
     const allowedSessionIds = sourceSessionId ? context?.sessionListAccess === 'current_session'
       && context.defaultSessionId !== sourceSessionId ? [] : [sourceSessionId] : context?.sessionListAccess === 'current_session'
       && typeof context?.defaultSessionId === 'string'
       && context.defaultSessionId.trim().length > 0
+      && query?.underSessionId !== context.defaultSessionId
       ? [context.defaultSessionId.trim()]
       : undefined;
     const resolveAuthorizationHeaders = (request: Readonly<{

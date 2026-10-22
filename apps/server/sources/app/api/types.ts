@@ -29,6 +29,7 @@ export type RestrictedCredentialRouteSessionField =
     | "params.destinationSessionId"
     | "params.sourceSessionId"
     | "body.sessionId"
+    | "body.underSessionId"
     | "body.managerSessionId"
     | "body.expectedManagerSessionId"
     | "body.subject.id"
@@ -60,6 +61,8 @@ export type RestrictedCredentialRouteMachineField =
 export type RestrictedCredentialRouteBinding =
     /** Account-scoped: the route reads nothing Session-specific. */
     | Readonly<{ scope: "account" }>
+    /** List-only runtime read; signed Account query transport keeps its existing admission. */
+    | Readonly<{ scope: 'session_managed_subtree'; session: 'body.underSessionId' }>
     | Readonly<{
         scope: "session";
         session: RestrictedCredentialRouteSessionSelector;

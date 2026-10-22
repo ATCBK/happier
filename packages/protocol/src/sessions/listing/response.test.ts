@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { projectLegacySessionAccessCapabilitiesV1 } from '../access/sessionEffectiveAccessV1.js';
 import { V2SessionRecordSchema } from '../control/contract.js';
-import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from './response.js';
+import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema, SessionRuntimeManagedSubtreeListResponseV1Schema } from './response.js';
+import { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1 } from '../metadata/sessionMetadataSchemasV1.js';
 
 describe('SessionListQueryResponseV1Schema', () => {
   const RESPONSE = {
@@ -94,6 +95,22 @@ describe('SessionListQueryResponseV1Schema', () => {
   });
 
   const responseWith = (sessions: readonly unknown[]) => ({ ...RESPONSE, sessions });
+
+  it('keeps the restricted runtime page distinct from Account-private query rows', () => {
+    const { viewer: _viewer, ...sharedSession } = session;
+    expect(SessionRuntimeManagedSubtreeListResponseV1Schema.safeParse(responseWith([sharedSession])).success).toBe(true);
+    expect(SessionListQueryResponseV1Schema.safeParse(responseWith([sharedSession])).success).toBe(false);
+    expect(SessionRuntimeManagedSubtreeListResponseV1Schema.safeParse(responseWith([session])).success).toBe(false);
+    const owner = createSessionOwnerMetadataV1({ metadata: { path: '/private-workspace' } });
+    if (!owner.ok) throw new Error('Invalid owner metadata fixture');
+    const privateRow = { ...sharedSession, encryptionMode: 'plain', share: null,
+      metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata: { path: '/private-workspace' } })),
+      effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+        capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
+      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata) };
+    expect(V2SessionRecordSchema.safeParse(privateRow).success).toBe(true);
+    expect(SessionRuntimeManagedSubtreeListResponseV1Schema.safeParse(responseWith([privateRow])).success).toBe(false);
+  });
 
   it('requires the current access and viewer projections on every query row', () => {
     expect(SessionListQueryResponseV1Schema.safeParse(responseWith([session])).success).toBe(true);

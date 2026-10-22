@@ -17,7 +17,8 @@ import { SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelInte
 import { buildSessionOrganizationAssignmentSnapshotHttpRequestV1, SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
 import { normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
-import { SessionListQueryResponseV1Schema, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryResponseV1Schema, SessionCurrentProjectionRecordV1Schema,
+  SessionRuntimeManagedSubtreeListResponseV1Schema, type SessionRuntimeManagedSubtreeListResponseV1 } from '@happier-dev/protocol/sessions/listing/response';
 import { buildSessionListServerQueryV1, SessionListUnavailableQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { SessionAttentionSetResultV1Schema, buildSessionAttentionStandingHttpPath } from '@happier-dev/protocol/sessions/organization/attentionAction';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema, type SetSessionPinRequest, type SetSessionPinResponse } from '@happier-dev/protocol/sessions/organization/mutations';
@@ -659,57 +660,7 @@ function looksLikeMissingV2SessionRoute404(data: unknown, sessionId: string): bo
   );
 }
 
-export async function fetchSessionByIdCompat(params: Readonly<{
-  token: string;
-  resolveAuthorizationHeaders?: (request: Readonly<{
-    method: 'GET'; path: string;
-  }>) => Readonly<Record<string, string>> | null;
-  sessionId: string;
-  reason?: SessionSnapshotRefreshReason;
-  signal?: AbortSignal;
-  /** Supply only after the exact Home's canonical sharing.session decision is enabled. */
-  accessProjectionVersion?: 1;
-  /** Exact Home snapshot already owned by the caller's runtime/connection; never fetched here. */
-  serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
-}>): Promise<RawSessionRecord | null> {
-  const accessProjectionVersion = resolveRequestedSessionDetailAccessProjectionVersion(params);
-  const response = await getSessionByIdResponse({ ...params, accessProjectionVersion });
-
-  if (response.status === 404) {
-    if (!looksLikeMissingV2SessionRoute404(response.data, params.sessionId)) return null;
-    if (accessProjectionVersion === 1) {
-      throwSessionDetailProjectionUnavailable();
-    }
-
-    let cursor: string | undefined = undefined;
-    const seenCursors = new Set<string>();
-    while (true) {
-      const res = await fetchSessionsPage({
-        token: params.token,
-        cursor,
-        limit: 200,
-        ...(params.resolveAuthorizationHeaders
-          ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
-          : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      const match = res.sessions.find((row) => row.id === params.sessionId);
-      if (match) return match;
-      if (!res.hasNext || !res.nextCursor) return null;
-      if (seenCursors.has(res.nextCursor)) return null;
-      seenCursors.add(res.nextCursor);
-      cursor = res.nextCursor;
-    }
-  }
-  if (isAuthenticationStatus(response.status)) {
-    throwAuthenticationStatusError(response.status);
-  }
-  if (response.status !== 200) {
-    throwUnexpectedStatusError(`/v2/sessions/${params.sessionId}`, response.status);
-  }
-
-  return parseSessionByIdResponse(response.data, accessProjectionVersion);
-}
+export { fetchSessionById as fetchSessionByIdCompat };
 
 export async function patchSessionMetadata(params: Readonly<{
   token: string;
@@ -1312,14 +1263,16 @@ export type SessionListAttentionContinuationV1 = Readonly<{
 }>;
 
 /** Strict filtered-listing transport. Query failures never broaden into legacy GET semantics. */
-export async function fetchSessionsQueryPage(params: Readonly<{
+type SessionListQueryHttpParams = Readonly<{
   token: string;
   query: SessionListQueryV1;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'POST'; path: string; body: SessionListQueryV1;
   }>) => Readonly<Record<string, string>> | null;
   signal?: AbortSignal;
-}>): Promise<SessionListQueryResponseV1> {
+}>;
+
+async function fetchSessionsQueryPagePayload(params: SessionListQueryHttpParams): Promise<unknown> {
   if (params.signal?.aborted) {
     const error = new Error('Session list was cancelled');
     error.name = 'AbortError';
@@ -1355,12 +1308,18 @@ export async function fetchSessionsQueryPage(params: Readonly<{
   }
   if (response.status !== 200) throwUnexpectedStatusError(path, response.status);
 
-  const parsed = parseOrThrow<SessionListQueryResponseV1>(
-    SessionListQueryResponseV1Schema,
-    response.data,
-    `Unexpected ${path} response shape`,
-  );
-  return parsed;
+  return response.data;
+}
+
+export async function fetchSessionsQueryPage(params: SessionListQueryHttpParams): Promise<SessionListQueryResponseV1> {
+  return parseOrThrow(SessionListQueryResponseV1Schema, await fetchSessionsQueryPagePayload(params),
+    'Unexpected /v2/sessions/query response shape');
+}
+
+/** Restricted runtimes cannot substitute their hosting Account's required viewer projection. */
+export async function fetchSessionRuntimeManagedSubtreeQueryPage(params: SessionListQueryHttpParams): Promise<SessionRuntimeManagedSubtreeListResponseV1> {
+  return parseOrThrow(SessionRuntimeManagedSubtreeListResponseV1Schema, await fetchSessionsQueryPagePayload(params),
+    'Unexpected restricted /v2/sessions/query response shape');
 }
 
 export type SessionListQueryPageV1 = Awaited<ReturnType<typeof fetchSessionsQueryPage>>;

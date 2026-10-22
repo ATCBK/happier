@@ -1,4 +1,4 @@
-import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryResponseV1Schema, SessionRuntimeManagedSubtreeListResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionListQueryV1Schema, SessionListUnavailableQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { z } from 'zod/mini';
 import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
@@ -15,6 +15,7 @@ import {
     listSessionsForAccount,
     SessionListInvalidCursorError,
     SessionListUnavailableQueryError,
+    SessionListCredentialScopeDeniedError,
 } from '@/app/session/listing/service';
 import { createV2SessionListServerTiming } from '@/app/session/listing/timing';
 import { type Fastify } from '../../types';
@@ -43,14 +44,16 @@ export function registerSessionFilteredListingRoute(app: Fastify): void {
         schema: {
             body: SessionListQueryV1Schema,
             response: {
-                200: SessionListQueryResponseV1Schema,
+                200: z.union([SessionListQueryResponseV1Schema, SessionRuntimeManagedSubtreeListResponseV1Schema]),
                 400: FILTERED_LISTING_INVALID_CURSOR_RESPONSE_SCHEMA,
+                403: z.strictObject({ error: z.enum(['present_user_required', 'credential_scope_denied']) }),
                 404: FILTERED_LISTING_UNAVAILABLE_RESPONSE_SCHEMA,
                 409: FILTERED_LISTING_METADATA_UPGRADE_RESPONSE_SCHEMA,
             },
         },
         config: {
             rateLimit: resolveApiHotEndpointRateLimit(process.env, 'sessions.list'),
+            restrictedCredentialBinding: { scope: 'session_managed_subtree', session: 'body.underSessionId' },
         },
     }, async (request, reply) => {
         const timing = createV2SessionListServerTiming(request);
@@ -66,8 +69,12 @@ export function registerSessionFilteredListingRoute(app: Fastify): void {
             });
             if (!payload) return;
             timing.apply(reply);
-            return reply.send(SessionListQueryResponseV1Schema.parse(payload));
+            return reply.send((request.sessionRuntimePrincipal
+                ? SessionRuntimeManagedSubtreeListResponseV1Schema : SessionListQueryResponseV1Schema).parse(payload));
         } catch (error) {
+            if (error instanceof SessionListCredentialScopeDeniedError) {
+                return reply.code(403).send({ error: error.code });
+            }
             if (error instanceof SessionListInvalidCursorError) {
                 return reply.code(400).send({ error: 'Invalid cursor format' });
             }

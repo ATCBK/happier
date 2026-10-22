@@ -2,7 +2,8 @@ import type { SessionListQueryResponseV1 } from '@happier-dev/protocol/sessions/
 import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import type { V2SessionListCursorV2, V2SessionListResponse } from '@happier-dev/protocol/sessions/control/contract';
 import { SESSION_LIST_PAGE_DEFAULT_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
-import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryResponseV1Schema, SessionRuntimeManagedSubtreeListResponseV1Schema,
+    type SessionRuntimeManagedSubtreeListResponseV1 } from '@happier-dev/protocol/sessions/listing/response';
 import type { Prisma } from "@prisma/client";
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
@@ -20,6 +21,7 @@ import {
 import type { SessionPersonalDiscussionFacts } from "@/app/session/personal/discussionFacts";
 import {
     readSessionMetadataOwnerAccountModes,
+    isSessionMetadataPrivacyUpgradeRequiredError,
     requiresSessionMetadataOwnerAccountMode,
     type SessionMetadataOwnerAccountMode,
 } from "@/app/session/metadata/sessionMetadataRecipientProjection";
@@ -50,6 +52,14 @@ import { readSessionManagedSubtreeSessionIdsInTx } from "@/app/session/follow/se
 import { projectSessionManagerForRowsInTx, readmitCapturedSessionManagerReferencesInTx, type SessionManagerContribution } from "@/app/session/awareness/sessionManagerProjection";
 import { readAccountFollowRuleReceiverCountsInTx } from '@/app/session/follow/accountFollowRuleService';
 import { deriveSessionCoordinatorV1 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorV1';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { mapV2SessionListRow } from './rows';
+import { projectSessionEffectiveAccessV1, type EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
+
+export class SessionListCredentialScopeDeniedError extends Error {
+    readonly code = 'credential_scope_denied';
+    constructor() { super('credential_scope_denied'); }
+}
 
 export class SessionListInvalidCursorError extends Error {
     constructor() {
@@ -100,8 +110,12 @@ export async function listSessionsForAccount(params: Readonly<{
     source: SessionListSource;
     rowRepresentabilityWhere: Prisma.SessionWhereInput;
     timing: ReturnType<typeof createV2SessionListServerTiming>;
-}>): Promise<V2SessionListResponse | SessionListQueryResponseV1 | null> {
+}>): Promise<V2SessionListResponse | SessionListQueryResponseV1 | SessionRuntimeManagedSubtreeListResponseV1 | null> {
     const source = params.source;
+    if (params.authentication.sessionRuntimePrincipal) {
+        if (source.kind !== 'query') throw new SessionListCredentialScopeDeniedError();
+        return await listSessionRuntimeManagedSubtree({ ...params, source });
+    }
     if (source.kind === "query") {
         return await listFilteredSessionsForAccount({
             userId: params.userId,
@@ -180,6 +194,72 @@ export async function listSessionsForAccount(params: Readonly<{
         const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
         return { ...captured, sessions: await readmitCapturedSessionManagerReferencesInTx(tx, { ...admission, sessions, contributions }) };
     }), { transactionClass: "session-listing-read" });
+}
+
+/** Restricted listing uses the canonical subtree, paging and shared row projection. */
+async function listSessionRuntimeManagedSubtree(params: Readonly<{
+    userId: string;
+    authentication: SessionAccessAuthentication;
+    source: FilteredSessionListSource;
+    rowRepresentabilityWhere: Prisma.SessionWhereInput;
+    timing: ReturnType<typeof createV2SessionListServerTiming>;
+}>): Promise<SessionRuntimeManagedSubtreeListResponseV1> {
+    const { query } = params.source;
+    const principal = params.authentication.sessionRuntimePrincipal;
+    if (!principal || principal.accountId !== params.userId || query.underSessionId !== principal.sessionId
+        || query.scope !== 'all_accessible' || query.attention !== 'any'
+        || query.audiences.length || query.tagIds.length || query.folderIds?.length
+        || query.coordinator !== undefined || query.includeAttention === true || query.attentionCursor !== undefined
+        || !query.includeInactive) throw new SessionListCredentialScopeDeniedError();
+    const readIds = async (tx: Tx) => {
+        const ids = await readSessionManagedSubtreeSessionIdsInTx(tx, {
+            accountId: params.userId, rootSessionId: principal.sessionId, authentication: params.authentication,
+            allowSessionRuntimeManagedSubtreeRead: true,
+        });
+        if (!ids.includes(principal.sessionId)) throw new SessionListCredentialScopeDeniedError();
+        return ids;
+    };
+    const viewAccess = (sessionId: string): EffectiveSessionAccess => ({
+        accountId: params.userId, sessionId, level: 'view', sources: [], relationshipKinds: [], audienceContext: null,
+        capabilities: projectSessionAccessCapabilitiesV1({ owner: false, grants: [{ accessLevel: 'view', canApprovePermissions: false }] }),
+    });
+    return await readSnapshotWithCurrentAdmission(async tx => {
+        const ids = await readIds(tx);
+        const source: SessionListReadSource = { kind: 'effective', reader: tx, allowProjectionFallback: false,
+            accessMode: 'effective_access_v1', baseWhere: conjoinSessionListWhereInputs(
+                { id: { in: ids } }, createSessionListStorageWhere(query.storage), params.rowRepresentabilityWhere),
+        };
+        const cursor = query.cursor ? await resolveV2SessionListCursorForVisibleRows({ userId: params.userId,
+            cursor: query.cursor, cursorRowWhere: {}, source }) : undefined;
+        if (cursor === null) throw new SessionListInvalidCursorError();
+        const rows = await findV2SessionListRows({ userId: params.userId, source, cursor,
+            orderBy: V2_SESSION_LIST_ORDER_BY, take: (query.limit ?? SESSION_LIST_PAGE_DEFAULT_LIMIT) + 1 });
+        const page = createV2SessionListRowPage({ rows, limit: query.limit ?? SESSION_LIST_PAGE_DEFAULT_LIMIT });
+        const ownerAccountModes = await readSessionListOwnerAccountModes(page.rows, tx);
+        const sessions = [];
+        let metadataUpgradeRequiredCount = 0;
+        for (const row of page.rows) {
+            try {
+                const { share: _share, ...session } = mapV2SessionListRow({ row, userId: params.userId, ownerAccountModes,
+                    verifiedSessionRuntimePrincipal: true, effectiveAccess: viewAccess(row.id) });
+                sessions.push(session);
+            } catch (error) {
+                if (!isSessionMetadataPrivacyUpgradeRequiredError(error)) throw error;
+                metadataUpgradeRequiredCount += 1;
+            }
+        }
+        return SessionRuntimeManagedSubtreeListResponseV1Schema.parse({ sessions, nextCursor: page.nextCursor, hasNext: page.hasNext,
+            attentionNextCursor: null, attentionHasNext: false,
+            ...(metadataUpgradeRequiredCount ? { metadataUpgradeRequiredCount } : {}) });
+    }, async (tx, captured) => {
+        const ids = new Set(await readIds(tx));
+        const { sessionRuntimePrincipal: _principal, ...authentication } = params.authentication;
+        const sessions = await readmitSessionRowsInTx(tx, { accountId: params.userId, authentication,
+            accessMode: 'effective_access_v1' }, captured.sessions.filter(row => ids.has(row.id)));
+        return SessionRuntimeManagedSubtreeListResponseV1Schema.parse({ ...captured, sessions: sessions.map(({ share: _share, ...row }) => ({ ...row,
+            effectiveAccess: projectSessionEffectiveAccessV1(viewAccess(row.id)),
+        })) });
+    }, { transactionClass: 'session-listing-read' });
 }
 
 async function listSessionRowsForAccount(params: Readonly<{

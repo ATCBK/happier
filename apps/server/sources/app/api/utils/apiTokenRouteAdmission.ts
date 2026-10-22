@@ -192,6 +192,8 @@ export function readRestrictedCredentialRouteField(
             return params?.sourceSessionId;
         case "body.sessionId":
             return body?.sessionId;
+        case "body.underSessionId":
+            return body?.underSessionId;
         case "body.managerSessionId":
             return body?.managerSessionId;
         case "body.expectedManagerSessionId":
@@ -245,6 +247,9 @@ function isEphemeralSessionRunnerRequestBound(request: AuthenticatedRouteRequest
     const binding = request.routeOptions?.config?.restrictedCredentialBinding;
     if (!binding) return false;
     if (binding.scope === "account") return true;
+    if (binding.scope === 'session_managed_subtree') {
+        return readRestrictedCredentialRouteField(request, binding.session) === principal.sessionId;
+    }
     if (binding.allowSessionRuntime === false) return false;
     const sessionIds = readRestrictedCredentialRouteSessionIds(request, binding);
     if (sessionIds === null || sessionIds.some(sessionId => sessionId !== principal.sessionId)) return false;

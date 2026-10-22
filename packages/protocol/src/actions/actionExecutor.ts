@@ -3430,6 +3430,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(origin.data.serverIdentityId ? { serverIdentityId: origin.data.serverIdentityId } : {}),
         ...(args.ctx.runtimeAccountId ? { runtimeAccountId: args.ctx.runtimeAccountId } : {}),
         actionRequestId: origin.data.requestId,
+        ...(origin.data.caller.kind === 'session'
+          ? { defaultSessionId: origin.data.caller.sessionId }
+          : origin.data.sessionId ? { defaultSessionId: origin.data.sessionId } : {}),
       } : origin?.success ? {
         authority: origin.data.authority,
         surface: origin.data.surface,
@@ -10434,7 +10437,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
           }
           const requestedRoot = listRequest.underSessionId ?? listRequest.query?.underSessionId;
-          if (ctx.sessionListAccess === 'current_session' && requestedRoot !== undefined) {
+          if (ctx.sessionListAccess === 'current_session' && requestedRoot !== undefined
+            && requestedRoot !== ctx.defaultSessionId?.trim()) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.list' };
           }
           const callerSubtree = ctx.sessionListAccess === 'led_subtree'

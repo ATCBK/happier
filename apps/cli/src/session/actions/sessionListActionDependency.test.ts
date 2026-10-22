@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 
-const { fetchSessionById, fetchSessionsPage, fetchSessionsQueryPage, listSessions } = vi.hoisted(() => ({
+const { fetchSessionById, fetchSessionsPage, fetchSessionsQueryPage, fetchSessionRuntimeManagedSubtreeQueryPage, listSessions } = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
   fetchSessionsPage: vi.fn(),
   fetchSessionsQueryPage: vi.fn(),
+  fetchSessionRuntimeManagedSubtreeQueryPage: vi.fn(),
   listSessions: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock('@/session/transport/http/sessionsHttp', async (importActual) => ({
   fetchSessionById,
   fetchSessionsPage,
   fetchSessionsQueryPage,
+  fetchSessionRuntimeManagedSubtreeQueryPage,
 }));
 
 vi.mock('@/session/services/listSessions', async (importActual) => ({
@@ -47,6 +49,7 @@ describe('session.list Action dependency for a current-Session principal', () =>
     fetchSessionById.mockReset();
     fetchSessionsPage.mockReset();
     fetchSessionsQueryPage.mockReset();
+    fetchSessionRuntimeManagedSubtreeQueryPage.mockReset();
     listSessions.mockReset();
   });
 
@@ -136,5 +139,26 @@ describe('session.list Action dependency for a current-Session principal', () =>
     });
     await expect(sessionList({ context: { ...currentSessionContext, serverId }, query: allAccessibleQuery }))
       .resolves.toMatchObject({ sessions: [{ id: 'runner-session' }], queryVersion: 1 });
+  });
+
+  it('reads Under-self through the restricted Home query and refuses any other root', async () => {
+    const child = createSessionRecordFixture({ id: 'worker', encryptionMode: 'plain', metadata: '{}' });
+    fetchSessionRuntimeManagedSubtreeQueryPage.mockResolvedValue({ sessions: [child], nextCursor: null, hasNext: false,
+      attentionNextCursor: null, attentionHasNext: false });
+    const { createRestrictedCurrentSessionListActionDependency } = await import('./sessionListActionDependency');
+    const sessionList = createRestrictedCurrentSessionListActionDependency({ credentials, sessionId: 'runner-session',
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test', material: { mode: 'plain' } });
+    await expect(sessionList({ context: currentSessionContext,
+      query: { ...allAccessibleQuery, underSessionId: 'runner-session' } }))
+      .resolves.toMatchObject({ sessions: [{ id: 'worker' }], queryVersion: 1 });
+    expect(fetchSessionRuntimeManagedSubtreeQueryPage).toHaveBeenCalledWith(expect.objectContaining({ token: credentials.token,
+      query: { ...allAccessibleQuery, underSessionId: 'runner-session' } }));
+    await expect(sessionList({ context: currentSessionContext,
+      query: { ...allAccessibleQuery, underSessionId: 'another-coordinator' } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(fetchSessionRuntimeManagedSubtreeQueryPage).toHaveBeenCalledTimes(1);
+    expect(fetchSessionsQueryPage).not.toHaveBeenCalled();
+    expect(fetchSessionById).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
   });
 });

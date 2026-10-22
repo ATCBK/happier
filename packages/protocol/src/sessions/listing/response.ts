@@ -41,3 +41,16 @@ export const SessionListQueryResponseV1Schema = lazyZodSchema(() => z.strictObje
 }));
 
 export type SessionListQueryResponseV1 = Readonly<z.infer<typeof SessionListQueryResponseV1Schema>>;
+
+/** The same query envelope for a proved runtime subtree, without Account-private projections. */
+export const SessionRuntimeManagedSubtreeListResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  ...SessionListQueryResponseV1Schema.shape,
+  sessions: z.array(z.safeExtend(SessionCurrentProjectionRecordV1Schema, {
+    viewer: z.optional(z.never()),
+    ownerMetadata: z.optional(z.never()),
+    lastViewedSessionSeq: z.optional(z.never()),
+    unreadSince: z.optional(z.never()),
+    receivedRuleCount: z.optional(z.never()),
+  })),
+}));
+export type SessionRuntimeManagedSubtreeListResponseV1 = Readonly<z.infer<typeof SessionRuntimeManagedSubtreeListResponseV1Schema>>;
