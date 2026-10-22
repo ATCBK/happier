@@ -23,6 +23,7 @@ import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
 import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 /** This in-process Home boundary serves the current exact-read wire contract. */
 function serializeMachineReadFixture(request: Pick<IncomingMessage, 'url'>, machine: Pick<MachinePublishedRowV1, 'id'> & Partial<MachinePublishedRowV1>) {
@@ -48,12 +49,138 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 
 afterEach(async () => {
     credentials.secret = undefined;
+    vi.useRealTimers();
+    resetRuntimeFetch();
     vi.unstubAllGlobals();
     await serverScopedRpcSocketPool.stopAll();
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
     clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
+});
+
+it.each([false, true])('distinguishes held SCM setup boundaries from elapsed continuation time (clock stall: %s)', async stallContinuation => {
+    const { Encryption } = await import('@/sync/encryption/encryption');
+    const { ScmComparisonCaptureInputSchema, ScmComparisonCaptureOutputSchema } = await import('@happier-dev/protocol/scm');
+    const { ScmDiffSummaryResultListInputSchema, ScmDiffSummaryResultListResponseSchema } = await import('@happier-dev/protocol/scm/diffSummaryResult');
+    const secret = new Uint8Array(32).fill(29);
+    const daemonEncryption = await Encryption.create(secret);
+    const dataKey = new Uint8Array(32).fill(31);
+    const envelope = Buffer.from(await daemonEncryption.encryptEncryptionKey(dataKey)).toString('base64');
+    await daemonEncryption.initializeMachines(new Map([['scm-setup-machine', dataKey]]));
+    const cipher = daemonEncryption.getMachineEncryption('scm-setup-machine');
+    if (!cipher) throw new Error('Expected real Machine cipher');
+    const transport = { mode: 'e2ee' as const, cipher };
+    const bodyStarted = createDeferred<void>();
+    const releaseBody = createDeferred<void>();
+    const handshakeStarted = createDeferred<void>();
+    const releaseSocket = createDeferred<void>();
+    const bodyConsumed = createDeferred<void>();
+    let received = 0;
+    let issued = 0;
+    let modeRequests = 0;
+    const responses = {
+        list: ScmDiffSummaryResultListResponseSchema.parse({ success: true, results: [], count: 0, bytes: 0,
+            sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 1 } }),
+        capture: ScmComparisonCaptureOutputSchema.parse({ success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'No saved comparison at this test boundary' }),
+    };
+    const http = createServer(async (request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch') {
+            response.writeHead(200);
+            response.flushHeaders();
+            bodyStarted.resolve();
+            await releaseBody.promise;
+            if (!response.destroyed) response.end(serializeMachineReadFixture(request, {
+                id: 'scm-setup-machine', dataEncryptionKey: envelope,
+                access: { custodian: { accountId: 'scm-setup-account', displayName: '' }, role: 'manage',
+                    resourceMode: 'e2ee', accessState: 'ready' },
+            }));
+        } else if (request.url === '/v1/account/encryption') {
+            modeRequests += 1;
+            response.end(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }));
+        } else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.use((_socket, next) => {
+        handshakeStarted.resolve();
+        void releaseSocket.promise.then(() => next());
+    });
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+        const decoded = await socketRpcCodec.decodeRequestParams(transport, packet.params, packet.method);
+        received += 1;
+        const isList = packet.method === `scm-setup-machine:${RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST}`;
+        if (isList) ScmDiffSummaryResultListInputSchema.parse(decoded.params);
+        else {
+            expect(packet.method).toBe(`scm-setup-machine:${RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE}`);
+            expect(ScmComparisonCaptureInputSchema.parse(decoded.params)).toMatchObject({ cwd: '/project', comparisonId: 'a'.repeat(64) });
+        }
+        ack({ ok: true, result: await socketRpcCodec.encodeResponse(transport, isList ? responses.list : responses.capture, decoded.callId) });
+    }));
+    const baselineTime = Date.now();
+    if (stallContinuation) vi.useFakeTimers({ toFake: ['Date'] });
+    // This is the genuine HTTP boundary, not an internal setup mock. Move only
+    // the wall clock after a fully parsed Machine body: a timeout can then occur
+    // with no unresolved HTTP/body boundary. It is not a reproduced product bug.
+    setRuntimeFetch(async (input, init) => {
+        const response = await fetch(input, init);
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (path === '/v1/machines/read-batch') {
+            const parse = response.json.bind(response);
+            response.json = async () => {
+                const value: unknown = await parse();
+                if (stallContinuation) vi.setSystemTime(baselineTime + 31_000);
+                bodyConsumed.resolve();
+                return value;
+            };
+        }
+        return response;
+    });
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'scm-setup-account' })).toString('base64url')}.signature`;
+        credentials.secret = Buffer.from(secret).toString('base64url');
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'SCM setup discriminator' });
+        const pending = Promise.all([
+            [RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST, ScmDiffSummaryResultListInputSchema.parse({})],
+            [RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE, ScmComparisonCaptureInputSchema.parse({ cwd: '/project', comparisonId: 'a'.repeat(64), source: { kind: 'workingTree' } })],
+        ].map(([method, payload]) => machineRpcWithServerScope({ serverId: home.id, accountId: 'scm-setup-account',
+            machineId: 'scm-setup-machine', method: String(method), payload, preferScoped: true,
+            // Match qa-r52's instrumentation: this observer intentionally
+            // selects the server route rather than peer mediation.
+            onIssued: () => { issued += 1; } })
+            .then(value => ({ value }), (error: unknown) => ({ error }))));
+        const reach = (stage: Promise<void>) => Promise.race([stage, pending.then(() => { throw new Error('SCM calls settled before the held setup stage'); })]);
+        await reach(bodyStarted.promise);
+        await reach(handshakeStarted.promise);
+        expect(modeRequests).toBe(0);
+        expect(issued).toBe(0);
+        expect(received).toBe(0);
+        releaseBody.resolve();
+        await reach(bodyConsumed.promise);
+        expect(issued).toBe(0);
+        expect(received).toBe(0);
+        releaseSocket.resolve();
+        const results = await pending;
+        expect(modeRequests).toBe(0);
+        if (stallContinuation) {
+            expect(results).toEqual([expect.objectContaining({ error: expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT' }) }),
+                expect.objectContaining({ error: expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT' }) })]);
+            expect(received).toBe(0);
+            expect(issued).toBe(0);
+        } else {
+            expect(results).toEqual([{ value: responses.list }, { value: responses.capture }]);
+            expect(issued).toBe(2);
+            expect(received).toBe(2);
+        }
+    } finally {
+        releaseBody.resolve(); releaseSocket.resolve();
+        vi.useRealTimers();
+        resetRuntimeFetch();
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
 });
 
 it('detects Agent readiness through real scoped E2EE HTTP, crypto and Socket.IO wiring', async () => {
