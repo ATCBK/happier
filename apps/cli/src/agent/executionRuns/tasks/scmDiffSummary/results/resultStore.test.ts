@@ -62,6 +62,19 @@ async function setupPartialApplication() {
 }
 
 describe('saved SCM result owner', () => {
+  it.each([false, true])('persists a PR draft generation receipt independently of cache reuse (unknown: %s)', async unknown => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-scm-draft-receipt-'));
+    const store = createScmDiffSummaryResultStore({ directory });
+    const pending = ScmDiffSummaryGenerateOutputSchema.parse({ ...output, requestedOutputs: ['summary'], outputs: { summary: { state: 'pending' } } });
+    const saved = await store.create({ cwd, output: pending, pullRequestDraftEvidence: '{}' });
+    const receipt = { ...saved.output, inputId: 'draft-input', ...(unknown ? { admission: 'outcomeUnknown' as const } : { runId: 'draft-run' }) };
+    await store.admitGeneration({ cwd, key: 'draft-key', outputs: ['summary'], bypass: true }, async () => receipt);
+    const reopened = createScmDiffSummaryResultStore({ directory });
+    expect(await reopened.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true, result: { output: receipt } });
+    expect(await reopened.readStoredScope({ cwd, resultId: saved.resultId })).toMatchObject({ pullRequestDraftEvidence: '{}' });
+    const ordinary = await reopened.admitGeneration({ cwd, key: 'draft-key', outputs: ['summary'] }, async () => (await store.create({ cwd, output: pending })).output);
+    expect(ordinary.resultId).not.toBe(saved.resultId);
+  });
   it('retains a discussion input without granting any result publication', async () => {
     const { directory, store, request } = await setup();
     const before = await store.read(request);

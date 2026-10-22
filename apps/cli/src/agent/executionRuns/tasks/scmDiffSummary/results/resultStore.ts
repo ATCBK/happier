@@ -251,7 +251,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         const output = await generate();
         if (output.resultId) {
           await locked({ ...input, resultId: output.resultId }, async (stored) => {
-            if (stored && !stored.pullRequestDraftEvidence) await save({ ...stored, generation: { key: input.key, ...(output.runId ? { runId: output.runId } : {}),
+            if (stored) await save({ ...stored, generation: { key: input.key, ...(output.runId ? { runId: output.runId } : {}),
               ...(output.admission ? { admission: output.admission } : {}),
               ...(output.success && output.inputId ? { inputId: output.inputId } : {}) } });
           });
