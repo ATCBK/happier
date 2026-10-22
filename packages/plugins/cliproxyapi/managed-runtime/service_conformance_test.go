@@ -232,11 +232,11 @@ func assertGeneratedCatalogMatchesRegisteredSDK(t *testing.T, catalog []CatalogM
 	if !found {
 		t.Fatal("generated model export missing")
 	}
-	encoded = bytes.TrimSuffix(encoded, []byte(" as const;\n"))
 	var generated map[Provider][]struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(encoded, &generated); err != nil {
+	// Decode the generated JSON value before its TypeScript type annotation.
+	if err := json.NewDecoder(bytes.NewReader(encoded)).Decode(&generated); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]bool{}

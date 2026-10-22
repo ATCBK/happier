@@ -68,9 +68,10 @@ describe("Team API composition legacy Home credential admission (SQLite integrat
             data: { teamId: team.id, accountId: account.id, role: "owner" },
         });
         const target = await db.account.create({
-            data: { publicKey: "released-team-legacy-target-key" },
+            data: { publicKey: "released-team-legacy-target-key", encryptionMode: "plain" },
             select: { id: true },
         });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: target.id, role: "member" } });
         const savedSecretResourceId = "released-team-legacy-saved-secret";
         const savedSecret = await inTx((tx) => createSavedSecretResourceInTx(tx, {
             accountId: account.id,
@@ -84,6 +85,17 @@ describe("Team API composition legacy Home credential admission (SQLite integrat
             },
         }));
         expect(savedSecret.ok).toBe(true);
+        const teamSecretResourceId = "released-team-legacy-team-secret";
+        expect(await inTx((tx) => createSavedSecretResourceInTx(tx, {
+            accountId: target.id,
+            authentication: { authenticationAuthority: "present_user" },
+            resourceId: teamSecretResourceId,
+            displayName: "Team-only secret",
+            kind: "apiKey",
+            encryptionMode: "plain",
+            storedContent: { t: "plain", v: { v: 1, name: "Team-only secret", kind: "apiKey", value: "team-only-value" } },
+            teamGrants: [team.id],
+        }))).toMatchObject({ ok: true });
         const currentToken = await auth.createToken(account.id, undefined, {
             kind: "account",
             authority: "present_user",
@@ -149,7 +161,6 @@ describe("Team API composition legacy Home credential admission (SQLite integrat
                     recipientEmail: null,
                     requestKey: crypto.randomUUID(),
                 }),
-                await inject("/v1/account/saved-secrets/resources/materials"),
             ];
             for (const attempt of attempts) {
                 expect({ status: attempt.statusCode, body: attempt.json() }).toEqual({
@@ -158,10 +169,17 @@ describe("Team API composition legacy Home credential admission (SQLite integrat
                 });
             }
 
+            // Ordinary Account custody remains readable with the released bearer;
+            // Team-derived custody still requires qualified Team authentication.
+            const legacyMaterials = await inject("/v1/account/saved-secrets/resources/materials");
+            expect(legacyMaterials.statusCode).toBe(200);
+            expect(legacyMaterials.json().resources.map((resource: { resourceId: string }) => resource.resourceId))
+                .toEqual([savedSecretResourceId]);
+
             await expect(db.team.findUniqueOrThrow({ where: { id: team.id } }))
                 .resolves.toMatchObject({ name: "Legacy admission target" });
             await expect(db.team.count()).resolves.toBe(1);
-            await expect(db.teamMembership.count({ where: { teamId: team.id } })).resolves.toBe(1);
+            await expect(db.teamMembership.count({ where: { teamId: team.id } })).resolves.toBe(2);
             await expect(db.teamGroup.count({ where: { teamId: team.id } })).resolves.toBe(0);
             await expect(db.teamDirectorySource.count({ where: { teamId: team.id } })).resolves.toBe(0);
             await expect(db.teamInvitation.count({ where: { teamId: team.id } })).resolves.toBe(0);
@@ -173,9 +191,8 @@ describe("Team API composition legacy Home credential admission (SQLite integrat
                 currentToken,
             );
             expect(currentMaterials.statusCode).toBe(200);
-            expect(currentMaterials.json()).toMatchObject({
-                resources: [{ resourceId: savedSecretResourceId }],
-            });
+            expect(currentMaterials.json().resources.map((resource: { resourceId: string }) => resource.resourceId).sort())
+                .toEqual([savedSecretResourceId, teamSecretResourceId].sort());
         } finally {
             await app.close();
         }

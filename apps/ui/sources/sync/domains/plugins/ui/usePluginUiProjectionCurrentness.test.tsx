@@ -65,6 +65,7 @@ const { FeedResponseSchema } = await import('@/sync/domains/social/feedTypes');
 const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
 const { areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
 const { isMachineOnline } = await import('@/utils/sessions/machineUtils');
+const { captureMachinePresenceObservation } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { resolveServerScopedMachine } = await import('@/sync/domains/machines/resolveServerScopedMachine');
 const { getPreferredLanguage } = await import('@/text');
 const { resolveNativeReactNativeHostRuntimeIdentity } = await import('@/components/plugins/reactNative/hostRuntimeIdentity');
@@ -708,13 +709,18 @@ describe('usePluginUiProjectionCurrentness', () => {
         expect(restored.getCurrent().phase).toBe('retainedOffline');
 
         projectionRuntime.describe.mockResolvedValue(supportedProjection('Live catalog'));
-        setMachine({ active: true });
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Restored Account has no admitted lifetime');
+        // Account transport withdrawal invalidates retained presence. A new
+        // Home ingress observes this exact Machine before live reads resume.
+        const observePresence = captureMachinePresenceObservation(lifetime.scope);
         await act(async () => {
+            setMachine({ active: true });
             await restored.rerender();
         });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-
-        expect(restored.getCurrent().phase).toBe('current');
+        expect(restored.getCurrent().phase).toBe('retainedOffline');
+        await act(async () => { observePresence(['machine-1']); });
+        await waitForHomeGovernance(() => expect(restored.getCurrent().phase).toBe('current'));
         expect(restored.getCurrent().interactionEnabled).toBe(true);
         expect(restored.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles).toEqual({
             en: { title: 'Live catalog' },
