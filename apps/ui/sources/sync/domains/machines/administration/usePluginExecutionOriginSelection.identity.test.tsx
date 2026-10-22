@@ -726,7 +726,6 @@ describe('execution-origin plugin identity with real Account and machine owners'
             await act(async () => { storage.setState({ settingsVersion: version }); });
         }
         const redundantSerializations = createFacts.mock.calls.length - initialSerializations;
-        console.info('execution-origin unchanged inventory: 100 settings-version updates, fact projection creations =', redundantSerializations);
         expect(redundantSerializations).toBe(0);
         expect(hook.getCurrent().candidates).toBe(initial.candidates);
         expect(hook.getCurrent().canExecute).toBe(true);
