@@ -343,6 +343,7 @@ describe('fetchAndApplySessionById', () => {
         metadataVersion: 1, metadata: JSON.stringify({ name: 'Garden notes' }),
         agentStateVersion: 0, agentState: null, share: null,
       } }));
+      await vi.runAllTimersAsync();
       expect(await resultPromise).toMatchObject({ ok: true, session: { id: 'slow-session' } });
       expect(applySessions.mock.calls[0]?.[0]).toMatchObject([{ id: 'slow-session', metadata: { name: 'Garden notes' } }]);
     } finally { vi.useRealTimers(); }

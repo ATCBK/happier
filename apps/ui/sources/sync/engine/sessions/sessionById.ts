@@ -14,6 +14,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { AgentState, Metadata } from '@happier-dev/session-core/state';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { loadSyncTuning } from '@/sync/runtime/syncTuning';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { reportNewAgentRequestsFromSessionTransition } from '@/voice/context/reportNewAgentRequestsFromSessionTransition';
 import {
@@ -66,6 +67,7 @@ import {
 import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildRenderableFromRowAndCache } from './sessionSnapshot';
+import { createSessionHydrationApplyQueue } from './sessionHydrationApplyQueue';
 import { readSessionByIdHttp } from './sessionByIdHttp';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 
@@ -89,6 +91,74 @@ export type SessionByIdEncryption = {
 export type SessionByIdContentDemand = 'session' | 'encryption-context' | 'list-projection';
 
 type SessionDataKeyEnvelopeCache = Map<string, string>;
+
+type SessionPublication = Omit<Session, 'presence'> & { presence?: 'online' | number };
+type ApplySessions = (sessions: SessionPublication[]) => void;
+type PendingSessionPublication = {
+  session: SessionPublication;
+  isCurrent: () => boolean;
+  ensureCurrent: () => Promise<void>;
+  getExistingSession?: (sessionId: string) => Session | null | undefined;
+  resolve: (applied: boolean) => void;
+  reject: (error: unknown) => void;
+};
+const hydrationPublications = new WeakMap<ApplySessions, ReturnType<typeof createSessionHydrationApplyQueue<PendingSessionPublication>>>();
+
+function publishHydratedSession(params: {
+  session: SessionPublication;
+  applySessions: ApplySessions;
+  isCurrent: () => boolean;
+  ensureCurrent: () => Promise<void>;
+  getExistingSession?: (sessionId: string) => Session | null | undefined;
+}): Promise<boolean> {
+  const applySessions = params.applySessions;
+  let queue = hydrationPublications.get(applySessions);
+  if (!queue) {
+    const ready = createSessionHydrationApplyQueue<PendingSessionPublication>({
+      apply: batch => {
+        const admitted: PendingSessionPublication[] = [];
+        const staged = new Map<string, PendingSessionPublication>();
+        const previous = new Map<string, Session | null | undefined>();
+        for (const entry of batch) {
+          try {
+            if (entry.isCurrent() && isStoredSessionInResponseScope(staged.get(entry.session.id)?.session, entry.session)) {
+              if (!previous.has(entry.session.id)) previous.set(entry.session.id, entry.getExistingSession?.(entry.session.id));
+              admitted.push(entry);
+              staged.set(entry.session.id, entry);
+            } else entry.resolve(false);
+          } catch (error) { entry.reject(error); }
+        }
+        try {
+          if (admitted.length > 0) applySessions(admitted.map(entry => entry.session));
+          for (const entry of staged.values()) {
+            reportNewAgentRequestsFromSessionTransition(previous.get(entry.session.id), entry.getExistingSession?.(entry.session.id) ?? entry.session);
+          }
+          for (const entry of admitted) entry.resolve(true);
+        } catch (error) {
+          for (const entry of admitted) entry.reject(error);
+        }
+      },
+    });
+    queue = createSessionHydrationApplyQueue<PendingSessionPublication>({
+      // Reuse the list hydration owner's configured publication window. Completed
+      // rows wait only for this window, never for unrelated unfinished reads.
+      flushDelayMs: loadSyncTuning().sessionListBackgroundHydrationApplyFlushDelayMs,
+      apply: batch => {
+        for (const entry of batch) {
+          // A withdrawn witness may need a fresh read. It cannot hold another
+          // completed row behind that read; ready rows share the same scheduler.
+          entry.ensureCurrent().then(() => ready.enqueue(entry), entry.reject);
+        }
+      },
+    });
+    hydrationPublications.set(applySessions, queue);
+  }
+  const publicationQueue = queue;
+  return new Promise((resolve, reject) => publicationQueue.enqueue({
+    session: params.session, isCurrent: params.isCurrent, ensureCurrent: params.ensureCurrent,
+    getExistingSession: params.getExistingSession, resolve, reject,
+  }));
+}
 
 /** Transport inputs only; the ordinary Session reader still admits and opens each row. */
 export type SessionByIdPrefetchedRead = Readonly<{
@@ -215,7 +285,7 @@ async function fetchSessionTurnsProjection(params: Readonly<{
  * bytes. This content state does not establish whether the Session belongs in a visible list;
  * that remains a separate visibility decision.
  */
-function applyLockedSessionShell(params: Readonly<{
+async function applyLockedSessionShell(params: Readonly<{
   row: V2SessionByIdResponse['session'];
   sessionId: string;
   serverId?: string | null;
@@ -224,18 +294,20 @@ function applyLockedSessionShell(params: Readonly<{
   sessionDataKeyHydration: SessionDataKeyHydrationResult;
   applySessions: (sessions: Array<Omit<Session, 'presence'> & { presence?: 'online' | number }>) => void;
   getExistingSession?: (sessionId: string) => Session | null | undefined;
+  isCurrent: () => boolean;
+  ensureCurrent: () => Promise<void>;
   includeMetadataTupleMutationSnapshot: boolean;
   ownerMetadataView?: Session['ownerMetadataView'];
   // The owner's metadata could not be opened: install the same locked shell the
   // list path installs (one executor for this outcome, see cp-c2).
   ownerMetadataUnavailable?: boolean;
-}>): {
+}>): Promise<{
   ok: boolean;
   session: HydratedSessionById | Session | null;
   sessionDataKeyHydration?: SessionDataKeyHydrationResult;
   metadataTupleMutationSnapshot?: HydratedSessionMetadataTupleMutationSnapshot | null;
   errorCode?: string;
-} {
+}> {
   const {
     ownerMetadata: _ownerMetadataEnvelope,
     ...rowWithoutOwnerMetadata
@@ -267,7 +339,15 @@ function applyLockedSessionShell(params: Readonly<{
   const sessionToApply = params.ownerMetadataUnavailable
     ? buildSessionOwnerMetadataUnavailableShell(lockedSession)
     : lockedSession;
-  params.applySessions([sessionToApply as unknown as Omit<Session, 'presence'> & { presence?: 'online' | number }]);
+  const applied = await publishHydratedSession({
+    session: sessionToApply as unknown as SessionPublication,
+    applySessions: params.applySessions,
+    getExistingSession: params.getExistingSession,
+    ensureCurrent: params.ensureCurrent,
+    isCurrent: () => params.isCurrent()
+      && isStoredSessionInResponseScope(params.getExistingSession?.(params.sessionId), sessionToApply),
+  });
+  if (!applied) return { ok: false, session: null, errorCode: 'stale_response' };
   return {
     ok: true,
     session: (params.getExistingSession?.(params.sessionId) ?? sessionToApply) as HydratedSessionById,
@@ -658,6 +738,8 @@ export async function fetchAndApplySessionById(params: Readonly<{
       sessionDataKeyHydration: hydration,
       applySessions: params.applySessions,
       getExistingSession: params.getExistingSession,
+      isCurrent: isHydrationCurrent,
+      ensureCurrent: ensureAccountCurrentness,
       includeMetadataTupleMutationSnapshot: params.includeMetadataTupleMutationSnapshot === true,
       ownerMetadataView: lockedOwnerVisibility,
     });
@@ -673,6 +755,8 @@ export async function fetchAndApplySessionById(params: Readonly<{
     row, sessionId, serverId: params.serverId, encryptionMode, contentAvailability,
     sessionDataKeyHydration: hydration, applySessions: params.applySessions,
     getExistingSession: params.getExistingSession,
+    isCurrent: isHydrationCurrent,
+    ensureCurrent: ensureAccountCurrentness,
     includeMetadataTupleMutationSnapshot: params.includeMetadataTupleMutationSnapshot === true,
     ownerMetadataUnavailable: true,
   });
@@ -738,6 +822,8 @@ export async function fetchAndApplySessionById(params: Readonly<{
       sessionDataKeyHydration: hydration,
       applySessions: params.applySessions,
       getExistingSession: params.getExistingSession,
+      isCurrent: isHydrationCurrent,
+      ensureCurrent: ensureAccountCurrentness,
       includeMetadataTupleMutationSnapshot: params.includeMetadataTupleMutationSnapshot === true,
       ownerMetadataView: lockedOwnerVisibility,
     });
@@ -944,9 +1030,16 @@ export async function fetchAndApplySessionById(params: Readonly<{
   await ensureAccountCurrentness();
   if (!isStoredSessionInResponseScope(previousSession, nextSession)) return staleResult();
   if (!isHydrationCurrent()) return staleResult();
-  params.applySessions([nextSession]);
+  const applied = await publishHydratedSession({
+    session: nextSession,
+    applySessions: params.applySessions,
+    getExistingSession: params.getExistingSession,
+    ensureCurrent: ensureAccountCurrentness,
+    isCurrent: () => isHydrationCurrent()
+      && isStoredSessionInResponseScope(params.getExistingSession?.(sessionId), nextSession),
+  });
+  if (!applied) return staleResult();
   const appliedSession = params.getExistingSession?.(sessionId) ?? nextSession;
-  reportNewAgentRequestsFromSessionTransition(previousSession, appliedSession);
 
   return {
     ok: true,

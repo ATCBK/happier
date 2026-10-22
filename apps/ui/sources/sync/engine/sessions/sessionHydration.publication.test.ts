@@ -75,6 +75,100 @@ afterEach(() => {
 });
 
 describe('Session hydration publication', () => {
+    it('publishes concurrent by-ID hydration completions together before their reads resolve', async () => {
+        const { row, params } = await createHydrationContext();
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        const ids = Array.from({ length: 6 }, (_, index) => `concurrent-hydration-${index}`);
+        const publications: string[][] = [];
+        const unsubscribe = storage.subscribe((next, previous) => {
+            if (next.sessions !== previous.sessions) publications.push(Object.keys(next.sessions));
+        });
+        try {
+            const results = await Promise.all(ids.map(id => fetchAndApplySessionById({
+                ...params, sessionId: id, includeTurnsProjection: false,
+                request: async () => jsonResponse({ session: { ...row, id } }),
+            }).then(result => {
+                expect(result.ok).toBe(true);
+                expect(result.session).toBe(storage.getState().sessions[id]);
+                return result;
+            })));
+            expect(results).toHaveLength(ids.length);
+            expect(publications).toHaveLength(1);
+            expect([...publications[0]].sort()).toEqual([...ids].sort());
+        } finally {
+            unsubscribe();
+        }
+    });
+
+    it('rechecks a retired exact reader before its queued publication and lets the next reader recover', async () => {
+        const { row, params } = await createHydrationContext();
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        const scheduled = createDeferred<VoidFunction>();
+        const microtask = vi.spyOn(globalThis, 'queueMicrotask').mockImplementationOnce(callback => scheduled.resolve(callback));
+        const controller = new AbortController();
+        const publications = vi.fn();
+        const unsubscribe = storage.subscribe(publications);
+        try {
+            const hydration = fetchAndApplySessionById({
+                ...params, sessionId, includeTurnsProjection: false, signal: controller.signal,
+                prefetched: { detail: { status: 200, body: { session: row } } },
+                request: async () => jsonResponse({ session: row }),
+            });
+            const publish = await scheduled.promise;
+            controller.abort();
+            publish();
+            expect(await hydration).toMatchObject({ ok: false, errorCode: 'stale_response' });
+            expect(storage.getState().sessions[sessionId]).toBeUndefined();
+            expect(publications).not.toHaveBeenCalled();
+            microtask.mockRestore();
+            const recovered = await fetchAndApplySessionById({
+                ...params, sessionId, includeTurnsProjection: false,
+                request: async () => jsonResponse({ session: row }),
+            });
+            expect(recovered.ok).toBe(true);
+            expect(recovered.session).toBe(storage.getState().sessions[sessionId]);
+            expect(publications).toHaveBeenCalledTimes(1);
+        } finally {
+            microtask.mockRestore();
+            unsubscribe();
+        }
+    });
+
+    it('publishes a completed exact read without waiting for an unrelated slow read', async () => {
+        const { row, params } = await createHydrationContext();
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        const slowResponse = createDeferred<Response>();
+        const slowId = 'slow-hydration';
+        const slow = fetchAndApplySessionById({
+            ...params, sessionId: slowId, includeTurnsProjection: false,
+            request: () => slowResponse.promise,
+        });
+        try {
+            const fast = await fetchAndApplySessionById({
+                ...params, sessionId, includeTurnsProjection: false,
+                request: async () => jsonResponse({ session: row }),
+            });
+            expect(fast.ok).toBe(true);
+            expect(fast.session).toBe(storage.getState().sessions[sessionId]);
+            expect(storage.getState().sessions[slowId]).toBeUndefined();
+        } finally {
+            slowResponse.resolve(jsonResponse({ session: { ...row, id: slowId } }));
+            expect((await slow).ok).toBe(true);
+        }
+    });
+
+    it('keeps competing Homes for the same Session id from entering one publication', async () => {
+        const { row, params } = await createHydrationContext();
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        const results = await Promise.all(['home-a', 'home-b'].map(home => fetchAndApplySessionById({
+            ...params, serverId: home, sessionId, includeTurnsProjection: false,
+            request: async () => jsonResponse({ session: row }),
+        })));
+        expect(results.filter(result => result.ok)).toHaveLength(1);
+        expect(results.filter(result => !result.ok)).toMatchObject([{ errorCode: 'stale_response' }]);
+        expect(results.find(result => result.ok)?.session).toBe(storage.getState().sessions[sessionId]);
+    });
+
     it('excludes a plaintext wire title from parsed HTTP hydration and list publication', async () => {
         const { row, params } = await createHydrationContext();
         const wireTitle = 'Untrusted plaintext wire title';

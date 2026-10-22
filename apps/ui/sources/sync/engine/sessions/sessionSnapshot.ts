@@ -63,6 +63,7 @@ import {
     type SessionListPageSource,
 } from './sessionHttpCompat';
 import { orderRowsForSessionListHydration } from './sessionListHydrationPriority';
+import { createSessionHydrationApplyQueue, type HydrationApplyFlushReason } from './sessionHydrationApplyQueue';
 import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
 import {
@@ -120,7 +121,6 @@ export type SessionListFetchResult = Readonly<{
      */
     metadataUpgradeRequiredCount?: number;
 }>;
-type HydrationApplyFlushReason = 'size' | 'timer' | 'required' | 'final' | 'manual';
 type CurrentSessionListRenderableLookup = (sessionId: string) => SessionListRenderableSession | null | undefined;
 type HydratedSessionApplyBatcherStats = Readonly<{
     appliedRows: number;
@@ -1230,42 +1230,27 @@ function createHydratedSessionApplyBatcher(params: {
 } {
     const batchSize = Math.max(1, Math.trunc(params.batchSize));
     const flushDelayMs = Math.max(0, Math.trunc(params.flushDelayMs));
-    let pending: HydratedSession[] = [];
     let pendingRequiredRows = 0;
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    let flushTimerReason: HydrationApplyFlushReason | null = null;
     let firstQueuedAtMs: number | null = null;
     let appliedRows = 0;
     let staleSkippedRows = 0;
 
-    const clearFlushTimer = (): void => {
-        if (!flushTimer) return;
-        clearTimeout(flushTimer);
-        flushTimer = null;
-        flushTimerReason = null;
-    };
-
-    const flush = (reason: HydrationApplyFlushReason = 'manual'): void => {
-        clearFlushTimer();
-        if (pending.length === 0) return;
+    const apply = (batch: HydratedSession[], reason: HydrationApplyFlushReason): void => {
         if (!params.shouldContinue()) {
             syncPerformanceTelemetry.count('sync.sessions.snapshot.hydrationApply.cancelled', {
-                sessions: pending.length,
+                sessions: batch.length,
                 requiredRows: pendingRequiredRows,
-                backgroundRows: countBackgroundRows(pending.length, pendingRequiredRows),
+                backgroundRows: countBackgroundRows(batch.length, pendingRequiredRows),
                 batchSize,
                 flushDelayMs,
             });
-            pending = [];
             pendingRequiredRows = 0;
             firstQueuedAtMs = null;
             return;
         }
 
-        const batch = pending;
         const batchRequiredRows = pendingRequiredRows;
         const queuedAtMs = firstQueuedAtMs;
-        pending = [];
         pendingRequiredRows = 0;
         firstQueuedAtMs = null;
         const queueWaitMs = queuedAtMs == null ? 0 : Math.max(0, nowMs() - queuedAtMs);
@@ -1310,48 +1295,32 @@ function createHydratedSessionApplyBatcher(params: {
         staleSkippedRows += batch.length - appliedSessions.length;
     };
 
-    const scheduleFlush = (delayMs = flushDelayMs, reason: HydrationApplyFlushReason = 'timer'): void => {
-        if (flushTimer) {
-            if (reason !== 'size' || flushTimerReason === 'size') return;
-            clearFlushTimer();
-        }
-        flushTimerReason = reason;
-        flushTimer = setTimeout(() => flush(reason), delayMs);
-    };
+    const queue = createSessionHydrationApplyQueue({
+        apply, batchSize, flushDelayMs,
+        flushRequiredRowsImmediately: () => pendingRequiredRows > 0 && params.coalesceRequiredRows !== true,
+        coalesceRequiredRows: () => pendingRequiredRows > 0 && params.coalesceRequiredRows === true,
+    });
 
     return {
         enqueue: (session, options) => {
             if (!params.shouldContinue()) return;
-            if (pending.length === 0) {
+            if (queue.getPendingCount() === 0) {
                 firstQueuedAtMs = nowMs();
             }
-            pending.push(session);
             const requiredRows = options?.required === true ? 1 : 0;
             pendingRequiredRows += requiredRows;
             syncPerformanceTelemetry.count('sync.sessions.snapshot.hydrationApply.enqueue', {
                 sessions: 1,
-                pending: pending.length,
+                pending: queue.getPendingCount() + 1,
                 batchSize,
                 flushDelayMs,
                 required: requiredRows,
                 requiredRows,
                 backgroundRows: requiredRows === 1 ? 0 : 1,
             });
-            if (pending.length >= batchSize) {
-                if (pendingRequiredRows > 0) {
-                    if (params.coalesceRequiredRows === true) {
-                        scheduleFlush();
-                    } else {
-                        flush('size');
-                    }
-                    return;
-                }
-                scheduleFlush(flushDelayMs, 'size');
-                return;
-            }
-            scheduleFlush();
+            queue.enqueue(session);
         },
-        flush,
+        flush: queue.flush,
         getStats: () => ({
             appliedRows,
             staleSkippedRows,

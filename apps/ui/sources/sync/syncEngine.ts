@@ -3164,7 +3164,7 @@ class Sync {
                             sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                             activeRequest: this.requestViaConfiguredSocket,
                             activeReadTransport: this.createAppliedReadTransport(appliedTarget),
-                            applySessions: sessions => this.applySessions(sessions),
+                            applySessions: this.applySessions,
                             log,
                             isCurrent: isDraftScopeCurrent,
                         });
@@ -4119,7 +4119,7 @@ class Sync {
                         activeRequest: this.requestViaConfiguredSocket,
                         activeReadTransport: this.createAppliedReadTransport(appliedTransportTarget),
                         getExistingSession: readHydrationSession,
-                        applySessions: (sessions) => this.applySessions(sessions),
+                        applySessions: this.applySessions,
                         log,
                         includeTurnsProjection,
                         authority: options?.authority,
@@ -7157,6 +7157,16 @@ class Sync {
             ...(options?.requiredHydrationSessionIds ?? []),
             ...organizationPinnedSessionIds,
         ]));
+        const applyRequiredHydrationSessions: typeof this.applySessions = (sessions) => {
+            if (!shouldContinue()) return;
+            this.applySessions(sessions.filter((session) => {
+                const currentRenderable = activeServerId
+                    ? storage.getState().sessionListRowsByServerId[activeServerId]?.[session.id]
+                    : null;
+                return !currentRenderable
+                    || isHydratedSessionCurrentForListState(session, () => currentRenderable);
+            }));
+        };
         const hydrateRequiredSession = async (
             sessionId: string,
             accountCurrentness: Awaited<ReturnType<typeof fetchAccountEncryptionCurrentness>> | undefined,
@@ -7174,16 +7184,8 @@ class Sync {
                 activeReadTransport: this.createAppliedReadTransport(appliedTransportTarget),
                 accountCurrentness,
                 getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
-                applySessions: (sessions) => {
-                    if (!shouldContinue()) return;
-                    this.applySessions(sessions.filter((session) => {
-                        const currentRenderable = activeServerId
-                            ? storage.getState().sessionListRowsByServerId[activeServerId]?.[session.id]
-                            : null;
-                        return !currentRenderable
-                            || isHydratedSessionCurrentForListState(session, () => currentRenderable);
-                    }));
-                },
+                applySessions: applyRequiredHydrationSessions,
+                isCurrent: shouldContinue,
                 log,
                 includeTurnsProjection: false,
             });
@@ -13178,7 +13180,7 @@ class Sync {
     /** Retained older availability belongs to the cursor, not a mounted list's lifetime. */
     getSessionOlderMessagesAvailability(sessionId: string): boolean | null {
         if (this.getSessionTargetWindowState(sessionId).isWindowMode) return null;
-        const fork = getForkedTranscriptSnapshotCached(storage.getState(), sessionId);
+        const fork = getForkedTranscriptSnapshotCached(storage.getState(), sessionId, { textUpdates: false });
         if (fork) {
             return computeForkedTranscriptHasMoreOlder({
                 fork,
