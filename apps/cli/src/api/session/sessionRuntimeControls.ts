@@ -1,47 +1,24 @@
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 
-const runtimeControlKeys = [
-  'readPermissionHandler',
-  'readCodingPromptBehavior',
-  'readEffectiveInputConfiguration',
-  'readAppliedChildSelection',
-  'prepareRunTeamCredentialProviderBinding',
-  'withdrawWorkflowStepInput',
-  'refreshGoal',
-  'setGoal',
-  'clearGoal',
-  'listVendorPlugins',
-  'listSkills',
-  'startInlineReview',
-  'invalidateConnectedServiceAuthTransports',
-  'applyConnectedServiceAuthGeneration',
-  'readConnectedServiceRuntimeIdentity',
-  'enableUsageLimitWaitResume',
-  'cancelUsageLimitWaitResume',
-  'checkUsageLimitRecoveryNow',
-  'consumeUsageLimitResetCredit',
-  'clearTerminalComposer',
-  'interruptPendingInputAndRun',
-  'readActiveTurnInputId',
-  'cancelActiveTurn',
-  'handleUserMessage',
-  'preparePendingMessageComposerAdmission',
-  'acceptPendingMessageComposerAdmission',
-  'abandonPendingMessageComposerAdmission',
-] as const satisfies readonly (keyof SessionRuntimeControls)[];
+// These two controls belong to the client/transcript lifetime, not the host
+// generation. All other members come directly from the typed installed source.
+type ClientOwnedControl = 'wakePendingMaterialization' | 'preparePendingMessageComposerAdmission';
+type InstalledRuntimeControls = Omit<SessionRuntimeControls, ClientOwnedControl>;
+
+function installedRuntimeControls({
+  wakePendingMaterialization: _wake,
+  preparePendingMessageComposerAdmission: _admission,
+  ...controls
+}: SessionRuntimeControls): InstalledRuntimeControls {
+  return controls;
+}
 
 export function applySessionRuntimeControls(
   target: Partial<SessionRuntimeControls>,
   controls: SessionRuntimeControls | null,
 ): void {
-  for (const key of runtimeControlKeys) {
+  for (const key of Object.keys(installedRuntimeControls(target)) as (keyof InstalledRuntimeControls)[]) {
     delete target[key];
   }
-  if (!controls) return;
-  for (const key of runtimeControlKeys) {
-    const control = controls[key];
-    if (typeof control === 'function') {
-      target[key] = control as never;
-    }
-  }
+  if (controls) Object.assign(target, installedRuntimeControls(controls));
 }

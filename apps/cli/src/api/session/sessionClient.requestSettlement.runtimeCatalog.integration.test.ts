@@ -66,6 +66,40 @@ describe('ApiSessionClient exact request settlement recovery', () => {
   const clients: ApiSessionClient[] = [];
   const connectGates: ReturnType<typeof createDeferred>[] = [];
 
+  it('overlaps AgentState currentness and Session reads without committing before both are admitted', async () => {
+    const session = createOwnerSession({ id: 'withdrawal-read-overlap' });
+    const row = createOwnerRow(session);
+    serveSession(row);
+    const homeRead = vi.mocked(axios.get).getMockImplementation()!;
+    const currentnessStarted = createDeferred();
+    const releaseCurrentness = createDeferred();
+    let sessionReads = 0;
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') {
+        currentnessStarted.resolve();
+        await releaseCurrentness.promise;
+      }
+      if (path === `/v2/sessions/${session.id}`) sessionReads += 1;
+      return homeRead(url, options);
+    });
+    const connect = createDeferred();
+    const client = createClient(session, [createSocket()], { initialRegisteredSessionStateFieldMutations: [] }, connect);
+    const mutation = client.updateAgentState(state => ({ ...state, controlledByUser: true }));
+    try {
+      await currentnessStarted.promise;
+      // HTTP is held, not internal tuple/currentness logic. An independent
+      // Session read must progress while Account-mode admission is pending.
+      await vi.waitFor(() => expect(sessionReads).toBe(1));
+      expect(axios.patch).not.toHaveBeenCalled();
+      expect(client.getAgentStateSnapshot()?.controlledByUser).not.toBe(true);
+    } finally {
+      releaseCurrentness.resolve();
+      await mutation;
+    }
+    expect(client.getAgentStateSnapshot()?.controlledByUser).toBe(true);
+  });
+
   function createSocket(options: Parameters<typeof createApiSessionSocketStub>[0] = {}) {
     const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1', committedFenceMs: 1_000 });
     const transcript = createSessionTranscriptHomeStub();

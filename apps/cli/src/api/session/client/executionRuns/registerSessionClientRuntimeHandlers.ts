@@ -56,7 +56,7 @@ import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { createExecutionRunRpcApprovalDeps } from '@/rpc/handlers/executionRuns/createExecutionRunRpcApprovalDeps';
 import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
-import { createExecutionRunManagedProviderEndpointPreparer } from '@/agent/runtime/bridges/executionRun/runtime/managedProvider';
+import { createExecutionRunManagedProviderEndpointPreparer, type ExecutionRunManagedProviderEndpointPreparer } from '@/agent/runtime/bridges/executionRun/runtime/managedProvider';
 import { createRunnerManagedProviderRunSourceOpener } from '@/agent/runtime/session/process/runnerManagedProviderConsumerAccess';
 import type { ResolveManagedProviderPurposeBindingIntent } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
@@ -368,26 +368,32 @@ export function registerSessionClientRuntimeHandlers(
     const resolveOwnerAccountSettings = async (): Promise<AccountSettings | null> => {
         return (await resolveOwnerAccountSettingsSnapshot())?.settings ?? null;
     };
-    const managedRunServices = params.sessionRuntimeControls?.managedProviderRunServices;
-    const resolveManagedPurposeBindingIntent: ResolveManagedProviderPurposeBindingIntent | undefined = managedRunServices
-        ? async input => {
-            const snapshot = await resolveOwnerAccountSettingsSnapshot({ signal: input.signal });
-            if (!snapshot?.scopeKey || !await ownerAccountIsCurrent()) throw createProviderErrorV1('provider_authorization_changed', {});
-            const result = await managedRunServices.resolvePurpose({ ...input, serviceRefs: [...input.serviceRefs],
-                expectedAccountSettingsScopeKey: snapshot.scopeKey });
-            input.signal.throwIfAborted();
-            if (!await ownerAccountIsCurrent()) throw createProviderErrorV1('provider_authorization_changed', {});
-            return result.binding;
-        }
-        : undefined;
-    const prepareManagedEndpoint = managedRunServices && resolveManagedPurposeBindingIntent && runtimeAccountId
-        ? createExecutionRunManagedProviderEndpointPreparer({ machineId: sessionMachineId, accountId: runtimeAccountId,
+    const readManagedRunServices = () => disposed ? undefined : params.sessionRuntimeControls?.managedProviderRunServices;
+    const resolveManagedPurposeBindingIntent: ResolveManagedProviderPurposeBindingIntent = async input => {
+        const managedRunServices = readManagedRunServices();
+        if (!managedRunServices) throw createProviderErrorV1('provider_authorization_changed', {});
+        const snapshot = await resolveOwnerAccountSettingsSnapshot({ signal: input.signal });
+        const isCurrent = async () => await ownerAccountIsCurrent() && readManagedRunServices() === managedRunServices;
+        if (!snapshot?.scopeKey || !await isCurrent()) throw createProviderErrorV1('provider_authorization_changed', {});
+        const result = await managedRunServices.resolvePurpose({ ...input, serviceRefs: [...input.serviceRefs],
+            expectedAccountSettingsScopeKey: snapshot.scopeKey });
+        input.signal.throwIfAborted();
+        if (!await isCurrent()) throw createProviderErrorV1('provider_authorization_changed', {});
+        return result.binding;
+    };
+    const prepareManagedEndpoint: ExecutionRunManagedProviderEndpointPreparer = async input => {
+        const managedRunServices = readManagedRunServices();
+        if (!managedRunServices || !runtimeAccountId) throw createProviderErrorV1('provider_authorization_changed', {});
+        // A retained endpoint belongs to the services that opened it. Replacement
+        // must withdraw that authority rather than switch its reads to a new owner.
+        const isOwnerCurrent = async () => await ownerAccountIsCurrent() && readManagedRunServices() === managedRunServices;
+        return await createExecutionRunManagedProviderEndpointPreparer({ machineId: sessionMachineId, accountId: runtimeAccountId,
             readAccountSettingsSnapshot: resolveOwnerAccountSettingsSnapshot,
             resolveManagedPurposeBindingIntent,
-            openSource: createRunnerManagedProviderRunSourceOpener({ services: managedRunServices, isOwnerCurrent: ownerAccountIsCurrent }),
-        })
-        : undefined;
-    const readCodingPromptBehavior = () => params.sessionRuntimeControls?.readCodingPromptBehavior?.() ?? null;
+            openSource: createRunnerManagedProviderRunSourceOpener({ services: managedRunServices, isOwnerCurrent }),
+        })(input);
+    };
+    const readCodingPromptBehavior = () => disposed ? null : params.sessionRuntimeControls?.readCodingPromptBehavior?.() ?? null;
     const readAppliedChildSelection = async (options?: Readonly<{ waitForReady?: boolean }>) => {
         if (options?.waitForReady && !params.sessionRuntimeControls?.readAppliedChildSelection && !disposed) {
             await params.waitForAppliedChildSelectionReader?.(runtimeControlsLifetime.signal);
@@ -408,6 +414,16 @@ export function registerSessionClientRuntimeHandlers(
     const permissionOwnerUnavailable = () => Object.assign(new Error('Session permission owner is unavailable'), {
         code: 'execution_run_interaction_unavailable',
     });
+    function readRuntimeCallback<Args extends unknown[], Result>(read: () => ((...args: Args) => Promise<Result>) | undefined) {
+        const callback = disposed ? undefined : read();
+        if (!callback) return undefined;
+        return async (...args: Args): Promise<Result> => {
+            if (disposed || read() !== callback) throw permissionOwnerUnavailable();
+            const result = await callback(...args);
+            if (disposed || read() !== callback) throw permissionOwnerUnavailable();
+            return result;
+        };
+    }
     const sessionInteractionHost = parentSessionForTools
         ? {
             session: parentSessionForTools,
@@ -415,25 +431,26 @@ export function registerSessionClientRuntimeHandlers(
             readOwnerAccountCredentials,
             readCodingPromptBehavior,
             readAppliedChildSelection,
-            ...(params.sessionRuntimeControls?.readReferenceAction
-                ? { readReferenceAction: params.sessionRuntimeControls.readReferenceAction } : {}),
+            get readReferenceAction() {
+                return readRuntimeCallback(() => params.sessionRuntimeControls?.readReferenceAction);
+            },
             get permissionHandler() {
                 const handler = disposed ? null : params.sessionRuntimeControls?.readPermissionHandler?.();
                 if (!handler) throw permissionOwnerUnavailable();
                 return handler;
             },
-            ...(typeof params.sessionRuntimeControls?.listSkills === 'function'
-                ? { listSkills: () => params.sessionRuntimeControls!.listSkills!() }
-                : {}),
-            ...(typeof params.sessionRuntimeControls?.listVendorPlugins === 'function'
-                ? { listVendorPlugins: () => params.sessionRuntimeControls!.listVendorPlugins!() }
-                : {}),
-            ...(typeof params.sessionRuntimeControls?.resolveComposerReference === 'function'
-                ? { resolveComposerReference: params.sessionRuntimeControls.resolveComposerReference }
-                : {}),
-            ...(typeof params.sessionRuntimeControls?.resolveComposerAttachmentForDispatch === 'function'
-                ? { resolveComposerAttachmentForDispatch: params.sessionRuntimeControls.resolveComposerAttachmentForDispatch }
-                : {}),
+            get listSkills() {
+                return readRuntimeCallback(() => params.sessionRuntimeControls?.listSkills);
+            },
+            get listVendorPlugins() {
+                return readRuntimeCallback(() => params.sessionRuntimeControls?.listVendorPlugins);
+            },
+            get resolveComposerReference() {
+                return readRuntimeCallback(() => params.sessionRuntimeControls?.resolveComposerReference);
+            },
+            get resolveComposerAttachmentForDispatch() {
+                return readRuntimeCallback(() => params.sessionRuntimeControls?.resolveComposerAttachmentForDispatch);
+            },
             prepareRunTeamCredentialProviderBinding: async ({ runId, agentId, selection: explicitSelection }: Readonly<{
                 runId: string;
                 agentId: string;
@@ -1055,8 +1072,8 @@ export function registerSessionClientRuntimeHandlers(
         readModelProjection: createAccountScopedProviderModelProjectionReader({ serverUrl: params.serverUrl,
             readCredentials: readOwnerAccountCredentials, readAccountSettingsSnapshot: resolveOwnerAccountSettingsSnapshot,
             isCurrent: ownerAccountIsCurrent }),
-        ...(resolveManagedPurposeBindingIntent ? { resolveManagedPurposeBindingIntent } : {}),
-        ...(prepareManagedEndpoint ? { prepareManagedEndpoint } : {}),
+        resolveManagedPurposeBindingIntent,
+        prepareManagedEndpoint,
         resolveAgentStartContext: async (context) => {
             // Public Session RPC carries role identity, never private admission
             // facts. Materialize them here from this exact Session/Home owner.

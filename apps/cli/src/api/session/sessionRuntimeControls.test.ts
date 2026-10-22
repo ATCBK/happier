@@ -4,6 +4,28 @@ import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applySessionRuntimeControls } from './sessionRuntimeControls';
 
 describe('applySessionRuntimeControls', () => {
+  it('publishes object services and every supplied runtime callback while preserving client-owned controls', async () => {
+    const wakePendingMaterialization = () => {};
+    const preparePendingMessageComposerAdmission: NonNullable<SessionRuntimeControls['preparePendingMessageComposerAdmission']> = async request => request;
+    const target: SessionRuntimeControls = { wakePendingMaterialization, preparePendingMessageComposerAdmission };
+    const services: NonNullable<SessionRuntimeControls['managedProviderRunServices']> = {
+      resolvePurpose: async input => ({ kind: 'provider_managed.purpose', binding: { purpose: input.purpose, target: input.target } }),
+      openBinding: async () => { throw new Error('No daemon binding in publication test'); },
+      readBinding: async () => { throw new Error('No daemon binding in publication test'); },
+      closeBinding: async () => {},
+    };
+    const readSkillDelivery = () => undefined;
+    const readReferenceAction = async () => ({ status: 'current' });
+    applySessionRuntimeControls(target, { managedProviderRunServices: services, readSkillDelivery, readReferenceAction });
+    expect(target.managedProviderRunServices).toBe(services);
+    expect(target.readSkillDelivery).toBe(readSkillDelivery);
+    await expect(target.readReferenceAction?.('workflow.definition.get', {})).resolves.toEqual({ status: 'current' });
+    applySessionRuntimeControls(target, { readSkillDelivery });
+    expect(target.managedProviderRunServices).toBeUndefined();
+    expect(target.readReferenceAction).toBeUndefined();
+    applySessionRuntimeControls(target, null);
+    expect(target).toEqual({ wakePendingMaterialization, preparePendingMessageComposerAdmission });
+  });
   it('installs the Team Run opener and removes it when its Session runtime retires', async () => {
     const target: Partial<SessionRuntimeControls> = {};
     const refusal = Object.assign(new Error('provider_binding_changed'), { code: 'provider_binding_changed' });
