@@ -317,7 +317,7 @@ import {
   requiresExactDaemonApprovalReplay,
   isSessionDiscussionApprovalPublicationV1,
   admitApprovalRequesterDecisionV1,
-  buildApprovalRequesterConfirmationV1,
+  resolveApprovalRequesterConfirmationV1,
   isApprovalRequesterConfirmationBoundToOriginV1,
   type ApprovalRequesterConfirmationV1,
   type ApprovalExecutionOriginCallerV1,
@@ -3487,6 +3487,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ...(args.retainedPublicProfilePreview ? { publicProfilePreviewResult: args.retainedPublicProfilePreview } : {}),
       ...(actionId !== null && (actionId === 'plugins.install'
         || requiresPresentUserExecutionAuthorityForActionInputV1(getActionSpec(actionId), replayInput))
+        && !(request.v === 2 && request.requesterConfirmation)
         && resolveHostStampedAuthority(args.ctx) === 'present_user'
         ? { authority: 'present_user' as const,
             ...(request.v === 2 && request.status === 'executing' && request.decision?.kind === 'approve'
@@ -4859,14 +4860,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
         if ('ok' in preparedApproval) return preparedApproval;
         const approvalActionArgs = preparedApproval.actionArgs;
-        const requesterConfirmation = sharedRequesterRequest
-          ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId, input: approvalActionArgs }) : null;
-        // An unknown cause still needs policy consent, but cannot name a
-        // requester Account. Keep its attribution unknown on the ordinary
-        // approval; only a known foreign requester requires this exact binding.
-        if (sharedRequesterRequest && ctx.actionRequestAttributionV1?.requester && !requesterConfirmation) {
-          return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
-        }
+        const requesterAdmission = resolveApprovalRequesterConfirmationV1({ context: ctx, actionId,
+          input: approvalActionArgs, required: sharedRequesterRequest });
+        if (!requesterAdmission.ok) return requesterAdmission;
+        const { requesterConfirmation } = requesterAdmission;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId,
           input: approvalActionArgs,
@@ -11066,11 +11063,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const approvalActionArgs = preparedApproval.actionArgs;
         const sharedRequesterRequest = !delegatesApprovalClassificationToResolvedAction(targetActionId)
           && isSharedRequesterActionV1(ctx);
-        const requesterConfirmation = sharedRequesterRequest
-          ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId: targetActionId, input: approvalActionArgs }) : null;
-        if (sharedRequesterRequest && ctx.actionRequestAttributionV1?.requester && !requesterConfirmation) {
-          return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
-        }
+        const requesterAdmission = resolveApprovalRequesterConfirmationV1({ context: ctx, actionId: targetActionId,
+          input: approvalActionArgs, required: sharedRequesterRequest });
+        if (!requesterAdmission.ok) return requesterAdmission;
+        const { requesterConfirmation } = requesterAdmission;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId: targetActionId,
           input: approvalActionArgs,

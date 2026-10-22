@@ -386,6 +386,19 @@ export function buildApprovalRequesterConfirmationV1(params: Readonly<{
   return parsed.success ? parsed.data : null;
 }
 
+/** Required requester consent never falls back to the executor's Account owner. */
+export function resolveApprovalRequesterConfirmationV1(params: Readonly<{
+  context?: ActionExecutorContext; actionId: ActionId; input: unknown; required: boolean;
+}>): Readonly<{ ok: true; requesterConfirmation: ApprovalRequesterConfirmationV1 | null }>
+  | Readonly<{ ok: false; errorCode: 'approval_requester_unavailable'; error: 'approval_requester_unavailable' }> {
+  if (!params.required) return { ok: true, requesterConfirmation: null };
+  const requesterConfirmation = params.context
+    ? buildApprovalRequesterConfirmationV1({ ...params, context: params.context }) : null;
+  return requesterConfirmation
+    ? { ok: true, requesterConfirmation }
+    : { ok: false, errorCode: 'approval_requester_unavailable', error: 'approval_requester_unavailable' };
+}
+
 export function isApprovalRequesterConfirmationBoundToOriginV1(
   subject: ApprovalRequesterConfirmationV1, origin: ApprovalExecutionOriginV1,
 ): boolean {

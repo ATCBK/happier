@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import tweetnacl from 'tweetnacl';
 
 import { ApprovalRequestV2Schema, type ApprovalRequest, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 
 import { createBlockingApprovalCoordinator } from './blockingApprovalCoordinator.js';
-import { computeActionInputApprovalDigestV1 } from './decisionAuthority.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
+import { buildApprovalRequesterConfirmationV1 } from '../approvals/approvalRequestV1.js';
+import { buildApprovalExecutionOriginV1 } from './actionExecutor.js';
+import { ExternalActionExecutionAuthorizationV1Schema } from './externalActionApi.js';
+import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from './externalActionExecutionAuthorization.js';
+import type { ActionExecutorContext } from './executor/types.js';
 
 function approvalRequest(overrides: Partial<ApprovalRequestV2> = {}): ApprovalRequestV2 {
   return ApprovalRequestV2Schema.parse({
@@ -47,20 +52,38 @@ describe('createBlockingApprovalCoordinator', () => {
   it.each(['builtin', 'target'] as const)('keeps $0 requester confirmation waiting for the host decision proof after a durable update', async family => {
     const coordinator = createBlockingApprovalCoordinator();
     const base = approvalRequest();
-    const builtin = approvalRequest({ requesterConfirmation: {
-      requestRef: 'request-bob', requesterAccountId: 'bob', executionAccountId: 'alice',
-      personaSessionRef: { serverId: 'server-1', sessionId: 'bot-session' },
-      inputDigest: computeActionInputApprovalDigestV1(base.actionId, base.actionArgs),
-    } });
     const targetInput = { title: 'Release' };
-    const request = family === 'builtin' ? builtin : TargetActionApprovalRequestV1Schema.parse({
+    const actionId = family === 'builtin' ? base.actionId : 'action.invoke';
+    const input = family === 'builtin' ? base.actionArgs : { action: { pluginId: 'acme.target', localId: 'run' }, input: targetInput };
+    const target = { kind: 'session' as const, sessionId: 'bot-session' };
+    // Home authorization is the transport boundary; build the signed subject
+    // with the real producers rather than an unsigned, invalid stored shape.
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-admitted-origin', binding: {
+      accountId: 'alice', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'stable-home', machineId: 'machine-1', installationId: 'installation-1', actionId,
+      requestId: 'request-bob', target,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'request-bob', target, input }),
+    } });
+    const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
+    const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+      runtimeAccountId: 'alice', serverId: 'server-1', serverIdentityId: 'stable-home', defaultSessionId: 'bot-session',
+      actionRequestId: 'request-bob', actionRequestAttributionV1: base.executionOriginV1.actionRequestAttributionV1,
+      externalActionTarget: target, externalActionExecutionAuthorization: authorization,
+      signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({ actionId: args.actionId, input: args.input,
+        target: args.target, authorizationToken: args.authorization.token, requesterConfirmation: args.requesterConfirmation,
+        privateKey: keys.secretKey }),
+    };
+    const requesterConfirmation = buildApprovalRequesterConfirmationV1({ context, actionId, input });
+    if (!requesterConfirmation) throw new Error('Expected requester confirmation');
+    const executionOriginV1 = buildApprovalExecutionOriginV1({ context, actionId, input, targetSessionId: 'bot-session', requesterConfirmation });
+    if (!executionOriginV1) throw new Error('Expected signed requester origin');
+    const request = family === 'builtin' ? approvalRequest({ executionOriginV1, requesterConfirmation }) : TargetActionApprovalRequestV1Schema.parse({
       v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.target/actions/run',
       input: targetInput, secretInputPaths: [], sourceCustody: { kind: 'development', registeredRootId: 'target-root' },
       policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64), summary: 'Release',
-      executionOriginV1: { ...builtin.executionOriginV1, surface: 'agent', actionId: 'action.invoke' },
-      requesterConfirmation: { ...builtin.requesterConfirmation,
-        inputDigest: computeActionInputApprovalDigestV1('action.invoke', { action: { pluginId: 'acme.target', localId: 'run' }, input: targetInput }) },
+      executionOriginV1,
+      requesterConfirmation,
     });
     const pending = coordinator.waitForDecision({ artifactId: 'requester-live', request });
     const approved = { ...request, status: 'approved' as const, updatedAtMs: 2,

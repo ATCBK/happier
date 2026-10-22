@@ -224,7 +224,7 @@ function sharedRequesterCurrentUiContext(input: unknown): ActionExecutorContext 
 }
 
 describe('createActionExecutor (approvals)', () => {
-  it.each(['policy', 'explicit'] as const)('keeps unknown requester attribution while awaiting ordinary %s consent', async route => {
+  it.each(['policy', 'explicit'] as const)('refuses unknown requester %s consent without falling back to the Bot owner', async route => {
     const requests: ApprovalRequest[] = [];
     const effects: ActionExecutorContext[] = [];
     const executor = createExecutor({
@@ -240,16 +240,78 @@ describe('createActionExecutor (approvals)', () => {
       ? await executor.execute('session.message.send', input, context)
       : await executor.execute('approval.request.create', { actionId: 'session.message.send', actionArgs: input,
         summary: 'Send message', createdBy: { surface: 'agent' } }, context);
-    expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { artifactId: 'unknown-requester' } });
-    expect(requests[0]).toMatchObject({ status: 'open', executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
-    expect(requests[0]).not.toHaveProperty('requesterConfirmation');
+    expect(created, JSON.stringify(created)).toMatchObject({ ok: false, errorCode: 'approval_requester_unavailable' });
+    expect(requests).toEqual([]);
     expect(effects).toEqual([]);
-    expect(await executor.execute('approval.request.decide', { artifactId: 'unknown-requester', decision: 'approve' }, {
-      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'server-1',
-      serverIdentityId: 'stable-home', runtimeAccountId: 'alice',
-    })).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(await executor.execute('session.message.send', input, { ...context,
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'session.message.send': ['agent'] } }) }))
+      .toMatchObject({ ok: true });
+    expect(requests).toEqual([]);
     expect(effects).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
+  });
+
+  it('keeps requester public-link confirmation blocked before any approval transition', async () => {
+    const actionId = 'artifact.public_link.create';
+    const actionArgs = getActionSpec(actionId).inputSchema.parse({ artifactId: '11111111-1111-4111-8111-111111111111' });
+    const requesterConfirmation = { requestRef: 'bob-input', requesterAccountId: 'bob',
+      personaSessionRef: { serverId: 'server-1', sessionId: 's1' }, executionAccountId: 'alice',
+      inputDigest: computeActionInputApprovalDigestV1(actionId, actionArgs) };
+    const executionOriginV1 = buildApprovalExecutionOriginV1({ actionId, input: actionArgs,
+      context: sharedRequesterContext(actionId, actionArgs), targetSessionId: 's1', requesterConfirmation });
+    if (!executionOriginV1) throw new Error('Expected signed public-link origin');
+    const request = ApprovalRequestV2Schema.parse({ ...createApprovalRequest(), actionId, actionArgs,
+      requestedSurface: 'agent', executionOriginV1, requesterConfirmation });
+    const transitions: ApprovalRequest[] = [];
+    const executor = createExecutor({ approvalsGet: async () => request,
+      approvalsUpdate: async ({ request }) => { transitions.push(request); return { ok: true }; } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'public-link-approval', decision: 'approve' }, {
+      surface: 'rpc', authority: 'present_user', runtimeAccountId: 'alice', requesterApprovalDecision: { sessionId: 's1',
+        actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true },
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(transitions).toEqual([]);
+    expect(request.status).toBe('open');
+  });
+
+  it.each([false, true])('keeps detached Run person authority separate from requester consent (shared requester: %s)', async shared => {
+    const actionId = 'execution.run.permission.respond';
+    const actionArgs = { runId: 'alice-run', requestId: 'alice-permission', approved: true };
+    const source = sharedRequesterContext(actionId, actionArgs);
+    const requests: ApprovalRequestV2[] = [];
+    const effects: ActionExecutorContext[] = [];
+    const executor = createExecutor({
+      // Artifact persistence and the detached Run process transport are boundaries.
+      approvalsCreate: async ({ request }) => { requests[0] = ApprovalRequestV2Schema.parse(request); return { artifactId: 'run-approval' }; },
+      approvalsGet: async () => requests[0] ?? null,
+      approvalsUpdate: async ({ request: next }) => {
+        const transition = decideApprovalRequestTransition(requests[0], next);
+        if (!transition.ok) return transition;
+        requests[0] = ApprovalRequestV2Schema.parse(next);
+        return { ok: true };
+      },
+      executionRunPermissionRespond: async (_input, context) => { effects.push(context); return { ok: true }; },
+    });
+    expect(await executor.execute(actionId, actionArgs,
+      shared ? source : { ...source, actionRequestAttributionV1: undefined }))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'run-approval' } });
+    expect(requests[0]).toMatchObject({ status: 'open', actionId, actionArgs,
+      ...(shared ? { requesterConfirmation: { requesterAccountId: 'bob', executionAccountId: 'alice' } } : {}) });
+    expect(effects).toEqual([]);
+    const result = await executor.execute('approval.request.decide', { artifactId: 'run-approval', decision: 'approve' }, {
+      surface: shared ? 'rpc' : 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+      serverId: 'server-1', serverIdentityId: 'stable-home', actionCaller: { kind: 'host' },
+      ...(shared ? { requesterApprovalDecision: { sessionId: 's1',
+        // Bob's proof grants invocation of this Bot only, not Alice's detached Run.
+        actor: { kind: 'accountUser' as const, accountId: 'bob', relationship: 'sharedApprover' as const },
+        isCurrent: async () => true } } : {}),
+    });
+    if (shared) {
+      expect(effects).toEqual([]);
+      expect(requests[0]).toMatchObject({ status: 'failed', execution: { ok: false, errorCode: 'present_user_required' } });
+    } else {
+      expect(result).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      expect(effects).toHaveLength(1);
+      expect(effects[0]).toMatchObject({ authority: 'present_user', runtimeAccountId: 'alice' });
+    }
   });
 
   it('defaults the admitted shared request outward effect to requester confirmation and respects its Action waiver', async () => {

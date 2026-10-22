@@ -8,7 +8,7 @@ import { actionInputIssueFailure } from '@happier-dev/protocol/actions/executor/
 import { randomUUID } from 'node:crypto';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent, pluginActionDeclarationRequiresConfirmationForInput } from '@happier-dev/protocol/plugins/actions/invocation';
-import { buildApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { resolveApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, MessageActionReferenceV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
@@ -859,9 +859,10 @@ export async function executeContributedAction(params: Readonly<{
           const projectedInput = projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? []);
           const retainedInput = { action: { pluginId: request.action.pluginId, localId: request.action.localId },
             input: projectedInput?.input ?? request.action.input };
-          const requesterConfirmation = sharedRequester && params.approvalContext
-            ? buildApprovalRequesterConfirmationV1({ context: params.approvalContext, actionId: 'action.invoke', input: retainedInput }) : null;
-          if (sharedRequester && !requesterConfirmation) return { status: 'unavailable', code: 'approval_requester_unavailable' };
+          const requesterAdmission = resolveApprovalRequesterConfirmationV1({ context: params.approvalContext,
+            actionId: 'action.invoke', input: retainedInput, required: sharedRequester });
+          if (!requesterAdmission.ok) return { status: 'unavailable', code: requesterAdmission.errorCode };
+          const { requesterConfirmation } = requesterAdmission;
           const originSurface = deferredSurface ?? (requestedSurface === 'plugin' ? 'plugin' : null);
           const executionOriginV1 = (!requesterConfirmation ? params.approvalExecutionOrigin : undefined) ?? (originSurface === null ? null : buildApprovalExecutionOriginV1({
             actionId: 'action.invoke',
