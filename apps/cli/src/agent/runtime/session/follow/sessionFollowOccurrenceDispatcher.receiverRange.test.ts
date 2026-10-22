@@ -2,7 +2,7 @@ import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
-import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createSessionFollowOccurrenceDispatcher } from './sessionFollowOccurrenceDispatcher';
 import { SessionFollowRuleSourceOccurrenceV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
 import { SessionFollowPersonalProgressRequestV1Schema, type SessionFollowPersonalProgressRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
@@ -16,6 +16,74 @@ import { logger } from '@/ui/logger';
 import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(['failed', 'completed', 'waiting', 'stalled'] as const)('dispatches a no-original manager Turn through receiver recovery (%s)', async status => {
+  const sourceSessionId = 'c111111111111111111111111';
+  const destinationSessionId = 'c222222222222222222222222';
+  const metadata = { machineId: 'machine', path: '/receiver', host: 'host', flavor: 'codex', codexSessionId: 'native-session',
+    runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } };
+  let running = false;
+  let held = false;
+  let delivered = SESSION_FOLLOW_ZERO_FRONTIER_V1;
+  const observation = () => ({ sourceSessionId, destinationSessionId, relation: 'manager' as const, attachedAt: 1,
+    policy: { preset: 'everything' as const }, delivered,
+    observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, turn: { id: 'source-turn', status } } });
+  const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
+    metadata: JSON.stringify(metadata), ownerAccountId: 'account-1', origin: { kind: 'none' }, seq: 0,
+    latestTurnId: 'source-turn', latestTurnStatus: status === 'stalled' ? 'in_progress' : status,
+    active: status !== 'stalled', activeAt: 0, pendingReviewRuns: 0 });
+  const destination = () => createSessionRecordFixture({ id: destinationSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
+    metadata: JSON.stringify({ ...metadata, ...(held ? { sessionExplicitStopV1: {
+      v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 1 } } : {}) }), active: false });
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200, data: { assigned: false, direct: false, team: false, group: false } };
+    if (path === `/v2/sessions/${sourceSessionId}`) return { status: 200, data: { session: source } };
+    if (path === `/v2/sessions/${destinationSessionId}`) return { status: 200, data: { session: destination() } };
+    if (path.endsWith('/messages')) return { status: 200, data: { messages: [], hasMore: false } };
+    if (path.endsWith('/execution-runs')) return { status: 200, data: { runs: [] } };
+    return { status: 404, data: {} };
+  });
+  const writes = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    if (new URL(String(url)).pathname === '/v3/automations/runs/workflow-storage') {
+      expect(body).toMatchObject({ operation: 'list' });
+      return { status: 200, data: { runs: [], nextCursor: null } };
+    }
+    expect(new URL(String(url)).pathname).toBe(`/v2/sessions/${destinationSessionId}/follows/inactive-observations`);
+    return { status: 200, data: { ok: true, v: 1, sessionId: destinationSessionId,
+      target: { homeId: 'home', accountId: 'account-1', sessionId: destinationSessionId, machineId: 'machine', installationId: 'installation' },
+      currentSourceSessionIds: [sourceSessionId], observations: [observation()] } };
+  });
+  const spawn = vi.fn(async () => ({ type: 'success' as const, sessionId: destinationSessionId }));
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://turn-follow.test',
+    machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {},
+    isSessionAlreadyRunning: async () => running, spawnSession: spawn,
+    resolveSourceKeyContext: async () => ({ serverIdentityId: 'home', authority: 'account_automation', surface: 'api' }),
+    isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+  const recover = () => dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [observation()] });
+  try {
+    held = true;
+    await recover();
+    expect(spawn).not.toHaveBeenCalled();
+    held = false;
+    running = true;
+    await recover();
+    expect(spawn).not.toHaveBeenCalled();
+    running = false;
+    await recover();
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ existingSessionId: destinationSessionId }));
+    expect(writes.mock.calls.filter(([url]) => String(url).endsWith('/pending'))).toEqual([]);
+    delivered = observation().observed;
+    spawn.mockClear();
+    await recover();
+    expect(spawn).not.toHaveBeenCalled();
+  } finally { dispatcher.dispose(); }
+});
 
 it.each(['rules', 'source_ranges'] as const)('identifies a pending and refused range rule read without exposing private source or Account content (%s)', async phase => {
   const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});

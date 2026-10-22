@@ -204,17 +204,24 @@ it.each([
           trackedSession: tracked, isCurrent: async () => true });
         expect(refused).toMatchObject({ ok: false });
         expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(refused)).toEqual(refused);
+        if (failureReason === 'admission_refused') {
+          expect(refused).toMatchObject({ error: { cause: { code: 'session_not_active' } } });
+        }
         expect(JSON.stringify(refused)).not.toContain(failureReason);
         const records = warning.mock.calls.flatMap(([label]) => {
           try { return [JSON.parse(label) as { kind?: string; reason?: string }]; } catch { return []; }
         });
         for (const kind of ['runner_managed_provider_start_refused', 'runner_plugin_services_dispatch_refused']) {
           expect.soft(records.filter(record => record.kind === kind)).toContainEqual(expect.objectContaining({ kind, reason: failureReason,
+            ...(failureReason === 'admission_refused' ? { admissionReasonCode: 'session_not_active' } : {}),
+            ...(failureReason === 'broker_open_refused' ? { admissionReasonCode: 'broker_unavailable' } : {}),
             ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403, discoveryCause: 'http_response' } : {}),
           }));
         }
         expect(warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused')).toEqual([
           ['[ProviderBroker] Account connection open refused', { reason: failureReason,
+            ...(failureReason === 'admission_refused' ? { admissionReasonCode: 'session_not_active' } : {}),
+            ...(failureReason === 'broker_open_refused' ? { admissionReasonCode: 'broker_unavailable' } : {}),
             ...(failureReason === 'endpoint_discovery_failed' ? { httpStatus: 403, discoveryCause: 'http_response' } : {}),
           }],
         ]);

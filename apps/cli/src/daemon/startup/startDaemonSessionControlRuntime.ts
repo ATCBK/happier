@@ -17018,7 +17018,7 @@ export async function startDaemonSessionControlRuntime(
           installationId: installation.installationId, signal, rulesCache: requester.sessionFollowRuleCache,
           isCurrent: async () => !isRuntimePublicationQuiescing() && await requester.isCurrent(signal),
           subscribeInvalidation: bootstrap.subscribeSessionFollowRules,
-          spawnSession: spawnSessionForInternalResume, resolveServerFeaturesSnapshot,
+          spawnSession: spawnSessionForInternalResume, isSessionAlreadyRunning, resolveServerFeaturesSnapshot,
           resolveSourceKeyContext: async () => {
             const origin = await createCurrentMachineExecutionOriginContextResolver({ serverUrl: bootstrap.serverHttpBaseUrl,
               resolveCurrentMachineId: () => params.machineId })(signal);
@@ -17071,7 +17071,7 @@ export async function startDaemonSessionControlRuntime(
           installationId: installation.installationId, signal,
           isCurrent,
           subscribeInvalidation: listener => machine.onSessionFollowRulesChanged(listener),
-          spawnSession: spawnSessionForInternalResume, resolveServerFeaturesSnapshot,
+          spawnSession: spawnSessionForInternalResume, isSessionAlreadyRunning, resolveServerFeaturesSnapshot,
           resolveSourceKeyContext: async () => {
             const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
             return origin?.machineId === params.machineId && await account.isCurrent?.()

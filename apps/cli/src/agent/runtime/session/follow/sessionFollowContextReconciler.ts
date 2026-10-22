@@ -65,17 +65,28 @@ export function shouldWakeForSessionFollowObservation(
     && wakes({ kind: 'person_wrote' })) return true;
   if (source.recentMessages.some(message => message.event?.kind === 'goal_changed')
     && wakes({ kind: 'goal_changed' })) return true;
-  if (source.workerUpdate) {
-    const kind = classifyWorkerUpdateEventV1(source.workerUpdate);
-    if (kind !== null && wakes(kind === 'needs_you'
-      ? { kind, type: source.awareness.operational.primary === 'permission_required' ? 'approval'
-        : source.awareness.operational.reasons.includes('blocked_input') ? 'blocked' : 'decision' }
-      : { kind })) return true;
-  }
+  if (shouldWakeForSessionFollowWorkerUpdate(observation, source)) return true;
   // A message may wake only through an explicit Custom choice. Proven human
   // ingress is classified above, never inferred from a role or missing provenance.
   return source.recentMessages.some(message => !message.event && !isAuthoritativeHumanSessionFollowMessageV1(message))
     && wakes({ kind: 'message' });
+}
+
+/** Turn-only intake must select the worker outcome itself, never unrelated transcript ingress. */
+export function shouldWakeForSessionFollowWorkerUpdate(
+  observation: SessionFollowPendingObservationV1,
+  source: SessionFollowUpdateEnvelopeV1 & Partial<Pick<SessionFollowHydratedUpdate, 'workerUpdate'>>,
+): boolean {
+  if ('kind' in observation || !source.workerUpdate || source.reason === 'source_unavailable'
+    || !isSessionAwarenessContentReadableV1(source.awareness.encryption)
+    || source.edge.sourceSessionId !== observation.sourceSessionId
+    || source.edge.destinationSessionId !== observation.destinationSessionId
+    || source.awareness.sessionId !== observation.sourceSessionId) return false;
+  const kind = classifyWorkerUpdateEventV1(source.workerUpdate);
+  return kind !== null && resolveFollowDeliveryV1({ policies: [observation.policy], event: kind === 'needs_you'
+    ? { kind, type: source.awareness.operational.primary === 'permission_required' ? 'approval'
+      : source.awareness.operational.reasons.includes('blocked_input') ? 'blocked' : 'decision' }
+    : { kind } }).session.wake;
 }
 
 export type SessionFollowPreparedContext = Readonly<{

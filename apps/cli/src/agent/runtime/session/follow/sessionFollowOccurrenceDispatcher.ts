@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { randomUUID } from 'node:crypto';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { evaluateSessionFollowRuleOccurrenceV1, type SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
 import { resolveFollowDeliveryV1, isFollowPolicyEqualV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
@@ -34,7 +35,13 @@ import { createSessionFollowSourceKeyPreparationAfterSet } from './createSession
 import { submitAccountFollowPersonalProgress } from '@/api/sessionFollowPersonalProgressTransport';
 import { openSessionStateValue } from '@happier-dev/sync-client';
 import { AgentStateSchema } from '@happier-dev/session-core/state';
-import { decryptSessionPayload, encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { decryptSessionPayload, encryptSessionPayload, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { fetchInactiveSessionFollowObservations } from '@/session/transport/http/sessionFollowInactiveObservationsHttp';
+import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
+import { isSessionFollowFrontierEqualV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
+import { createSessionFollowSourceHydrator } from './sessionFollowSourceHydrator';
+import { shouldWakeForSessionFollowWorkerUpdate } from './sessionFollowContextReconciler';
 import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEvent } from '@/agent/permissions/activeForegroundRequests';
 import { captureSemanticSessionFollowRuleSourceEvidence } from './sessionFollowRuleSourceEvidence';
 import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
@@ -61,6 +68,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   /** Borrowed from the already-retained requester Account lifetime, never an installed Account substitute. */
   rulesCache?: ReturnType<typeof createAccountSessionFollowRuleCache>;
   spawnSession?: Parameters<typeof sendSessionMessage>[0]['spawnSession'];
+  isSessionAlreadyRunning?: (sessionId: string) => Promise<boolean>;
   resolveServerFeaturesSnapshot?: () => Promise<Parameters<typeof sendSessionMessage>[0]['serverFeaturesSnapshot']>;
   resolveSourceKeyContext: () => Promise<ActionExecutorContext | null>;
   /** Personal effects require their own saved-settings scope, not Session delivery's Account observation. */
@@ -80,6 +88,60 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     }> = {}) => logger.debug('[Session Follow] Dispatch checkpoint', { ...facts, phase, status, ...details });
   const prepareSourceKey = createSessionFollowSourceKeyPreparationAfterSet({ credentials: input.credentials,
     serverHttpBaseUrl: input.serverHttpBaseUrl, resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot });
+  // Turn-only waiting/stall/terminal facts have no required original input.
+  // They share source traversal/admission with originals, then retain their
+  // existing host context-only acceptance and frontier ACK.
+  const dispatchManagerTurn = async (observation: SessionFollowSessionPendingObservationV1,
+    coveredKinds: ReadonlySet<FollowEventV1['kind']>) => {
+    const sessionId = observation.destinationSessionId;
+    const turn = observation.observed.turn;
+    if (observation.relation !== 'manager' || !turn
+      || isSessionFollowFrontierEqualV1(observation.delivered, observation.observed)
+      || !input.spawnSession || !input.isSessionAlreadyRunning) return;
+    const turnKind = turn.status === 'completed' ? 'finished'
+      : turn.status === 'failed' || turn.status === 'cancelled' ? 'failed_or_stopped'
+      : turn.status === 'waiting' ? 'needs_you' : 'stalled';
+    if (coveredKinds.has(turnKind)) return;
+    if (!await current() || await input.isSessionAlreadyRunning(sessionId)) return;
+    const readReceiver = async () => {
+      const receiver = await resolveSessionTransportContext({ credentials: input.credentials, idOrPrefix: sessionId, signal: input.signal });
+      if (!receiver.ok || receiver.sessionId !== sessionId || !await current()) return null;
+      const metadata = tryDecryptSessionOwnerMetadataView({ credentials: input.credentials, rawSession: receiver.rawSession,
+        accountEncryptionMode: receiver.accountEncryptionCurrentness.mode });
+      return metadata && resolveSessionAutoResumeAdmissionV1({ metadata, archivedAt: receiver.rawSession.archivedAt,
+        machineAvailable: true, authorityAvailable: true }) === 'eligible' ? { ...receiver, metadata } : null;
+    };
+    if (!await readReceiver()) return;
+    const hydrate = createSessionFollowSourceHydrator({ credentials: input.credentials, session: {
+      sessionId,
+      runSessionFollowSourceRequest: ({ credentials, request }) => {
+        if (credentials.token !== input.credentials.token) throw new Error('Follow credentials do not belong to the observed Home');
+        return runWithServerHttpBaseUrl(input.serverHttpBaseUrl, request);
+      },
+    } });
+    const source = await hydrate({ observation, signal: input.signal });
+    if (!source || !shouldWakeForSessionFollowWorkerUpdate(observation, source)
+      || source.recheckWorkerUpdateAdmission && !await source.recheckWorkerUpdateAdmission(input.signal)) return;
+    const receiver = await readReceiver();
+    const origin = await input.resolveSourceKeyContext();
+    if (!receiver || !origin || !await current()) return;
+    const observed = await fetchInactiveSessionFollowObservations({ token: input.credentials.token,
+      destinationSessionId: sessionId, machineId: input.machineId, installationId: input.installationId, signal: input.signal });
+    if (!observed?.ok || observed.target.homeId !== origin.serverIdentityId || observed.target.accountId !== input.accountId
+      || observed.target.sessionId !== sessionId || observed.target.machineId !== input.machineId
+      || observed.target.installationId !== input.installationId || !await current()) return;
+    const pending = observed.observations.find(candidate => 'sourceSessionId' in candidate && !('kind' in candidate)
+      && candidate.sourceSessionId === observation.sourceSessionId && candidate.relation === observation.relation
+      && candidate.attachedAt === observation.attachedAt
+      && isFollowPolicyEqualV1(candidate.policy, observation.policy)
+      && isSessionFollowFrontierEqualV1(candidate.delivered, observation.delivered)
+      && isSessionFollowFrontierEqualV1(candidate.observed, observation.observed));
+    if (!pending || !await current() || await input.isSessionAlreadyRunning(sessionId)) return;
+    await requestInactiveSessionResume({ credentials: input.credentials, sessionId, rawSession: receiver.rawSession,
+      metadata: receiver.metadata, requestId: randomUUID(), executionAuthority: 'account_automation',
+      spawnSession: input.spawnSession, signal: input.signal });
+    return true;
+  };
   const dispatchRun = async (request: SessionFollowRunOccurrence | Readonly<{ source: RunFollowOriginalV1['source'] }>, receiverSessionId?: string, personalOnly = false): Promise<void> => {
     if (!await current()) return;
     const response = await axios.post(`${input.serverHttpBaseUrl}${SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes}`,
@@ -440,6 +502,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     observations: readonly SessionFollowSessionPendingObservationV1[]; sourceSessionId?: string }>,
     sourcePublisher?: SessionFollowRuleSourceOccurrenceV1['sourcePublisher']): Promise<SessionFollowReceiverRangeResult> => {
     const coveredEvents: { sourceSessionId: string; kind: FollowEventV1['kind'] }[] = [];
+    const managerTurns: { observation: SessionFollowSessionPendingObservationV1; coveredKinds: ReadonlySet<FollowEventV1['kind']> }[] = [];
     const diagnostic = { entry: 'receiver_range' as const, destinationSessionId: request.destinationSessionId,
       ...(request.sourceSessionId ? { sourceSessionId: request.sourceSessionId } : {}) };
     checkpoint(diagnostic, 'currentness', 'started');
@@ -557,6 +620,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         }
       }
       let afterSeq = range.afterSeq;
+      let sourceRangeAvailable = true;
       while (afterSeq < throughSeq && await current()) {
         const pageStart = afterSeq;
         checkpoint(diagnostic, 'range_transcript', 'started', { sourceSessionId, afterSeq, throughSeq });
@@ -585,9 +649,24 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           }
           if (typeof row.seq === 'number') afterSeq = row.seq;
         }
+        if (unavailable) sourceRangeAvailable = false;
         if (unavailable || !page.hasMore || page.nextAfterSeq === null || page.nextAfterSeq <= pageStart) break;
         afterSeq = page.nextAfterSeq;
       }
+      // A failed source read or unadmitted original cannot fall through to a
+      // second wake. Only a completely traversed source can offer a disjoint
+      // no-original manager Turn through the same dispatcher.
+      if (sourceRangeAvailable && afterSeq >= throughSeq && await current()) {
+        const coveredKinds = new Set(coveredEvents.filter(event => event.sourceSessionId === sourceSessionId).map(event => event.kind));
+        for (const observation of request.observations) if (observation.sourceSessionId === sourceSessionId && observation.relation === 'manager') {
+          managerTurns.push({ observation, coveredKinds });
+        }
+      }
+    }
+    // Offer every source original before attempting the receiver's one
+    // context-only resume, as the former bootstrap caller did.
+    for (const { observation, coveredKinds } of managerTurns) {
+      if (await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => dispatchManagerTurn(observation, coveredKinds))) break;
     }
     checkpoint(diagnostic, 'range', 'completed');
     return { coveredEvents };

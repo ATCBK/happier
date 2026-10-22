@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
-import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { withConfiguredDaemonTestHome } from '../testkit/fakeDaemonLifecycle.testkit';
@@ -14,6 +14,9 @@ import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readInstallationIdentityIfExistsSync } from '../identity/store';
 import { bootstrapMachineSyncRuntime, retireMachineSyncRuntimeAttempt, type BootstrapMachineSyncRuntimeParams } from './bootstrapMachineSyncRuntime';
 import type { ApiMachineClient } from '@/api/apiMachine';
+import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
+import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
+import { SessionFollowObservePendingResponseV1Schema, type SessionFollowSessionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 it('routes a source-only Account change through the installed private rule cache and exact receiver admission without an edge', async () => {
   await withConfiguredDaemonTestHome({ prefix: 'follow-first-source-change-' }, async ({ homeDir }) => {
@@ -139,6 +142,121 @@ it('routes a source-only Account change through the installed private rule cache
       await connectOptions?.onConnect?.();
       expect(runRouteReads).toEqual([...workflowIds.map(runId => ({ v: 1, source: { kind: 'workflow_run', runId } })),
         { v: 1, source: { kind: 'discussion', discussionId } }]);
+    } finally {
+      if (runtime) await retireMachineSyncRuntimeAttempt(runtime);
+      await host.dispose(); restoreHttp(); await app.close();
+    }
+  });
+});
+
+it.each([
+  ['unavailable', 'ready'], ['available', 'ready'], ['unavailable', 'goal-changed'], ['available', 'goal-changed'],
+] as const)('defers an original-backed update to original admission (%s dispatcher, %s)', async (dispatcherState, eventType) => {
+  await withConfiguredDaemonTestHome({ prefix: 'follow-original-wake-' }, async ({ homeDir }) => {
+    const accountId = 'receiver-account';
+    const machineId = 'receiver-machine';
+    const sourceSessionId = 'c111111111111111111111111';
+    const destinationSessionId = 'c222222222222222222222222';
+    const serverId = 'follow-home';
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.fixture`, encryption: null };
+    const origin = new URL(resolveServerHttpBaseUrl()).origin;
+    const metadata = JSON.stringify({ path: homeDir, host: 'host', machineId, flavor: 'codex',
+      runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} }, codexSessionId: 'native-receiver' });
+    const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
+      metadata, ownerAccountId: accountId, origin: { kind: 'none' }, seq: 1, archivedAt: null, active: true,
+      latestTurnId: 'source-turn', latestTurnStatus: 'completed', pendingReviewRuns: 0 });
+    const destination = createSessionRecordFixture({ id: destinationSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
+      metadata, ownerAccountId: accountId, origin: { kind: 'none' }, archivedAt: null, active: true });
+    const observation: SessionFollowSessionPendingObservationV1 = { sourceSessionId, destinationSessionId,
+      ...(eventType === 'ready' ? { relation: 'manager' as const, attachedAt: 1 } : { relation: 'follower' as const }),
+      policy: { preset: 'everything' }, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1,
+      observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1, turn: { id: 'source-turn', status: 'completed' } } };
+    let rulesAvailable = dispatcherState === 'available';
+    const pending: unknown[] = [];
+    const legacyContexts: unknown[] = [];
+    const app = fastify();
+    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get('/v2/account/session-follow-rules', async (_request, reply) => rulesAvailable
+      ? { rules: [] } : reply.code(503).send({ error: 'unavailable' }));
+    app.get('/v2/account/session-follow-preferences', async () => ({ assigned: false, direct: false, team: false, group: false }));
+    app.get('/v2/account/session-follows', async () => ({ follows: [] }));
+    app.get(`/v2/sessions/${destinationSessionId}/follows/sessions`, async () => ({ sources: [] }));
+    app.get(`/v2/sessions/${sourceSessionId}`, async () => ({ session: source }));
+    app.get(`/v2/sessions/${destinationSessionId}`, async () => ({ session: destination }));
+    app.get(`/v2/sessions/${destinationSessionId}/delivery-mutes`, async () => ({ scopes: [] }));
+    app.get(`/v1/sessions/${sourceSessionId}/messages`, async () => ({ messages: [{ id: 'ready-original', localId: 'ready-original', seq: 1,
+      createdAt: 200, updatedAt: 200, sidechainId: null, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
+        content: { type: 'event', id: 'ready-original', data: { type: eventType,
+          ...(eventType === 'ready' ? { completedTurnId: 'source-turn' } : {}) } } } } }], hasMore: false }));
+    app.post('/v2/sessions/:sessionId/follows/inactive-observations', async request => {
+      const sessionId = (request.params as { sessionId: string }).sessionId;
+      return { ok: true, v: 1, sessionId, target: { homeId: serverId, accountId, sessionId, machineId,
+        installationId: readInstallationIdentityIfExistsSync()!.installationId },
+        currentSourceSessionIds: [sourceSessionId], observations: [observation] };
+    });
+    app.post(`/v2/sessions/${sourceSessionId}/follows/occurrence-routes`, async () => ({ ok: true, v: 1, sourceSessionId,
+      originalCreatedAt: 200, routes: [observation] }));
+    app.post(`/v2/sessions/${destinationSessionId}/pending`, async request => { pending.push(request.body); return { didWrite: true }; });
+    const restoreHttp = installAxiosFastifyAdapter({ app, origin });
+    let changedSession: Parameters<ApiMachineClient['onSessionChanged']>[0] | undefined;
+    const transport = { ...createApiMachineTransportFixture(),
+      onSessionChanged: (listener: NonNullable<typeof changedSession>) => { changedSession = listener; return () => {}; },
+      registerMachineAccessLossReceiver: () => () => {},
+      resolveInstalledAccountObservationRuntime: async () => ({ accountId, credentials, machineId, serverId,
+        serverHttpBaseUrl: origin, isCurrent: async () => true }),
+      setRPCHandlers: () => ({}), registerLiveStreamRelayRoutes: vi.fn(),
+      connect: () => {}, registerLocalServicesRoutes: () => {}, registerSimulatorPreviewRoutes: () => {},
+      updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
+      emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(), sendTransferRelayV2Envelope: vi.fn(),
+      sendMachineLiveStreamRelayEnvelope: vi.fn(),
+      getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
+    };
+    const apiMachine = transport as unknown as ApiMachineClient;
+    const host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: homeDir, activeServerDir: homeDir, serverId,
+      serverHttpBaseUrl: origin, machineId, custodianAccountId: accountId, credentials,
+      connectedServicesMaterializationBaseDir: join(homeDir, 'materialized'), registry: new ConnectedServiceRuntimeRegistry(),
+      trackedSessions: new Map(), getRequester: () => null, getApiMachineForSessions: () => apiMachine,
+      resolveQualifiedConnectedAccountV4Support: () => 'indeterminate',
+      startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: serverId, machineId }) } });
+    // Substitute only the publisher socket. The resumed host's selection and
+    // source hydration stay real, so a process launch cannot stand in for delivery.
+    const session = Object.assign(createApiSessionClientFixture(), { sessionId: destinationSessionId,
+      runSessionFollowSourceRequest: <T>({ request }: { request: () => T }): T => request(),
+      observePendingSessionFollow: async () => SessionFollowObservePendingResponseV1Schema.parse({ ok: true, v: 1,
+        sessionId: destinationSessionId, publisherGeneration: '1', currentSourceSessionIds: [sourceSessionId], observations: [observation] }),
+    });
+    const reconcile = createSessionFollowContextReconciler({ session,
+      hydrateObservation: createSessionFollowSourceHydrator({ session, credentials }), maxFollowContextUtf8Bytes: 8192 });
+    let runtime: Awaited<ReturnType<typeof bootstrapMachineSyncRuntime>> | undefined;
+    try {
+      runtime = await bootstrapMachineSyncRuntime({ cliVersion: 'test', machineId, credentials,
+        machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+        requesterServerId: serverId, preferredHost: 'host', happyHomeDir: homeDir, happyLibDir: homeDir,
+        filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
+        createConnectedApiMachine: () => apiMachine as NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>,
+        attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+        startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSessionForInternalResume: async () => {
+          legacyContexts.push(await reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' }));
+          return { type: 'success', sessionId: destinationSessionId };
+        },
+        spawnSession: async () => { throw new Error('Follow must use internal resume'); },
+        stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => false,
+        resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: serverId, machineId }),
+        dispatchSessionFollowOccurrence: host.runtime.dispatchSessionFollowOccurrence,
+        loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+        directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+        connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
+      });
+      if (!changedSession) throw new Error('Missing Account Session observer');
+      await changedSession({ sessionId: destinationSessionId, cursor: 1 });
+      const beforeRetry = [...legacyContexts];
+      rulesAvailable = true;
+      await changedSession({ sessionId: destinationSessionId, cursor: 2 });
+      expect(pending).toHaveLength(dispatcherState === 'available' ? 2 : 1);
+      expect(beforeRetry).toEqual([]);
+      expect(legacyContexts).toEqual([]);
     } finally {
       if (runtime) await retireMachineSyncRuntimeAttempt(runtime);
       await host.dispose(); restoreHttp(); await app.close();
