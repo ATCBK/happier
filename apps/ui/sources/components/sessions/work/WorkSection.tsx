@@ -87,6 +87,9 @@ function WorkSectionOnPage(props: WorkSectionProps) {
                     <Text testID={`session-agents-section-count:${props.testID}`} style={stylesheet.pageCount}>{count}</Text>
                 ) : undefined}
                 action={props.action ?? undefined}
+                // A Work section's action is a quiet icon cluster (+, ✎, search): it keeps the title
+                // line's end on a phone instead of dropping onto a line of its own.
+                actionLayout="trailing"
             >
                 {props.loading ? <SkeletonRows testID={`${props.testID}-loading`} rows={2} accessibilityLabel={props.title} /> : props.children}
             </ItemGroup>
