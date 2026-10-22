@@ -891,8 +891,8 @@ reader validates the notice independently of the message; malformed or future
 sidecars leave the fallback text readable. Explicit Saved Secret catalog failures
 retain their existing fail-closed error path.
 
-Selected-server MCP notices, Skill failure notices and optional prompt-library
-warnings await the existing transcript journal's local admission, not the Home
+The Host's selected-server MCP notice publisher, shared Skill-failure publisher
+and optional prompt-library warning await the transcript journal's local admission, not the Home
 delivery ACK. Successful admission persists the stable notice identity before
 preparation returns; the same journal retries delivery and Home deduplicates it.
 MCP journal-admission failure still throws to startup; Skill and prompt-library

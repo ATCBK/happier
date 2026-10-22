@@ -53,7 +53,11 @@ import { applyActiveModelFacts } from '@/providers/sessions/applyActiveModelFact
 import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
-import { resolveSessionClientDurableMutationOutboxPath } from './client/transport/mutations/sessionClientDurableMutationPersistence';
+import { publishRunnerSkillNotice, publishSkillLaunchNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
+import { createSessionPromptPlanResolver } from '@/agent/prompting/coding/sessionPromptPlan';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { loadSessionClientDurableMutationOutbox, resolveSessionClientDurableMutationOutboxPath } from './client/transport/mutations/sessionClientDurableMutationPersistence';
 import { SessionMutationJournalAdmissionBlockedError } from './client/transport/mutations/createSessionClientDurableMutationOutbox';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
@@ -95,6 +99,55 @@ describe('ApiSessionClient socket write readiness', () => {
   const clients: ApiSessionClient[] = [];
   const connectGates: ReturnType<typeof createDeferred>[] = [];
 
+  it.each(['preparation', 'native-refusal'] as const)('admits an optional Skill notice before its Home ACK (%s)', async kind => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const transcript = createSessionTranscriptHomeStub();
+    const localIds: string[] = [];
+    let completedAcks = 0;
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        localIds.push(SessionTranscriptObservationInputSchema.parse(payload).localId);
+        started.resolve();
+        await release.promise;
+        completedAcks += 1;
+      }
+      return transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(createPlainSessionFixture({ id: `skill-notice-${kind}` }), [socket], {
+      initialRegisteredSessionStateFieldMutations: [],
+    });
+    let admitted = false;
+    const pending = (kind === 'preparation'
+      ? publishRunnerSkillNotice(client, {
+          plan: { plan: 'session_dir', items: [], nativeDisables: [], diagnostics: [] },
+          indexItems: [], unavailable: true, unavailableReason: 'skill_rules_unavailable',
+        })
+      : publishSkillLaunchNotice(client, {
+          pluginRoot: '/session', skillsRoot: '/session/skills',
+          items: [], nativeDisables: [{ name: 'review', path: '/native/review/SKILL.md' }],
+        })).then(() => { admitted = true; });
+    try {
+      await started.promise;
+      await vi.waitFor(() => expect(admitted).toBe(true));
+      await pending;
+      expect(completedAcks).toBe(0);
+      expect(localIds).toHaveLength(1);
+      expect(await loadSessionClientDurableMutationOutbox(client.sessionId)).toMatchObject([
+        { kind: 'transcript_message_append', payload: { localId: localIds[0] } },
+      ]);
+      expect(localIds[0]).toMatch(/^capability-notice:/u);
+      release.resolve();
+      await client.flushDurableMutationDelivery();
+      expect(completedAcks).toBe(1);
+      expect(localIds).toHaveLength(1);
+      expect(await loadSessionClientDurableMutationOutbox(client.sessionId)).toEqual([]);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
+
   it('admits a diagnostic event durably without awaiting its one Home round trip', async () => {
     const started = createDeferred();
     const release = createDeferred();
@@ -128,6 +181,91 @@ describe('ApiSessionClient socket write readiness', () => {
     } finally {
       release.resolve();
       await pending;
+    }
+  });
+
+  it('prepares optional prompt-library context after durable notice admission without waiting for its Home ACK', async () => {
+    const previousGet = Object.getOwnPropertyDescriptor(axios, 'get');
+    const previousPost = Object.getOwnPropertyDescriptor(axios, 'post');
+    if (!previousGet || !previousPost) throw new Error('Missing suite Axios boundary');
+    const restoreProjectBoundary = installEmptyProjectAccountRowsHttpBoundary();
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/auth/ping') return { status: 200, data: {} };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      return { status: 503, data: { error: 'unavailable' } };
+    });
+    const started = createDeferred();
+    const release = createDeferred();
+    const transcript = createSessionTranscriptHomeStub();
+    const observations: ReturnType<typeof SessionTranscriptObservationInputSchema.parse>[] = [];
+    let completedAcks = 0;
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        observations.push(SessionTranscriptObservationInputSchema.parse(payload));
+        started.resolve();
+        await release.promise;
+        const ack = transcript.answer(event, payload);
+        completedAcks += 1;
+        return ack;
+      }
+      return transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(createPlainSessionFixture({ id: 'prompt-library-notice-admission', metadata: createTestMetadata({
+      work: { memoryEnabled: true, promptStack: [{ id: 'optional-entry',
+        ref: { kind: 'doc', artifactId: 'optional-document' }, enabled: true, required: false, placement: 'system_append' }] },
+    }) }), [socket], { initialRegisteredSessionStateFieldMutations: [] });
+    const resolver = createSessionPromptPlanResolver({
+      opts: { credentials: { token: 'tok', encryption: null } }, session: client,
+      agentId: 'codex', machineId: 'machine-1', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
+      readNativeSessionId: () => 'native',
+      // Daemon turn-contribution IPC is external to this process. The real
+      // prompt/Artifact admission, resolver, Session client and journal stay beneath it.
+      daemonBridge: {
+        resolvePrompt: async () => ({ kind: 'prompt', promptAssetBlocks: [], toolPromptContributions: [] }),
+        resolveAgentComposition: async () => { throw new Error('Unexpected composition request'); },
+        resolveComposerReference: async () => { throw new Error('Unexpected reference request'); },
+        resolveComposerAttachment: async () => { throw new Error('Unexpected attachment request'); },
+        afterComposerAttachmentMessageAccepted: async () => { throw new Error('Unexpected attachment acceptance'); },
+        transformAgentContext: async () => { throw new Error('Unexpected context transform'); },
+        transformSessionInput: async () => { throw new Error('Unexpected input transform'); },
+        transformAgentRequest: async () => { throw new Error('Unexpected request transform'); },
+      },
+    });
+    let prepared = false;
+    const pending = runWithServerHttpBaseUrl(serverUrl, () => resolver({
+      baseOverride: 'Retained base instructions', includeAdmittedInventory: true,
+    })).then(result => { prepared = true; return result; });
+    try {
+      await started.promise;
+      await vi.waitFor(() => expect(prepared).toBe(true));
+      expect(await pending).toMatchObject({ text: expect.stringContaining('Retained base instructions'),
+        admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
+      expect(resolver.readStartupInstructions?.()).not.toBeNull();
+      expect(observations).toHaveLength(1);
+      expect(completedAcks).toBe(0);
+      const original = observations[0];
+      expect(original.localId).toMatch(/^capability-notice:/u);
+      expect(original.content).toMatchObject({ t: 'plain', v: { content: { data: {
+        capabilityNoticeV1: { v: 1, items: [{ kind: 'prompt_library', code: 'prompt_library_unavailable' }] },
+      } } } });
+      expect(await loadSessionClientDurableMutationOutbox(client.sessionId)).toEqual([expect.objectContaining({
+        payload: expect.objectContaining({ localId: original.localId, content: original.content }),
+      })]);
+      release.resolve();
+      await client.flushDurableMutationDelivery();
+      expect(observations).toHaveLength(1);
+      expect(completedAcks).toBe(1);
+      expect(await loadSessionClientDurableMutationOutbox(client.sessionId)).toEqual([]);
+    } finally {
+      release.resolve();
+      try { await pending; } finally {
+        try { restoreProjectBoundary(); } finally {
+          // The fixture's spies must not replace this suite's module mocks.
+          Object.defineProperties(axios, { get: previousGet, post: previousPost });
+        }
+      }
     }
   });
 
