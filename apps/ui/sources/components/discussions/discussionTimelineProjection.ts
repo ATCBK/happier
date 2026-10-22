@@ -5,6 +5,7 @@ import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workf
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { t } from '@/text';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { buildMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
@@ -98,8 +99,8 @@ export function resolveDiscussionReplyAttributionLine(
     const actor = message.requesterAccountActor;
     const name = requester.accountId === viewer.accountId && areServerProfileIdentifiersEquivalent(requester.serverId, viewer.serverId)
         ? t('session.collaboration.discussion.attribution.you')
-        : actor && actor.accountId === requester.accountId && actor.profile
-            ? formatAccountDisplayName(actor.profile) ?? t('session.collaboration.discussion.attribution.anotherPerson')
+        : actor && actor.accountId === requester.accountId
+            ? resolveAccountActorPresentation({ ...actor, serverId: requester.serverId }, viewer).name
             : t('session.collaboration.discussion.attribution.anotherPerson');
     return t('session.collaboration.discussion.attribution.askedBy', { requester: name });
 }

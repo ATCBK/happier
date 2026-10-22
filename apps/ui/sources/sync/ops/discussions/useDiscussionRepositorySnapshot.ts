@@ -47,15 +47,20 @@ export function useDiscussionDocSnapshot(repository: DiscussionRepository | null
 }
 
 /** The single React projection seam for the shared Home Discussion repository. */
+export function useDiscussionRepositorySnapshot(repository: DiscussionRepository): DiscussionRepositorySnapshot;
+export function useDiscussionRepositorySnapshot(repository: DiscussionRepository | null): DiscussionRepositorySnapshot | null;
 export function useDiscussionRepositorySnapshot(
-    repository: DiscussionRepository,
-): DiscussionRepositorySnapshot {
+    repository: DiscussionRepository | null,
+): DiscussionRepositorySnapshot | null {
     return React.useSyncExternalStore(
-        repository.subscribe,
-        repository.getSnapshot,
-        repository.getSnapshot,
+        repository?.subscribe ?? subscribeWithoutRepository,
+        repository?.getSnapshot ?? readWithoutRepository,
+        repository?.getSnapshot ?? readWithoutRepository,
     );
 }
+
+const subscribeWithoutRepository = () => () => {};
+const readWithoutRepository = () => null;
 
 function readDiscussionSnapshotTitle(snapshot: DiscussionRepositorySnapshot | undefined, discussionId: string): string | null {
     const summary = snapshot?.lists.active.items.find(row => row.id === discussionId)

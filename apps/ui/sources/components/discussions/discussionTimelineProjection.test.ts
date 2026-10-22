@@ -74,8 +74,16 @@ describe('resolveDiscussionReplyAttributionLine', () => {
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: 'Bob Keller' }));
         expect(resolveDiscussionReplyAttributionLine(reply('viewer', { accountId: 'viewer', name: 'Maya Chen' }), viewer))
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: t('session.collaboration.discussion.attribution.you') }));
-        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer))
-            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: 'Bob Keller' }));
+    });
+
+    it.each([
+        ['former member', { v: 1 as const, accountId: 'bob', profile: null }, t('message.accountActorFormerMember')],
+        ['unknown requester', null, t('session.collaboration.discussion.attribution.anotherPerson')],
+        ['current member', reply('bob', { accountId: 'bob', name: 'Bob Keller' }).requesterAccountActor, 'Bob Keller'],
+        ['unnamed current member', reply('bob', { accountId: 'bob', name: '  ' }).requesterAccountActor, t('message.accountActorUnnamedMember')],
+    ] as const)('distinguishes the %s in the admitted requester projection', (_case, requesterAccountActor, name) => {
+        expect(resolveDiscussionReplyAttributionLine({ ...reply('bob', null), requesterAccountActor }, viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: name }));
     });
 
     it('keeps an unprojected or mismatched requester unknown and says nothing without a person cause', () => {
@@ -83,6 +91,9 @@ describe('resolveDiscussionReplyAttributionLine', () => {
         expect(resolveDiscussionReplyAttributionLine(reply('bob', null), viewer))
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
         expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'owner', name: 'Bot Owner' }), viewer))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
+        expect(resolveDiscussionReplyAttributionLine({ ...reply('bob', null),
+            requesterAccountActor: { v: 1, accountId: 'owner', profile: null } }, viewer))
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));
         expect(resolveDiscussionReplyAttributionLine(reply('viewer', null), { serverId: 'elsewhere', accountId: 'viewer' }))
             .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: other }));

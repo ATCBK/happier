@@ -43,59 +43,42 @@ export function SessionDiscussionSourceLinksProvider(
     children: React.ReactNode;
   }>,
 ) {
-  const { binding } = useServerCredentialAccountScopeBinding(
+  const { binding: resolvedBinding } = useServerCredentialAccountScopeBinding(
     props.serverId ?? undefined,
   );
-  if (!props.serverId || !binding?.isCurrent()) return <>{props.children}</>;
-  return (
-    <AnchoredLinks
-      sessionId={props.sessionId}
-      binding={binding}
-    >
-      {props.children}
-    </AnchoredLinks>
-  );
-}
-
-function AnchoredLinks(
-  props: Readonly<{
-    sessionId: string;
-    binding: NonNullable<
-      ReturnType<typeof useServerCredentialAccountScopeBinding>['binding']
-    >;
-    children: React.ReactNode;
-  }>,
-) {
-  const { binding, sessionId } = props;
-  const serverId = binding.scope.serverId;
-  const address = React.useMemo(() => ({ serverId }), [serverId]);
+  const binding = props.serverId && resolvedBinding?.isCurrent() ? resolvedBinding : null;
+  const { sessionId } = props;
+  const serverId = binding?.scope.serverId ?? null;
+  const address = React.useMemo(() => serverId ? { serverId } : null, [serverId]);
   const client = React.useMemo(
-    () =>
+    () => binding ?
       createDiscussionClient({
         scope: binding.scope,
         availability: 'available',
-      }),
-    [binding.scope],
+      }) : null,
+    [binding?.scope],
   );
   const repository = React.useMemo(
-    () =>
+    () => binding && address && client ?
       getDiscussionRepository({
         scope: binding.scope,
         address,
         client,
         accountLifetime: binding,
-      }),
+      }) : null,
     [address, binding, client],
   );
   useDiscussionRepositorySnapshot(repository);
   React.useEffect(() => {
+    if (!repository) return;
     const unmount = repository.mount({ anchorSessionId: sessionId });
     if (repository.getListSnapshot(sessionId).lists.active.status === 'idle')
       void repository.refreshAnchoredList(sessionId, 'active');
     return unmount;
   }, [repository, sessionId]);
-  const discussions = repository.getListSnapshot(sessionId).lists.active.items;
-  const value = React.useMemo<SourceMarkers>(() => {
+  const discussions = repository?.getListSnapshot(sessionId).lists.active.items;
+  const value = React.useMemo<SourceMarkers | null>(() => {
+    if (!address || !discussions) return null;
     const titles = new Map(
       discussions.map((discussion) => [
         discussion.id,
@@ -119,6 +102,8 @@ function AnchoredLinks(
       },
     };
   }, [address, discussions]);
+  // Scope hydration changes marker availability, never the transcript's position.
+  // Inserting a wrapper here would discard its consumed Find launch and local state.
   return (
     <SessionDiscussionSourceLinksContext.Provider value={value}>
       {props.children}
