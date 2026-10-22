@@ -92,8 +92,9 @@ export function SessionRunDetailsScreen() {
         headerRight,
     }), [headerLeft, headerRight]);
 
+    // The Run reads on the page paper like its Session; the canvas is the navigation plane.
     return (
-        <View style={{ flex: 1, paddingBottom: bottomChromeHeight, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+        <View style={{ flex: 1, paddingBottom: bottomChromeHeight, backgroundColor: theme.colors.surface.base }}>
             <Stack.Screen options={screenOptions} />
             {!hydrateReady && !hydrateMissing ? (
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />

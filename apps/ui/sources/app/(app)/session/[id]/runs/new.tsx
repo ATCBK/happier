@@ -91,7 +91,7 @@ export function SessionNewRunScreen() {
 
     if (hasIntentParam && initialIntent === null) {
         return (
-            <View style={{ flex: 1, padding: theme.space.s16, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+            <View style={{ flex: 1, padding: theme.space.s16, backgroundColor: theme.colors.surface.base }}>
                 <Stack.Screen options={screenOptions} />
                 <Text style={{ color: theme.colors.text.secondary }}>{t('errors.invalidFormat')}</Text>
             </View>
@@ -99,7 +99,7 @@ export function SessionNewRunScreen() {
     }
 
     return (
-        <View style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+        <View style={{ flex: 1, backgroundColor: theme.colors.surface.base }}>
             <Stack.Screen options={screenOptions} />
             <ConstrainedScreenContent
                 style={{
