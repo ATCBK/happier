@@ -2,6 +2,8 @@ import { logger } from '@/ui/logger';
 
 export function registerPidSpawnResourceCleanup(params: Readonly<{
   pid: number;
+  /** Existing operation kind; never a credential, path, or native error text. */
+  label?: string;
   spawnResourceCleanupByPid:
     Map<number, () => void | Promise<void>>;
   isCurrentPidOwner: () => boolean;
@@ -11,12 +13,26 @@ export function registerPidSpawnResourceCleanup(params: Readonly<{
   const previousCleanup =
     params.spawnResourceCleanupByPid.get(params.pid) ?? null;
   let cleanupStarted = false;
+  let cleanupCompleted = false;
   let cleanupPromise: Promise<void> | null = null;
   const registeredCleanup = async (): Promise<void> => {
     cleanupStarted = true;
     cleanupPromise ??= Promise.resolve().then(async () => {
-      await params.cleanup();
+      if (!cleanupCompleted) {
+        try {
+          await params.cleanup();
+        } catch (error) {
+          if (!params.label) throw error;
+          throw new Error(`Session resource cleanup failed: ${params.label}`, { cause: error });
+        }
+        cleanupCompleted = true;
+      }
       await previousCleanup?.();
+    }).catch((error: unknown) => {
+      // Retain failed custody for the next explicit attempt, while concurrent
+      // callers join this attempt and completed stages stay retired.
+      cleanupPromise = null;
+      throw error;
     });
     await cleanupPromise;
   };
@@ -68,7 +84,7 @@ export async function retireUpstreamAuthorityBeforeProcessStop(
   } catch (error) {
     logger.debug(
       '[DAEMON RUN] Failed to retire upstream authority before process stop',
-      error,
+      { pid: params.pid, error },
     );
     return false;
   }

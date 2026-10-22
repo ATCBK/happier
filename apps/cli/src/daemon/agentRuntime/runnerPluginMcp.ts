@@ -82,6 +82,7 @@ export function createDaemonRunnerPluginMcp(input: Readonly<{
         try {
           await active(context);
           unregister = registerPidSpawnResourceCleanup({ pid: tracked.pid, spawnResourceCleanupByPid: input.spawnResourceCleanupByPid,
+            label: operation.kind,
             isCurrentPidOwner: () => input.trackedSessions.get(tracked.pid) === tracked && !tracked.reportMarkerCustody?.retiring,
             cleanup: dispose });
           if (!unregister || !lease.registry.projectMcpServerItems) throw unavailable();
