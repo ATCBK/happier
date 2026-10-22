@@ -1,4 +1,5 @@
 export {
+    describeActionResultFields,
     describeApprovalActionFields,
     describeApprovalRequestFields,
     formatApprovalFieldValues,

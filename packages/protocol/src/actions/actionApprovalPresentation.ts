@@ -131,13 +131,15 @@ export type ApprovalStructuredValueEntry = Readonly<{
   reference?: ApprovalActionReference;
   /** A schema version or an empty value: present, but read only when asked for. */
   technical?: true;
+  /** An epoch-millisecond moment (`archivedAt`): the client reads it as a localized time. */
+  valueFormat?: 'timestamp';
 }>;
 
 export type ApprovalActionFieldRow =
   | Readonly<{
     kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference;
     /** A boolean choice reads through the client's localized yes/no labels. */
-    valueFormat?: 'boolean' | 'unavailable' | 'confidential';
+    valueFormat?: 'boolean' | 'unavailable' | 'confidential' | 'timestamp';
     /** Declared choices carry their localization keys; clients never infer labels from enum values. */
     selectedOptions?: readonly Pick<ActionInputOption, 'label' | 'labelKey'>[];
     /** A readable reading of a structured (JSON) value; `value` stays the exact literal. */
@@ -496,6 +498,11 @@ function formatApprovalEntryValue(key: string | undefined, value: unknown): stri
   return formatApprovalScalar(value);
 }
 
+/** The `…At` convention every Protocol shape uses for an epoch-millisecond moment (`createdAt`, `archivedAt`). */
+function isApprovalTimestamp(key: string | undefined, value: unknown): boolean {
+  return key !== undefined && /[a-z]At$/.test(key) && typeof value === 'number' && Number.isInteger(value) && value >= 1e12;
+}
+
 function isEmptyApprovalValue(value: unknown): boolean {
   return (Array.isArray(value) && value.length === 0) || (isRecord(value) && Object.keys(value).length === 0);
 }
@@ -526,6 +533,7 @@ function appendApprovalStructuredEntries(
       label, value: formatApprovalEntryValue(key, value), depth,
       ...(reference ? { reference } : {}),
       ...(technical ? { technical: true as const } : {}),
+      ...(isApprovalTimestamp(key, value) ? { valueFormat: 'timestamp' as const } : {}),
     });
     return;
   }
@@ -845,6 +853,38 @@ export function describeApprovalActionFields(input: Readonly<{
   // A structured row with nothing readable left is read in Details, never as a bare title.
   return { rows: rows.map((row) => row.kind === 'value' && row.entries && !row.technical
     && !row.entries.some((entry) => entry.value !== null && !entry.technical) ? { ...row, technical: true as const } : row), unrepresentable };
+}
+
+/**
+ * What a completed Action returned, read like its arguments: one row per field under its readable name, a
+ * Session, Machine, Home or Account by its name, a moment as a time, a nested value as readable entries.
+ * A `success: true` only repeats the call's own Completed, and a value the call was given (its target id)
+ * only repeats Details; both leave. A result that is not an object stays with its caller (null).
+ */
+export function describeActionResultFields(input: Readonly<{ result: unknown; actionArgs?: unknown }>): ApprovalActionFieldsPresentation | null {
+  if (!isRecord(input.result)) return null;
+  const args = isRecord(input.actionArgs) ? input.actionArgs : {};
+  const rows: ApprovalActionFieldRow[] = [];
+  for (const [key, value] of Object.entries(input.result)) {
+    if (value === undefined || (key === 'success' || key === 'ok') && value === true) continue;
+    if (typeof value === 'string' && args[key] === value) continue;
+    // The Action declared these keys on its own output, so a Session id here is the Session it acted on.
+    const reference = typeof value === 'string' && value.trim() && key === 'machineId'
+      ? { kind: 'machine' as const, id: value.trim() } : describeApprovalKeyReference(key, value);
+    const entries = reference ? undefined : describeApprovalStructuredValue([value]);
+    const technical = !reference && (isTechnicalApprovalKey(key) || value === null || isEmptyApprovalValue(value)
+      || typeof value === 'string' && !value.trim());
+    rows.push({
+      kind: 'value', path: key, title: humanizeApprovalKey(key),
+      value: formatApprovalFieldValues([value], { preserveStructuredValues: true }) ?? '',
+      ...(reference ? { reference } : {}),
+      ...(typeof value === 'boolean' ? { valueFormat: 'boolean' as const }
+        : isApprovalTimestamp(key, value) ? { valueFormat: 'timestamp' as const } : {}),
+      ...(entries ? { entries } : {}),
+      ...(technical ? { technical: true as const } : {}),
+    });
+  }
+  return { rows, unrepresentable: null };
 }
 
 /** The visual a Session visual approval asks to show, read once for its rows and its preview. */

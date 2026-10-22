@@ -521,6 +521,7 @@ export {
 } from './actionInputPredicates.js';
 export { buildActionDraftSeedInput } from './actionDraftSeed.js';
 export {
+  describeActionResultFields,
   describeApprovalActionFields,
   describeApprovalRequestFields,
   formatApprovalFieldValues,
