@@ -1599,7 +1599,7 @@ describe('managed Machine detail', () => {
             return;
         }
         const errors = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
-            && node.props.diagnosticCode === 'native_boot_unconfirmed');
+            && String(node.props.diagnosticCode).split(' · ')[0] === 'native_boot_unconfirmed');
         if (basis === 'enrolled-failure') expect(errors.length).toBeGreaterThan(0);
         else expect(errors).toHaveLength(0);
         const checks = screen.tree.findAllByType(RoundButton).filter(button =>
@@ -1803,7 +1803,7 @@ describe('managed Machine detail', () => {
                 error: { errorCode: 'native_boot_unconfirmed', error: 'Native boot configuration failed after enrollment' } } },
             handlers: { reinstall: () => retried.push('same-enrolled-resource') } }} />));
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
-            && node.props.diagnosticCode === 'native_boot_unconfirmed').length).toBeGreaterThan(0);
+            && String(node.props.diagnosticCode).split(' · ')[0] === 'native_boot_unconfirmed').length).toBeGreaterThan(0);
         const enrolledRetry = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-retry'
             && typeof node.props.onPress === 'function')[0];
         expect(enrolledRetry).toBeDefined();

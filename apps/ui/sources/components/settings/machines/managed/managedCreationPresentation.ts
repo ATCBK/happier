@@ -6,11 +6,14 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
 import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 
-/** Home request and registration failures retain installation-specific recovery copy. */
+/**
+ * The short cause the page says for a failed install, in the app's words; null when only the installer's own
+ * message exists. That raw message (it can name commands and environment variables) stays behind Details.
+ */
 export function describeManagedInstallationFailure(
     error: NonNullable<ActionOperationProjection['snapshot']['error']>,
     progress: ActionOperationProjection['snapshot']['progress'],
-): string {
+): string | null {
     const details = error.details;
     const request = details && 'kind' in details && details.kind === 'managedControllerRequest' ? details : undefined;
     if (error.errorCode === 'database_connection_unavailable' || error.errorCode === 'database_transaction_conflict_exhausted'
@@ -19,7 +22,7 @@ export function describeManagedInstallationFailure(
     }
     if (error.errorCode === 'provider_unavailable' && progress?.kind === 'phase'
         && progress.phase === 'ssh.auth.wait') return t('managedMachines.creation.enrollmentUnavailable');
-    return resolveSystemTaskFailureMessage({ code: error.errorCode, message: error.error }) ?? error.error;
+    return resolveSystemTaskFailureMessage({ code: error.errorCode, message: null }) ?? null;
 }
 
 /** Setup is observed on the admitted row; Join alone cannot complete this stage. */
@@ -47,7 +50,12 @@ export function managedCreationState(machine: ManagedMachineV1, context: Managed
     if (machine.allocation === 'confirmed-absent') return { kind: 'absent' };
     if (machine.cleanup) return machine.creationState === 'canceled' && machine.cleanup.disposition === 'pending'
         ? { kind: 'creationCanceledCleanup' } : { kind: 'cleanupUnknown' };
-    if (machine.allocation === 'may-exist') return { kind: 'mayExist', name: machine.launch.name };
+    if (machine.allocation === 'may-exist') {
+        // A submitted create stays may-exist until the provider binds it; while its acquire last ran, it is being created.
+        const acquire = currentManagedCreationOperation(machine, context.operation, context)?.snapshot;
+        return acquire?.state === 'running' && (acquire.actionId === 'machines.managed.acquire' || acquire.actionId === 'machines.managed.bootstrap.retry')
+            ? { kind: 'creating', name: machine.launch.name } : { kind: 'mayExist', name: machine.launch.name };
+    }
     if (machine.observation?.availability === 'unavailable') return { kind: 'observationUnavailable' };
     if (machine.observation?.availability === 'absent') return { kind: 'absent' };
     if (machine.observation?.storage === 'lost') return { kind: 'volumeLost' };
@@ -129,13 +137,18 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     context: Pick<ManagedCreationContext, 'enrolledMachine'> = {}): ActionOperationProjection | null {
     if (!operation) return null;
     const snapshot = operation.snapshot;
+    const failedIdleObservation = snapshot.state === 'failed' && snapshot.actionId === 'machines.managed.power.set'
+        && snapshot.progress?.kind === 'phase'
+        && ['managed.intent.waiting-idle', 'managed.intent.activity-unknown', 'managed.intent.busy'].includes(snapshot.progress.phase)
+        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable'].includes(snapshot.error?.errorCode ?? '');
     // Confirmed removal supersedes an earlier failed request on this resource.
     // A superseded operation can fail after Delete observed absence. Compare
-    // request admission, not settlement; later requests still need attention.
-    // Activity retains the historical failure.
+    // request admission, not settlement. A passive idle failure is obsolete
+    // even if it raced the absence report; later actionable requests still
+    // need attention. Activity retains the historical failure.
     if (machine.desired === 'delete' && machine.allocation === 'confirmed-absent'
         && machine.observation?.availability === 'absent' && snapshot.state === 'failed'
-        && snapshot.createdAt <= machine.observation.observedAt) return null;
+        && (snapshot.createdAt <= machine.observation.observedAt || failedIdleObservation)) return null;
     if (snapshot.domainRef?.kind === 'machineEnvironment') {
         const reference = snapshot.domainRef;
         const scopeMatches = snapshot.actionId === 'machines.environment.apply' && snapshot.scope.machineId === machine.enrolledMachineId
@@ -163,12 +176,8 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     if (healthyEnrollment && !machine.submittedNativeEffect && (machine.desired === 'start' || machine.desired === 'resume')
         && machine.observation?.availability !== 'absent' && machine.observation?.availability !== 'unavailable'
         && machine.observation?.storage !== 'lost' && machine.observation?.power !== 'stopped' && machine.observation?.power !== 'suspended'
-        && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
-        && snapshot.actionId === 'machines.managed.power.set' && snapshot.settledAt !== undefined
-        && guest.activeAt !== undefined && guest.activeAt > snapshot.settledAt
-        && snapshot.progress?.kind === 'phase'
-        && ['managed.intent.waiting-idle', 'managed.intent.activity-unknown', 'managed.intent.busy'].includes(snapshot.progress.phase)
-        && ['managed_controller_request_failed', 'ECONNABORTED', 'admission_unavailable'].includes(snapshot.error?.errorCode ?? '')) return null;
+        && operation.observation === 'available' && !operation.isUnavailableProjection && failedIdleObservation
+        && snapshot.settledAt !== undefined && guest.activeAt !== undefined && guest.activeAt > snapshot.settledAt) return null;
     // Existing 0.3 installation operations stored this CLI activation refusal as
     // action_failed. The enrolled guest's current connection resolves only that
     // readiness failure; unrelated bootstrap/setup failures remain actionable.

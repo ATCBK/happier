@@ -4,6 +4,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -14,7 +15,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ManagedMachineStateRow, type ManagedLifecycleHandlers } from './ManagedMachineStateRow';
 import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedInstallationFailure, isManagedCreationStateRowVisible, managedCreationSetup, managedCreationState, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
-import { describeManagedLifecycleState } from './managedLifecyclePresentation';
+import { describeManagedLifecycleState, type ManagedLifecycleState } from './managedLifecyclePresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
@@ -57,10 +58,23 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
     const mayBill = machine.reviewedFacts?.billing?.location !== 'local';
     // Native identity is for finding a resource Happier may have lost; a healthy one is already named by its size and image.
     const needsRecovery = Boolean(machine.recovery) || machine.creationState !== 'active' || machine.allocation === 'may-exist' || Boolean(machine.cleanup);
-    const stateRowChecks = showStateRow && lifecycle.actions.includes('checkNow') && Boolean(props.handlers?.checkNow);
+    const installationRetryOnly = !(operation && status) && canRetryInstallation && Boolean(props.handlers?.reinstall);
+    const operationCard = Boolean(operation && status && status.tone !== 'success') || installationRetryOnly && !(showStateRow && !lifecycle.banner);
+    // While the install task tells the story, a quiet creation state would be a second, contradicting card:
+    // the task's stage is the state, and the resource's freshness joins its card.
+    const operationTells = operationCard && !lifecycle.banner && QUIET_UNDER_OPERATION.has(state.kind);
+    const stateRow = showStateRow && !operationTells;
+    const stateRowChecks = stateRow && lifecycle.actions.includes('checkNow') && Boolean(props.handlers?.checkNow);
     // Freshness qualifies the state it dates: on the state row's own sheet, or standing alone with Check now.
     // A failed re-read is said here too, not in a second "As of" line above the page: one freshness per page.
     const staleRead = props.staleRead;
+    const error = !prompt && !heldAsk ? operation?.snapshot.error : undefined;
+    const failure = error ? {
+        title: describeManagedInstallationFailure(error, operation?.snapshot.progress) ?? t('managedMachines.creation.installFailedTitle', { name }),
+        detail: [error.errorCode, error.error].filter((part, index, parts) => part && parts.indexOf(part) === index).join(' · '),
+    } : null;
+    // A failure that can't be retried yet carries Check now itself; the freshness row must not offer it twice.
+    const failureChecks = Boolean(failure && !(canRetryInstallation && props.handlers?.reinstall) && props.handlers?.checkNow);
     const observationRow = machine.observation || staleRead ? <Item testID="managed-machine.observation" mode="info" showChevron={false}
         title={machine.observation ? t('surfaceState.asOf', { time: formatAsOfTime(machine.observation.observedAt) })
             : t('managedMachines.detail.loadFailed')}
@@ -69,10 +83,9 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
         accessoryLayout={staleRead ? 'adaptive' : undefined}
         rightElement={staleRead ? <RoundButton title={t('common.retry')} display="inverted" size="small"
                 testID="managed-machine.observation-retry" onPress={staleRead.retry} />
-            : stateRowChecks || !props.handlers?.checkNow ? undefined
+            : stateRowChecks || failureChecks || !props.handlers?.checkNow ? undefined
             : <RoundButton title={t('managedMachines.inspect.checkNow')} display="inverted" size="small"
                 testID="managed-machine.observation-check" onPress={props.handlers.checkNow} />} /> : null;
-    const installationRetryOnly = !(operation && status) && canRetryInstallation && Boolean(props.handlers?.reinstall);
     const installationRetry = canRetryInstallation && props.handlers?.reinstall ?
         <RoundButton title={t('managedMachines.creation.retryInstall')} display="secondary" size="small"
             testID="managed-machine.installation-retry" onPress={props.handlers.reinstall} /> : undefined;
@@ -88,9 +101,18 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
                         testID="managed-machine.setup-retry" onPress={props.setupRecovery.retry} /> : null}
                 </View> : undefined} />
         </ItemGroup> : null}
-        {operation && status && status.tone !== 'success' || installationRetryOnly && !(showStateRow && !lifecycle.banner) ? <ItemGroup>
+        {operationCard ? <ItemGroup>
             {/* The task waits on the user here: its own question replaces the stage, with its answer beside it. */}
-            <Item title={name} subtitle={prompt ? prompt.message : heldAsk ? t('approvals.waitingForYou')
+            {failure ? <SectionContentRow>
+                {/* One story: the short cause in the app's words with its recovery; the installer's own message waits behind Details. */}
+                <SurfaceStateCard kind="error" size="details" layout="inline" title={failure.title}
+                    diagnosticCode={failure.detail} testID="managed-machine.installation-error"
+                    // Retry when the failed install is confirmed; while its history can't be read, Check now re-reads it.
+                    action={canRetryInstallation && props.handlers?.reinstall ? { label: t('managedMachines.creation.retryInstall'),
+                        onPress: props.handlers.reinstall, testID: 'managed-machine.installation-retry' }
+                        : props.handlers?.checkNow ? { label: t('managedMachines.inspect.checkNow'), onPress: props.handlers.checkNow,
+                            testID: 'managed-machine.installation-check' } : undefined} />
+            </SectionContentRow> : <Item title={name} subtitle={prompt ? prompt.message : heldAsk ? t('approvals.waitingForYou')
                 : status ? describeActionOperationStatusLabel(status.label) : lifecycle.line}
                 mode="info" showChevron={false} testID="managed-machine.installation" subtitleLines={prompt ? 0 : undefined}
                 accessoryLayout={prompt && props.answerPrompt ? 'adaptive' : undefined}
@@ -103,16 +125,13 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
                         testID="managed-machine.installation-prompt-decline" onPress={() => props.answerPrompt?.(false)} />
                     <RoundButton title={t('common.continue')} size="small"
                         testID="managed-machine.installation-prompt-approve" onPress={() => props.answerPrompt?.(true)} />
-                </View> : installationRetry} />
-            {operation?.snapshot.error ? <SurfaceStateCard kind="error" size="line"
-                title={describeManagedInstallationFailure(operation.snapshot.error, operation.snapshot.progress)}
-                diagnosticCode={operation.snapshot.error.errorCode}
-                testID="managed-machine.installation-error" /> : null}
+                </View> : installationRetry} />}
+            {operationTells ? observationRow : null}
         </ItemGroup> : null}
         {/* A blocking or billing-uncertain state is the page's banner, which already says what may bill. */}
-        {showStateRow && lifecycle.banner ? <ManagedMachineStateRow name={name} mark={null}
+        {stateRow && lifecycle.banner ? <ManagedMachineStateRow name={name} mark={null}
             state={state} provider={props.provider} handlers={props.handlers ?? {}} testID="managed-machine.progress" /> : null}
-        {showStateRow && !lifecycle.banner ? <ItemGroup>
+        {stateRow && !lifecycle.banner ? <ItemGroup>
             <ManagedMachineStateRow name={name}
                 mark={props.mark ?? <Icon name="desktop" />}
                 state={state} provider={props.provider} handlers={props.handlers ?? {}}
@@ -123,7 +142,7 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
             {mayBill && machine.allocation !== 'confirmed-absent' && (machine.allocation === 'may-exist' || machine.cleanup) ? <Item title={t('managedMachines.creation.mayBill')}
                 mode="info" showChevron={false} titleLines={0} testID="managed-machine.possible-cost" /> : null}
             {observationRow}
-        </ItemGroup> : observationRow ? <ItemGroup>{observationRow}</ItemGroup> : null}
+        </ItemGroup> : observationRow && !operationTells ? <ItemGroup>{observationRow}</ItemGroup> : null}
         {needsRecovery && (machine.resource || machine.recovery) ? <ItemGroup title={t('managedMachines.detail.recoveryTitle')}>
             <Item title={t('managedMachines.detail.nativeIdentity')} mode="info" showChevron={false}
                 testID="managed-machine.recovery" accessoryLayout="stacked" rightElement={
@@ -135,6 +154,9 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
         </ItemGroup> : null}
     </>;
 }
+
+/** Creation states an install task's own stage already says; anything that blocks or may bill still speaks. */
+const QUIET_UNDER_OPERATION: ReadonlySet<ManagedLifecycleState['kind']> = new Set(['resourceReady', 'creating', 'creationWaiting']);
 
 /** A flat native value reads as one fact per line; anything nested keeps its JSON on that line. */
 function describeNativeIdentity(value: unknown): string {

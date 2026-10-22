@@ -34,6 +34,7 @@ import {
   describeFiniteRetention,
   retentionChoiceId,
   type RetentionEffect,
+  type RetentionParking,
 } from './managedRetentionPresentation';
 
 export type ManagedMachineKeepControlProps = Readonly<{
@@ -53,6 +54,8 @@ export type ManagedMachineKeepControlProps = Readonly<{
   presentation: 'field' | 'choices';
   /** The effects this provider can carry out; an unsupported one is never offered. */
   effects?: readonly RetentionEffect[];
+  /** How this provider parks for Stop, so a suspend reads as Suspend. Defaults (no provider) say Stop. */
+  parking?: RetentionParking;
   /** What the selected choice does, in the provider's billing words; `field` shows one line for the category. */
   consequence: (retention: RetentionV1) => string;
   /** False when the provider cannot start the same machine again, so wake is not offered. */
@@ -139,7 +142,7 @@ export const ManagedMachineKeepControl = React.memo(
 function UnavailableKeepPolicy(props: ManagedMachineKeepControlProps) {
   // One row says the current rule and why it cannot change yet; no second row, no trailing rule.
   return <Item testID={`${props.testID}:retention`} title={t('managedRetention.whenUnused')}
-    subtitle={[describeRetention(props.policy.retention),
+    subtitle={[describeRetention(props.policy.retention, undefined, props.parking),
       props.nativeExpiry ?? props.unavailableReason ?? t('managedMachines.options.unavailable')].join('\n')}
     subtitleLines={0} mode="info" showChevron={false} />;
 }
@@ -185,8 +188,9 @@ function KeepField(props: InnerProps) {
       buildRetentionChoices({
         current: props.policy.retention,
         effects: props.effects,
+        parking: props.parking,
       }),
-    [props.effects, props.policy.retention],
+    [props.effects, props.parking, props.policy.retention],
   );
   if (props.capabilitiesAvailable === false) return <UnavailableKeepPolicy {...props} />;
   return (
@@ -273,8 +277,9 @@ function KeepChoices(props: InnerProps) {
       buildRetentionKindChoices({
         current: props.policy.retention,
         effects: props.effects,
+        parking: props.parking,
       }),
-    [props.effects, props.policy.retention],
+    [props.effects, props.parking, props.policy.retention],
   );
   const effects = props.effects ?? DEADLINE_EFFECTS;
   const current = props.policy.retention;
@@ -289,12 +294,12 @@ function KeepChoices(props: InnerProps) {
               id: DEADLINE_CHOICE_ID,
               title:
                 current.kind === 'deadline'
-                  ? describeRetention(current)
+                  ? describeRetention(current, undefined, props.parking)
                   : t('managedRetention.atTime'),
             },
           ]
         : choices,
-    [choices, current, effects.length, props.deadline],
+    [choices, current, effects.length, props.deadline, props.parking],
   );
   const selectedId =
     draft || (props.deadline && current.kind === 'deadline')
@@ -368,6 +373,7 @@ function KeepChoices(props: InnerProps) {
         <DeadlineEditor
           draft={draft}
           effects={effects}
+          parking={props.parking}
           disabled={props.disabled}
           testID={`${props.testID}:deadline`}
           onChange={setDraft}
@@ -438,6 +444,7 @@ function DeadlineEditor(
   props: Readonly<{
     draft: DeadlineDraft;
     effects: readonly RetentionEffect[];
+    parking?: RetentionParking;
     disabled?: boolean;
     testID: string;
     onChange: (draft: DeadlineDraft) => void;
@@ -461,9 +468,11 @@ function DeadlineEditor(
           tabs={props.effects.map((effect) => ({
             id: effect,
             label:
-              effect === 'stop'
-                ? t('managedRetention.scopeStop')
-                : t('managedRetention.scopeDelete'),
+              effect === 'delete'
+                ? t('managedRetention.scopeDelete')
+                : props.parking === 'suspend'
+                  ? t('managedMachines.actions.suspend')
+                  : t('managedRetention.scopeStop'),
           }))}
           activeTabId={draft.effect}
           onSelectTab={(effect) => props.onChange({ ...draft, effect })}
@@ -487,7 +496,7 @@ function DeadlineEditor(
         {retention ? (
           <>
             <Text testID={`${props.testID}:review`} style={styles.reviewTitle}>
-              {describeRetention(retention)}
+              {describeRetention(retention, undefined, props.parking)}
             </Text>
             <InterruptsNote testID={`${props.testID}:interrupts`} />
           </>

@@ -1491,9 +1491,10 @@ describe('managed native intent through the accepted Action', () => {
             // The guest becomes idle after the Account has disabled Delete.
             // A fresh installed policy invocation must consume that projection.
             enabled = false;
-            test.readActivity.mockResolvedValue({ kind: 'idle', since: 0 });
-            test.confirmIdle.mockImplementation(async () => ({ kind: 'idle', since: 0,
-                evidence: signedIdle(test.readMachine(), 0, Date.now()) }));
+            const idle = async (): Promise<ManagedActivityBridgeResultV1> => ({ kind: 'idle', since: 0,
+                evidence: signedIdle(test.readMachine(), 0, Date.now()) });
+            test.readActivity.mockImplementation(idle);
+            test.confirmIdle.mockImplementation(idle);
         });
         const work = test.driver.executePolicy(test.readMachine(), { kind: 'retention' }, { ...test.options, signal: lifetime.signal,
             runPolicyAction: (machine, runApproved) => executeManagedMachinePolicyAction({ machine, runApproved, serverId: 'home',

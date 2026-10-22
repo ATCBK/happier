@@ -40,6 +40,23 @@ const machine: ManagedMachineV1 = {
 };
 
 describe('managed creation presentation', () => {
+  it('reads a submitted creation whose acquire still runs as creating, not as a resource that may already exist', () => {
+    const submitted: ManagedMachineV1 = { ...machine, allocation: 'may-exist', resource: undefined };
+    const acquiring: ActionOperationProjection = {
+      serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
+      snapshot: { version: 1, operationId: 'acquire', revision: 1, actionId: 'machines.managed.acquire',
+        state: 'running', scope: { accountId: 'owner', machineId: machine.controller.machineId },
+        title: 'Create machine', createdAt: 10, startedAt: 10, cancellation: 'supported',
+        domainRef: { kind: 'managedMachine', id: machine.id } },
+    };
+    expect(managedCreationState(submitted, { operation: acquiring }).kind).toBe('creating');
+    // A last-known running acquire still reads as creating while its history reconnects.
+    expect(managedCreationState(submitted, { operation: { ...acquiring, observation: 'reconnecting' } }).kind).toBe('creating');
+    // Without a live acquire, Happier cannot say whether the native create landed.
+    expect(managedCreationState(submitted).kind).toBe('mayExist');
+    expect(managedCreationState(submitted, { operation: { ...acquiring, snapshot: { ...acquiring.snapshot, state: 'failed', settledAt: 20,
+      error: { errorCode: 'action_failed', error: 'boom' } } } }).kind).toBe('mayExist');
+  });
   it('explains a Home controller failure while preserving native installation diagnostics', () => {
     const progress = { kind: 'phase' as const, phase: 'ssh.installCli', label: 'Installing Happier' };
     for (const errorCode of ['database_connection_unavailable', 'database_transaction_conflict_exhausted', 'internal_error']) {
@@ -48,8 +65,9 @@ describe('managed creation presentation', () => {
           category: 'status', status: errorCode === 'internal_error' ? 500 : 503, code: errorCode } }, progress))
         .toBe(t('managedMachines.creation.homeRequestFailed'));
     }
-    expect(describeManagedInstallationFailure({ errorCode: 'provider_unavailable', error: 'Native command failed' }, progress))
-      .toBe('Native command failed');
+    // The installer's own sentence is diagnostic detail, never the page's cause.
+    expect(describeManagedInstallationFailure({ errorCode: 'provider_unavailable', error: 'Native command failed: GITHUB_TOKEN unset' }, progress))
+      .toBeNull();
   });
   it('retires a failed pre-effect idle observation only after newer healthy guest presence', () => {
     const enrolled = { ...machine, enrolledMachineId: 'guest' };
@@ -118,6 +136,10 @@ describe('managed creation presentation', () => {
       progress: { kind: 'phase' as const, phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' },
     } };
     expect(currentManagedCreationOperation(removed, retention)).toBeNull();
+    // Native absence can precede its Home report. A retention read admitted
+    // in that gap is still not actionable once the removed row arrives.
+    expect(currentManagedCreationOperation(removed, { ...retention, snapshot: { ...retention.snapshot,
+      createdAt: 35, settledAt: 40 } })).toBeNull();
     const later = { ...failed, snapshot: { ...failed.snapshot, createdAt: 35, settledAt: 40 } };
     expect(currentManagedCreationOperation(removed, later)).toBe(later);
     expect(currentManagedCreationOperation(machine, failed)).toBe(failed);

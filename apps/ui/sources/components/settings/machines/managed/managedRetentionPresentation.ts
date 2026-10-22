@@ -2,7 +2,7 @@ import type {
   MachineRetentionCategoryV1,
   MachineRetentionPolicyV1,
 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
-import { DEFAULT_MACHINE_UNUSED_RETENTION_MS_V1, isMachineRetainedWakeEligibleV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
+import { DEFAULT_MACHINE_UNUSED_RETENTION_MS_V1, isMachineRetainedWakeEligibleV1, resolveMachineRetentionNativeIntentV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import type { RetentionV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 import { t } from '@/text';
@@ -29,6 +29,16 @@ const UNUSED_DURATIONS_MS: readonly number[] = [
 
 export type RetentionEffect = 'stop' | 'delete';
 
+/**
+ * How a provider parks a machine for the Stop effect: its native Stop, or its native Suspend when that is
+ * the only way it parks (the Protocol resolver decides). The words follow what will really happen.
+ */
+export type RetentionParking = 'stop' | 'suspend';
+
+export function retentionParking(supportedIntents: Parameters<typeof resolveMachineRetentionNativeIntentV1>[1]): RetentionParking {
+  return resolveMachineRetentionNativeIntentV1('stop', supportedIntents) === 'suspend' ? 'suspend' : 'stop';
+}
+
 export function formatRetentionDuration(ms: number): string {
   if (ms >= DAY_MS && ms % DAY_MS === 0)
     return t('managedRetention.days', { count: ms / DAY_MS });
@@ -42,21 +52,26 @@ export function formatRetentionDuration(ms: number): string {
 export function describeRetention(
   retention: RetentionV1,
   formatTime: (at: number) => string = formatAsOfTime,
+  parking: RetentionParking = 'stop',
 ): string {
   switch (retention.kind) {
     case 'until-delete':
       return t('managedRetention.untilDelete');
     case 'unused': {
       const duration = formatRetentionDuration(retention.afterMs);
-      return retention.effect === 'stop'
-        ? t('managedRetention.stopAfterUnused', { duration })
-        : t('managedRetention.deleteAfterUnused', { duration });
+      return retention.effect === 'delete'
+        ? t('managedRetention.deleteAfterUnused', { duration })
+        : parking === 'suspend'
+          ? t('managedRetention.suspendAfterUnused', { duration })
+          : t('managedRetention.stopAfterUnused', { duration });
     }
     case 'deadline': {
       const time = formatTime(retention.at);
-      return retention.effect === 'stop'
-        ? t('managedRetention.stopAt', { time })
-        : t('managedRetention.deleteAt', { time });
+      return retention.effect === 'delete'
+        ? t('managedRetention.deleteAt', { time })
+        : parking === 'suspend'
+          ? t('managedRetention.suspendAt', { time })
+          : t('managedRetention.stopAt', { time });
     }
   }
 }
@@ -66,6 +81,10 @@ export type RetentionConsequenceFacts = Readonly<{
   stoppedBilling: 'billed' | 'not-billed' | 'unknown';
   /** The provider's display name ("Hetzner"). */
   provider: string;
+  /** How it parks for Stop; a suspend keeps the machine's state. */
+  parking?: RetentionParking;
+  /** The resource kind ("Sandbox"), for "Cua pauses this sandbox". */
+  kind?: string;
 }>;
 
 /**
@@ -94,6 +113,8 @@ export function describeRetentionConsequence(
       ? t('managedRetention.consequence.deleteAtBilled', when)
       : t('managedRetention.consequence.deleteAt', when);
   }
+  if (facts.parking === 'suspend')
+    return t('managedRetention.consequence.suspend', { provider: facts.provider, kind: facts.kind ?? t('common.machine') });
   if (facts.location === 'local')
     return t('managedRetention.categoryHelp.local');
   switch (facts.stoppedBilling) {
@@ -158,6 +179,7 @@ export function buildRetentionChoices(
     current: RetentionV1;
     effects?: readonly RetentionEffect[];
     finiteOnly?: boolean;
+    parking?: RetentionParking;
   }>,
 ): readonly RetentionChoice[] {
   const effects = input.finiteOnly
@@ -183,7 +205,7 @@ export function buildRetentionChoices(
   return retentions.map((retention) => ({
     id: retentionChoiceId(retention),
     retention,
-    title: describeRetention(retention),
+    title: describeRetention(retention, undefined, input.parking),
   }));
 }
 
@@ -206,6 +228,7 @@ export function buildRetentionKindChoices(
   input: Readonly<{
     current: RetentionV1;
     effects?: readonly RetentionEffect[];
+    parking?: RetentionParking;
   }>,
 ): readonly RetentionChoice[] {
   const effects = input.effects ?? ['stop', 'delete'];
@@ -225,7 +248,7 @@ export function buildRetentionKindChoices(
   return retentions.map((retention) => ({
     id: retentionChoiceId(retention),
     retention,
-    title: describeRetention(retention),
+    title: describeRetention(retention, undefined, input.parking),
   }));
 }
 

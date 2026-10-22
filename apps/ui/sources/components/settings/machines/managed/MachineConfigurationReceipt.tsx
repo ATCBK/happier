@@ -232,11 +232,10 @@ function ReceiptCost(props: Readonly<{ cost: ManagedReceiptCost }>) {
   }
   return (
     <View style={styles.cost}>
+      {/* Where it runs labels the figure, as a price's label does; beside it, the two read as one phrase. */}
+      <Text style={styles.quietLine}>{t('managedMachines.price.runsOn', { computer: cost.computer })}</Text>
       <View style={styles.bigRow}>
         <Text style={styles.big}>{t('managedMachines.price.noBill')}</Text>
-        <Text style={styles.bigUnit}>
-          {t('managedMachines.price.runsOn', { computer: cost.computer })}
-        </Text>
       </View>
       {cost.meters.map((meter) => (
         <View

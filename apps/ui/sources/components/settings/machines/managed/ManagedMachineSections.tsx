@@ -26,6 +26,10 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useServerScopedMachine, useMachineListForServer } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { StorageState } from '@/sync/store/types';
+import { readOpenManagedMachineApprovalId } from '@/sync/domains/artifacts/approvalArtifacts';
+import { resolveActionTitle } from '@/text/actionTitles';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -52,7 +56,7 @@ import { ManagedCreationProgress } from './ManagedCreationProgress';
 import { ManagedMachineControllerSection, ManagedMachinePolicySection, ManagedMachineRecipeSection, ManagedControllerMoveList } from './ManagedMachineDetailSections';
 import { buildManagedConfigurationReceipt, managedCredentialReceiptTargets, managedSizeDimensions } from './managedConfigurationPresentation';
 import { useQualifiedConnectedAccountTargetPresentations } from '@/hooks/server/connectedServices/useQualifiedConnectedAccountTargetPresentations';
-import { describeRetention, describeRetentionConsequence, formatRetentionDuration } from './managedRetentionPresentation';
+import { describeRetention, describeRetentionConsequence, formatRetentionDuration, retentionParking } from './managedRetentionPresentation';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedCreation, managedCreationSetup, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
 import { useManagedMachineActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
@@ -178,6 +182,22 @@ export function ManagedMachineSections(props: SectionProps) {
             // invalidate in complete; a safe read must not restart itself.
         },
     });
+    // A Delete already waiting in Inbox (filed here earlier, elsewhere, or by Cancel's cleanup) is shown, never filed again.
+    const selectPendingDelete = React.useMemo(() => {
+        let artifacts: StorageState['artifacts'] | null = null;
+        let id: string | null = null;
+        return (state: StorageState) => {
+            if (state.artifacts !== artifacts) {
+                artifacts = state.artifacts;
+                id = readOpenManagedMachineApprovalId(Object.values(state.artifacts),
+                    { homeId: machine.homeId, managedId: machine.id, actionId: 'machines.managed.delete' });
+            }
+            return id;
+        };
+    }, [machine.homeId, machine.id]);
+    const pendingDeleteApprovalId = storage(selectPendingDelete);
+    const openApproval = (artifactId: string) => router.push(
+        `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(props.serverId)}` as never);
     const approvalRequestRef = React.useRef(approval.requestApproval);
     approvalRequestRef.current = approval.requestApproval;
     const [policyParent, setPolicyParent] = React.useState<ManagedMachinePolicyParent | null>(null);
@@ -387,6 +407,7 @@ export function ManagedMachineSections(props: SectionProps) {
     };
     const inspect = () => fireAndForget(run('machines.managed.inspect', target), { tag: 'ManagedMachineSections.inspect' });
     const reviewDependencies = () => {
+        if (pendingDeleteApprovalId) { openApproval(pendingDeleteApprovalId); return; }
         if (!canMutate) return;
         setDeleteReview(null);
         fireAndForget(run('machines.managed.references.get', target, result => {
@@ -486,7 +507,7 @@ export function ManagedMachineSections(props: SectionProps) {
             tone: 'bordered' as const, disabled: !canRebuild,
             loading: pending === 'machines.provisioners.options' || pending === 'machines.managed.rebuild', onPress: reviewRebuild }] : []),
         ...(supportedIntents.includes('delete') ? [{ label: t('managedMachines.actions.delete'), testID: 'managed-machine.delete',
-            tone: 'text' as const, disabled: !canMutate,
+            tone: 'text' as const, disabled: !canMutate && !pendingDeleteApprovalId,
             loading: pending === 'machines.managed.references.get' || pending === 'machines.managed.delete', onPress: reviewDependencies }] : []),
     ] : [];
     const receipt: ManagedReceiptModel = { ...buildManagedConfigurationReceipt({ launch: machine.launch,
@@ -511,9 +532,12 @@ export function ManagedMachineSections(props: SectionProps) {
     const providerName = provisionerPresentation.title ?? policyParent?.providerTitle;
     const enrolledDaemonState = StoredMachinePublishedDaemonStateV1Schema.safeParse(enrolledMachine?.daemonState);
     // The consequence says what the rule means for the bill, from the provider's own billing facts.
+    // A provider that parks by suspending says Suspend, from the same resolver that picks the native intent.
+    const parking = retentionParking(supportedIntents);
     const consequence = (retention: MachineRetentionPolicyV1['retention']) => billing && providerName
-        ? describeRetentionConsequence(retention, { location: billing.location, stoppedBilling: billing.stoppedBilling, provider: providerName })
-        : describeRetention(retention);
+        ? describeRetentionConsequence(retention, { location: billing.location, stoppedBilling: billing.stoppedBilling, provider: providerName,
+            parking, ...(provisionerPresentation.kindTitle ? { kind: provisionerPresentation.kindTitle } : {}) })
+        : describeRetention(retention, undefined, parking);
     const creationContext: ManagedCreationContext = { provider: providerName, operation,
         ...(reachabilityScope && enrolledMachine?.installationId ? { enrolledMachine: {
             machineId: enrolledMachine.id, installationId: enrolledMachine.installationId,
@@ -532,7 +556,7 @@ export function ManagedMachineSections(props: SectionProps) {
             : parentReadFailed ? t('managedRetention.waitsForProvider', { provider: providerName ?? t('common.machine') })
                 : providerName ? t('managedMachines.options.loading', { provider: providerName }) : undefined,
         nativeExpiry: nativeExpiryDescription,
-        effects: supportedMachineRetentionEffectsV1(supportedIntents),
+        effects: supportedMachineRetentionEffectsV1(supportedIntents), parking,
         canWake: isMachineRetainedWakeEligibleV1(policy.retention, { supportedIntents }),
         // A live machine is where an explicit, reviewed deadline is set (plan 52); the Action still asks first.
         deadline: true,
@@ -575,8 +599,11 @@ export function ManagedMachineSections(props: SectionProps) {
     return <ManagedReceiptColumns receipt={receipt} compact={compact} testID="managed-machine.detail">
         {approval.approvalId ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
             title={t('approvals.title')} description={t('approvals.status.open')}
-            action={{ label: t('approvals.details'), onPress: () => router.push(
-                `/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
+            action={{ label: t('approvals.details'), onPress: () => openApproval(approval.approvalId!) }} />
+            // A cleanup state already offers Review on its own row; say it once.
+            : pendingDeleteApprovalId && !describeManagedCreation(machine, creationContext).actions.includes('review') ? <AttentionBanner testID="managed-machine.approval" tone="neutral"
+                title={resolveActionTitle('machines.managed.delete', null)} description={t('approvals.waitingForYou')}
+                action={{ label: t('approvals.review'), onPress: () => openApproval(pendingDeleteApprovalId) }} /> : null}
         <ManagedCreationProgress machine={machine} operation={operation} setupRecovery={setupRecovery} provider={providerName}
             enrolledMachine={creationContext.enrolledMachine} title={machineName}
             {...(props.staleRead ? { staleRead: props.staleRead } : {})}
@@ -585,6 +612,7 @@ export function ManagedMachineSections(props: SectionProps) {
             answerPrompt={answerPrompt}
             providerAvailable={creationContext.providerAvailable}
             mark={provisionerPresentation.markAt(MANAGED_PROVISIONER_MARK_SIZE.row)} controller={creationContext.controller} handlers={{ ...(props.current ? { checkNow: inspect } : {}),
+            ...(pendingDeleteApprovalId ? { review: () => openApproval(pendingDeleteApprovalId) } : {}),
             ...(canCancelCreation && canMutate ? { cancel: cancelCreation } : {}),
             ...(recoveryConsoleUrl ? { openProvider: () => {
                 if (!props.binding?.isCurrent()) return;
@@ -604,9 +632,9 @@ export function ManagedMachineSections(props: SectionProps) {
                     expectedIntentRevision: machine.intentRevision }), { tag: 'ManagedMachineSections.retryInstall' }),
             } : {}) }} />
         <ManagedCreationScopeRuleSection machine={machine} serverId={props.serverId} binding={props.binding} />
-        {/* A resource confirmed gone has nothing left to keep or stop; its state row says so and offers Remove. */}
-        {resourceEnded ? null : <ManagedMachinePolicySection testID="managed-machine.policy" description={policyDescription} keep={keep}
-            compactSummary={compact ? { summary: describeRetention(policy.retention),
+        {/* A resource confirmed gone, or a creation canceled, has nothing left to keep; its state row says what remains. */}
+        {resourceEnded || machine.creationState !== 'active' ? null : <ManagedMachinePolicySection testID="managed-machine.policy" description={policyDescription} keep={keep}
+            compactSummary={compact ? { summary: describeRetention(policy.retention, undefined, parking),
                 onPress: () => {
                     closeKeepSheet();
                     keepSheetRef.current = showManagedKeepSheet(keepChannel, 'managed-machine.policy-sheet');
@@ -682,7 +710,7 @@ export function ManagedMachineSections(props: SectionProps) {
             </SectionButtonRow></ItemGroup> : null}
         {removeReviewKey === deleteReviewKey ? <ManagedDecisionRow testID="managed-machine.remove-decision"
             footnote={resourceEnded
-                ? t('managedPower.resourceAbsent') : t('managedCleanup.archiveReview')}
+                ? t('managedCleanup.archiveEnded') : t('managedCleanup.archiveReview')}
             onCancel={canMutate ? () => setRemoveReviewKey(null) : undefined}
             confirm={{ label: t('managedMachines.actions.remove'), testID: 'managed-machine.remove-confirm', disabled: !canRemove,
                 loading: pending === 'machines.managed.retire', onPress: () => { if (canRemove) fireAndForget(run('machines.managed.retire', { ...target,

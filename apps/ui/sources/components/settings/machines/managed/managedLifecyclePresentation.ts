@@ -9,6 +9,8 @@ import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
  */
 export type ManagedLifecycleState =
   | Readonly<{ kind: 'creationWaiting'; name: string }>
+  /** A submitted create the provider has not bound yet, while its acquire runs. */
+  | Readonly<{ kind: 'creating'; name: string }>
   /** Provider calls run where the account lives; nothing is created until that machine is back. */
   | Readonly<{
       kind: 'controllerWaiting';
@@ -48,6 +50,8 @@ export type ManagedLifecycleState =
   | Readonly<{ kind: 'mayExist'; name: string }>;
 
 export type ManagedLifecycleAction =
+  /** Opens the Ask already waiting in Inbox for this resource (its cleanup Delete). */
+  | 'review'
   | 'checkNow'
   | 'tryAgain'
   | 'openProvider'
@@ -111,6 +115,12 @@ export function describeManagedLifecycleState(
         { detail: t('managedMachines.creation.waiting', { name: state.name }) },
         [],
       );
+    case 'creating':
+      return present(
+        'pending',
+        { detail: t('managedMachines.creation.creating', { name: state.name }) },
+        [],
+      );
     case 'controllerWaiting':
       return present(
         'neutral',
@@ -147,7 +157,7 @@ export function describeManagedLifecycleState(
       return present(
         'warning',
         { cause: t('managedMachines.creation.canceledCleanup') },
-        ['checkNow', 'openProvider'],
+        ['review', 'checkNow', 'openProvider'],
       );
     case 'stopPending':
       return present('pending', { detail: t('managedPower.stopPending') }, [
@@ -227,7 +237,7 @@ export function describeManagedLifecycleState(
             .filter(Boolean)
             .join(' '),
         },
-        ['tryAgain', 'openProvider'],
+        ['review', 'tryAgain', 'openProvider'],
         { title: t('managedCleanup.pendingTitle') },
       );
     case 'cleanupUnknown':
@@ -324,6 +334,8 @@ export function managedLifecycleActionLabel(
   provider?: string,
 ): string {
   switch (action) {
+    case 'review':
+      return t('managedMachines.actions.review');
     case 'checkNow':
       return t('managedMachines.inspect.checkNow');
     case 'tryAgain':
