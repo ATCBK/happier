@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapClaudeProviderFailureToUsageDetails } from './runtimeIssues.js';
+import { buildClaudeRuntimeIssue, mapClaudeProviderFailureToUsageDetails } from './runtimeIssues.js';
 
 describe('mapClaudeProviderFailureToUsageDetails', () => {
+  it.each(['result', 'errors'] as const)('retains failed SDK %s evidence and its own reset without allowance telemetry', (field) => {
+    const text = 'Claude AI usage limit reached|1792656000';
+    const evidence = { type: 'result', subtype: 'error_during_execution', is_error: true,
+      [field]: field === 'errors' ? [text] : text };
+    expect(buildClaudeRuntimeIssue({ evidence, occurredAt: 1792655000000 })).toMatchObject({
+      source: 'usage_limit', usageLimit: { limitCategory: 'usage_limit', resetAtMs: 1792656000000 },
+    });
+    expect(mapClaudeProviderFailureToUsageDetails({ ...evidence, subtype: 'success', is_error: false })).toBeNull();
+    expect(mapClaudeProviderFailureToUsageDetails({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      result: 'Usage limit reached' })).toMatchObject({ limitCategory: 'usage_limit', resetAtMs: null });
+  });
+
   it('preserves StopFailure classification and provider retry timing through the canonical parser', () => {
     expect(mapClaudeProviderFailureToUsageDetails({ error_type: 'rate_limit' })).toMatchObject({ quotaScope: 'account' });
     expect(mapClaudeProviderFailureToUsageDetails({ status: 429, error: { retry_after: 2 } }))

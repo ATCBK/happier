@@ -27,6 +27,21 @@ function createHarness() {
 }
 
 describe('Claude unified direct lifecycle mapping (ported R-11 / HF-3)', () => {
+  it.each(['text', 'user_prompt', 'user'])('aborts the foreground for a tool interruption on the %s transcript path', async (kind) => {
+    const { observations, publishTranscript } = createHarness();
+    await publishTranscript({
+      kind, text: '[Request interrupted by user for tool use]', turnId: 'interrupted-turn',
+      providerPayload: { type: 'user', uuid: 'interruption-row', message: {
+        role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }],
+      } },
+    });
+    expect(observations).toEqual([{
+      type: 'turn_aborted', agentId: CLAUDE_UNIFIED_TERMINAL_PROVIDER_ID,
+      turnId: 'interrupted-turn', reason: 'user_interrupt',
+      detail: '[Request interrupted by user for tool use]', source: 'transcript',
+    }]);
+  });
+
   it('uses prompt identity across native hook and JSONL producers, with distinct row identity for queued consumption', async () => {
     const { observations, publishHook, publishTranscript } = createHarness();
     await publishHook({ providerPayload: { prompt_id: 'prompt-1', prompt: 'hello' } }, 'UserPromptSubmit');

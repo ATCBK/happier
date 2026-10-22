@@ -129,6 +129,13 @@ function parseClock(hourText: string, minuteText: string | undefined, meridiemTe
   return { hour, minute };
 }
 
+// Native Claude's stable limit-reached text carries its own reset, independently
+// of availability observations for optional allowances.
+const parseClaudePipeEpochResetText: ClaudeRuntimeResetTextEvidenceParser = (text, { nowMs }) => {
+  const match = /limit\s+reached\s*\|\s*(\d{10,13})\b/iu.exec(text);
+  return match ? timingFromTimestamp(Number(match[1]), nowMs) : null;
+};
+
 const parseClaudeTuiResetText: ClaudeRuntimeResetTextEvidenceParser = (text, { nowMs }) => {
   const match = /\b(?:resets?)\s+(?:(?:([A-Z][a-z]+)\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm))\s*\(([^)]+)\)/iu.exec(text);
   if (!match) return null;
@@ -175,10 +182,14 @@ export function parseClaudeUsageLimitReset(input: Readonly<{
   body?: unknown;
 }>): ClaudeRuntimeResetTiming {
   const headers = isRecord(input.headers) ? input.headers : null;
+  const body = isRecord(input.body) ? input.body : null;
   return parseProviderResetAt({
     ...input,
+    // Normalize the actual SDK failure text at the Claude boundary; the shared
+    // timing parser continues to own timestamps and retry/reset interpretation.
+    ...(body ? { body: { ...body, message: [body.message, body.errors, body.result] } } : {}),
     timestampEvidence: readClaudeHeaderTimestampEvidence(headers),
-    textEvidenceParsers: [parseClaudeTuiResetText],
+    textEvidenceParsers: [parseClaudePipeEpochResetText, parseClaudeTuiResetText],
   });
 }
 

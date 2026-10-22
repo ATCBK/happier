@@ -199,69 +199,31 @@ function collectSyntheticApiErrorRecords(record: Record<string, unknown>): Recor
   return records;
 }
 
-function containsRateLimitEvidence(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return /rate[ _-]?limit(?:ed)?/iu.test(value);
-  }
-  if (Array.isArray(value)) return value.some(containsRateLimitEvidence);
+function containsClaudeFailureText(value: unknown, pattern: RegExp): boolean {
+  if (typeof value === 'string') return pattern.test(value);
+  if (Array.isArray(value)) return value.some((item) => containsClaudeFailureText(item, pattern));
   if (!isRecord(value)) return false;
   return [
-    value.error,
-    value.code,
-    value.type,
-    value.error_type,
-    value.errorType,
-    value.kind,
-    value.message,
-    value.detail,
-    value.details,
-    value.description,
-    value.text,
-    value.content,
-    value.last_assistant_message,
-    value.lastAssistantMessage,
-  ].some(containsRateLimitEvidence);
+    value.error, value.errors, value.result, value.code, value.type, value.error_type, value.errorType,
+    value.kind, value.message, value.detail, value.details, value.description,
+    value.text, value.content, value.last_assistant_message, value.lastAssistantMessage,
+  ].some((item) => containsClaudeFailureText(item, pattern));
+}
+
+function containsRateLimitEvidence(value: unknown): boolean {
+  return containsClaudeFailureText(value, /rate[ _-]?limit(?:ed)?/iu);
+}
+
+function containsUsageLimitEvidence(value: unknown): boolean {
+  return containsClaudeFailureText(value, /usage\s+limit|limit\s+reached/iu);
 }
 
 function containsTransientThrottleEvidence(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return /temporarily\s+limiting\s+requests/iu.test(value)
-      || /not\s+your\s+usage\s+limit/iu.test(value);
-  }
-  if (Array.isArray(value)) return value.some(containsTransientThrottleEvidence);
-  if (!isRecord(value)) return false;
-  return [
-    value.error,
-    value.code,
-    value.type,
-    value.kind,
-    value.message,
-    value.detail,
-    value.details,
-    value.description,
-    value.text,
-    value.content,
-  ].some(containsTransientThrottleEvidence);
+  return containsClaudeFailureText(value, /temporarily\s+limiting\s+requests|not\s+your\s+usage\s+limit/iu);
 }
 
 function containsProviderCapacityEvidence(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return /\b529\b/u.test(value) || /\boverloaded(?:_error)?\b/iu.test(value);
-  }
-  if (Array.isArray(value)) return value.some(containsProviderCapacityEvidence);
-  if (!isRecord(value)) return false;
-  return [
-    value.error,
-    value.code,
-    value.type,
-    value.kind,
-    value.message,
-    value.detail,
-    value.details,
-    value.description,
-    value.text,
-    value.content,
-  ].some(containsProviderCapacityEvidence);
+  return containsClaudeFailureText(value, /\b529\b|\boverloaded(?:_error)?\b/iu);
 }
 
 function readSyntheticProviderLimitId(records: readonly Record<string, unknown>[]): string | undefined {
@@ -313,18 +275,19 @@ function mapSyntheticClaudeApiErrorToUsageDetails(
     'status_code',
   ]));
   const hasRateLimitEvidence = records.some(containsRateLimitEvidence);
+  const hasUsageLimitEvidence = records.some(containsUsageLimitEvidence);
   const hasTransientThrottleEvidence = records.some(containsTransientThrottleEvidence);
   const hasProviderCapacityEvidence = status === 529 || records.some(containsProviderCapacityEvidence);
   const hasCompatibleStatus = status === null || status === 429 || status === 529;
   const isAssistantApiError =
     (record.type === 'assistant' || record.type === 'assistant_response')
     && record.isApiErrorMessage === true
-    && (hasRateLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence || status === 429)
+    && (hasRateLimitEvidence || hasUsageLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence || status === 429)
     && hasCompatibleStatus;
   const isResultApiError =
     (record.type === 'result' || knownProviderFailure)
     && hasCompatibleStatus
-    && (status === 429 || hasRateLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence)
+    && (status === 429 || hasRateLimitEvidence || hasUsageLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence)
     && (
       status === 429
       || status === 529
@@ -357,7 +320,9 @@ function mapSyntheticClaudeApiErrorToUsageDetails(
       ? { limitCategory: 'capacity' as const }
       : hasTransientThrottleEvidence
         ? { limitCategory: 'rate_limit' as const }
-        : {}),
+        : hasUsageLimitEvidence
+          ? { limitCategory: 'usage_limit' as const }
+          : {}),
     quotaScope: hasProviderCapacityEvidence || hasTransientThrottleEvidence ? 'provider' : 'account',
     recoverability: 'wait',
     ...(providerLimitId ? { providerLimitId } : {}),

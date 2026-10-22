@@ -94,19 +94,35 @@ describe('Claude terminal lifecycle mapping leaf', () => {
         });
     });
 
-    it('maps interrupted transcript rows to user interrupts', () => {
+    it.each([
+        '[Request interrupted by user]',
+        '[Request interrupted by user for tool use]',
+    ])('maps exact interruption marker %s to a user interrupt', (text) => {
+      for (const kind of ['text', 'user_prompt'] as const) {
         expect(mapClaudeTranscriptEventToTerminalLifecycleObservation({
             agentId: 'claude',
-            kind: 'text',
-            text: '[Request interrupted by user]',
+            kind,
+            text,
             turnId: 'claude-turn',
         })).toEqual({
             type: 'turn_aborted',
             agentId: 'claude',
             turnId: 'claude-turn',
             reason: 'user_interrupt',
-            detail: '[Request interrupted by user]',
+            detail: text,
             source: 'transcript',
         });
+      }
+    });
+
+    it('preserves interruption text inside a real prompt or queued command as prompt input', () => {
+        expect(mapClaudeTranscriptEventToTerminalLifecycleObservation({
+            agentId: 'claude', kind: 'text',
+            text: 'Explain [Request interrupted by user for tool use]',
+        })).toMatchObject({ type: 'prompt_submitted' });
+        expect(mapClaudeTranscriptEventToTerminalLifecycleObservation({
+            agentId: 'claude', kind: 'queued_command',
+            text: '[Request interrupted by user for tool use]',
+        })).toMatchObject({ type: 'prompt_submitted', providerEvidence: 'queued_command' });
     });
 });

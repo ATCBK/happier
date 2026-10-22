@@ -160,18 +160,6 @@ export function mapClaudeTranscriptEventToTerminalLifecycleObservation(
 ): ClaudeTerminalLifecycleObservation | null {
     const turnId = readTurnId(event.turnId);
 
-    if (event.kind === 'user_prompt') {
-        return {
-            type: 'prompt_submitted',
-            agentId: event.agentId,
-            turnId,
-            source: 'transcript',
-            promptText: event.text,
-            ...(event.acceptanceEvidenceId ? { acceptanceEvidenceId: event.acceptanceEvidenceId } : {}),
-            ...(typeof event.observedAtMs === 'number' ? { observedAtMs: event.observedAtMs } : {}),
-        };
-    }
-
     if (event.kind === 'queued_command') {
         return {
             type: 'prompt_submitted',
@@ -225,13 +213,14 @@ export function mapClaudeTranscriptEventToTerminalLifecycleObservation(
         };
     }
 
-    if (event.text.includes('[Request interrupted by user]')) {
+    if (event.text === '[Request interrupted by user]'
+        || event.text === '[Request interrupted by user for tool use]') {
         return {
             type: 'turn_aborted',
             agentId: event.agentId,
             turnId,
             reason: 'user_interrupt',
-            detail: '[Request interrupted by user]',
+            detail: event.text,
             source: 'transcript',
         };
     }
