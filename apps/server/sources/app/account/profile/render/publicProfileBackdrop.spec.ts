@@ -36,7 +36,9 @@ describe('renderPublicProfileBackdrop', () => {
             dpr: 2, theme: 'light' as const, page: [255, 255, 255] as const, horizonAt: 0.6 };
         const props = pictureBackdropProps({ ...input, look: { effect: selected.look.effect, params: selected.look.params,
             strength: selected.look.strength, fade: selected.look.dissolve.style, from: selected.look.dissolve.from, to: selected.look.dissolve.to } });
-        const job = { ...props, source: { rgba: new Uint8ClampedArray(source.rgba), w: 64, h: 48 } };
+        const crop = cropOf({ w: 64, h: 48 }, input.width, input.height, props.focus, props.horizon);
+        const job = { ...props, grade: backdropBandGrade(props.grade, crop, props.horizon),
+            source: { rgba: new Uint8ClampedArray(source.rgba), w: 64, h: 48 } };
         const expected = renderBackdrop({ ...job, dpr: 2 });
         expect(Buffer.from(expected.rgba)).not.toEqual(Buffer.from(renderBackdrop({ ...job, dpr: 1 }).rgba));
         const actual = await renderPublicProfileBackdrop(input);
