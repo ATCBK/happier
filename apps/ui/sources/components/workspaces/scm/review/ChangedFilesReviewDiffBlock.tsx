@@ -2,8 +2,14 @@ import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/Code
 import * as React from 'react';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
+import { resolveFilePageMediaFacts } from '@/components/workspaces/files/file/filePageMediaFacts';
+import { workspaceStatFile } from '@/sync/ops/workspaceFileSystem';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -70,6 +76,8 @@ export type ChangedFilesReviewDiffBlockProps = Readonly<{
     evidenceOnly?: boolean;
     /** Before/after facts for a changed image (Review wells); absent shows the current picture alone. */
     imageCompare?: ImageCompareSource | null;
+    /** Opens this file's File page (a changed recording plays there). */
+    onOpenFile?: (filePath: string) => void;
     hunkNotes?: Readonly<{
         placement: 'column' | 'inline';
         columnWidth: number;
@@ -119,6 +127,7 @@ function areChangedFilesReviewDiffBlockPropsEqual(
         || prev.flat !== next.flat
         || prev.evidenceOnly !== next.evidenceOnly
         || prev.imageCompare !== next.imageCompare
+        || prev.onOpenFile !== next.onOpenFile
         || prev.hunkNotes !== next.hunkNotes
         || prev.hunkReview !== next.hunkReview
         || prev.reviewUnits !== next.reviewUnits
@@ -366,6 +375,17 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             }
         }
 
+        if (fileViewer.kind === 'video' || fileViewer.kind === 'audio') {
+            // Recognised media wins over git's binary flag (P2 §3.2): a changed recording names its kind and
+            // size, and opens the File page that plays it.
+            return (
+                <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
+                    <ReviewBlockMediaLine filePath={filePath} viewer={fileViewer} scope={props.workspaceScope ?? null}
+                        present={props.imageCompare ? !isDeletedSource(props.imageCompare) : true} onOpenFile={props.onOpenFile} />
+                </View>
+            );
+        }
+
         if (fileIsBinary) {
             return (
                 <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }, noOverflowAnchor]}>
@@ -442,6 +462,60 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
 const EMPTY_NOTE_TOPS: ReadonlyMap<number, number> = new Map();
 const EMPTY_COLUMN_NOTES: NonNullable<ChangedFilesReviewDiffBlockProps['hunkNotes']> = { placement: 'column', columnWidth: 0, render: () => null };
+
+function isDeletedSource(source: ImageCompareSource): boolean {
+    return (source.kind === 'captured' ? source.file.changeKind : source.changeKind) === 'deleted';
+}
+
+/** A changed recording in Review: its kind and size on one quiet line that opens the File page's player. */
+function ReviewBlockMediaLine(props: Readonly<{
+    filePath: string;
+    viewer: FileViewerClass;
+    scope: WorkspaceScopeBase | null;
+    /** The file is still on disk (not deleted), so its size can be read. */
+    present: boolean;
+    onOpenFile?: (filePath: string) => void;
+}>) {
+    const { theme } = useUnistyles();
+    const [sizeBytes, setSizeBytes] = React.useState<number | null>(null);
+    const { scope, filePath, present } = props;
+    const serverId = scope?.serverId;
+    const machineId = scope?.machineId;
+    const rootPath = scope?.rootPath;
+    React.useEffect(() => {
+        if (!present || !machineId || !rootPath) return;
+        const controller = new AbortController();
+        void workspaceStatFile({ serverId, machineId, rootPath }, filePath, { signal: controller.signal }).then((stat) => {
+            if (!controller.signal.aborted && stat.success && stat.exists && typeof stat.sizeBytes === 'number') setSizeBytes(stat.sizeBytes);
+        }, () => {});
+        return () => controller.abort();
+    }, [present, serverId, machineId, rootPath, filePath]);
+    const facts = resolveFilePageMediaFacts({ viewer: props.viewer, sizeBytes }).join(' · ');
+    const glyph = props.viewer.kind === 'video' ? 'video-camera' : 'waveform';
+    const line = (hovered: boolean) => (
+        <>
+            <Icon name={glyph} size={ICON_SIZE.xs} color={hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
+            <Text style={{ ...Typography.variant('meta'), color: hovered ? theme.colors.text.primary : theme.colors.text.secondary, fontVariant: ['tabular-nums'] }}>
+                {facts}
+            </Text>
+        </>
+    );
+    const onOpenFile = props.onOpenFile;
+    const rowStyle = [mediaLineStyles.row, { gap: theme.space.s6 }];
+    if (!onOpenFile) return <View testID="scm-review-media-line" style={rowStyle}>{line(false)}</View>;
+    return (
+        <HappierPressable testID="scm-review-media-open" accessibilityRole="link" accessibilityLabel={`${filePath.split('/').pop() ?? filePath} · ${facts}`}
+            onPress={() => onOpenFile(filePath)}
+            style={(state) => [rowStyle, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
+            {(state) => line(state.hovered || state.focused)}
+        </HappierPressable>
+    );
+}
+
+const mediaLineStyles = StyleSheet.create({
+    row: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
+});
 
 /** Review's changed image through the one compare owner; a live working tree compares HEAD with the file. */
 function ReviewBlockImageCompare(props: Readonly<{

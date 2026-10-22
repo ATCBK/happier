@@ -105,6 +105,23 @@ describe('ChangedFilesReviewDiffBlock', () => {
         expect(screen.getTextContent()).not.toContain(t('files.noChanges'));
     });
 
+    // Recognised media wins over git's binary flag (P2 §3.2): a changed recording names its kind, not
+    // "Binary File", and opens the File page that plays it.
+    it.each(['assets/intro-loop.mp4', 'assets/chime.wav'])('reads a changed recording (%s) as its kind and opens its File page', async (filePath) => {
+        const diffStateSource = createChangedFilesReviewDiffStateSource();
+        diffStateSource.setDiffState(filePath, { status: 'loaded', diff: '', error: null });
+        const onOpenFile = vi.fn();
+        const { resolveFileViewerKind } = await import('@/scm/utils/filePresentation');
+        const kindLabel = t(resolveFileViewerKind({ path: filePath }).labelKey as never) as string;
+        const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={createThemeFixture()} sessionId="s1" snapshotSignature="sig"
+            filePath={filePath} diffStateSource={diffStateSource} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
+            isBinaryContent onOpenFile={onOpenFile} />);
+        expect(screen.getTextContent()).not.toContain(t('files.binaryFile'));
+        expect(screen.getTextContent()).toContain(kindLabel);
+        await screen.pressByTestIdAsync('scm-review-media-open');
+        expect(onOpenFile).toHaveBeenCalledWith(filePath);
+    });
+
     it('reserves a fixed height while loading for large diffs (prevents scroll jumps)', async () => {
         const loadingState = { status: 'loading', diff: '', error: null } as const;
         const diffStateSource = {

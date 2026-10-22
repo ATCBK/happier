@@ -1098,6 +1098,10 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         const entry = snapshot?.entries.find(file => file.path === path);
         return entry ? { kind: 'workingTree' as const, changeKind: entry.kind, area: diffArea, signature: snapshotSignature } : null;
     }, [props.hunkReview?.source, snapshot, diffArea, snapshotSignature]);
+    const openReviewPath = React.useCallback((path: string) => {
+        const file = reviewFiles.find((entry) => entry.fullPath === path);
+        if (file) deferOnWeb(() => onFilePress(file));
+    }, [reviewFiles, onFilePress]);
     const renderDiffBlock = useChangedFilesReviewDiffBlockRenderer({
         binaryPaths: binaryReviewPaths,
         hunkNotes,
@@ -1121,6 +1125,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         flat: Boolean(props.comparisonChrome),
         getHunkReview,
         getImageCompare,
+        onOpenFile: props.evidenceOnly ? undefined : openReviewPath,
     });
 
     const onFilePressPinned = props.onFilePressPinned;

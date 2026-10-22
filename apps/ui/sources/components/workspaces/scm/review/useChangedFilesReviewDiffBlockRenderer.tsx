@@ -35,6 +35,8 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
     hunkNotes?: ChangedFilesReviewDiffBlockProps['hunkNotes'];
     /** Before/after facts per changed image path, from the Review's comparison entries. */
     getImageCompare?: (path: string) => ChangedFilesReviewDiffBlockProps['imageCompare'];
+    /** Opens a file's File page from inside its block (a changed recording plays there). */
+    onOpenFile?: (path: string) => void;
     /** Keep / Discard rows on every file's changes (one checkout, one discard owner). */
     getHunkReview?: (path: string) => Readonly<{ hunks: NonNullable<ChangedFilesReviewDiffBlockProps['hunkReview']>;
         reviewUnits: ChangedFilesReviewDiffBlockProps['reviewUnits'] }>;
@@ -107,6 +109,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
                 evidenceOnly={input.evidenceOnly}
                 hunkNotes={input.hunkNotes}
                 imageCompare={input.getImageCompare?.(path) ?? null}
+                onOpenFile={input.onOpenFile}
                 hunkReview={review?.hunks ?? null}
                 reviewUnits={review?.reviewUnits}
             />
@@ -118,6 +121,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
         input.hunkNotes,
         input.getHunkReview,
         input.getImageCompare,
+        input.onOpenFile,
         input.findModel,
         input.findActive,
         input.binaryPaths,
