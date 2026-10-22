@@ -40,6 +40,27 @@ describe('SessionListIdentity', () => {
         expect(screen.tree.root.findAllByType('Avatar')).toHaveLength(0);
     });
 
+    it('dims the provider logo for a monochrome identity, as the avatar is greyed', async () => {
+        const { lightTheme } = await import('@/theme');
+        const { SessionListIdentity } = await import('./SessionListIdentity');
+        const session = createSessionFixture();
+        const render = (monochrome: boolean) => renderScreen(
+            <SessionListIdentity
+                session={session}
+                display="agentLogo"
+                avatarSize={28}
+                agentLogoSize={22}
+                monochrome={monochrome}
+                color={lightTheme.colors.text.secondary}
+            />,
+        );
+
+        const live = await render(false);
+        expect(live.tree.root.findByType('AgentIcon').props.color).toBe(lightTheme.colors.text.secondary);
+        const stopped = await render(true);
+        expect(stopped.tree.root.findByType('AgentIcon').props.color).toBe(lightTheme.colors.text.tertiary);
+    });
+
     it('uses the canonical default agent when list-only metadata has no resolvable provider', async () => {
         const { SessionListIdentity } = await import('./SessionListIdentity');
         const session = createSessionFixture({

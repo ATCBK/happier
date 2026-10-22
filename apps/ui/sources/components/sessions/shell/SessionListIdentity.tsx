@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { DEFAULT_AGENT_ID, getAgentPickerIconScale, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
@@ -29,6 +30,7 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
     color?: string;
     testID?: string;
 }>) {
+    const { theme } = useUnistyles();
     if (props.display === 'none') return null;
     if (props.display === 'agentLogo') {
         const agentId = resolveAgentIdFromFlavor(props.session.metadata?.flavor) ?? DEFAULT_AGENT_ID;
@@ -36,7 +38,9 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
             <AgentIcon
                 agentId={agentId}
                 size={props.agentLogoSize}
-                color={props.color}
+                // A logo is already a single tint, so the avatar's greyscale has no effect here:
+                // a stopped session takes the dimmer ink instead.
+                color={props.monochrome === true ? theme.colors.text.tertiary : props.color}
                 style={{ transform: [{ scale: getAgentPickerIconScale(agentId) }] }}
                 testID={props.testID ?? `session-list-agent-logo-${props.session.id}`}
             />
