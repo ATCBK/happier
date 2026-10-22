@@ -286,6 +286,11 @@ installer_animate_step() {
   return "${status}"
 }
 
+# Successful steps suppress tool chatter, but recovery warnings remain visible.
+replay_installer_step_warnings() {
+  sed -n '/^WARNING: /p' "$1" >&2
+}
+
 run_installer_step() {
   local label="$1"
   shift
@@ -323,6 +328,8 @@ run_installer_step() {
   if [[ "${status}" -eq 0 ]]; then
     if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_output}" ]]; then
       cat "${tmp_output}"
+    else
+      replay_installer_step_warnings "${tmp_output}"
     fi
     rm -f "${tmp_output}" >/dev/null 2>&1 || true
     return 0
@@ -374,6 +381,8 @@ capture_installer_step_output() {
     printf -v "${__resultvar}" '%s' "$(cat "${tmp_output}")"
     if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_error}" ]]; then
       cat "${tmp_error}" >&2
+    else
+      replay_installer_step_warnings "${tmp_error}"
     fi
     rm -f "${tmp_output}" "${tmp_error}" >/dev/null 2>&1 || true
     return 0
@@ -598,19 +607,31 @@ validate_requested_install_version() {
   return 0
 }
 
-# GitHub rejects an expired or revoked token even for public releases, so a failed
-# authenticated request is retried anonymously instead of failing the install.
+# Only rejected credentials trigger anonymous fallback. Buffer each response so a
+# failed transfer cannot leave partial metadata in the caller's next retry.
 curl_auth() {
+  local response=""
+  local status=0
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    if curl -fsSL --show-error \
+    if response="$(curl -fsSL --show-error --write-out $'\n%{http_code}' \
       -H "Authorization: Bearer ${GITHUB_TOKEN}" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
-      "$@"; then
+      "$@")"; then
+      printf '%s' "${response%$'\n'*}"
       return 0
+    else
+      status=$?
     fi
-    echo "GitHub request with GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN failed; retrying without the token..." >&2
+    if [[ "${response##*$'\n'}" != "401" ]]; then
+      return "${status}"
+    fi
+    echo "WARNING: GitHub rejected GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN (401); retrying without the token..." >&2
   fi
-  curl -fsSL --show-error "$@"
+  if response="$(curl -fsSL --show-error "$@")"; then
+    printf '%s' "${response}"
+  else
+    return $?
+  fi
 }
 
 fetch_release_metadata_with_retry() {

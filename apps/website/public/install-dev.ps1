@@ -1667,7 +1667,7 @@ function Remove-InstallerGitHubTokenAfterFailure {
   if (-not (Test-InstallerWebExceptionStatus -ErrorRecord $ErrorRecord -StatusCode 401)) {
     return $false
   }
-  Write-Warning "GitHub rejected GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN (401); retrying without the token."
+  Write-Warning "GitHub rejected GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN (401); retrying without the token." -WarningAction Continue
   $Headers.Remove("Authorization")
   return $true
 }
