@@ -9,6 +9,7 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
 import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { enterDemoMode, isDemoModeActive, resetDemoModeDepthForTests } from '@/demoMode/runtime/enterExitDemoMode';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -73,7 +74,7 @@ type HookValue = Readonly<{
 
 let servedHome: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>> | null = null;
 let signedOut = false;
-let firstAttachRequest = createDeferred<void>();
+let firstAttachRequestObserved = false;
 let statusRequestIssued = createDeferred<void>();
 let statusRequestSignals: AbortSignal[] = [];
 let attachRequestSignals: AbortSignal[] = [];
@@ -103,7 +104,7 @@ const rpcRequests = installSessionActionRpcBoundary(async (request, { serverUrl,
   }
   if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_ATTACH) {
     attachRequestSignals.push(signal);
-    firstAttachRequest.resolve();
+    firstAttachRequestObserved = true;
     return machineExternalSessionAttachSpy(request.params, options);
   }
   if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_DETACH)
@@ -170,7 +171,7 @@ async function publishAcceptedCursor() {
 async function settleMountedRuntime(enabled: boolean) {
   if (!enabled || signedOut || isDemoModeActive()) return;
   // The outer test deadline owns this genuine transport observation; add no shorter polling deadline.
-  await firstAttachRequest.promise;
+  await waitForHomeGovernance(() => expect(firstAttachRequestObserved).toBe(true));
   await flushHookEffects();
 }
 
@@ -276,7 +277,7 @@ describe('useExternalSessionRuntime', () => {
     documentListeners.clear();
     previousState = storage.getState();
     signedOut = false;
-    firstAttachRequest = createDeferred<void>();
+    firstAttachRequestObserved = false;
     statusRequestIssued = createDeferred<void>();
     statusRequestSignals = [];
     attachRequestSignals = [];
@@ -1337,7 +1338,7 @@ describe('useExternalSessionRuntime', () => {
     expect(attachRequestSignals[0]?.aborted).toBe(true);
     expect(machineExternalSessionDetachSpy).not.toHaveBeenCalled();
 
-    firstAttachRequest = createDeferred<void>();
+    firstAttachRequestObserved = false;
     const reopened = await renderHarness();
     expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(2);
     expect(attachRequestSignals[1]?.aborted).toBe(false);

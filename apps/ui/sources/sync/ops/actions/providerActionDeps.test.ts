@@ -108,13 +108,12 @@ describe('Provider Account source visibility Action', () => {
     it('keeps the real projection RPC open for its owner budget and consumes the source-scoped result', async () => {
         const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
         const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });
-        let entered = () => {};
+        let entered = false;
         let release = () => {};
-        const started = new Promise<void>(resolve => { entered = resolve; });
         const released = new Promise<void>(resolve => { release = resolve; });
         const failure = createProviderErrorV1('provider_endpoint_unavailable', { machineId: machine.id, connectionId: 'pc_a' });
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async () => {
-            entered();
+            entered = true;
             await released;
             return { status: 'success', agentTargetKey: 'agent:happier.agent.claude/claude', groups: [],
                 refreshFailures: [{ connectionId: 'pc_a', error: failure }] };
@@ -125,7 +124,7 @@ describe('Provider Account source visibility Action', () => {
             machineId: machine.id, agentTargetKey: 'agent:happier.agent.claude/claude',
         }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId });
         try {
-            await started;
+            await vi.waitFor(() => expect(entered).toBe(true));
             await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
             release();
             await expect(pending).resolves.toMatchObject({ ok: true, result: { status: 'success',

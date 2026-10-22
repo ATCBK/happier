@@ -1080,8 +1080,7 @@ describe('ProviderConnectionDetailScreen', () => {
         const testRow = findTestRow(screen);
         await pressAndFlush(testRow);
 
-        const updatedTestRow = findTestRow(screen);
-        expect(updatedTestRow?.props.subtitle).toBe('settingsProviders.errors.unreachableDescription');
+        await waitForHomeGovernance(() => expect(findTestRow(screen)?.props.subtitle).toBe('settingsProviders.errors.unreachableDescription'));
     });
 
     it('normalizes a thrown probe failure through the shared typed Provider boundary', async () => {
@@ -1093,9 +1092,11 @@ describe('ProviderConnectionDetailScreen', () => {
 
         await pressAndFlush(testRow);
 
-        const updatedTestRow = findTestRow(screen);
-        expect(updatedTestRow?.props.subtitle).toBeTruthy();
-        expect(updatedTestRow?.props.subtitle).not.toContain('socket implementation detail');
+        await waitForHomeGovernance(() => {
+            const updatedTestRow = findTestRow(screen);
+            expect(updatedTestRow?.props.subtitle).toBeTruthy();
+            expect(updatedTestRow?.props.subtitle).not.toContain('socket implementation detail');
+        });
     });
 
     it('clears the previous machine probe result when the target machine changes', async () => {
@@ -1103,13 +1104,13 @@ describe('ProviderConnectionDetailScreen', () => {
             probeCapability: 'catalog',
             probeObservationIdentity: 'probe-observation:v1:machine-a',
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
+        installDetailCatalog();
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
         const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
         const testRow = findTestRow(screen);
         await pressAndFlush(testRow);
-        expect(findTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
+        await waitForHomeGovernance(() => expect(findTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
 
         await act(async () => {
             await administrationTarget.controller.select('machine-b');
@@ -1146,13 +1147,13 @@ describe('ProviderConnectionDetailScreen', () => {
                 accountState: 'valid', machineState: 'absent', effectiveState: 'valid',
             },
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
+        installDetailCatalog();
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
         const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
         const testRow = findTestRow(screen);
         await pressAndFlush(testRow);
-        expect(findTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
+        await waitForHomeGovernance(() => expect(findTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
 
         state.connection = connection({
             displayName: 'Renamed only', displayNameMode: 'custom', revision: 2,
@@ -1185,7 +1186,6 @@ describe('ProviderConnectionDetailScreen', () => {
             ...facts,
             probeObservationIdentity: 'probe-observation:v1:secret-record-one',
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
         const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
         const testRow = findTestRow(screen);
@@ -1241,7 +1241,6 @@ describe('ProviderConnectionDetailScreen', () => {
             probeCapability: 'catalog',
             probeObservationIdentity: null,
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
         const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
         const testRow = findTestRow(screen);
@@ -1256,7 +1255,6 @@ describe('ProviderConnectionDetailScreen', () => {
             revision: 1,
             credential: { required: true, accountBound: false, boundMachineIds: [] },
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
         const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
         const testRow = findTestRow(screen);
@@ -1316,7 +1314,6 @@ describe('ProviderConnectionDetailScreen', () => {
                 effectiveState: 'valid',
             },
         });
-        probeProviderConnection.mockResolvedValue({ status: 'success' });
         installDetailCatalog();
         const write = createDeferred<void>();
         account.home.answer(account.serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
@@ -1327,8 +1324,8 @@ describe('ProviderConnectionDetailScreen', () => {
         await openAdvanced(screen);
         const testRow = findTestRow(screen);
         await pressAndFlush(testRow);
-        expect(findTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
+        await waitForHomeGovernance(() => expect(findTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
 
         const accountRow = screen.findAllByType(Item)
             .find((item) => item.props.title === 'settingsProviders.detail.accountAccess');
@@ -1357,11 +1354,12 @@ describe('ProviderConnectionDetailScreen', () => {
         expect(field()).toBeDefined();
         await act(async () => { field()?.props.onChangeText('https://machine.example/v1'); });
         await act(async () => { await field()?.props.onSubmitEditing(); });
+        await waitForHomeGovernance(() => expect(findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.retry')).toBeDefined());
         const retry = findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.retry');
         expect(retry).toBeDefined();
         await act(async () => { await retry?.props.onPress?.(); });
 
-        expect(run).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(2));
         expect(run.mock.calls[1]).toEqual(run.mock.calls[0]);
     });
 
@@ -1432,8 +1430,8 @@ describe('ProviderConnectionDetailScreen', () => {
 
         await pressAndFlush(enable);
 
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledOnce());
         expect(stored.writes).toBe(0);
-        expect(run).toHaveBeenCalledOnce();
         expect(run.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ action: 'setEnabled', machineId: 'machine-a',
             connectionId: 'pc_a', enabled: true, scope: 'machine' }));
     });
@@ -1799,10 +1797,10 @@ describe('ProviderConnectionDetailScreen', () => {
             .toContain('settingsProviders.local.runningOutsideHappier');
         expect(screen.findByTestId('provider-connection-local-start-managed')).not.toBeNull();
         await screen.pressByTestIdAsync('provider-connection-local-start-managed');
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'startLocal', machineId: 'machine-a', connectionId: 'pc_a',
             contributionKey: 'acme.plugin/acme',
-        }), 'start:acme.plugin/acme');
+        }), 'start:acme.plugin/acme'));
     });
 
     it('shows projected Provider and Connected Service titles for managed effects without raw implementation ids', async () => {

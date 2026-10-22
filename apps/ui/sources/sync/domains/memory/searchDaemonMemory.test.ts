@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
@@ -154,10 +155,14 @@ describe('searchDaemonMemory', () => {
             .then(value => ({ value }), error => ({ error }));
         void outcome.then(() => { settled = true; });
         try {
+            await waitForHomeGovernance(() => expect(reply.mock.calls.some(([request]) =>
+                request.method === RPC_METHODS.DAEMON_MEMORY_STATUS)).toBe(true));
             await statusIssued.promise;
             await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
             expect(settled).toBe(false);
             statusResponse.resolve(supportedStatus);
+            await waitForHomeGovernance(() => expect(reply.mock.calls.some(([request]) =>
+                request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true));
             await searchIssued.promise;
             await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
             expect(settled).toBe(false);
@@ -377,6 +382,7 @@ describe('searchDaemonMemory', () => {
         const pending = searchDaemonMemory({ ...query, signal: controller.signal });
         const outcome = pending.then(value => ({ value }), error => ({ error }));
         try {
+            await waitForHomeGovernance(() => expect(reply).toHaveBeenCalledOnce());
             await issued.promise;
             await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
             controller.abort();

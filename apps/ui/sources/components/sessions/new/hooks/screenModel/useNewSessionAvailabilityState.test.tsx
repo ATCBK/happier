@@ -160,7 +160,7 @@ describe('machine launch readiness', () => {
     });
 
     it('checks the new registry namespace after hydration without rechecking unrelated publications', async () => {
-        vi.useFakeTimers();
+        vi.useFakeTimers({ toFake: ['Date'] });
         network.respond('capabilities.detect', { protocolVersion: 1, results: {
             'tool.tmux': { ok: true, checkedAt: Date.now(), data: { available: true } },
         } });
@@ -176,7 +176,7 @@ describe('machine launch readiness', () => {
             setBackendTarget: vi.fn(), machines: [selectedMachine], allProfiles: [],
         }), { initialProps: machine, flushOptions: { advanceTimersMs: 0 } });
         try {
-            expect(hook.getCurrent().selectedMachineSpawnReadiness.status).toBe('ready');
+            await vi.waitFor(() => expect(hook.getCurrent().selectedMachineSpawnReadiness.status).toBe('ready'));
             const hydrated = { ...machine, daemonStateVersion: 1103, daemonState: { status: 'running', pid: 12, contributionRegistryProjectionRevision: 0 } };
             await act(async () => storage.getState().applyMachines([hydrated], false, { sourceServerId: serverId }));
             await hook.rerender(hydrated);

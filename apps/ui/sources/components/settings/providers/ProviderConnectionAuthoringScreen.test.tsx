@@ -339,16 +339,14 @@ describe('ProviderConnectionAuthoringScreen', () => {
             await flushHookEffects();
         });
         expect(run).not.toHaveBeenCalled();
-        expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
             authoringPreview: expect.objectContaining({ displayName: 'Renamed local models' }),
-        }));
-        await React.act(async () => {
-            screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
-            await flushHookEffects();
-        });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        })));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'createContribution', displayName: 'Renamed local models',
-        }), 'save');
+        }), 'save'));
     });
 
     it('cancels a named built-in draft without creating a connection', async () => {
@@ -510,7 +508,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
             )!.props.onChangeText('https://rejected.example.test/v1');
             await flushHookEffects();
         });
-        expect(screen.findAll(node => node.props.testID === 'provider-error:provider_connection_invalid').length).toBeGreaterThan(0);
+        await waitForHomeGovernance(() => expect(screen.findAll(node => node.props.testID === 'provider-error:provider_connection_invalid').length).toBeGreaterThan(0));
         expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(true);
         expect(run).not.toHaveBeenCalled();
     });
@@ -656,11 +654,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 ?.props.onChangeText('https://account-a.example/v1');
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
-        expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
             authoringPreview: expect.objectContaining({
                 endpointOverrides: [{ endpointTemplateId: 'chat', baseUrl: 'https://account-a.example/v1' }],
             }),
-        }));
+        })));
         const accountARequestCount = providerHarness.state.requests.length;
 
         // The incumbent reset retires Account A's lifetime, then Account B
@@ -791,16 +789,15 @@ describe('ProviderConnectionAuthoringScreen', () => {
             />,
         );
 
-        expect(describeProviderConnections).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenCalledTimes(2));
         // The add sheet no longer lists a computer destination (PA1), so the adopted review is read
         // from what Connect submits: the current preview, never the late one.
-        await React.act(async () => {
-            await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
-        });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'createContribution',
             authoringReview: expect.objectContaining({ fingerprint: 'authoring-review:v1:default' }),
-        }), 'save');
+        }), 'save'));
         expect(JSON.stringify(run.mock.calls)).not.toContain('authoring-review:v1:late');
     });
 
@@ -878,9 +875,9 @@ describe('ProviderConnectionAuthoringScreen', () => {
         // No "Enable after saving" on the add sheet: a provider someone just connected is simply on.
         expect(screen.findAllByType(Item)
             .find((item) => item.props.title === 'settingsProviders.authoring.enableAfterSaving')).toBeUndefined();
-        const connect = screen.findByTestId('settings-provider-authoring-connect');
-        await React.act(async () => { await connect?.props.onPress?.(); });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'createContribution',
             enable: true,
             authoringReview: {
@@ -889,7 +886,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 revision: 1,
                 endpointOverrides: [],
             },
-        }), 'save');
+        }), 'save'));
     });
 
     it('retains no save replay after an unknown built-in create outcome', async () => {
@@ -900,12 +897,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
             <ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />,
         );
 
-        await React.act(async () => {
-            await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
-        });
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
 
-        expect(screen.findByType(ProviderErrorItems.type).props.error)
-            .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' });
+        await waitForHomeGovernance(() => expect(screen.findByType(ProviderErrorItems.type).props.error)
+            .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' }));
         expect(screen.findByType(ProviderErrorItems.type).props.retry).toBeUndefined();
         expect(run).toHaveBeenCalledOnce();
         const createRequest = run.mock.calls[0]?.[0] as { connectionId: string };
@@ -971,9 +967,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
             });
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
+        await waitForHomeGovernance(() => expect(screen.findAllByType(Item)
+            .find((item) => item.props.title === 'http://127.0.0.1:22434/v1')?.props.onPress).toBeTypeOf('function'));
         const connect = findComposite(screen, 'settings-provider-authoring-connect', 'title');
 
         expect(connect?.props.onPress).toBeUndefined();
+        expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(true);
         expect(run).not.toHaveBeenCalled();
 
         await React.act(async () => {
@@ -989,10 +988,9 @@ describe('ProviderConnectionAuthoringScreen', () => {
         const rows = screen.findAllByType(Item);
         expect(rows.find((item) => item.props.title === 'settingsProviders.authoring.destinationScope')).toBeUndefined();
         expect(rows.find((item) => item.props.title === 'openai-chat')).toBeUndefined();
-        await React.act(async () => {
-            await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
-        });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'createContribution',
             authoringReview: {
                 candidateId: 'discovery-candidate:v1:second',
@@ -1000,7 +998,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 revision: 1,
                 endpointOverrides: [],
             },
-        }), 'save');
+        }), 'save'));
         expect(probeProviderDraft).not.toHaveBeenCalled();
     });
 
@@ -1076,19 +1074,17 @@ describe('ProviderConnectionAuthoringScreen', () => {
             { endpointTemplateId: 'cliproxyapi-openai-chat', baseUrl: 'https://remote.gateway.example/v1' },
             { endpointTemplateId: 'cliproxyapi-anthropic', baseUrl: 'https://remote.gateway.example/' },
         ];
-        expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
             authoringPreview: expect.objectContaining({
                 contributionKey: state.contributionKey,
                 selectedCandidateId: null,
                 endpointOverrides,
             }),
-        }));
+        })));
 
-        await React.act(async () => {
-            await screen.findByTestId('settings-provider-authoring-connect')
-                ?.props.onPress?.();
-        });
-        expect(stored.writes).toBe(1);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-connect');
+        await waitForHomeGovernance(() => expect(stored.writes).toBe(1));
         expect(stored.catalog.connections).toEqual([expect.objectContaining({
             source: { kind: 'contribution', contributionKey: state.contributionKey },
             endpointOverrides: [...endpointOverrides].sort((left, right) => left.endpointTemplateId.localeCompare(right.endpointTemplateId)),
@@ -1203,6 +1199,8 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 ?.props.onPress?.();
             await Promise.resolve();
         });
+        await waitForHomeGovernance(() => expect(findProviderRecoveryAction(screen,
+            'settingsProviders.errors.actions.reviewConnection')).toBeDefined());
         await React.act(async () => {
             findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.reviewConnection')?.props.onPress?.();
             await Promise.resolve();
@@ -1692,9 +1690,6 @@ describe('ProviderConnectionAuthoringScreen', () => {
         probeProviderDraft.mockReturnValueOnce(new Promise((resolve) => { resolveProbe = resolve; }));
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
-        await React.act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
         const requiresApiKey = screen.findAllByType(Item)
             .find((item) => item.props.title === 'settingsProviders.authoring.requiresApiKey');
         await React.act(async () => {
@@ -1705,10 +1700,10 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 .find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')
                 ?.props.onChangeText('https://initial.example/v1');
             requiresApiKey?.props.rightElement.props.onValueChange(false);
-            await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        const test = findDraftTestRow(screen);
-        await React.act(async () => { test?.props.onPress?.(); });
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-test');
+        await waitForHomeGovernance(() => expect(probeProviderDraft).toHaveBeenCalledOnce());
         await React.act(async () => {
             screen.findAllByType(FieldTextInput)
                 .find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')
@@ -1726,9 +1721,6 @@ describe('ProviderConnectionAuthoringScreen', () => {
     it('retains successful Test connection truth across a display-only rename', async () => {
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
-        await React.act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
         const requiresApiKey = screen.findAllByType(Item)
             .find((item) => item.props.title === 'settingsProviders.authoring.requiresApiKey');
         await React.act(async () => {
@@ -1739,17 +1731,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 .find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')
                 ?.props.onChangeText('https://gateway.example/v1');
             requiresApiKey?.props.rightElement.props.onValueChange(false);
-            await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        const test = findDraftTestRow(screen);
-        expect(typeof test?.props.onPress).toBe('function');
-        await React.act(async () => {
-            test?.props.onPress?.();
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-test');
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
         expect(probeProviderDraft).toHaveBeenCalledOnce();
-        expect(findDraftTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
 
         await React.act(async () => {
             screen.findAllByType(FieldTextInput)
@@ -1773,15 +1760,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
             screen.findAllByType(Item)
                 .find((item) => item.props.title === 'settingsProviders.authoring.requiresApiKey')
                 ?.props.rightElement.props.onValueChange(false);
-            await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        const test = findDraftTestRow(screen);
-        await React.act(async () => {
-            test?.props.onPress?.();
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
-        expect(findDraftTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-test');
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
 
         await React.act(async () => {
             screen.findAllByType(FieldTextInput)
@@ -1826,13 +1809,10 @@ describe('ProviderConnectionAuthoringScreen', () => {
         await React.act(async () => {
             picker?.props?.onSelectId?.(ref);
         });
-        const test = findDraftTestRow(screen);
-        await React.act(async () => {
-            test?.props.onPress?.();
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
-        expect(findDraftTestRow(screen)?.props.subtitle)
-            .toBe('settingsProviders.detail.testSucceeded');
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('settings-provider-authoring-test');
+        await waitForHomeGovernance(() => expect(findDraftTestRow(screen)?.props.subtitle)
+            .toBe('settingsProviders.detail.testSucceeded'));
 
         await React.act(async () => {
             publishSecret(2, 'gateway-private-b');

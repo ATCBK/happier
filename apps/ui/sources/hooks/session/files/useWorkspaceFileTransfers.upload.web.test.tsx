@@ -83,15 +83,24 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         const hook = await renderTransfers();
         const preparation = harness.deferNextUploadPreparation();
         let pending: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']> | undefined;
+        let settled = false;
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         try {
-            await act(async () => { pending = hook.getCurrent().startUploads(uploadInput()); await preparation.entered; });
+            await act(async () => {
+                pending = hook.getCurrent().startUploads(uploadInput()).finally(() => { settled = true; });
+                await vi.waitFor(() => expect(harness.requests.some(request => request.url.endsWith('/v1/actions/daemon.filesystem.upload'))).toBe(true));
+                await preparation.entered;
+            });
             const request = harness.requests.find(request => request.url.endsWith('/v1/actions/daemon.filesystem.upload'));
             expect(request?.signal).toBeDefined();
             await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
             expect(request?.signal?.aborted).toBe(false);
             expect(hook.getCurrent().uploadState.status).toBe('uploading');
-            await act(async () => { preparation.release(); await expect(pending).resolves.toEqual({ ok: true }); });
+            await act(async () => {
+                preparation.release();
+                await vi.waitFor(() => expect(settled).toBe(true));
+                await expect(pending).resolves.toEqual({ ok: true });
+            });
             expect(harness.uploads[0]).toMatchObject({ finalized: true, aborted: false });
             expect(hook.getCurrent().uploadState.status).toBe('done');
         } finally {

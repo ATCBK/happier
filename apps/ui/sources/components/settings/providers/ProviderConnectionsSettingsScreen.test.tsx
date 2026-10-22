@@ -902,11 +902,12 @@ describe('ProviderConnectionsSettingsScreen', () => {
         const screen = await renderScreen(<ProviderConnectionsSettingsScreen />);
 
         await React.act(async () => { await findConnectAction(screen, 'Ollama')?.props.onPress?.(); });
+        await waitForHomeGovernance(() => expect(providerErrorState(screen)?.props.action).toBeDefined());
         const retry = providerErrorState(screen)?.props.action;
         expect(retry).toBeDefined();
         await React.act(async () => { await retry?.onPress?.(); });
 
-        expect(run).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(2));
         expect(run.mock.calls[1]).toEqual(run.mock.calls[0]);
     });
 
@@ -930,7 +931,7 @@ describe('ProviderConnectionsSettingsScreen', () => {
 
         await React.act(async () => { await findConnectAction(screen, 'Ollama')?.props.onPress?.(); });
 
-        expect(providerErrorState(screen)?.props.title).toBe('settingsProviders.errors.mutationOutcomeUnknownTitle');
+        await waitForHomeGovernance(() => expect(providerErrorState(screen)?.props.title).toBe('settingsProviders.errors.mutationOutcomeUnknownTitle'));
         const review = providerErrorState(screen)?.props.action;
         expect(review?.label).toBe('settingsProviders.errors.actions.reviewCurrentState');
         expect(review).toBeDefined();
@@ -1098,11 +1099,11 @@ describe('ProviderConnectionsSettingsScreen', () => {
             await findConnectAction(screen, 'Ollama')?.props.onPress?.();
         });
 
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'enableDetected', machineId: 'machine-a',
             candidateId: 'discovery-candidate:v1:exact-listener',
             displayName: null, savedSecretId: null,
-        }), 'detected:plugin/ollama:http://127.0.0.1:11435');
+        }), 'detected:plugin/ollama:http://127.0.0.1:11435'));
         expect(run.mock.calls[0]?.[0]).not.toHaveProperty('contributionKey');
         expect(run.mock.calls[0]?.[0]).not.toHaveProperty('endpointTemplateId');
         expect(run.mock.calls[0]?.[0]).not.toHaveProperty('normalizedEndpointUrl');
@@ -1170,9 +1171,9 @@ describe('ProviderConnectionsSettingsScreen', () => {
             await findConnectAction(screen, 'Ollama')?.props.onPress?.();
         });
 
-        expect(routerPush).toHaveBeenCalledWith(expect.stringContaining(
+        await waitForHomeGovernance(() => expect(routerPush).toHaveBeenCalledWith(expect.stringContaining(
             'candidateId=discovery-candidate%3Av1%3Aexact',
-        ));
+        )));
         expect(routerPush).toHaveBeenCalledWith(expect.not.stringContaining('normalizedEndpointUrl'));
     });
 
@@ -1228,10 +1229,10 @@ describe('ProviderConnectionsSettingsScreen', () => {
         await React.act(async () => {
             await startButton.props.onPress?.();
         });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'startLocal', machineId: 'machine-a', contributionKey: 'plugin/ollama',
             connectionId: expect.stringMatching(/^pc_/u),
-        }), 'start:plugin/ollama');
+        }), 'start:plugin/ollama'));
     });
 
     it('shows the existing pending spinner while managed Start awaits readiness', async () => {
@@ -1285,12 +1286,13 @@ describe('ProviderConnectionsSettingsScreen', () => {
             .find((row) => row.props.title === 'Ollama')?.props.rightElement;
 
         await React.act(async () => { await startButton?.props.onPress?.(); });
+        await waitForHomeGovernance(() => expect(providerErrorState(screen)?.props.action).toBeDefined());
         const retry = providerErrorState(screen)?.props.action;
         expect(retry).toBeDefined();
         expect(providerErrorState(screen)?.props.title).not.toBe('settingsProviders.errors.connectionInvalidTitle');
         await React.act(async () => { await retry?.onPress?.(); });
 
-        expect(run).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(2));
         expect(run.mock.calls[1]).toEqual(run.mock.calls[0]);
         expect(routerPush).not.toHaveBeenCalled();
     });

@@ -5,6 +5,7 @@ import { AccountEncryptionModeResponseSchema, AccountSettingsV2GetResponseSchema
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 let storage: typeof import('@/sync/domains/state/storage').storage;
 let createSocketIoAckTimeoutError: typeof import('@happier-dev/sync-client').createSocketIoAckTimeoutError;
@@ -616,7 +617,13 @@ describe('machineSpawnNewSession error mapping', () => {
         userAttemptId: 'attempt-a',
         spawnNonce: 'nonce-a',
       } as const;
-      await expect(machineSpawnNewSession(options)).resolves.toMatchObject({
+      const initial = machineSpawnNewSession(options);
+      let initialSettled = false;
+      void initial.then(() => { initialSettled = true; }, () => { initialSettled = true; });
+      // Keep the nonce retry clock controlled while allowing the real HTTP
+      // batch dispatcher to run before checking the initial custody result.
+      await waitForHomeGovernance(() => expect(initialSettled).toBe(true));
+      await expect(initial).resolves.toMatchObject({
         type: 'error',
         spawnAttemptCustody: { status: 'unresolved', spawnNonce: 'nonce-a' },
       });

@@ -36,7 +36,7 @@ describe('Media stage desktop small-picture zoom', () => {
             items={[{ kind: 'image', title: 'hero.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:hero-small' } } }]} /></InjectedAuthProvider>);
         try {
             await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width, height: width } }));
-            const detector = screen.findAll(node => typeof node.type === 'string' && node.type === 'GestureDetector')[0]!;
+            const detector = screen.findAllByType('GestureDetector')[0]!;
             const doubleTap = recognizer(detector.props.gesture, 'media-double-tap')!.__handlers!.onEnd!;
             // Use the picture centre, not its dismiss backing.
             const viewport = StyleSheet.flatten(detector.parent!.props.style);

@@ -130,7 +130,11 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
         const removeEntry = vi.fn(async () => {});
         const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-download');
         const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+            // Only post-click disk/URL cleanup is clock-controlled. Keep the
+            // preceding real batch acquisition outside that frozen interval.
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        });
         const remove = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'remove');
         const appendChild = vi.spyOn(browser.document.body, 'appendChild');
         Object.defineProperty(browser.window.navigator, 'storage', {
@@ -150,7 +154,6 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
                 throw new Error('whole-payload Blob must not be constructed for OPFS downloads');
             }
         });
-        vi.useFakeTimers();
         const hook = await renderTransfers();
 
         await act(async () => {

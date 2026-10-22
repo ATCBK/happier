@@ -3,6 +3,7 @@ import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const boundary = await installSessionOpsNetworkBoundary();
 const { socketRpcCodec, readRpcRequestDisposition } = await import('@happier-dev/sync-client');
@@ -37,6 +38,13 @@ const publishedMachine = { id: 'machine-1', metadata: null, metadataVersion: 0, 
 
 async function decodeRequest(request: SessionOpsRpcRequest) {
     return await socketRpcCodec.decodeRequestParams(content, request.payload, `${request.targetId}:${request.method}`);
+}
+
+async function waitForSetupBoundary(receipt: Promise<void>): Promise<void> {
+    let received = false;
+    void receipt.then(() => { received = true; });
+    await waitForHomeGovernance(() => expect(received).toBe(true));
+    await receipt;
 }
 
 async function enableDirectRoute(method: string) {
@@ -142,7 +150,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             const pending = machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
                 method: 'method-test', payload: {}, preferScoped: true, timeoutMs: 1_000 })
                 .catch((error: unknown) => error);
-            await issued.promise;
+            await waitForSetupBoundary(issued.promise);
             await vi.advanceTimersByTimeAsync(1_000);
             expect(await pending).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
             expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1'))
@@ -224,7 +232,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
                 machineId: 'machine-1', sessionId: 'slow-stopped-session', signal: controller.signal });
             const settled = vi.fn();
             void pending.then(settled, settled);
-            await issued.promise;
+            await waitForSetupBoundary(issued.promise);
             await vi.advanceTimersByTimeAsync(31_000);
             expect(settled).not.toHaveBeenCalled();
             expect(boundary.requests).toHaveLength(1);
@@ -399,17 +407,18 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         });
         vi.useFakeTimers();
         try {
+            const startedAt = Date.now();
             const settled = vi.fn();
             const pending = machineRpcWithServerScope({
                 serverId: home.id, machineId: 'machine-1', method: RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS,
                 payload: {}, timeoutMs: 4_000,
             }).then(settled, settled);
-            await firstIssued.promise;
+            await waitForSetupBoundary(firstIssued.promise);
             await vi.advanceTimersByTimeAsync(3_000);
             firstReply.resolve();
             await vi.advanceTimersByTimeAsync(250);
-            await retryIssued.promise;
-            await vi.advanceTimersByTimeAsync(749);
+            await waitForSetupBoundary(retryIssued.promise);
+            await vi.advanceTimersByTimeAsync(startedAt + 4_000 - Date.now() - 1);
             expect(settled).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
             expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000, scope: 'scoped' }));
@@ -463,16 +472,17 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         });
         vi.useFakeTimers();
         try {
+            const startedAt = Date.now();
             const settled = vi.fn();
             const pending = machineRpcWithServerScope({
                 serverId: home.id, machineId: 'machine-1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
                 payload: {}, timeoutMs: 4_000,
             }).then(settled, settled);
-            await featuresRequested.promise;
+            await waitForSetupBoundary(featuresRequested.promise);
             await vi.advanceTimersByTimeAsync(3_000);
             featuresReply.resolve();
-            await issued.promise;
-            await vi.advanceTimersByTimeAsync(999);
+            await waitForSetupBoundary(issued.promise);
+            await vi.advanceTimersByTimeAsync(startedAt + 4_000 - Date.now() - 1);
             expect(settled).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
             expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000 }));
@@ -511,7 +521,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             }, context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: home.id, runtimeAccountId: 'account-a',
                 externalActionTarget: { kind: 'machine', machineId: 'machine-1',
                     project: { machineId: 'machine-1', directory: '/tmp' } } } }).catch((error: unknown) => error);
-            await machineRequested.promise;
+            await waitForSetupBoundary(machineRequested.promise);
             await vi.advanceTimersByTimeAsync(4_000);
             const error = await attempt;
             expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
@@ -556,7 +566,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         try {
             expect(isMachineReachable(scope, connectedMachine)).toBe(true);
             const pending = dispatchSessionSpawnNewToMachine({ payload });
-            await machineRequested.promise;
+            await waitForSetupBoundary(machineRequested.promise);
             await vi.advanceTimersByTimeAsync(readSpawnSessionRpcTimeoutMsFromEnv());
             const result = SessionSpawnNewResultV1Schema.parse(await pending);
             expect(result).toEqual({ type: 'error', code: 'spawn_failed', retryable: true,
@@ -589,12 +599,13 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         });
         vi.useFakeTimers();
         try {
+            const startedAt = Date.now();
             const settled = vi.fn();
             const pending = fetchMachineDoctorSnapshot({
                 serverId: home.id, machineId: 'machine-1', timeoutMs: 4_000,
             }).then(settled);
-            await issued.promise;
-            await vi.advanceTimersByTimeAsync(3_999);
+            await waitForSetupBoundary(issued.promise);
+            await vi.advanceTimersByTimeAsync(startedAt + 4_000 - Date.now() - 1);
             expect(settled).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
             await pending;

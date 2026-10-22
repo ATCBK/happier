@@ -92,12 +92,13 @@ beforeEach(async () => {
     }));
     clearDaemonMergedProjectionCacheForTests();
     rpc.mockReset();
-    // Advance the search scheduler without aging fresh Machine presence.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    // Keep Machine presence fresh without draining RPC deadlines alongside
+    // deferred batch dispatch. These cases observe search state, not timer duration.
+    vi.useFakeTimers({ toFake: ['Date'] });
 });
 afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?.dispose(); connection = undefined; vi.restoreAllMocks(); await homes.reset(); });
 
-async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
+async function flush() { await flushHookEffects(); }
 
 describe('History unified conversation search', () => {
     it.each(['control', 'return'] as const)('admits an explicit %s submit during indexed lookup and settles a partial hit or complete empty scan', async submit => {
@@ -125,8 +126,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected pending-query transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />);
         const readList = () => screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
         await waitForHomeGovernance(async () => { await flush(); expect(readList().props.contentScanAvailable).toBe(true); });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'unmatched copper fern'));
@@ -182,8 +182,11 @@ describe('History unified conversation search', () => {
                 agentPluginId: 'acme.review', agentLocalId: 'archive' } }}
             navigation={{ push, replace: () => {}, back: () => {} }}>
             <WorkspaceRouteBody />
-        </DestinationInstanceHost>, { flushOptions: { runOnlyPendingTimers: true } });
-        await flush();
+        </DestinationInstanceHost>);
+        await waitForHomeGovernance(async () => {
+            await flush();
+            expect(screen.findHostByTestId('external-sessions-search-target:content'), screen.getTextContent()).not.toBeNull();
+        });
         expect(screen.findHostByTestId('external-sessions-search-target:content'), screen.getTextContent()).not.toBeNull();
         await screen.pressByTestIdAsync('external-sessions-search-target:content');
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
@@ -203,7 +206,10 @@ describe('History unified conversation search', () => {
         }
         refresh = true;
         await act(async () => publishMachineContributionRegistryProjectionInvalidation({ serverId, machineId: 'machine-1' }));
-        await flush();
+        await waitForHomeGovernance(async () => {
+            await flush();
+            expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(2);
+        });
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)).toHaveLength(1);
         expect(readList().props).toMatchObject({ searchQuery: 'body phrase', searchTarget: 'content',
             candidates: [{ remoteSessionId: 'stable-native' }] });
@@ -232,8 +238,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected listing transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} />);
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.error).toBeTruthy(); });
         const list = screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
         expect(list.props.error).toBe('externalSessions.browseAgentFailed');
@@ -258,8 +263,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected failure-presentation transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />);
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentScanAvailable).toBe(true); });
@@ -296,8 +300,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected History retry transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />);
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentScanAvailable).toBe(true); });
@@ -308,7 +311,7 @@ describe('History unified conversation search', () => {
         await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.cancelled).toBe(true);
         await screen.pressByTestIdAsync('direct-session-candidates:cancelled-action');
-        await flush();
+        await waitForHomeGovernance(async () => { await flush(); expect(pages).toHaveLength(2); });
         expect(pages).toHaveLength(2);
         expect(cursors).toEqual([undefined, 'remaining-file', 'remaining-file']);
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.cancelled).toBe(false);
@@ -341,8 +344,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected History scan transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />);
         expect(isMachineOnline(storage.getState().machines['machine-1'])).toBe(true);
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
@@ -377,8 +379,7 @@ describe('History unified conversation search', () => {
             throw new Error(`Unexpected History transport ${call.method}`);
         });
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
-        { flushOptions: { runOnlyPendingTimers: true } });
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />);
         await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates:content-scan-off')).not.toBeNull(); });
         expect(screen.findHostByTestId('direct-session-candidates:content-unsearched')).toBeNull();
         expect(screen.findHostByTestId('direct-session-candidates:content-scan-off:settings')).not.toBeNull();
@@ -400,7 +401,7 @@ describe('History unified conversation search', () => {
             if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE) return { ok: true, sessionId: 'happy-session', created: true };
             throw new Error(`Unexpected History transport ${call.method}`);
         });
-        const scopes = await renderHook(() => useServerCredentialAccountScopeBindings([serverId]), { flushOptions: { runOnlyPendingTimers: true } });
+        const scopes = await renderHook(() => useServerCredentialAccountScopeBindings([serverId]));
         await waitForHomeGovernance(async () => { await flush(); expect(scopes.getCurrent().get(serverId)?.isCurrent()).toBe(true); });
         const lifetime = scopes.getCurrent().get(serverId);
         expect(lifetime?.isCurrent()).toBe(true);
@@ -410,12 +411,15 @@ describe('History unified conversation search', () => {
         if (custody === 'local Home alias') expect(routeServerId).not.toBe(serverId);
         storage.setState(state => ({ settings: { ...state.settings, keyboardShortcutsV2Enabled: false } }));
         const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={custody === 'explicit Account' ? lifetime : undefined}
-            lockScope={{ machineId: 'machine-1', serverId: routeServerId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>,
-        { flushOptions: { runOnlyPendingTimers: true } });
-        await flush();
+            lockScope={{ machineId: 'machine-1', serverId: routeServerId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>);
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
-        await flush();
-        await flush();
+        await waitForHomeGovernance(async () => {
+            await flush();
+            expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.candidates).toMatchObject([
+                { remoteSessionId: 'indexed-native', match: { snippet: 'body phrase' } },
+            ]);
+        });
         const request = rpc.mock.calls.find(([call]) => call.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0];
         expect(request).toMatchObject({ machineId: 'machine-1', serverId, accountId: 'history-account',
             payload: { query: 'body phrase', externalSource: { agentId: 'acme.archive', sourceKey: 'archive' } } });
@@ -431,7 +435,10 @@ describe('History unified conversation search', () => {
                 routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({ agentId: 'acme.archive', remoteSessionId: 'indexed-native', directItemId: 'native-message' })}` },
         });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'new phrase'));
-        await flush();
+        await waitForHomeGovernance(async () => {
+            await flush();
+            expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.candidates[0]?.match.snippet).toBe('new phrase');
+        });
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.candidates[0]?.match.snippet).toBe('new phrase');
     });
 });

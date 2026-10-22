@@ -99,16 +99,24 @@ const { useScmCommitPlan } = await import('./useScmCommitPlan');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const { ScmCommitsView } = await import('./ScmCommitsView');
 const { RunWorkNotifications } = await import('@/components/sessions/work/RunWorkNotifications');
-const { applySavedScmDiffSummaryResult } = await import('@/sync/ops/scmDiffSummary/generate');
+const { applySavedScmDiffSummaryResult, retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const { WorkflowTriggerSetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1');
 const { buildTriggerTarget } = await import('@/components/workflows/triggers/sessionTriggerForm');
 const { SPECIMEN_COMPARISON } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
 const initialStorage = getStorage().getState();
+let fixtureHomeId: string | null = null;
 
 beforeEach(async () => { await homes.reset(); });
 afterEach(async () => {
     standardCleanup();
     vi.useRealTimers();
+    // Home transport teardown does not erase the Summary owner's retained
+    // domain results. Retire this fixture's scope before the next case reuses it.
+    if (fixtureHomeId) retireScmDiffSummaryScope({
+        serverId: resolveServerProfileScopeIdForIdentifier(fixtureHomeId), accountId: 'commit-plan-account',
+    });
+    fixtureHomeId = null;
     getStorage().setState(initialStorage, true);
     boundary.saved = null; boundary.read = null; boundary.recover = null;
     boundary.generate = null; boundary.discard = null; boundary.listSaved = true;
@@ -119,6 +127,7 @@ afterEach(async () => {
 async function addHome(name: string) {
     const id = await homes.addHome({ name, serverUrl: `https://${name}.example.test`,
         serverIdentityId: `srv_${name.replaceAll('-', '_')}`, accountId: 'commit-plan-account', accountEncryptionMode: 'plain', currentAccount: true });
+    fixtureHomeId = id;
     homes.answer(id, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) });
     return { id };
 }

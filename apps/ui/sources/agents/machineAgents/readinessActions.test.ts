@@ -166,7 +166,6 @@ describe('readiness user intents through mounted Actions', () => {
     });
 
     it('native start/check/restart/cancel honor admission and share the mounted sign-in custody', async () => {
-        vi.useFakeTimers();
         boundary.confirm.mockResolvedValue(true);
         const addressed = await target('admitted-sign-in');
         let terminalId = 'first-login';

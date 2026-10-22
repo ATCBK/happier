@@ -14,6 +14,7 @@ import {
     validateWorkflowDefinition,
     getActionSpec,
     WorkflowRunStartRequestV1Schema,
+    WorkflowActionFailureV1Schema,
     WorkflowTriggerWriteResultV1Schema,
     SessionTriggerUpdateRequestV1Schema,
     ScmPullRequestListResponseSchema,
@@ -489,7 +490,7 @@ describe('UI Workflow Action front door', () => {
             expect(h.operations).toEqual([]);
         } finally { h.account.dispose(); }
     });
-    it.each(['absent', 'unprojected', 'not_found', 'forbidden', 'other_session', 'retired', 'native_owner'] as const)(
+    it.each(['absent', 'unprojected', 'not_found', 'forbidden', 'http_503', 'network_error', 'other_session', 'retired', 'native_owner'] as const)(
         'FIX81 resolves Keep going placement through the exact Home: %s', async cached => {
         const previousState = storage.getState();
         const h = await createHarness();
@@ -510,6 +511,8 @@ describe('UI Workflow Action front door', () => {
                     sessionReads.push(request.url.toString());
                     if (cached === 'not_found') return json({ error: 'Session not found' }, 404);
                     if (cached === 'forbidden') return json({ error: 'Forbidden' }, 403);
+                    if (cached === 'http_503') return json({ error: 'Unavailable' }, 503);
+                    if (cached === 'network_error') throw new TypeError('Failed to fetch');
                     if (cached === 'retired') await TokenStorage.setCredentialsForServerUrl(h.home.serverUrl,
                         { serverId: h.account.serverId }, { token: 'replacement-account' });
                     return json({ session: wire });
@@ -531,9 +534,17 @@ describe('UI Workflow Action front door', () => {
             const result = await h.execute('session.trigger.add', input, h.context);
             if (cached !== 'absent' && cached !== 'unprojected') {
                 expect(result).toMatchObject({ ok: false, ...(cached === 'native_owner' ? { errorCode: 'native_goal_owner' } : {}) });
-                if (cached === 'not_found' || cached === 'forbidden') expect(result).toMatchObject({
+                if (cached === 'not_found') expect(result).toMatchObject({
                     errorCode: 'target_unavailable', details: { code: 'target_unavailable', reason: 'session_unavailable' },
                 });
+                // Account detail 403 is terminal auth; scoped Session credentials
+                // produce the distinct semantic `forbidden` tested at the owner.
+                if (cached === 'forbidden') expect(result).toMatchObject({ errorCode: 'not_authenticated' });
+                if (cached === 'http_503' || cached === 'network_error') {
+                    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ errorCode: 'storage_unavailable' });
+                    expect(sessionReads).not.toEqual([]);
+                    expect(h.transport).not.toHaveBeenCalled();
+                }
                 expect(h.automationWrites).toEqual([]);
                 return;
             }

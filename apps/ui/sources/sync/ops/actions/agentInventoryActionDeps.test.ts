@@ -139,7 +139,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
     const connectedServices = { v: 2, bindingsByServiceId: {
       'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'acct-work' },
     } } as const;
-    const entered = createDeferred<void>();
+    let entered = false;
     const release = createDeferred<void>();
     const observation = AgentModelsProbeObservationSchema.parse({ agentId, source: 'dynamic', supportsFreeform: false,
       availableModels: [{ id: 'native/gpt-6.1-sol', name: 'Sol' }] });
@@ -151,7 +151,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
         || JSON.stringify(payload.params?.connectedServices) !== JSON.stringify(connectedServices)) {
         return { ok: true, result: AgentModelsProbeObservationSchema.parse({ agentId, source: 'unavailable', availableModels: [], supportsFreeform: false }) };
       }
-      entered.resolve();
+      entered = true;
       await release.promise;
       return { ok: true, result: observation };
     });
@@ -161,7 +161,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       timeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS, transportTimeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS } };
     const pending = executor.execute('agents.models.list', input, { surface: 'ui', serverId });
     try {
-      await entered.promise;
+      await vi.waitFor(() => expect(entered).toBe(true));
       // The daemon owns probe settlement (including credential materialization/cleanup).
       // Its answer must survive a caller clock that reaches the same budget first.
       await vi.advanceTimersByTimeAsync(NEW_SESSION_MODEL_PROBE_TIMEOUT_MS + 1);
@@ -181,8 +181,11 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       expect(sections.flatMap(section => section.options).map(option => option.value)).toContainEqual({
         agentTargetKey: 'agent:acme.voice/agent', providerConnectionId: null, modelId: 'native/gpt-6.1-sol',
       });
-      const misbound = await executor.execute('agents.models.list', { ...input, machineId: 'wrong-machine' }, { surface: 'ui', serverId });
-      expect(misbound).toMatchObject({ ok: true, result: { source: 'unavailable', items: [] } });
+      let misboundSettled = false;
+      const misbound = executor.execute('agents.models.list', { ...input, machineId: 'wrong-machine' }, { surface: 'ui', serverId })
+        .finally(() => { misboundSettled = true; });
+      await vi.waitFor(() => expect(misboundSettled).toBe(true));
+      expect(await misbound).toMatchObject({ ok: true, result: { source: 'unavailable', items: [] } });
     } finally {
       release.resolve();
       await pending;
@@ -423,8 +426,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
     }), { initialProps: { enabled, cwd: '/repo' } });
     const hook = await render();
     try {
-      await flushHookEffects();
-      expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: null, spawnFailure });
+      await vi.waitFor(() => expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: null, spawnFailure }));
       expect(hook.getCurrent().preflightModels?.unavailable).toBe(true);
       const cached = await render(false);
       try { expect(cached.getCurrent().probe).toMatchObject({ failed: true, spawnFailure }); }
@@ -433,8 +435,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       respond({ availableModels: [{ id: 'live-model', name: 'Live model' }], supportsFreeform: false,
         source: 'dynamic', refreshError: false, observedAt: Date.now() });
       await act(async () => { hook.getCurrent().probe.onRefresh?.(); });
-      await flushHookEffects();
-      expect(hook.getCurrent().probe.failed).toBe(false);
+      await vi.waitFor(() => expect(hook.getCurrent().probe.failed).toBe(false));
       expect(hook.getCurrent().probe.spawnFailure).toBeNull();
       const observedAt = hook.getCurrent().probe.refreshedAt;
       const previous = hook.getCurrent().preflightModels;
@@ -442,8 +443,7 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
 
       respond({ availableModels: [], supportsFreeform: false, source: 'dynamic', refreshError: false, spawnFailure });
       await act(async () => { hook.getCurrent().probe.onRefresh?.(); });
-      await flushHookEffects();
-      expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: observedAt, spawnFailure });
+      await vi.waitFor(() => expect(hook.getCurrent().probe).toMatchObject({ failed: true, refreshedAt: observedAt, spawnFailure }));
       expect(hook.getCurrent().preflightModels).toBe(previous);
       await hook.rerender({ enabled: false, cwd: '/other' });
       expect(hook.getCurrent().probe.spawnFailure).toBeNull();

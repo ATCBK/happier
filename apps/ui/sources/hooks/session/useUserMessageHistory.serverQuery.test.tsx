@@ -650,7 +650,7 @@ describe('useUserMessageHistory server role query', () => {
             hook.getCurrent().requestNextPage();
             await flushHookEffects();
         });
-        expect(hook.getCurrent().pendingEncryption).toBe(true);
+        await vi.waitFor(() => expect(hook.getCurrent().pendingEncryption).toBe(true));
         expect(hook.getCurrent().hasMore).toBe(true);
         expect(historyPageHttpReply).not.toHaveBeenCalled();
 
@@ -660,7 +660,7 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
-        expect(hook.getCurrent().rows.map((row) => row.text)).toEqual(['decrypted later']);
+        await vi.waitFor(() => expect(hook.getCurrent().rows.map((row) => row.text)).toEqual(['decrypted later']));
         expect(hook.getCurrent().pendingEncryption).toBe(false);
         await hook.unmount();
     });

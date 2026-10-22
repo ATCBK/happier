@@ -44,8 +44,10 @@ afterAll(() => boundary.dispose());
 it.each(['spawn', 'session'] as const)('keeps the %s preview in its containing Action lifetime beyond the generic RPC cutoff', async kind => {
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
+    let dispatched = false;
     boundary.setRpcResponder(async request => {
         if (request.method !== RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW) throw new Error('Unexpected Machine operation');
+        dispatched = true;
         entered.resolve();
         await released.promise;
         return preview;
@@ -60,6 +62,7 @@ it.each(['spawn', 'session'] as const)('keeps the %s preview in its containing A
         ? deps.spawnCapabilitiesPreview!({ machineId: 'machine-1', agentId: 'codex' }, context)
         : deps.sessionCapabilitiesGet!({ sessionId: 'session-1' }, context)).finally(() => { settled = true; });
     try {
+        await vi.waitFor(() => expect(dispatched || settled).toBe(true));
         const phase = await Promise.race([entered.promise.then(() => 'dispatched'), read.then(value => ({ refused: value,
             paths: boundary.httpRequests.map(request => new URL(request.url).pathname) }))]);
         expect(phase).toBe('dispatched');

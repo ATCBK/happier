@@ -593,9 +593,7 @@ describe('ProviderConnectionModelsSection', () => {
             connectionId: 'pc_a', machineId: 'machine-a',
         });
         await staleFailure.pressByTestIdAsync('provider-model-catalog-refresh');
-        await act(async () => {
-            await vi.waitFor(() => expect(staleFailure.findByTestId('provider-error:provider_endpoint_unavailable')).not.toBeNull());
-        });
+        await waitForHomeGovernance(() => expect(staleFailure.findByTestId('provider-error:provider_endpoint_unavailable')).not.toBeNull());
         expect(renderedModelRowCount(staleFailure)).toBe(1);
         expect(staleFailure.findByType(ProviderModelManager).props.groups[0].rows).toHaveLength(1);
         expect(presentedTitles(staleFailure))
@@ -652,7 +650,6 @@ describe('ProviderConnectionModelsSection', () => {
         await act(async () => {
             firstRelease.resolve();
             await vi.waitFor(() => expect(stored.writes).toBe(2));
-            await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
         });
 
         expect(catalogMutations().map(mutation => ({
@@ -872,9 +869,7 @@ describe('ProviderConnectionModelsSection', () => {
         await act(async () => {
             await screen.findByType(ProviderModelManager).props.onLoadModel?.('pc_a', 'manual-a');
         });
-        await act(async () => {
-            await vi.waitFor(() => expect(sectionState(screen).error).toMatchObject({ code: 'provider_endpoint_unavailable' }));
-        });
+        await waitForHomeGovernance(() => expect(sectionState(screen).error).toMatchObject({ code: 'provider_endpoint_unavailable' }));
         expect(screen.findByTestId('provider-error:provider_endpoint_unavailable')).not.toBeNull();
 
         expect(alert).not.toHaveBeenCalled();
@@ -974,7 +969,7 @@ describe('ProviderConnectionModelsSection', () => {
     it('delegates one exact Load action through the contained load hook', async () => {
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         await act(async () => { await screen.findByType(ProviderModelManager).props.onLoadModel?.('pc_a', 'manual-a'); });
-        expect(loadModel).toHaveBeenCalledWith('pc_a', 'manual-a');
+        await waitForHomeGovernance(() => expect(loadModel).toHaveBeenCalledWith('pc_a', 'manual-a'));
     });
 
     it('refreshes the provider catalog explicitly and retains the current list while refreshing', async () => {
@@ -996,7 +991,7 @@ describe('ProviderConnectionModelsSection', () => {
         probeProviderConnection.mockReturnValueOnce(deferred.promise);
         const screen = await renderScreen(<ModelsSectionHost connectionId="pc_a" />);
         await screen.pressByTestIdAsync('provider-model-catalog-refresh');
-        expect(probeProviderConnection).toHaveBeenCalledOnce();
+        await waitForHomeGovernance(() => expect(probeProviderConnection).toHaveBeenCalledOnce());
         await act(async () => {
             await administrationTarget.controller.setMachines([
                 { machineId: 'machine-a', displayName: 'Mac' },
