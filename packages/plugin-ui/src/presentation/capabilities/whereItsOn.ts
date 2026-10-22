@@ -48,10 +48,10 @@ export type HappierWhereItsOnGroup = (rules: readonly HappierReachRule[]) => Hap
 export type HappierWhereItsOnNames = Readonly<{
   agentName: (agentId: string) => string;
   /**
-   * The names a list of Agents reads as, each once ("Claude, QA Alpha and QA Beta"), when one runtime id stands for
-   * several titled instances. Absent: each id reads as its `agentName`.
+   * The names a list of Agents reads as, each once ("Claude, QA Alpha and QA Beta"): one runtime id can stand for
+   * several titled instances, so a sentence composes the names once instead of nesting lists.
    */
-  agentNames?: (agentIds: readonly string[]) => readonly string[];
+  agentNames: (agentIds: readonly string[]) => readonly string[];
   machineName: (machineId: string) => string;
   projectName: (projectKey: string) => string;
   /** A 0.2 workspace rule's folder, e.g. "~/client on nl2". */
@@ -452,9 +452,7 @@ export function happierWhereItsOnAgentNames(
   agentIds: readonly string[],
   names: HappierWhereItsOnNames,
 ): readonly string[] {
-  return names.agentNames
-    ? names.agentNames(agentIds)
-    : agentIds.map(names.agentName);
+  return names.agentNames(agentIds);
 }
 
 /** "Available to Claude and Codex on MacBook Pro and nl2", or that it is available nowhere yet. */

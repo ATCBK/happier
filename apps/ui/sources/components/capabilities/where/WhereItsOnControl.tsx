@@ -50,220 +50,240 @@ export type WhereItsOnControlProps = Omit<HappierWhereItsOnControlProps, 'names'
 
 const ICON_SIZES = { xs: ICON_SIZE.xs, sm: ICON_SIZE.sm, md: ICON_SIZE.md } as const;
 
-type Theme = ReturnType<typeof useUnistyles>['theme'];
+/** The Agent catalog identities the marks draw, from `useWhereItsOnNames`; the slot components stay stable. */
+const WhereIdentityContext = React.createContext<ReadonlyMap<string, SessionAgentCatalogIdentity>>(new Map());
 
-function buildHost(theme: Theme, identityById: ReadonlyMap<string, SessionAgentCatalogIdentity>): HappierWhereItsOnHost {
-  const tones = {
-    primary: theme.colors.text.primary,
-    secondary: theme.colors.text.secondary,
-    tertiary: theme.colors.text.tertiary,
-  } as const;
-  const AgentMark: HappierWhereItsOnHost['AgentMark'] = ({ agentId, size }) => {
-    const identity = identityById.get(agentId);
-    if (!identity) return null;
-    return (
-      <AgentCatalogIdentityIcon
-        entry={identity.entry}
-        machineId={null}
-        serverId={null}
-        current={identity.current}
-        size={ICON_SIZES[size]}
-      />
-    );
-  };
-  const PlaceGlyph: HappierWhereItsOnHost['PlaceGlyph'] = ({ name, size }) => (
-    <Icon name={name} size={ICON_SIZES[size]} color={theme.colors.text.secondary} />
+type Host = HappierWhereItsOnHost;
+
+const AgentMark: Host['AgentMark'] = ({ agentId, size }) => {
+  const identity = React.useContext(WhereIdentityContext).get(agentId);
+  if (!identity) return null;
+  return (
+    <AgentCatalogIdentityIcon
+      entry={identity.entry}
+      machineId={null}
+      serverId={null}
+      current={identity.current}
+      size={ICON_SIZES[size]}
+    />
   );
-  const menuItem = (item: HappierWhereItsOnMenuItem, category?: string): DropdownMenuItem => ({
-    id: item.id,
-    title: item.title,
-    testID: item.testID,
-    ...(category !== undefined ? { category } : {}),
-    ...(item.checked !== undefined ? { checked: item.checked } : {}),
-    ...(item.mark?.kind === 'agent'
-      ? { icon: <AgentMark agentId={item.mark.agentId} size="sm" /> }
-      : item.mark?.kind === 'icon'
-        ? { icon: <PlaceGlyph name={item.mark.name} size="sm" /> }
-        : {}),
-    ...(item.trailing
-      ? {
-          rightElement: (
-            <Text
-              variant="meta"
-              style={{
-                color: theme.colors.text.tertiary,
-                ...(item.trailing.tabular ? { fontVariant: ['tabular-nums'] as TextStyle['fontVariant'] } : {}),
-              }}
-            >
-              {item.trailing.text}
-            </Text>
-          ),
-        }
-      : {}),
-  });
-  return {
-    Section: ({ testID, title, description, children }) => (
-      <ItemGroup testID={testID} title={title} {...(description !== undefined ? { description } : {})}>
-        {children}
-      </ItemGroup>
-    ),
-    Disclosure: ({ testID, rowTestID, expanded, onExpandedChange, title, changeLabel, showDivider, children }) => (
-      <ExpandableItem
-        testID={testID}
-        expanded={expanded}
-        onExpandedChange={onExpandedChange}
-        showDivider={showDivider ?? false}
-        header={({ headerProps, expanded: open }) => (
-          <Item
-            {...(headerProps as Readonly<Record<string, unknown>>)}
-            testID={rowTestID}
-            title={title}
-            rightElement={
-              changeLabel !== undefined && !open ? (
-                <Text variant="label" style={{ color: theme.colors.text.link ?? theme.colors.text.secondary }}>
-                  {changeLabel}
+};
+
+const PlaceGlyph: Host['PlaceGlyph'] = ({ name, size }) => {
+  const { theme } = useUnistyles();
+  return <Icon name={name} size={ICON_SIZES[size]} color={theme.colors.text.secondary} />;
+};
+
+function useMenuItems(items: readonly HappierWhereItsOnMenuItem[], categoryOf?: (item: HappierWhereItsOnMenuItem) => string) {
+  const { theme } = useUnistyles();
+  return React.useMemo(
+    () =>
+      items.map((item): DropdownMenuItem => ({
+        id: item.id,
+        title: item.title,
+        testID: item.testID,
+        ...(categoryOf ? { category: categoryOf(item) } : {}),
+        ...(item.checked !== undefined ? { checked: item.checked } : {}),
+        ...(item.mark?.kind === 'agent'
+          ? { icon: <AgentMark agentId={item.mark.agentId} size="sm" /> }
+          : item.mark?.kind === 'icon'
+            ? { icon: <PlaceGlyph name={item.mark.name} size="sm" /> }
+            : {}),
+        ...(item.trailing
+          ? {
+              rightElement: (
+                <Text
+                  variant="meta"
+                  style={[{ color: theme.colors.text.tertiary }, item.trailing.tabular ? styles.tabular : null]}
+                >
+                  {item.trailing.text}
                 </Text>
-              ) : (
-                <ExpandableItemCaret expanded={open} />
-              )
+              ),
             }
-            showChevron={false}
-          />
-        )}
-      >
-        {children}
-      </ExpandableItem>
-    ),
-    Everywhere: ({ testID, title, subtitle, options, value, disabled, onChange }) => (
-      <SegmentedChoiceItem
-        testID={testID}
-        testIDPrefix={testID}
-        title={title}
-        subtitle={subtitle}
-        options={options}
-        value={value}
-        disabled={disabled}
-        onChange={onChange}
-        showDivider
-      />
-    ),
-    RuleList: SectionLeadingColumnProvider,
-    GroupLabel: ({ title }) => <CollectionListGroupLabel title={title} />,
-    Rule: ({ testID, title, subtitle, mark, wideControls, controls, note }) => (
-      <Item
-        testID={testID}
-        title={title}
-        subtitle={subtitle}
-        icon={mark}
-        // A lone Remove is a narrow control and stays beside the label; with the agents select the pair moves beneath on a phone.
-        {...(wideControls ? { accessoryLayout: 'adaptive' as const } : {})}
-        rightElement={controls}
-        {...(note !== undefined ? { bottomElement: note, bottomElementInset: 'text' as const } : {})}
-        showChevron={false}
-        showDivider={false}
-      />
-    ),
-    RemoveButton: ({ testID, accessibilityLabel, onPress }) => (
-      <IconButton iconName="x" variant="plain" accessibilityLabel={accessibilityLabel} testID={testID} onPress={onPress} />
-    ),
-    AddMenu: function AddMenu({ testID, title, groups, onSelect }) {
-      const [open, setOpen] = React.useState(false);
-      const items = React.useMemo(
-        () => groups.flatMap((group) => group.items.map((item) => menuItem(item, group.title))),
-        [groups],
-      );
-      return (
-        <DropdownMenu
-          testID={`${testID}Menu`}
-          open={open}
-          onOpenChange={setOpen}
-          items={items}
-          onSelect={onSelect}
-          showCategoryTitles
-          matchTriggerWidth={false}
-          rowKind="item"
-          popoverPhonePresentation="sheet"
-          popoverAccessibilityLabel={title}
-          trigger={({ toggle, open: isOpen }) => (
-            <SectionActionButton testID={testID} icon="plus" title={title} expanded={isOpen} onPress={toggle} />
-          )}
-        />
-      );
-    },
-    AgentSelect: function AgentSelect({ testID, label, accessibilityLabel, selectedAgentId, items, selectedId, onSelect }) {
-      const [open, setOpen] = React.useState(false);
-      const menuItems = React.useMemo(() => items.map((item) => menuItem(item)), [items]);
-      const fieldColors = resolveFieldBoxColors(theme);
-      const fieldLabel = resolveHappierFieldBoxLabel({ value: label, placeholder: label, colors: fieldColors });
-      return (
-        <DropdownMenu
-          testID={testID}
-          open={open}
-          onOpenChange={setOpen}
-          items={menuItems}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          matchTriggerWidth={false}
-          popoverPhonePresentation="sheet"
-          popoverAccessibilityLabel={accessibilityLabel}
-          trigger={({ toggle, open: isOpen }) => (
-            <HappierPressable
-              testID={`${testID}:trigger`}
-              onPress={toggle}
-              accessibilityRole="button"
-              accessibilityLabel={accessibilityLabel}
-              expanded={isOpen}
-              hasPopup="menu"
-            >
-              <HappierFieldBoxTrigger
-                colors={fieldColors}
-                span="intrinsic"
-                {...(selectedAgentId !== null ? { leading: <AgentMark agentId={selectedAgentId} size="xs" /> } : {})}
-                trailing={
-                  <Icon name={isOpen ? 'caret-up' : 'caret-down'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
-                }
-              >
-                <Text style={fieldLabel.style} numberOfLines={1}>
-                  {label}
-                </Text>
-              </HappierFieldBoxTrigger>
-            </HappierPressable>
-          )}
-        />
-      );
-    },
-    ConsequenceRow: ({ testID, continuesRow, showDivider, children }) => (
-      <SectionContentRow testID={testID} showDivider={showDivider} continuesRow={continuesRow}>
-        {children}
-      </SectionContentRow>
-    ),
-    ErrorLine: ({ testID, title, diagnostic, actionLabel, onAction }) => (
-      <SurfaceStateCard
-        testID={testID}
-        kind="error"
-        size="line"
-        title={title}
-        diagnosticCode={diagnostic}
-        action={{ label: actionLabel, onPress: onAction }}
-      />
-    ),
-    Text: ({ variant, tone, emphasis, tabular, hidden, style, testID, children }) => (
-      <Text
-        variant={variant}
-        {...(emphasis !== undefined ? { emphasis } : {})}
-        {...(testID !== undefined ? { testID } : {})}
-        {...(hidden ? { 'aria-hidden': true } : {})}
-        style={[{ color: tones[tone] }, tabular ? styles.tabular : null, style]}
-      >
-        {children}
-      </Text>
-    ),
-    PlaceGlyph,
-    AgentMark,
-    AgentNames: ({ agentIds, machines, testID }) => <AgentNameRun agentIds={agentIds} machines={machines} testID={testID} />,
-    hasAgentMark: (agentId) => identityById.has(agentId),
-  };
+          : {}),
+      })),
+    [items, categoryOf, theme],
+  );
 }
+
+const Disclosure: Host['Disclosure'] = ({ testID, rowTestID, expanded, onExpandedChange, title, changeLabel, showDivider, children }) => {
+  const { theme } = useUnistyles();
+  return (
+    <ExpandableItem
+      testID={testID}
+      expanded={expanded}
+      onExpandedChange={onExpandedChange}
+      // The body ends on the sheet's own row hairline, so the consequence reads as the sheet's last row.
+      showDivider={showDivider ?? false}
+      header={({ headerProps, expanded: open }) => (
+        <Item
+          {...(headerProps as Readonly<Record<string, unknown>>)}
+          testID={rowTestID}
+          title={title}
+          rightElement={
+            changeLabel !== undefined && !open ? (
+              <Text variant="label" style={{ color: theme.colors.text.link ?? theme.colors.text.secondary }}>
+                {changeLabel}
+              </Text>
+            ) : (
+              <ExpandableItemCaret expanded={open} />
+            )
+          }
+          showChevron={false}
+        />
+      )}
+    >
+      {children}
+    </ExpandableItem>
+  );
+};
+
+const AddMenu: Host['AddMenu'] = ({ testID, title, groups, onSelect }) => {
+  const [open, setOpen] = React.useState(false);
+  const flat = React.useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const categoryOf = React.useCallback(
+    (item: HappierWhereItsOnMenuItem) => groups.find((group) => group.items.includes(item))?.title ?? '',
+    [groups],
+  );
+  const items = useMenuItems(flat, categoryOf);
+  return (
+    <DropdownMenu
+      testID={`${testID}Menu`}
+      open={open}
+      onOpenChange={setOpen}
+      items={items}
+      onSelect={onSelect}
+      showCategoryTitles
+      matchTriggerWidth={false}
+      rowKind="item"
+      popoverPhonePresentation="sheet"
+      popoverAccessibilityLabel={title}
+      trigger={({ toggle, open: isOpen }) => (
+        <SectionActionButton testID={testID} icon="plus" title={title} expanded={isOpen} onPress={toggle} />
+      )}
+    />
+  );
+};
+
+const AgentSelect: Host['AgentSelect'] = ({ testID, label, accessibilityLabel, selectedAgentId, items, selectedId, onSelect }) => {
+  const { theme } = useUnistyles();
+  const [open, setOpen] = React.useState(false);
+  const menuItems = useMenuItems(items);
+  const fieldColors = resolveFieldBoxColors(theme);
+  const fieldLabel = resolveHappierFieldBoxLabel({ value: label, placeholder: label, colors: fieldColors });
+  return (
+    <DropdownMenu
+      testID={testID}
+      open={open}
+      onOpenChange={setOpen}
+      items={menuItems}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      matchTriggerWidth={false}
+      popoverPhonePresentation="sheet"
+      popoverAccessibilityLabel={accessibilityLabel}
+      trigger={({ toggle, open: isOpen }) => (
+        <HappierPressable
+          testID={`${testID}:trigger`}
+          onPress={toggle}
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+          expanded={isOpen}
+          hasPopup="menu"
+        >
+          <HappierFieldBoxTrigger
+            colors={fieldColors}
+            span="intrinsic"
+            {...(selectedAgentId !== null ? { leading: <AgentMark agentId={selectedAgentId} size="xs" /> } : {})}
+            trailing={<Icon name={isOpen ? 'caret-up' : 'caret-down'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
+          >
+            <Text style={fieldLabel.style} numberOfLines={1}>
+              {label}
+            </Text>
+          </HappierFieldBoxTrigger>
+        </HappierPressable>
+      )}
+    />
+  );
+};
+
+const WhereText: Host['Text'] = ({ variant, tone, emphasis, tabular, hidden, style, testID, children }) => {
+  const { theme } = useUnistyles();
+  return (
+    <Text
+      variant={variant}
+      {...(emphasis !== undefined ? { emphasis } : {})}
+      {...(testID !== undefined ? { testID } : {})}
+      {...(hidden ? { 'aria-hidden': true } : {})}
+      style={[{ color: theme.colors.text[tone] }, tabular ? styles.tabular : null, style]}
+    >
+      {children}
+    </Text>
+  );
+};
+
+/** Happier's settings primitives for each slot; stable components, so menus and disclosures keep their state. */
+const HOST_SLOTS: Omit<Host, 'hasAgentMark'> = {
+  Section: ({ testID, title, description, children }) => (
+    <ItemGroup testID={testID} title={title} {...(description !== undefined ? { description } : {})}>
+      {children}
+    </ItemGroup>
+  ),
+  Disclosure,
+  Everywhere: ({ testID, title, subtitle, options, value, disabled, onChange }) => (
+    <SegmentedChoiceItem
+      testID={testID}
+      testIDPrefix={testID}
+      title={title}
+      subtitle={subtitle}
+      options={options}
+      value={value}
+      disabled={disabled}
+      onChange={onChange}
+      showDivider
+    />
+  ),
+  RuleList: SectionLeadingColumnProvider,
+  GroupLabel: ({ title }) => <CollectionListGroupLabel title={title} />,
+  Rule: ({ testID, title, subtitle, mark, wideControls, controls, note }) => (
+    <Item
+      testID={testID}
+      title={title}
+      subtitle={subtitle}
+      icon={mark}
+      // A lone Remove is a narrow control and stays beside the label; with the agents select the pair moves beneath on a phone.
+      {...(wideControls ? { accessoryLayout: 'adaptive' as const } : {})}
+      rightElement={controls}
+      {...(note !== undefined ? { bottomElement: note, bottomElementInset: 'text' as const } : {})}
+      showChevron={false}
+      showDivider={false}
+    />
+  ),
+  RemoveButton: ({ testID, accessibilityLabel, onPress }) => (
+    <IconButton iconName="x" variant="plain" accessibilityLabel={accessibilityLabel} testID={testID} onPress={onPress} />
+  ),
+  AddMenu,
+  AgentSelect,
+  ConsequenceRow: ({ testID, continuesRow, showDivider, children }) => (
+    <SectionContentRow testID={testID} showDivider={showDivider} continuesRow={continuesRow}>
+      {children}
+    </SectionContentRow>
+  ),
+  ErrorLine: ({ testID, title, diagnostic, actionLabel, onAction }) => (
+    <SurfaceStateCard
+      testID={testID}
+      kind="error"
+      size="line"
+      title={title}
+      diagnosticCode={diagnostic}
+      action={{ label: actionLabel, onPress: onAction }}
+    />
+  ),
+  Text: WhereText,
+  PlaceGlyph,
+  AgentMark,
+  AgentNames: ({ agentIds, machines, testID }) => <AgentNameRun agentIds={agentIds} machines={machines} testID={testID} />,
+};
 
 export const WhereItsOnControl = React.memo(function WhereItsOnControl({ onUndo: _onUndo, ...props }: WhereItsOnControlProps) {
   const { theme } = useUnistyles();
@@ -276,16 +296,21 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl({ onUndo:
     machines: props.places.machines,
     projects: props.places.projects,
   });
-  const host = React.useMemo(() => buildHost(theme, identityById), [theme, identityById]);
+  const host = React.useMemo<Host>(
+    () => ({ ...HOST_SLOTS, hasAgentMark: (agentId) => identityById.has(agentId) }),
+    [identityById],
+  );
   return (
-    <HappierWhereItsOnControl
-      {...props}
-      names={names}
-      labels={whereItsOnControlLabels}
-      host={host}
-      reach={whereItsOnReach}
-      space={theme.space}
-    />
+    <WhereIdentityContext.Provider value={identityById}>
+      <HappierWhereItsOnControl
+        {...props}
+        names={names}
+        labels={whereItsOnControlLabels}
+        host={host}
+        reach={whereItsOnReach}
+        space={theme.space}
+      />
+    </WhereIdentityContext.Provider>
   );
 });
 
