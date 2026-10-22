@@ -144,6 +144,9 @@ const startHappyServerSpy = vi.fn(async (_client: any) => ({
   stop: vi.fn(),
 }));
 const persistTerminalAttachmentInfoIfNeededSpy = vi.fn<(info: { sessionId: string }) => Promise<void>>(async () => {});
+const sendTerminalFallbackMessageIfNeededSpy = vi.fn<
+  typeof import('@/agent/runtime/startupSideEffects').sendTerminalFallbackMessageIfNeeded
+>(() => {});
 const reportSessionToDaemonIfRunningSpy = vi.fn<
   typeof import('@/agent/runtime/startupSideEffects').reportSessionToDaemonIfRunning
 >(async () => {});
@@ -342,7 +345,7 @@ vi.mock('@/agent/runtime/startupSideEffects', () => ({
   primeAgentStateForUi: vi.fn(),
   persistTerminalAttachmentInfoIfNeeded: persistTerminalAttachmentInfoIfNeededSpy,
   reportSessionToDaemonIfRunning: reportSessionToDaemonIfRunningSpy,
-  sendTerminalFallbackMessageIfNeeded: vi.fn(),
+  sendTerminalFallbackMessageIfNeeded: sendTerminalFallbackMessageIfNeededSpy,
 }));
 
 vi.mock('@/agent/runtime/startupMetadataUpdate', () => ({
@@ -1507,6 +1510,78 @@ describe('runClaude fast-start', () => {
     if (testError) {
       throw testError;
     }
+  });
+
+  it('does not send the tmux fallback message when the unified terminal runtime owns the terminal host', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    autoSessionReady = true;
+    initResolved = false;
+    backendInitDelayMs = 0;
+    sendTerminalFallbackMessageIfNeededSpy.mockClear();
+    getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    const { runClaude } = await import('./runClaude');
+    let testError: unknown = null;
+    const runPromise = runClaude(createLegacyCredentials(), {
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      terminalRuntime: { mode: 'plain', requested: 'tmux', tmuxTarget: 'happy' },
+      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: true },
+    }).catch((e) => {
+      testError = e;
+      loopStarted.resolve();
+    });
+
+    try {
+      await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+      if (testError) throw testError;
+      expect(sendTerminalFallbackMessageIfNeededSpy).not.toHaveBeenCalled();
+    } finally {
+      loopExit.resolve(0);
+      await runPromise;
+    }
+
+    if (testError) throw testError;
+  });
+
+  it('sends the tmux fallback message when the daemon fell back to plain outside the unified terminal runtime', async () => {
+    vi.resetModules();
+    loopStarted = createDeferred<void>();
+    loopExit = createDeferred<number>();
+    lastLoopOpts = null;
+    autoSessionReady = true;
+    initResolved = false;
+    backendInitDelayMs = 0;
+    sendTerminalFallbackMessageIfNeededSpy.mockClear();
+    getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    const { runClaude } = await import('./runClaude');
+    let testError: unknown = null;
+    const runPromise = runClaude(createLegacyCredentials(), {
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      terminalRuntime: { mode: 'plain', requested: 'tmux', fallbackReason: 'tmux is not available on this machine' },
+      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: false },
+    }).catch((e) => {
+      testError = e;
+      loopStarted.resolve();
+    });
+
+    try {
+      await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
+      if (testError) throw testError;
+      expect(sendTerminalFallbackMessageIfNeededSpy).toHaveBeenCalledWith(expect.objectContaining({
+        terminal: expect.objectContaining({ mode: 'plain', requested: 'tmux' }),
+      }));
+    } finally {
+      loopExit.resolve(0);
+      await runPromise;
+    }
+
+    if (testError) throw testError;
   });
 
   it('publishes fast-start user-message readiness only after the startup-only RPC handler is registered', async () => {
