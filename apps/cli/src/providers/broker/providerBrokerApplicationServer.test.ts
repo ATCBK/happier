@@ -144,20 +144,29 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
-  it('logs an application exception without logging its private diagnostic', async () => {
+  it.each([
+    { name: 'Error', code: 'ECONNRESET', expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
+    { name: 'Error', code: 'ECONNRESET', statusCode: 400, expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
+    { name: 'private credential name', code: 'private credential code', expected: { errorName: 'UnknownError' } },
+  ])('returns a typed application refusal and logs only safe exception metadata: $name/$statusCode', async ({ name, code, statusCode, expected }) => {
     const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const server = await startProviderBrokerApplicationServer({
       handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
       localConsumer: {
         authorize: () => true,
-        request: async () => { throw new Error('private credential diagnostic'); },
+        request: async () => { throw Object.assign(new Error('private credential diagnostic'), { name, code, statusCode }); },
       },
     });
     try {
       const response = await server.app.inject({ method: 'GET', url: '/v1/models' });
-      expect(response.statusCode).toBe(500);
-      expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', { stage: 'handler', code: 'exception' });
+      expect(response.statusCode).toBe(403);
+      expect(response.headers[PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]).toBe('broker_unavailable');
+      expect(response.json().error.code).toBe('broker_unavailable');
+      expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', {
+        stage: 'handler', code: 'exception', ...expected,
+      });
       expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
+      expect(response.body).not.toContain('private');
     } finally {
       await server.close();
       diagnostics.mockRestore();

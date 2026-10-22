@@ -1,5 +1,7 @@
-import fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import fastify, { errorCodes, type FastifyInstance, type FastifyReply } from 'fastify';
 import { Readable } from 'node:stream';
+import { constants } from 'node:os';
+import { AxiosError } from 'axios';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
 import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -42,6 +44,13 @@ const RESPONSE_HOP_BY_HOP_HEADERS = new Set([
     'trailer',
     'transfer-encoding',
     'upgrade',
+]);
+// These are diagnostic classifications, never arbitrary error properties:
+// Provider exceptions can contain credentials even in their name/code fields.
+const APPLICATION_ERROR_NAMES = new Set([
+    'Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError',
+    'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError',
+    'AxiosError', 'CanceledError', 'ZodError', '$ZodError', 'FastifyError',
 ]);
 export const PROVIDER_BROKER_APPLICATION_LIMIT_METRIC_HEADER =
     'x-happier-provider-broker-limit-metric' as const;
@@ -142,8 +151,24 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
     const proxies = new Set<FirstBytesLocalCapabilityProxy>();
     const streamLifetimes = new Set<Pick<ProviderBrokerApplicationStreamLifetime, 'close' | 'retire'>>();
     const app = fastify({ logger: false });
-    app.addHook('onError', async () => {
-        logger.warnLocalFile('[provider-broker-application]', { stage: 'handler', code: 'exception' });
+    app.addHook('onError', async (_request, _reply, error) => {
+        const errorCode = typeof error.code === 'string' && (
+            Object.hasOwn(constants.errno, error.code)
+            || Object.hasOwn(errorCodes, error.code)
+            || Object.getOwnPropertyDescriptor(AxiosError, error.code)?.value === error.code
+        ) ? error.code : undefined;
+        logger.warnLocalFile('[provider-broker-application]', {
+            stage: 'handler', code: 'exception',
+            errorName: APPLICATION_ERROR_NAMES.has(error.name) ? error.name : 'UnknownError',
+            ...(errorCode ? { errorCode } : {}),
+        });
+    });
+    app.setErrorHandler((error, _request, reply) => {
+        // Preserve Fastify's parser/size refusals. Unexpected application
+        // failures use the same closed refusal as other broker unavailability,
+        // so neither its default 500 body nor Provider exception text escapes.
+        if (error.statusCode && error.statusCode < 500 && Object.hasOwn(errorCodes, error.code)) return reply.send(error);
+        return writeProviderBrokerApplicationFailure(reply, { ok: false, reasonCode: 'broker_unavailable' });
     });
 
     const sendResponse = async (
