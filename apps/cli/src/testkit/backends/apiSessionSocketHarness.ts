@@ -5,6 +5,7 @@ import { SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT, SESSION_RUNTIME_ACTIVITY_CLOSE
 import { SessionRuntimeActivityProjectionSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import type { SessionRuntimeActivityProjection, SessionTurnMutationV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SessionCreationTargetPreparationResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
@@ -73,25 +74,23 @@ export function respondToExactMachineSessionSpawnRpc(params: Readonly<{
     if (!call || !callback) return false;
 
     const exactMethod = (method: string) => `${params.machineId}:${method}`;
-    if (call.method === exactMethod(RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE)) {
+    if (call.method === exactMethod(RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE)
+        || call.method === exactMethod(RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT)) {
         const decodedParams = params.rpcCodec?.decode(call.params) ?? call.params;
         const request = decodedParams && typeof decodedParams === 'object' && !Array.isArray(decodedParams)
             ? decodedParams as Readonly<Record<string, unknown>>
             : {};
-        callback({
+        const directory = request.directory && typeof request.directory === 'object'
+            ? request.directory as Readonly<{ kind?: unknown; path?: unknown }> : null;
+        const result = SessionCreationTargetPreparationResultV1Schema.parse({
             ok: true,
-            result: params.rpcCodec?.encode({
-                ok: true,
-                directory: typeof request.directory === 'string' ? request.directory : process.cwd(),
-                directoryCreationRequired: false,
-                checkout: null,
-            }) ?? {
-                ok: true,
-                directory: typeof request.directory === 'string' ? request.directory : process.cwd(),
-                directoryCreationRequired: false,
-                checkout: null,
-            },
+            directory: typeof request.directory === 'string' ? request.directory
+                : directory?.kind === 'path' && typeof directory.path === 'string' ? directory.path : process.cwd(),
+            directoryKind: directory?.kind === 'managed' ? 'managed' : 'path',
+            directoryCreationRequired: false,
+            checkout: null,
         });
+        callback({ ok: true, result: params.rpcCodec?.encode(result) ?? result });
         return true;
     }
 

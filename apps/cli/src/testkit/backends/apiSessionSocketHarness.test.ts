@@ -1,13 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 import {
     bindApiSessionSocketMock,
     bindApiSessionSocketPairMock,
     bindApiSessionSocketSequenceMock,
     createApiSessionSocketStub,
+    respondToExactMachineSessionSpawnRpc,
 } from './apiSessionSocketHarness';
 
 describe('apiSessionSocketHarness', () => {
+    it.each([
+        RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE,
+        RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
+    ])('answers %s with the current prepared-directory contract', method => {
+        const callback = vi.fn();
+        expect(respondToExactMachineSessionSpawnRpc({
+            event: SOCKET_RPC_EVENTS.CALL,
+            args: [{ method: `test-machine:${method}`, params: { directory: { kind: 'path', path: '/project' } } }, callback],
+            machineId: 'test-machine', sessionId: 'test-session',
+        })).toBe(true);
+        expect(callback).toHaveBeenCalledWith({ ok: true, result: {
+            ok: true, directory: '/project', directoryKind: 'path', directoryCreationRequired: false, checkout: null,
+        } });
+    });
+
     it('triggers connect listeners and runs onConnect hooks', () => {
         const onConnect = vi.fn();
         const socket = createApiSessionSocketStub({ onConnect });
