@@ -209,6 +209,48 @@ describe('resident streamed disk index', () => {
             expect(reopened.readNode(root)).toMatchObject({ complete: true, node: { flags: { atLeast: false } } });
         } finally { await runner.dispose(); await reopenedRunner?.dispose(); }
     });
+    it('stops writing a resume projection when its scan is cancelled before helper admission', async () => {
+        const root = join(scratch, 'cancel-prior'); await mkdir(root);
+        await writeFile(join(root, 'retained'), Buffer.alloc(8192));
+        const index = createStorageScanIndex({ activeServerDir: join(scratch, 'cancel-prior-state') });
+        const volumes = [{ id: 'cancel-prior', mountPath: root, usedBytes: 0 }];
+        const runner = createStorageScanRunner({ index, readVolumes: () => volumes, readEnabled: () => true,
+            fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }) });
+        let release!: () => void; const heldWrite = new Promise<void>(resolve => { release = resolve; });
+        let reached!: () => void; const writing = new Promise<void>(resolve => { reached = resolve; });
+        const originalOpen = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open;
+        let cancelled = false; let writesAfterCancel = 0; let ownedDirectory: string | undefined;
+        await runner.initialize();
+        const first = await runner.start({ target: { folderPath: root } }); await runner.wait(first.scanId);
+        // A stopped invocation can retain a fully measured tree. A completed
+        // invocation would instead admit a fresh replacement on the next start.
+        index.finish('cancel-prior', 'cancelled');
+        const retained = index.state(first.scanId)!.progress.sizedBytes;
+        // Hold one genuine OS write; SQLite, projection iteration and the runner remain real.
+        const boundary = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            if (typeof args[0] !== 'string' || basename(args[0]) !== 'prior.ndjson') return handle;
+            ownedDirectory = dirname(args[0]); const write = handle.write.bind(handle); let firstWrite = true;
+            vi.spyOn(handle, 'write').mockImplementation(async (...writeArgs: Parameters<typeof handle.write>) => {
+                if (cancelled) writesAfterCancel += 1;
+                const result = await write(...writeArgs);
+                if (firstWrite) { firstWrite = false; reached(); await heldWrite; }
+                return result;
+            });
+            return handle;
+        });
+        try {
+            const resumed = await runner.start({ target: first.target, resume: true }); await writing;
+            expect(runner.activeNativePid(resumed.scanId)).toBeUndefined();
+            const stopping = runner.cancel(resumed.scanId); cancelled = true; release();
+            expect(await stopping).toMatchObject({ status: 'cancelled', progress: { sizedBytes: retained } });
+            // Continuing the remaining on-disk projection is the reproduced cancellation delay.
+            expect(writesAfterCancel).toBe(0);
+            expect(ownedDirectory).toBeDefined();
+            await expect(stat(ownedDirectory!)).rejects.toMatchObject({ code: 'ENOENT' });
+            await expect(stat(getHappierTempDirOwnerPath(ownedDirectory!))).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally { release(); boundary.mockRestore(); await runner.dispose(); }
+    });
     it.each(['open', 'close'] as const)('removes prior-projection scratch and ownership after a filesystem %s failure', async phase => {
         const root = join(scratch, `projection-${phase}`); const volumeId = `projection-${phase}`;
         const index = createStorageScanIndex({ activeServerDir: join(scratch, `projection-${phase}-state`) });
@@ -285,7 +327,6 @@ describe('resident streamed disk index', () => {
         try {
             const narrowRows = 1000; const wideRows = narrowRows * 10;
             const narrowHeapBytes = sample(narrowRows); const wideHeapBytes = sample(wideRows);
-            console.log(JSON.stringify({ qa: 'queued-skip-frontier-heap', narrowRows, wideRows, narrowHeapBytes, wideHeapBytes }));
             // A point membership read must not allocate even one extra copy of the ten-times-wider path corpus.
             expect(wideHeapBytes - narrowHeapBytes).toBeLessThan((wideRows - narrowRows) * 512);
             runner.skip(state.scanId, join(root, 'queued-1') + '-'.repeat(512));
@@ -533,7 +574,6 @@ describe('resident streamed disk index', () => {
                     expect(folder.nodes.find(node => node.name === 'file-0')?.deltaSincePrevious).toBe(28672);
                     expect(large.nodes[0]).toMatchObject({ name: 'file-0', deltaSincePrevious: 28672 });
                 }
-                console.log(JSON.stringify({ qa: 'comparison-page-work', ordinaryFiles: perFolder * 2, reads: 10, comparisonRows: comparisons, elapsedPairMs: elapsed }));
                 expect(comparisons.every(rows => rows <= 6)).toBe(true);
                 expect((await index.stats('comparison')).fileRows).toBe(perFolder * 2);
             } finally { boundary.mockRestore(); database.close(); }
@@ -571,7 +611,6 @@ describe('resident streamed disk index', () => {
         expect(afterCost.stats.fileRows).toBe(beforeCost.stats.fileRows);
         expect(afterCost.stats.directoryRows).toBeLessThan(beforeCost.stats.directoryRows);
         expect(afterCost.records).toBeLessThan(beforeCost.records);
-        console.log(JSON.stringify({ qa: 'atomic-summary-first-scan-cost', ordinaryFiles: leaves.length + 2, before: beforeCost, after: afterCost }));
         const activeServerDir = join(scratch, 'atomic-index-state'); const index = createStorageScanIndex({ activeServerDir });
         const runner = createStorageScanRunner({ index, readVolumes: () => [{ id: 'atomic', mountPath: volume, usedBytes: 0 }], readEnabled: () => true,
             readScanHints: root => readStorageScanHints({ root, repositoryRoots: [project], facts: { now: Date.now(), suggestUnusedAfterDays: 30, protection: { homeDir: volume } } }),
@@ -821,7 +860,6 @@ describe('resident streamed disk index', () => {
         try {
             await runner.initialize(); const state = await runner.start({ target: { volumeId: 'compact' } }); await runner.wait(state.scanId);
             const stats = await index.stats('compact');
-            console.log(JSON.stringify({ qa: 'compact-wide-deep-index', fileCount, chartBudget: STORAGE_CHART_MAX_DRAWABLE_NODES, ...stats }));
             // Every ordinary file remains queryable with STO-19's no-floor Large-files contract.
             expect(stats.fileRows).toBe(fileCount);
             const fileAllocation = (await measureNativeDisk({ paths: [join(folders[0], 'tiny-0')] })).totalAllocatedBytes;
@@ -863,7 +901,6 @@ describe('resident streamed disk index', () => {
                 try { expect(Object.values(database.prepare('PRAGMA integrity_check').get()!)).toEqual(['ok']); }
                 finally { database.close(); }
             }
-            console.log(JSON.stringify({ qa: 'compact-repeat-index', second: secondStats, third: thirdStats }));
         } finally { await runner.dispose(); }
     }, 120_000);
     it.skipIf(process.env.HAPPIER_SCAN_QA_MEDIUM !== '1')('measures the consumed metadata stream on a medium zero-byte file fixture', async () => {
@@ -881,8 +918,6 @@ describe('resident streamed disk index', () => {
             readFiles += page.nodes.length; cursor = page.nextCursor;
         } while (cursor);
         expect(readFiles).toBe(fixtureFiles); expect(index.state()?.status).toBe('complete');
-        console.log(JSON.stringify({ qa: 'metadata-only-medium-zero-byte-files', fixtureFiles, chartBudget: STORAGE_CHART_MAX_DRAWABLE_NODES,
-            elapsedMs, indexedFilesPerSecond: fixtureFiles / (elapsedMs / 1000), baselineWriterRssBytes, peakWriterRssBytes, ...stats }));
         await runner.dispose();
     }, 0);
     it.skipIf(process.env.HAPPIER_SCAN_QA_PROFILE !== '1')('profiles the native scan and index owner on an owned large tree', async () => {
@@ -925,8 +960,6 @@ describe('resident streamed disk index', () => {
             const stats = await index.stats('profile');
             expect(stats.fileRows).toBe(folders * perFolder); expect(index.readNode(root)?.complete).toBe(true);
             expect(index.readNode(root)?.node.size.allocatedBytes).toBe(nativeSummary.allocatedBytes);
-            console.log(JSON.stringify({ qa: 'owned-large-native-index-profile', folders, perFolder, nativeRecords, nativeMs, elapsedMs,
-                rowsPerSecond: stats.nodeRows * 1000 / elapsedMs, cpuUsed, costs, finishMs, batches, peakWriterRssBytes, ...stats, hotspots, profilePath }));
         } finally { profiler.disconnect(); await runner.dispose(); }
     }, 0);
     it.skipIf(process.env.HAPPIER_SCAN_QA_HOME !== '1')('measures actual home-tree index cost without opening file contents', async () => {
@@ -949,12 +982,6 @@ describe('resident streamed disk index', () => {
         await runner.initialize(); const started = performance.now(); const state = await runner.start({ target: { folderPath: homedir() } }); scanId = state.scanId;
         sample(); await runner.wait(state.scanId); await sampling;
         const elapsedMs = performance.now() - started; const stats = await index.stats('home-qa');
-        console.log(JSON.stringify({ qa: 'metadata-only-home-tree', platform: process.platform, chartBudget: STORAGE_CHART_MAX_DRAWABLE_NODES,
-            rootCoverageComplete: index.readNode(homedir())?.complete ?? false, unreadableCounts: index.state()?.unreadable.counts,
-            unreadableExamples: index.state()?.unreadable.examples,
-            elapsedMs, rowsPerSecond: stats.nodeRows * 1000 / elapsedMs,
-            baselineIndexWriterRssBytes, peakIndexWriterRssBytes: peakRss, firstObservedNativeRssBytes,
-            peakNativeRssBytes: peakNativeRss, nativeRssSamples: nativeSamples, ...stats, status: index.state()?.status }));
         expect(index.state()?.status).toBe('complete'); expect(stats.nodeRows).toBeGreaterThan(0); await runner.dispose();
     }, 0);
 });

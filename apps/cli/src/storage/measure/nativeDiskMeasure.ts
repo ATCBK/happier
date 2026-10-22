@@ -210,7 +210,9 @@ function runNativeDisk<T>(input: Readonly<{
     const fail = (error: Error) => {
         if (failure) return;
         failure = error;
-        if (!closed) child.kill('SIGKILL');
+        if (!closed) {
+            child.kill('SIGKILL');
+        }
     };
     const cancel = () => fail(aborted());
     const readLine = (line: string) => {

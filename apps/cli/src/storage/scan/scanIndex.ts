@@ -617,7 +617,8 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             const chartRows = z.object({ count: z.number() }).parse(db.prepare("SELECT COUNT(*) AS count FROM entries WHERE kind<>'file' OR visible=1").get()).count;
             return { nodeRows: count('nodes'), chartRows, entryRows: count('entries'), fileRows: count('files'), directoryRows: count('dirs'), observationRows: count('observations'), databaseBytes: (await stat(file(volumeId))).size };
         },
-        async writePriorProjection(volumeId: string, options: Readonly<{ resume?: boolean; relistOnly?: boolean }> = {}): Promise<{ path: string; dispose(): Promise<void> } | undefined> {
+        async writePriorProjection(volumeId: string, options: Readonly<{ resume?: boolean; relistOnly?: boolean; throwIfCancelled?: () => void }> = {}): Promise<{ path: string; dispose(): Promise<void> } | undefined> {
+            options.throwIfCancelled?.();
             const db = dbFor(volumeId); const table = options.resume || options.relistOnly ? 'nodes' : metadata(db, 'baselineState') ? 'baseline_nodes' : metadata(db, 'completeState') ? 'nodes' : undefined; if (!table) return undefined;
             const tempDirectory = createHappierTempDir({ purpose: 'storage-prior' });
             const path = join(tempDirectory, 'prior.ndjson'); let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -626,27 +627,36 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             const priorDirectories = options.relistOnly ? `SELECT id,allocated FROM ${table} WHERE kind='folder' AND (id=? OR parent=?)` : `SELECT id,allocated FROM ${table} WHERE kind='folder' AND id IN (${scope(table)})`;
             try {
                 handle = await open(path, 'wx', 0o600);
+                options.throwIfCancelled?.();
+                const writer = handle;
+                const write = async (record: object) => {
+                    options.throwIfCancelled?.();
+                    await writer.write(`${JSON.stringify(record)}\n`);
+                    // Stop before advancing a retained-tree iterator or opening
+                    // the next query when cancellation arrives during OS I/O.
+                    options.throwIfCancelled?.();
+                };
                 for (const value of db.prepare(priorDirectories).iterate(...(options.relistOnly ? [root, root] : [root]))) {
-                const row = z.object({ id: z.string(), allocated: z.number().check(z.int(), z.nonnegative(), z.int()) }).parse(value);
-                await handle.write(`${JSON.stringify({ v: 1, type: 'prior-dir', id: row.id, allocatedBytes: row.allocated })}\n`);
-            }
+                    const row = z.object({ id: z.string(), allocated: z.number().check(z.int(), z.nonnegative(), z.int()) }).parse(value);
+                    await write({ v: 1, type: 'prior-dir', id: row.id, allocatedBytes: row.allocated });
+                }
                 if (options.relistOnly || options.resume) for (const value of db.prepare(`SELECT n.id,n.data,d.unknown,d.months3,d.months6,d.months12,
                     (SELECT key FROM observations o WHERE o.owner=n.id AND o.path=n.id AND o.ageIncluded=0 ORDER BY key LIMIT 1) AS identityKey
                     FROM nodes n LEFT JOIN dirs d ON d.id=n.id WHERE n.id<>? AND ${options.relistOnly ? 'n.parent=?' : `d.complete=1 AND n.id IN (${scope('nodes')})`} AND n.kind IN ('folder','package')`).iterate(root, root)) {
                     const row = z.object({ id: z.string(), data: z.string(), unknown: z.nullable(z.number()), months3: z.nullable(z.number()), months6: z.nullable(z.number()), months12: z.nullable(z.number()), identityKey: z.nullable(z.string()) }).parse(value);
                     if (!row.identityKey) continue;
                     const node = StoredDiskNodeV1Schema.parse(JSON.parse(row.data) as unknown);
-                    await handle.write(`${JSON.stringify({ v: 1, type: 'prior-child', id: row.id, identityKey: row.identityKey,
+                    await write({ v: 1, type: 'prior-child', id: row.id, identityKey: row.identityKey,
                         allocatedBytes: node.size.allocatedBytes, logicalBytes: node.logicalBytes, items: node.items,
                         flags: { atLeast: node.flags.atLeast, sharedExtentsUnmeasured: node.size.sharedExtentsUnmeasured },
-                        ageGroupBytes: { unknown: row.unknown ?? 0, months3: row.months3 ?? 0, months6: row.months6 ?? 0, months12: row.months12 ?? 0 } })}\n`);
+                        ageGroupBytes: { unknown: row.unknown ?? 0, months3: row.months3 ?? 0, months6: row.months6 ?? 0, months12: row.months12 ?? 0 } });
                 }
                 if (options.resume) for (const value of db.prepare(`SELECT path,key,MAX(allocated) AS allocated FROM observations WHERE owner IN (${scope('nodes')}) GROUP BY path,key`).iterate(root)) {
                     const row = z.object({ path: z.string(), key: z.string(), allocated: z.number().check(z.int(), z.nonnegative(), z.int()) }).parse(value);
-                    await handle.write(`${JSON.stringify({ v: 1, type: 'prior-observation', id: row.path, key: row.key, allocatedBytes: row.allocated })}\n`);
+                    await write({ v: 1, type: 'prior-observation', id: row.path, key: row.key, allocatedBytes: row.allocated });
                 }
                 if (options.resume) for (const value of db.prepare(runnableFrontier).iterate()) {
-                    await handle.write(`${JSON.stringify({ v: 1, type: 'prior-frontier', id: pathRow.parse(value).path })}\n`);
+                    await write({ v: 1, type: 'prior-frontier', id: pathRow.parse(value).path });
                 }
                 await handle.close(); handle = undefined;
             } catch (error) {

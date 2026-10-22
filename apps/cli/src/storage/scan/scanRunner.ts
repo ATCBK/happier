@@ -51,24 +51,27 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
             const usedBytes = 'volumeId' in input.target ? volume.usedBytes : 0;
             if (disposed) throw Object.assign(new Error('Scan runner closed'), { code: 'closed' });
             if (input.resume && deps.index.root(volume.id) !== root) throw Object.assign(new Error('Resume target changed'), { code: 'invalid_resume_target' });
-            await options.beforeEffect?.();
             if (!await deps.readEnabled()) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'disabled' });
+            await options.beforeEffect?.();
             const state = deps.index.begin({ ...input, relistOnly: options.relistOnly, volumeId: volume.id, root, usedBytes,
                 reservedBytes: volume.reservedBytes, apfsContainerId: volume.apfsContainerId, fullDiskAccess: deps.fullDiskAccess() });
             const run: { native?: NativeDiskScan; done: Promise<void>; volumeId: string; cancelled: boolean; skipped: Set<string> } =
                 { done: Promise.resolve(), volumeId: volume.id, cancelled: false, skipped: new Set(input.resume ? deps.index.skippedPaths(volume.id) : []) };
             const lowPower = await deps.readLowPower?.();
             const scanHints = await deps.readScanHints?.(root);
+            const throwIfCancelled = () => {
+                if (run.cancelled || disposed) throw Object.assign(new Error('Scan cancelled'), { name: 'AbortError' });
+            };
             run.done = (async () => {
                 let resume = Boolean(input.resume);
                 try {
                 try {
                     do {
-                        const prior = await deps.index.writePriorProjection(volume.id, { resume, relistOnly: options.relistOnly });
+                        const prior = await deps.index.writePriorProjection(volume.id, { resume, relistOnly: options.relistOnly, throwIfCancelled });
                         try {
-                        await options.beforeEffect?.();
                         if (!await deps.readEnabled()) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'disabled' });
-                        if (run.cancelled || disposed) throw Object.assign(new Error('Scan cancelled'), { name: 'AbortError' });
+                        await options.beforeEffect?.();
+                        throwIfCancelled();
                         run.native = startNativeDiskScan({ ...scanHints, root, relistOnly: options.relistOnly, drawableNodes: STORAGE_CHART_MAX_DRAWABLE_NODES, keepMinBytes: 0, lowPower, usedBytes,
                             ...(prior ? { previousIndexPath: prior.path } : {}), ...(resume ? { resumeFrom: [], skippedPaths: [...run.skipped] } : {}) },
                             { onRecord: record => { deps.index.ingest(volume.id, record); deps.onChange?.(); },
@@ -141,7 +144,12 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
         },
         clearScheduled(): void { pendingVolumes.clear(); resumeRequested = false; },
         async waitScheduled(): Promise<void> { while (scheduled) await scheduled; },
-        async cancel(scanId: string) { const run = runs.get(scanId); if (run) { run.cancelled = true; run.native?.cancel(); } await run?.done; return deps.index.state(scanId); },
+        async cancel(scanId: string) {
+            const run = runs.get(scanId);
+            if (run) { run.cancelled = true; run.native?.cancel(); }
+            await run?.done;
+            return deps.index.state(scanId);
+        },
         skip(scanId: string, path: string) { const run = runs.get(scanId); const state = deps.index.state(scanId);
             if (run) {
                 if (state?.progress.currentPath !== path && !deps.index.hasFrontierPath(run.volumeId, path)) throw Object.assign(new Error('Skip path not active'), { code: 'invalid_skip_path' });
