@@ -105,6 +105,9 @@ export type SharedSubscriptionStore<
 > = Readonly<{
     getState(input: TInput): TState;
     observe(input: TInput, listener: () => void): () => void;
+    /** Refresh activity is separate from the retained domain snapshot. */
+    isRefreshing(input: TInput): boolean;
+    observeRefreshing(input: TInput, listener: () => void): () => void;
     read(input: TInput, options?: SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient>): Promise<void>;
     readOnce(input: TInput, options?: SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient>): Promise<void>;
     subscribe(
@@ -123,6 +126,8 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     snapshotClient: TSnapshotClient;
     watchClient: TWatchClient;
     readonly listeners: Set<() => void>;
+    readonly refreshListeners: Set<() => void>;
+    refreshing: boolean;
     refCount: number;
     inFlight: Promise<void> | null;
     refreshRequested: boolean;
@@ -157,6 +162,12 @@ export function createSharedSubscriptionStore<
     type Entry = SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>;
     const entries = new Map<string, Entry>();
 
+    const setRefreshing = (entry: Entry, refreshing: boolean): void => {
+        if (entry.refreshing === refreshing) return;
+        entry.refreshing = refreshing;
+        for (const listener of entry.refreshListeners) listener();
+    };
+
     const setState = (
         entry: Entry,
         next: TState,
@@ -181,6 +192,8 @@ export function createSharedSubscriptionStore<
                 snapshotClient: options?.snapshotClient ?? config.defaultSnapshotClient,
                 watchClient: (options?.watchClient ?? config.defaultWatchClient) as TWatchClient,
                 listeners: new Set(),
+                refreshListeners: new Set(),
+                refreshing: false,
                 refCount: 0,
                 inFlight: null,
                 refreshRequested: false,
@@ -218,6 +231,7 @@ export function createSharedSubscriptionStore<
         entry.readStarted = true;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.abortController = abortController;
+        setRefreshing(entry, true);
         if (config.beginRefresh) {
             setState(entry, config.beginRefresh(entry.state, entry.input, entry.nowMs));
         }
@@ -241,6 +255,7 @@ export function createSharedSubscriptionStore<
             if (entry.abortController === abortController) {
                 entry.abortController = null;
             }
+            setRefreshing(entry, false);
             // A mutation or source update during this read must not be swallowed by
             // single-flight sharing. Coalesce those invalidations into one subsequent read.
             if (entry.refreshRequested && entry.refCount > 0 && !abortController?.signal.aborted) {
@@ -337,6 +352,16 @@ export function createSharedSubscriptionStore<
             entry.listeners.add(listener);
             return () => { entry.listeners.delete(listener); };
         },
+        isRefreshing(input) {
+            const normalized = config.normalizeInput(input);
+            return entries.get(config.storeKey(normalized))?.refreshing ?? false;
+        },
+        observeRefreshing(input, listener) {
+            const normalized = config.normalizeInput(input);
+            const entry = ensureEntry(config.storeKey(normalized), normalized);
+            entry.refreshListeners.add(listener);
+            return () => { entry.refreshListeners.delete(listener); };
+        },
         read(input, options) {
             const normalized = config.normalizeInput(input);
             return runRefresh(ensureEntry(config.storeKey(normalized), normalized, options));
@@ -375,11 +400,11 @@ export function createSharedSubscriptionStore<
                 entry.watchRetired = false;
                 const previousWasAborted = entry.abortController?.signal.aborted;
                 const refresh = runRefresh(entry);
-                if (config.watchAfterRefresh) {
+                if (config.watchAfterRefresh || previousWasAborted) {
                     void refresh.then(async () => {
                         if (entry.refCount <= 0) return;
                         if (previousWasAborted) await runRefresh(entry);
-                        runWatchLoop(entry);
+                        if (config.watchAfterRefresh) runWatchLoop(entry);
                     });
                 }
             }
@@ -395,6 +420,7 @@ export function createSharedSubscriptionStore<
                     entry.unsubscribeRecovery?.();
                     entry.unsubscribeRecovery = null;
                     entry.abortController?.abort();
+                    setRefreshing(entry, false);
                     stopWatch(entry);
                     if (!config.retainState) entries.delete(key);
                 }
@@ -445,6 +471,7 @@ export function createSharedSubscriptionStore<
                 entry.unsubscribeRecovery?.();
                 entry.unsubscribeRecovery = null;
                 entry.abortController?.abort();
+                setRefreshing(entry, false);
                 stopWatch(entry);
             }
             entries.clear();

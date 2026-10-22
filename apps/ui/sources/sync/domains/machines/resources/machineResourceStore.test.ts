@@ -110,6 +110,34 @@ describe('machine resources subscription owner', () => {
     vi.useRealTimers();
   });
 
+  it('keeps cached summaries while one revalidation serves returning consumers', async () => {
+    const h = harness();
+    const first = h.store.demand(key);
+    await settle();
+    expect(h.store.getState(key).status).toBe('ready');
+    const cached = h.store.getState(key).summary;
+    first();
+    const refresh = createDeferred<MachineResourceRpcResult<MachineVitalsSnapshotV1>>();
+    h.snapshotClient.mockReturnValueOnce(refresh.promise);
+    const second = h.store.demand(key);
+    const sibling = h.store.demand(key);
+    try {
+      expect(h.store.getState(key).summary).toBe(cached);
+      expect(h.store.isRefreshing(key)).toBe(true);
+      expect(h.snapshotClient).toHaveBeenCalledTimes(2);
+      refresh.resolve({ ok: true, value: snapshot(75_000) });
+      await settle();
+      expect(h.store.getState(key).status).toBe('ready');
+      expect(h.store.isRefreshing(key)).toBe(false);
+      expect(h.store.getState(key).summary?.sampledAt).toBe(75_000);
+    } finally {
+      refresh.resolve({ ok: true, value: snapshot(75_000) });
+      second();
+      sibling();
+      h.store.reset();
+    }
+  });
+
   it('publishes live ticks without revisiting the retained hour of sample bodies', async () => {
     const h = harness(() => 3_720_000);
     const release = h.store.demand(key);
@@ -135,7 +163,6 @@ describe('machine resources subscription owner', () => {
       await settle();
     }
     const elapsedMs = performance.now() - start;
-    console.info('FX87 retained-hour / 30 live publications', { elapsedMs, historicalBodyReads });
     const current = h.store.getState(key);
     expect(current.snapshot?.sample?.sampledAt).toBe(3_718_000);
     expect(current.samples[0]).toBe(held.samples[29]);
@@ -439,10 +466,9 @@ describe('machine resources subscription owner', () => {
     h.store.reset();
   });
 
-  it('warms once per app session with one shared read and no live demand', async () => {
+  it('shares concurrent reads and keeps equal summaries without live demand', async () => {
     const h = harness();
-    await Promise.all([h.store.warm(key), h.store.warm(key)]);
-    await h.store.warm(key);
+    await Promise.all([h.store.read(key), h.store.read(key)]);
     expect(h.snapshotClient).toHaveBeenCalledOnce();
     expect(h.watchClient).not.toHaveBeenCalled();
     expect(h.store.getState(key).snapshot).toEqual(snapshot());
@@ -470,7 +496,7 @@ describe('machine resources subscription owner', () => {
     const updates = vi.fn();
     const release = h.store.observe(overview, updates);
     expect(h.store.getState(overview).snapshot).toBeNull();
-    await h.store.warm(key);
+    await h.store.read(key);
     expect(h.store.getState(overview).snapshot?.sample).toEqual(sample(60_000));
     expect(h.store.getState(otherHome).snapshot).toBeNull();
     expect(updates).toHaveBeenCalled();
@@ -812,17 +838,17 @@ describe('machine resources subscription owner', () => {
     h.store.reset();
   });
 
-  it('allows a one-shot warm to discover an upgraded daemon after a remembered unsupported answer', async () => {
+  it('discovers an upgraded daemon after a remembered unsupported answer', async () => {
     const h = harness();
     h.snapshotClient.mockResolvedValueOnce({
       ok: false,
       reason: 'older_happier',
     });
-    await h.store.warm({ ...key, daemonStateVersion: 1 });
-    await h.store.warm({ ...key, daemonStateVersion: 1 });
+    await h.store.read({ ...key, daemonStateVersion: 1 });
+    await h.store.read({ ...key, daemonStateVersion: 1 });
     expect(h.snapshotClient).toHaveBeenCalledOnce();
     h.store.daemonStateChanged(key, 2);
-    await h.store.warm({ ...key, daemonStateVersion: 2 });
+    await h.store.read({ ...key, daemonStateVersion: 2 });
     expect(h.store.getState(key).summary?.memory.availableBytes).toBe(80);
     expect(h.snapshotClient).toHaveBeenCalledTimes(2);
     expect(h.watchClient).not.toHaveBeenCalled();

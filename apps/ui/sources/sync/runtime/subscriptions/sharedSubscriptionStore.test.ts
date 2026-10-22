@@ -15,6 +15,63 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('reports shared revalidation separately while retaining the unchanged data snapshot', async () => {
+        let finish!: (value: number) => void;
+        let reads = 0;
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => { reads++; return await new Promise<number>(resolve => { finish = resolve; }); },
+            retainState: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+        });
+        const first = store.read('summary');
+        finish(7);
+        await first;
+        const dataUpdates = vi.fn();
+        const release = store.observe('summary', dataUpdates);
+        const phases: boolean[] = [];
+        const releasePhase = store.observeRefreshing('summary', () => phases.push(store.isRefreshing('summary')));
+        const refresh = store.read('summary');
+        const sibling = store.read('summary');
+        try {
+            expect(store.isRefreshing('summary')).toBe(true);
+            expect(store.getState('summary')).toBe(7);
+            expect(dataUpdates).not.toHaveBeenCalled();
+            expect(reads).toBe(2);
+            finish(7);
+            await Promise.all([refresh, sibling]);
+            expect(store.isRefreshing('summary')).toBe(false);
+            expect(dataUpdates).not.toHaveBeenCalled();
+            expect(phases).toEqual([true, false]);
+        } finally { finish(7); releasePhase(); release(); store.reset(); }
+    });
+    it('revalidates returning pull-only demand after its cancelled read settles', async () => {
+        const requests: Array<{ resolve: (value: number) => void; signal?: AbortSignal }> = [];
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            retainState: true,
+            defaultSnapshotClient: (signal?: AbortSignal) => new Promise<number>(resolve => requests.push({ resolve, signal })),
+            refresh: ({ snapshotClient, signal }) => snapshotClient(signal), applySnapshot: (_state: number, value: number) => value,
+        });
+        const first = store.read('summary');
+        requests[0]!.resolve(7);
+        await first;
+        const release = store.subscribe('summary', () => {});
+        release();
+        expect(requests[1]!.signal?.aborted).toBe(true);
+        expect(store.isRefreshing('summary')).toBe(false);
+        const returning = store.subscribe('summary', () => {});
+        try {
+            expect(store.getState('summary')).toBe(7);
+            requests[1]!.resolve(99);
+            await vi.waitFor(() => expect(requests).toHaveLength(3));
+            expect(store.getState('summary')).toBe(7);
+            expect(store.isRefreshing('summary')).toBe(true);
+            requests[2]!.resolve(8);
+            await vi.waitFor(() => expect(store.getState('summary')).toBe(8));
+            expect(store.isRefreshing('summary')).toBe(false);
+        } finally { returning(); store.reset(); for (const request of requests) request.resolve(7); }
+    });
     it.each(['settled', 'in-flight'] as const)('recovers a failed initial snapshot on the existing recovery signal (%s)', async phase => {
         let recover: (() => void) | undefined;
         let finishInitial!: (value: number) => void;

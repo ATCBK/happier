@@ -151,16 +151,18 @@ it('reads a reporting machine through the real Action wiring with its exact Home
     expect(MachineVitalsGetInputV1Schema.parse(request.payload)).toEqual({ serverId: key.serverId, machineId: key.machineId, view: 'summary' });
 });
 
-it('warms an implicit active-Home target into the same Account-qualified store key', async () => {
+it('resolves an implicit active-Home target into the same Account-qualified store key', async () => {
     const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
-    const { warmMachineResourceSummaries } = await import('./warmMachineResourceSummaries');
+    const { resolveMachineResourceKey } = await import('./machineRpc');
     const { machineResourceStore } = await import('./machineResourceStore');
     await setActiveServer({ serverId: key.serverId });
     const snapshot = MachineVitalsSnapshotV1Schema.parse({ state: 'reporting', sample: null,
         series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
     network.execute.mockResolvedValue(snapshot);
     try {
-        await warmMachineResourceSummaries([{ machineId: key.machineId }]);
+        const resolved = await resolveMachineResourceKey({ machineId: key.machineId });
+        expect(resolved).not.toBeNull();
+        await machineResourceStore.read({ ...resolved!, view: 'summary' });
         expect(machineResourceStore.getState({ ...key, expectedAccountId: 'owner' }).snapshot).toEqual(snapshot);
         expect(network.execute.mock.calls[0]?.[0]).toMatchObject({ serverId: key.serverId, accountId: 'owner' });
     } finally { machineResourceStore.reset(); }

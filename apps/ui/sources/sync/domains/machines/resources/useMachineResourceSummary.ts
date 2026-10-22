@@ -28,7 +28,7 @@ export function readMachineResourceReadStatus(state: Pick<MachineResourceState, 
     return state.status === 'slow' || state.status === 'error' ? state.status : undefined;
 }
 
-/** Row-local read of already demanded/warmed state; this hook is deliberately passive. */
+/** Row-local read of already demanded state; this hook is deliberately passive. */
 export function useMachineResourceSummary(input: MachineResourceKey): MachineResourceAvailability | null {
     const target = useMachineDaemonReadIdentities([input])[0]!;
     const presence = useMachinePresenceSummary(target.key.serverId, input.machineId);
@@ -80,4 +80,23 @@ export function useMachineResourceSummary(input: MachineResourceKey): MachineRes
             ...(readStatus ? { readStatus } : {}),
             attention: publishedAttention ?? state.snapshot?.attention ?? null };
     }, [machine, online, publication, publishedAttention, stale, state, target.accountMatches, viewed]);
+}
+
+/** A surface's retained summaries are being revalidated by the same demand owner. */
+export function useMachineResourceRefreshing(inputs: readonly MachineResourceKey[]): boolean {
+    const identities = useMachineDaemonReadIdentities(inputs);
+    const keys = React.useMemo(() => identities.filter(identity => identity.accountMatches)
+        .map(identity => ({ ...identity.key, view: 'summary' as const })), [identities]);
+    const subscribe = React.useCallback((listener: () => void) => {
+        const releases = keys.flatMap(key => [
+            machineResourceStore.observe(key, listener),
+            machineResourceStore.observeRefreshing(key, listener),
+        ]);
+        return () => { for (const release of releases) release(); };
+    }, [keys]);
+    const read = React.useCallback(() => keys.some(key => {
+        const state = machineResourceStore.getState(key);
+        return state.summary !== null && machineResourceStore.isRefreshing(key);
+    }), [keys]);
+    return React.useSyncExternalStore(subscribe, read, read);
 }

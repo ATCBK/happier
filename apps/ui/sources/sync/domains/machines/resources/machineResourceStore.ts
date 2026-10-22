@@ -349,6 +349,8 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
     }
     return {
         getState: getHeldState,
+        isRefreshing: store.isRefreshing,
+        observeRefreshing: store.observeRefreshing,
         observe(input: MachineResourceStoreInput, listener: () => void) {
             const release = store.observe(input, listener);
             const releaseHeld = store.observe({ ...input, view: input.view === 'overview' ? 'summary' : 'overview' }, listener);
@@ -361,9 +363,6 @@ export function createMachineResourceStore(clients: MachineResourceClients, nowM
             return store.subscribe(input, listener, { nowMs });
         },
         read(input: MachineResourceStoreInput) { return store.read(input, { nowMs }); },
-        warm(input: MachineResourceKey) {
-            return store.readOnce({ ...input, view: 'summary' }, { nowMs });
-        },
         retry(input: MachineResourceStoreInput) { store.invalidate(input); return store.read(input, { nowMs }); },
         getHistory(input: HistoryInput): MachineResourceHistoryState {
             return unsupported.has(machineKey(input)) ? NOT_REPORTED_HISTORY_STATE : histories.getState(input);

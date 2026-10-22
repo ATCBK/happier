@@ -91,6 +91,37 @@ describe('machine resource visibility and demand', () => {
         await hook.unmount();
     });
 
+    it('observes retained-summary revalidation without acquiring its own demand', async () => {
+        const { useMachineResourceRefreshing } = await import('./useMachineResourceSummary');
+        const { machineResourceStore } = await import('./machineResourceStore');
+        const sampledAt = Date.now();
+        const snapshot = { state: 'reporting', sample: { v: 1, sampledAt, intervalMs: 15_000,
+            cpu: { reported: true, busyPct: 20 }, memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
+            disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 } },
+            series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+        boundary.rpc.mockResolvedValue(snapshot);
+        const key = { serverId: homeA, machineId: 'machine-a', expectedAccountId: 'owner', view: 'summary' as const };
+        await machineResourceStore.read(key);
+        const cached = machineResourceStore.getState(key);
+        const reads = boundary.rpc.mock.calls.length;
+        const keys = [key];
+        const hook = await renderHook(() => useMachineResourceRefreshing(keys));
+        const pending = createDeferred<unknown>();
+        let refresh: Promise<void> | undefined;
+        try {
+            expect(hook.getCurrent()).toBe(false);
+            expect(boundary.rpc).toHaveBeenCalledTimes(reads);
+            boundary.rpc.mockReturnValueOnce(pending.promise);
+            await act(async () => { refresh = machineResourceStore.read(key); });
+            expect(hook.getCurrent()).toBe(true);
+            expect(machineResourceStore.getState(key)).toBe(cached);
+            await act(async () => { pending.resolve(snapshot); await refresh; });
+            expect(hook.getCurrent()).toBe(false);
+            expect(machineResourceStore.getState(key)).toBe(cached);
+            expect(boundary.rpc).toHaveBeenCalledTimes(reads + 1);
+        } finally { pending.resolve(snapshot); await refresh; await hook.unmount(); }
+    });
+
     it('projects a missing vitals method into the row older-Happier state', async () => {
         const { useMachineResourceLiveDemand } = await import('./useMachineResourceLiveDemand');
         const { useMachineResourceSummary } = await import('./useMachineResourceSummary');
@@ -278,6 +309,9 @@ describe('machine resource visibility and demand', () => {
         const { useMachineVitalsOverview } = await import('./useMachineVitalsOverview');
         const { useMachineDaemonReadIdentities } = await import('../useMachineDaemonReadTarget');
         const { machineResourceStore } = await import('./machineResourceStore');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        storage.setState({ machineListByServerId: { [homeA]: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })] } });
         const pending = createDeferred<unknown>();
         const aborted: string[] = [];
         boundary.rpc.mockImplementation(input => {
@@ -343,6 +377,9 @@ describe('machine resource visibility and demand', () => {
 
     it('reads the selected history range and suspends a mounted Overview when its route loses focus', async () => {
         const { useMachineVitalsOverview } = await import('./useMachineVitalsOverview');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        storage.setState({ machineListByServerId: { [homeA]: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })] } });
         boundary.rpc.mockImplementation(async input => {
             if (input.method === 'daemon.vitals.watch') {
                 const answer = createDeferred<unknown>();
@@ -414,7 +451,7 @@ describe('machine resource visibility and demand', () => {
 
     it('retones cached values from canonical published attention without value RPCs or identity churn', async () => {
         const { useMachineResourceSummary } = await import('./useMachineResourceSummary');
-        const { warmMachineResourceSummaries } = await import('./warmMachineResourceSummaries');
+        const { machineResourceStore } = await import('./machineResourceStore');
         const { storage } = await import('@/sync/domains/state/storageStore');
         const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
         const sampledAt = Date.now();
@@ -428,7 +465,7 @@ describe('machine resource visibility and demand', () => {
         }, series5m: { cpu: [], memory: [{ t: sampledAt, y: 80 }], networkRx: [], networkTx: [] }, attention: { level: 'calm', reasons: [] } });
         const key = { serverId: homeA, machineId: 'machine-a' };
         const hook = await renderHook(() => useMachineResourceSummary(key));
-        await act(async () => { await warmMachineResourceSummaries([key]); });
+        await act(async () => { await machineResourceStore.read({ ...key, expectedAccountId: 'owner', view: 'summary' }); });
         const before = hook.getCurrent();
         const oldSummary = before?.kind === 'reporting' ? before.summary : null;
         expect(oldSummary?.memory.tone).toBe('calm');
@@ -452,7 +489,6 @@ describe('machine resource visibility and demand', () => {
     it('reads nothing when hidden, backgrounded or closed, releases watches, and catches up immediately on resume', async () => {
         const { useMachineResourceLiveDemand } = await import('./useMachineResourceLiveDemand');
         const { useMachineResourceSummary } = await import('./useMachineResourceSummary');
-        const { warmMachineResourceSummaries } = await import('./warmMachineResourceSummaries');
         boundary.visibility = 'hidden';
         boundary.appState?.emit('active');
         const watches: Array<{ signal?: AbortSignal; resolve: (value: unknown) => void }> = [];
@@ -470,7 +506,6 @@ describe('machine resource visibility and demand', () => {
             useMachineResourceLiveDemand([key], { detail: 'summary', enabled });
             return useMachineResourceSummary(key);
         }, { initialProps: { enabled: true } });
-        await warmMachineResourceSummaries([key]);
         expect(boundary.rpc).not.toHaveBeenCalled();
         await act(async () => { boundary.visibility = 'visible'; documentBoundary.dispatchEvent(new Event('visibilitychange')); });
         await flushHookEffects({ cycles: 3, turns: 3 });
@@ -481,7 +516,6 @@ describe('machine resource visibility and demand', () => {
         await act(async () => { boundary.appState?.emit('background'); });
         expect(watches[0].signal?.aborted).toBe(true);
         const count = boundary.rpc.mock.calls.length;
-        await warmMachineResourceSummaries([key]);
         await flushHookEffects();
         expect(boundary.rpc).toHaveBeenCalledTimes(count);
         expect(hook.getCurrent()).toBe(hydrated);
