@@ -16,6 +16,30 @@ import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync
 afterEach(() => boundary.rpc.mockReset());
 
 describe('Updates cold fleet capability demand', () => {
+    it('does not commit the mounted background runtime for unrelated Machine details', async () => {
+        const previous = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        let machine = createMachineFixture({ id: 'updates-membership', activeAt: Date.now() });
+        const publish = () => storage.setState({ profileScope: null,
+            machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+        let commits = 0;
+        publish();
+        const screen = await renderScreen(<React.Profiler id="update-facts" onRender={() => { commits++; }}>
+            <UpdateFactsBackgroundRuntime enabled />
+        </React.Profiler>);
+        try {
+            const before = commits;
+            for (let tick = 1; tick <= 5; tick++) {
+                machine = { ...machine, daemonStateVersion: tick, updatedAt: machine.updatedAt + 1 };
+                await act(async () => publish());
+            }
+            expect(commits - before).toBe(0);
+        } finally {
+            await screen.unmount();
+            storage.setState(previous, true);
+        }
+    });
+
     it('preserves each pending machine probe while other machines arrive or leave', async () => {
         const previous = storage.getState();
         const serverId = getActiveServerSnapshot().serverId;
