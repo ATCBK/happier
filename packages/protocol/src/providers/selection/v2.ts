@@ -2,8 +2,40 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { ProviderAgentTargetKeySchema, ProviderConnectionIdSchema, ProviderModelIdSchema } from '../ids.js';
-import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from './v1.js';
-import { TeamCredentialRouteV1Schema, type TeamCredentialRouteV1 } from '../../teams/credentials/resourceV1.js';
+import { SessionActiveModelSelectionV1Schema, SessionModelSelectionV1Schema, type SessionActiveModelSelectionV1, type SessionModelSelectionV1 } from './v1.js';
+import { TeamCredentialProviderModelSelectionV1Schema, TeamCredentialRouteV1Schema, type TeamCredentialProviderModelSelectionV1, type TeamCredentialRouteV1 } from '../../teams/credentials/resourceV1.js';
+
+/** The existing active-model carrier's second epoch retains the runtime-opened Team source. */
+export const SessionActiveModelSelectionV2Schema = lazyZodSchema(() => z.strictObject({
+  ...SessionActiveModelSelectionV1Schema.shape,
+  v: z.literal(2),
+  teamCredentialModel: TeamCredentialProviderModelSelectionV1Schema,
+}).check(z.superRefine((fact, context) => {
+  if (fact.selection.providerConnectionId !== null
+    || fact.selection.agentTargetKey !== fact.teamCredentialModel.agentTargetKey
+    || fact.selection.modelId !== fact.teamCredentialModel.modelId) {
+    context.addIssue({ code: 'custom', path: ['teamCredentialModel'], message: 'Applied Team source must match the active model' });
+  }
+})));
+export type SessionActiveModelSelectionV2 = z.infer<typeof SessionActiveModelSelectionV2Schema>;
+export const SessionActiveModelSelectionSchema = lazyZodSchema(() => z.union([
+  SessionActiveModelSelectionV2Schema, SessionActiveModelSelectionV1Schema,
+]));
+export type SessionActiveModelSelection = z.infer<typeof SessionActiveModelSelectionSchema>;
+
+/** Only accepted native-open facts can qualify the model tuple; intent never supplies its source. */
+export function createSessionActiveModelSelection(input: Readonly<{
+  selection: SessionActiveModelSelectionV1['selection'];
+  source: SessionActiveModelSelectionV1['source'];
+  runner: SessionActiveModelSelectionV1['runner'];
+  teamCredentialModel: TeamCredentialProviderModelSelectionV1 | null | undefined;
+}>): SessionActiveModelSelection | null {
+  const { teamCredentialModel, ...fact } = input;
+  if (teamCredentialModel === undefined) return null;
+  const parsed = SessionActiveModelSelectionSchema.safeParse(teamCredentialModel === null
+    ? { ...fact, v: 1 } : { ...fact, v: 2, teamCredentialModel });
+  return parsed.success ? parsed.data : null;
+}
 
 export const NativeSessionModelRefV2Schema = lazyZodSchema(() => z.strictObject({
   source: z.literal('native'),

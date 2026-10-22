@@ -17,7 +17,8 @@ import { createSessionSystemSessionV1Schema } from '@happier-dev/protocol/sessio
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { readRuntimeDescriptorV1, RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
-import { SessionActiveModelSelectionV1Schema, SessionAppliedModelV1Schema, SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { SessionAppliedModelV1Schema, SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { SessionActiveModelSelectionSchema } from '@happier-dev/protocol/providers/selection/v2';
 import { SessionMcpSelectionV1Schema, SessionMcpSelectionRestartRequiredV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import { MachinePoolSelectionOriginV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { DiscussionSelectionSourceV1Schema } from '@happier-dev/protocol/discussions/references';
@@ -164,7 +165,7 @@ const MetadataObjectSchema = lazyZodSchema(() => z.looseObject({
         agentId: z.string(),
         updatedAt: z.number(),
         currentModelId: z.string(),
-        activeSelectionV1: z.optional(createStoredReadSchema(SessionActiveModelSelectionV1Schema)),
+        activeSelectionV1: z.optional(createStoredReadSchema(SessionActiveModelSelectionSchema)),
         availableModels: z.array(z.object({
             id: z.string(),
             name: z.string(),

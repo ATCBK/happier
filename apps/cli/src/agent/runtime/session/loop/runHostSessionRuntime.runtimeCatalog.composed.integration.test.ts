@@ -7885,7 +7885,7 @@ describe('runHostSessionRuntime', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
-  it('strictly refreshes before immediate runtime-model publication and activates durable delivery after publication', async () => {
+  it('publishes initial active facts and runtime models in one publisher acquisition after durable custody', async () => {
     const harness = createHarness();
     const order: string[] = [];
     let metadata: any = {
@@ -7947,6 +7947,11 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    expect(harness.session.updateMetadataAsCurrentPublisher).toHaveBeenCalledTimes(1);
+    expect(metadata.sessionModelsV1).toMatchObject({
+      agentId: 'qwen',
+      availableModels: [{ id: 'current-model', name: 'Current model' }],
+    });
   });
 
   it('drains queued runtime-model publication before terminal session close', async () => {

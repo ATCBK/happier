@@ -3,9 +3,12 @@ import type {
   AgentSessionModelsSnapshot,
   AgentSessionModelsSource,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { readExactSessionActiveModelSelectionV1 } from '@happier-dev/protocol/providers/active-model-selection';
+import { readExactSessionActiveModelSelection } from '@happier-dev/protocol/providers/active-model-selection';
 import { readSessionProviderBindingMetadataStateV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
-import type { ProviderBoundModelRef, SessionActiveModelSelectionV1 } from '@happier-dev/protocol';
+import type { ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
+import { createSessionActiveModelSelection, type SessionActiveModelSelection } from '@happier-dev/protocol/providers/selection/v2';
+import { applyActiveModelFacts } from '@/providers/sessions/applyActiveModelFacts';
+import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
 
 type SessionModelsState = NonNullable<Metadata['sessionModelsV1']>;
 type SessionModel = SessionModelsState['availableModels'][number];
@@ -180,13 +183,15 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
     pid: number;
     processStartTimeMs: number;
   }> | null;
-  initialActiveSelection?: SessionActiveModelSelectionV1 | null;
+  initialActiveSelection?: SessionActiveModelSelection | null;
+  initialActiveTarget?: AuthorizedSessionModelTransitionTarget;
+  readAppliedTeamCredentialModel?: () => TeamCredentialProviderModelSelectionV1 | null | undefined;
   session: ModelPublisherSession;
   source: AgentSessionModelsSource;
 }>): Readonly<{
   publishActiveSelection(input: Readonly<{
     selection: ProviderBoundModelRef;
-    activeSelectionV1: SessionActiveModelSelectionV1;
+    activeSelectionV1: SessionActiveModelSelection;
     publishActive(): Promise<void>;
   }>): Promise<void>;
   releaseActiveSelectionAuthority(input: Readonly<{
@@ -204,7 +209,15 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
   );
   let runtimeCatalogFingerprint = catalogFingerprint(runtime);
   let runtimeObservedAt = runtime.observedAt ?? (runtime.models === null ? 0 : Date.now());
-  const initialMetadata = params.session.getMetadataSnapshot();
+  // Startup's accepted binding/facts and the first runtime catalog share one
+  // publisher mutation. Consume the target once so later observations cannot
+  // restore a superseded startup binding.
+  let initialActiveTarget = params.initialActiveTarget ?? null;
+  const metadataSnapshot = params.session.getMetadataSnapshot();
+  const initialMetadata = initialActiveTarget && metadataSnapshot
+    ? applyActiveModelFacts(metadataSnapshot, initialActiveTarget, params.agentId,
+      params.initialActiveSelection ?? null)
+    : metadataSnapshot;
   let canonicalBase = stateForAgent(
     initialMetadata?.sessionModelsV1 ?? null,
     params.agentId,
@@ -265,7 +278,7 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
     metadata: Metadata,
     state: SessionModelsState,
     runtimeCurrentModelId: string,
-  ): SessionActiveModelSelectionV1 | null => {
+  ): SessionActiveModelSelection | null => {
     const runner = params.runnerProcessIdentity;
     const agentTargetKey = params.agentTargetKey;
     if (!runner || !agentTargetKey) return null;
@@ -281,8 +294,7 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
     } else {
       return null;
     }
-    const fact: SessionActiveModelSelectionV1 = {
-      v: 1,
+    const fact = createSessionActiveModelSelection({
       selection: {
         agentTargetKey,
         providerConnectionId,
@@ -290,8 +302,10 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
       },
       source: 'runtime_readback',
       runner,
-    };
-    return readExactSessionActiveModelSelectionV1({
+      teamCredentialModel: params.readAppliedTeamCredentialModel ? params.readAppliedTeamCredentialModel() : null,
+    });
+    if (!fact) return null;
+    return readExactSessionActiveModelSelection({
       metadata: {
         ...metadata,
         sessionModelsV1: {
@@ -313,9 +327,14 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
     const operation = pending.then(async () => {
       throwTerminalError();
       if (stopped) return;
-      const metadata = params.session.getMetadataSnapshot();
-      const observedCurrent = metadata?.sessionModelsV1 ?? null;
-      const current = stateForAgent(observedCurrent, params.agentId);
+      const startupTarget = initialActiveTarget;
+      const observedMetadata = params.session.getMetadataSnapshot();
+      const metadata = startupTarget && observedMetadata
+        ? applyActiveModelFacts(observedMetadata, startupTarget, params.agentId,
+          params.initialActiveSelection ?? null)
+        : observedMetadata;
+      const observedCurrent = observedMetadata?.sessionModelsV1 ?? null;
+      const current = stateForAgent(metadata?.sessionModelsV1 ?? null, params.agentId);
       const base = mergeBaseState(canonicalBase, legacyAcpBase);
       const merged = mergeState({
         agentId: params.agentId,
@@ -352,16 +371,21 @@ export function createSessionRuntimeModelsPublisher(params: Readonly<{
               : { activeSelectionV1: undefined }),
           }
         : null;
-      if (stateFingerprint(observedCurrent) === stateFingerprint(desired)) {
+      if (!startupTarget && stateFingerprint(observedCurrent) === stateFingerprint(desired)) {
         lastPublished = desired;
         return;
       }
       lastPublished = desired;
       await params.session.updateMetadataAsCurrentPublisher((metadata) => {
-        if (desired) return { ...metadata, sessionModelsV1: desired };
-        const { sessionModelsV1: _removed, ...rest } = metadata;
+        const current = startupTarget
+          ? applyActiveModelFacts(metadata, startupTarget, params.agentId,
+            params.initialActiveSelection ?? null)
+          : metadata;
+        if (desired) return { ...current, sessionModelsV1: desired };
+        const { sessionModelsV1: _removed, ...rest } = current;
         return rest;
       });
+      initialActiveTarget = null;
     });
     ownOperation(operation);
   };

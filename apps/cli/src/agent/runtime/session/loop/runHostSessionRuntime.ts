@@ -20,7 +20,6 @@ import type {
   SessionModelSelectionV1,
   ProviderBoundModelRef,
   SessionModelTransitionRequestV1,
-  SessionActiveModelSelectionV1,
   AgentSessionRuntimeEvent,
   SessionPendingMessageComposerAdmissionAcceptedRequestV1,
   SessionPendingMessageComposerAdmissionAbandonedRequestV1,
@@ -45,6 +44,7 @@ import { SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/session
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { createSessionActiveModelSelection, type SessionActiveModelSelection } from '@happier-dev/protocol/providers/selection/v2';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
@@ -3087,15 +3087,15 @@ export async function runHostSessionRuntime(
   };
   const createActiveSelectionFact = (
     target: AuthorizedSessionModelTransitionTarget,
-    source: SessionActiveModelSelectionV1['source'],
-  ): SessionActiveModelSelectionV1 | null =>
+    source: SessionActiveModelSelection['source'],
+  ): SessionActiveModelSelection | null =>
     runnerProcessIdentity
-      ? {
-          v: 1,
+      ? createSessionActiveModelSelection({
           selection: target.selection,
           source,
           runner: runnerProcessIdentity,
-        }
+          teamCredentialModel: hookRuntime.readAppliedTeamCredentialModel ? hookRuntime.readAppliedTeamCredentialModel() : null,
+        })
       : null;
   let adoptedModelSelection = startupSeed.modelSelection;
   let lastAcceptedModelIntentUpdatedAt = startupSeed.modelSelection?.updatedAt ?? 0;
@@ -3435,30 +3435,32 @@ export async function runHostSessionRuntime(
       if (claimedSession.hasOwnerMetadataAuthority()) {
         const activeTarget =
           modelTransitionCoordinator!.readActiveTarget();
-        await traceStartupAuthority('active_model_facts', claimedSession,
-          () => claimedSession.updateMetadataAsCurrentPublisher((current) =>
-          applyActiveModelFacts(
-            current,
-            activeTarget,
-            policyAgentId,
-            latestExactActiveSelectionFact?.selection.agentTargetKey
+        const activeSelection =
+          latestExactActiveSelectionFact?.selection.agentTargetKey
               === activeTarget.selection.agentTargetKey
             && latestExactActiveSelectionFact.selection.providerConnectionId
               === activeTarget.selection.providerConnectionId
             && latestExactActiveSelectionFact.selection.modelId
               === activeTarget.selection.modelId
               ? latestExactActiveSelectionFact
-              : null,
-          )));
+              : null;
         if (!runtimeModelsPublisher && hookRuntime.models) {
           runtimeModelsPublisher = createSessionRuntimeModelsPublisher({
             agentId: config.policyAgentId,
             agentTargetKey: modelTargetKey,
             runnerProcessIdentity,
-            initialActiveSelection: latestExactActiveSelectionFact,
+            initialActiveSelection: activeSelection,
+            initialActiveTarget: activeTarget,
+            ...(hookRuntime.readAppliedTeamCredentialModel
+              ? { readAppliedTeamCredentialModel: hookRuntime.readAppliedTeamCredentialModel.bind(hookRuntime) }
+              : {}),
             session: currentLifecycleSession,
             source: hookRuntime.models,
           });
+        } else {
+          await traceStartupAuthority('active_model_facts', claimedSession,
+            () => claimedSession.updateMetadataAsCurrentPublisher((current) =>
+              applyActiveModelFacts(current, activeTarget, policyAgentId, activeSelection)));
         }
         if (runtimeModelsPublisher) {
           const publisher = runtimeModelsPublisher;

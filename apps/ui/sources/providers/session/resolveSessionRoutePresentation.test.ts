@@ -82,6 +82,10 @@ describe('session route presentation', () => {
         expect(resolveSessionRoutePresentation({ phase: 'draft', selection, native }).applied)
             .toMatchObject({ kind: 'team', teamId: 'team', resourceId: 'resource', deliveryMode: 'brokered' });
         expect(resolveSessionRoutePresentation({ phase: 'running', selection, native }).applied.kind).toBe('unknown');
+        const applied = resolveSessionRoutePresentation({ phase: 'running', selection, appliedSelection: selection, native });
+        expect(presentSessionRouteChip(applied, native)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: t('teams.credentials.title') }),
+        });
     });
     it('uses applied display evidence after a rename and keeps the requested source separate', () => {
         const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' });

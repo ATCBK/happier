@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import { applyModelIntentSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
+import { readSessionModelSelectionV2FromMetadata } from '@happier-dev/agents';
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { readSessionProviderBindingMetadataStateV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
@@ -38,6 +39,41 @@ function appliedConnectedClaudeMetadata() {
 }
 
 describe('resolveSessionModelSelectionDisposition', () => {
+    it('presents the runtime-opened Team source while another source is armed, retaining only history after runner replacement', () => {
+        const teamCredentialModel = { kind: 'team_credential_provider_model' as const, resourceId: 'opened', teamId: 'team',
+            expectedResourceRevision: 0, deliveryMode: 'brokered' as const, agentTargetKey: 'backend:codex', modelId: 'shared' };
+        const runner = { pid: 42, processStartTimeMs: 10 };
+        const { kind: _kind, ...openedRef } = teamCredentialModel;
+        const metadata = MetadataSchema.parse({ modelSelectionIntentV2: { v: 2, updatedAt: 20,
+            ref: { source: 'team_resource', ...openedRef, resourceId: 'pending' } },
+            sessionModelsV1: { v: 1, agentId: 'codex', updatedAt: 21, currentModelId: 'shared',
+                availableModels: [{ id: 'shared', name: 'Shared' }], activeSelectionV1: {
+                    v: 2, selection: { agentTargetKey: 'backend:codex', providerConnectionId: null, modelId: 'shared' },
+                    source: 'runtime_apply', runner, teamCredentialModel,
+                } } });
+        const read = (currentRunnerProcessIdentity: typeof runner | null) => resolveSessionModelSelectionDisposition({
+            metadata, agentId: 'codex', agentTargetKey: 'backend:codex', sessionActive: true, currentRunnerProcessIdentity });
+        const disposition = read(runner);
+        const native = { label: 'Native', authSource: 'native' as const, connectedCount: 0 };
+        const presentation = resolveSessionRoutePresentation({ phase: 'running', native,
+            selection: disposition.proposedSelectionV2?.ref ?? null, appliedSelection: disposition.activeRouteSelection,
+            transitionPending: disposition.selectionTransitionPending });
+        expect(presentation.applied).toMatchObject({ kind: 'team', resourceId: 'opened' });
+        expect(presentation.pending).toMatchObject({ kind: 'team', resourceId: 'pending' });
+        expect(read(null)).toMatchObject({ activeRouteSelection: null,
+            lastAppliedRouteSelection: { source: 'team_resource', resourceId: 'opened' } });
+        const nativeIntent = MetadataSchema.parse({ ...metadata, modelSelectionIntentV2: { v: 2, updatedAt: 30,
+            ref: { source: 'native', agentTargetKey: 'backend:codex', modelId: 'shared' } },
+            modelSelectionIntentV1: { v: 1, updatedAt: 30,
+                selection: { agentTargetKey: 'backend:codex', providerConnectionId: null, modelId: 'shared' } } });
+        expect(resolveSessionModelSelectionDisposition({ metadata: nativeIntent, agentId: 'codex', agentTargetKey: 'backend:codex',
+            sessionActive: true, currentRunnerProcessIdentity: runner }).selectionTransitionPending).toBe(true);
+        const { modelSelectionIntentV2: _pending, ...retained } = metadata;
+        expect(resolveSessionModelSelectionDisposition({ metadata: retained, agentId: 'codex', agentTargetKey: 'backend:codex',
+            sessionActive: false, currentRunnerProcessIdentity: null }).contextRouteSelection)
+            .toMatchObject({ source: 'team_resource', resourceId: 'opened' });
+    });
+
     it('keeps a connected launch on ordinary input delivery before the first runtime model publication', () => {
         const applied = appliedConnectedClaudeMetadata();
         const { sessionModelsV1: models, modelSelectionIntentV1: intent, ...birth } = applied;
@@ -196,7 +232,7 @@ describe('resolveSessionModelSelectionDisposition', () => {
         });
     });
 
-    it('stops presenting a Team restart after the exact runner was started from the durable intent', () => {
+    it('settles a durable Team proposal only after the runner publishes its accepted source', () => {
         const metadata = MetadataSchema.parse({
             path: '/tmp/project', host: 'localhost',
             modelSelectionIntentV2: {
@@ -208,11 +244,24 @@ describe('resolveSessionModelSelectionDisposition', () => {
             },
         });
 
-        expect(resolveSessionModelSelectionDisposition({
+        const params = {
             agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude', metadata,
             sessionActive: true,
             currentRunnerProcessIdentity: { pid: 42, processStartTimeMs: 12 },
-        })).toMatchObject({
+        };
+        expect(resolveSessionModelSelectionDisposition(params).selectionTransitionPending).toBe(true);
+        const selection = readSessionModelSelectionV2FromMetadata(metadata)?.ref;
+        if (selection?.source !== 'team_resource') throw new Error('Expected Team intent fixture');
+        const { source: _source, ...team } = selection;
+        const applied = MetadataSchema.parse({ ...metadata, sessionModelsV1: {
+            v: 1, agentId: 'claude', updatedAt: 13, currentModelId: selection.modelId,
+            availableModels: [{ id: selection.modelId, name: 'Team model' }], activeSelectionV1: {
+                v: 2, source: 'runtime_apply', runner: params.currentRunnerProcessIdentity,
+                selection: { agentTargetKey: selection.agentTargetKey, providerConnectionId: null, modelId: selection.modelId },
+                teamCredentialModel: { kind: 'team_credential_provider_model', ...team },
+            },
+        } });
+        expect(resolveSessionModelSelectionDisposition({ ...params, metadata: applied })).toMatchObject({
             proposedSelectionV2: {
                 ref: { source: 'team_resource', modelId: 'team-model' },
             },

@@ -53,7 +53,6 @@ import type {
   ExternalSessionsSource,
   ModelOverrideV1,
   SessionAppliedModelV1,
-  SessionActiveModelSelectionV1,
   SessionModelSelectionIntentV1,
   RuntimeDescriptorMetadataCarrier,
   SessionRollbackRangesV1,
@@ -767,7 +766,7 @@ export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Rea
     agentId: string,
     updatedAt: number,
     currentModelId: string,
-    activeSelectionV1?: SessionActiveModelSelectionV1,
+    activeSelectionV1?: import('@happier-dev/protocol/providers/selection/v2').SessionActiveModelSelection,
     availableModels: Array<{
       id: string,
       name: string,

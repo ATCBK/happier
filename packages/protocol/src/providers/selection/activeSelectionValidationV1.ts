@@ -2,12 +2,10 @@ import {
   readSessionProviderBindingMetadataStateV1,
   sessionProviderBindingMetadataMatchesRuntimeBasisV1,
 } from '../sessions/bindingMetadataV1.js';
-import {
-  SessionActiveModelSelectionV1Schema,
-  type SessionActiveModelSelectionV1,
-} from './v1.js';
+import type { SessionActiveModelSelectionV1 } from './v1.js';
+import { SessionActiveModelSelectionSchema, type SessionActiveModelSelection } from './v2.js';
 
-export function readExactSessionActiveModelSelectionV1(params: Readonly<{
+export function readExactSessionActiveModelSelection(params: Readonly<{
   metadata: Readonly<Record<string, unknown>> | null | undefined;
   agentId: string;
   agentTargetKey: string;
@@ -15,7 +13,7 @@ export function readExactSessionActiveModelSelectionV1(params: Readonly<{
     pid: number;
     processStartTimeMs: number;
   }> | null;
-}>): SessionActiveModelSelectionV1 | null {
+}>): SessionActiveModelSelection | null {
   const metadata = params.metadata;
   if (!metadata) return null;
   const catalog = metadata.sessionModelsV1;
@@ -30,7 +28,7 @@ export function readExactSessionActiveModelSelectionV1(params: Readonly<{
   ) {
     return null;
   }
-  const active = SessionActiveModelSelectionV1Schema.safeParse(
+  const active = SessionActiveModelSelectionSchema.safeParse(
     catalogRecord.activeSelectionV1,
   );
   if (
@@ -75,4 +73,12 @@ export function readExactSessionActiveModelSelectionV1(params: Readonly<{
     return null;
   }
   return active.data;
+}
+
+/** V1 cannot represent a Team source. Older model-only consumers must not claim native proof. */
+export function readExactSessionActiveModelSelectionV1(
+  params: Parameters<typeof readExactSessionActiveModelSelection>[0],
+): SessionActiveModelSelectionV1 | null {
+  const fact = readExactSessionActiveModelSelection(params);
+  return fact?.v === 1 ? fact : null;
 }

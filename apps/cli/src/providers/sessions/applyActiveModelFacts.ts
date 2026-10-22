@@ -1,5 +1,5 @@
 import { applySessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
-import type { SessionActiveModelSelectionV1 } from '@happier-dev/protocol';
+import type { SessionActiveModelSelection } from '@happier-dev/protocol/providers/selection/v2';
 
 import type { Metadata } from '@/api/types';
 import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
@@ -8,7 +8,7 @@ export function applyActiveModelFacts(
   metadata: Metadata,
   target: AuthorizedSessionModelTransitionTarget,
   agentId: string,
-  activeSelectionV1: SessionActiveModelSelectionV1 | null = null,
+  activeSelectionV1: SessionActiveModelSelection | null = null,
 ): Metadata {
   const withBinding = applySessionProviderBindingMetadataV1(
     metadata,

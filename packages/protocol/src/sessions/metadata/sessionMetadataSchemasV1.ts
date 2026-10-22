@@ -24,11 +24,10 @@ import {
 import { ConnectedServiceCredentialRevisionV1Schema } from '../../connect/connectedServiceSchemas.js';
 import { PluginJsonValueV2Schema } from '../../plugins/contributions/jsonSchema.js';
 import {
-  SessionActiveModelSelectionV1Schema,
   SessionAppliedModelV1Schema,
   SessionModelSelectionIntentV1Schema,
 } from '../../providers/selection/v1.js';
-import { SessionModelSelectionV2Schema } from '../../providers/selection/v2.js';
+import { SessionActiveModelSelectionSchema, SessionModelSelectionV2Schema } from '../../providers/selection/v2.js';
 import { SessionProviderBindingMetadataV1Schema } from '../../providers/sessions/bindingMetadataV1.js';
 import {
   EXTERNAL_SESSION_OPERATION_METADATA_KEY,
@@ -857,7 +856,7 @@ const SessionOwnerModelCatalogV1Schema = lazyZodSchema(() => z.strictObject({
   availableModels: z.array(SessionOwnerModelCatalogItemV1Schema).check(z.maxLength(2_048)),
   // Optional for mixed-version producer compatibility. Absence is valid and
   // does not authorize owner-migration or backfill.
-  activeSelectionV1: z.optional(SessionActiveModelSelectionV1Schema),
+  activeSelectionV1: z.optional(SessionActiveModelSelectionSchema),
 }));
 
 const SessionOwnerConfigOptionGroupV1Schema = lazyZodSchema(() => z.strictObject({

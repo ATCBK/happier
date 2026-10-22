@@ -4,6 +4,17 @@ import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applySessionRuntimeControls } from './sessionRuntimeControls';
 
 describe('applySessionRuntimeControls', () => {
+  it('installs the Team Run opener and removes it when its Session runtime retires', async () => {
+    const target: Partial<SessionRuntimeControls> = {};
+    const refusal = Object.assign(new Error('provider_binding_changed'), { code: 'provider_binding_changed' });
+    applySessionRuntimeControls(target, { prepareRunTeamCredentialProviderBinding: async () => { throw refusal; } });
+    expect(target.prepareRunTeamCredentialProviderBinding).toBeTypeOf('function');
+    await expect(target.prepareRunTeamCredentialProviderBinding!({
+      runId: 'child', agentId: 'codex', resourceId: 'resource', modelId: 'model',
+    })).rejects.toBe(refusal);
+    applySessionRuntimeControls(target, null);
+    expect(target.prepareRunTeamCredentialProviderBinding).toBeUndefined();
+  });
   it('retains applied child selection through control installation and withdraws it on retirement', async () => {
     const target: Partial<SessionRuntimeControls> = {};
     const applied = { status: 'applied' as const,

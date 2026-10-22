@@ -1,12 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createSessionActiveModelSelection,
+  SessionActiveModelSelectionSchema,
   SessionModelSelectionV2Schema,
   projectSessionModelSelectionV2ToV1,
   sessionModelSelectionV2TeamBindingIntent,
 } from './v2.js';
+import { readExactSessionActiveModelSelection, readExactSessionActiveModelSelectionV1 } from './activeSelectionValidationV1.js';
+import { SessionActiveModelSelectionV1Schema } from './v1.js';
+import { SessionOwnerMetadataV1Schema, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, projectSessionSharedMetadataV1 } from '../../sessions/metadata/sessionMetadataSchemasV1.js';
 
 describe('SessionModelSelectionV2', () => {
+  it('keeps accepted Team source proof closed, runner-bound and distinct from V1 native proof', () => {
+    const teamCredentialModel = { kind: 'team_credential_provider_model' as const, teamId: 'team', resourceId: 'resource',
+      expectedResourceRevision: 0, deliveryMode: 'brokered' as const, agentTargetKey: 'backend:codex', modelId: 'shared-model' };
+    const input = { selection: { agentTargetKey: 'backend:codex', providerConnectionId: null, modelId: 'shared-model' },
+      source: 'runtime_apply' as const, runner: { pid: 42, processStartTimeMs: 1 }, teamCredentialModel };
+    const fact = createSessionActiveModelSelection(input);
+    expect(fact).toMatchObject({ v: 2, teamCredentialModel });
+    const metadata = { sessionModelsV1: { v: 1, agentId: 'codex', updatedAt: 2, currentModelId: 'shared-model',
+      availableModels: [{ id: 'shared-model', name: 'Shared model' }], activeSelectionV1: fact } };
+    const params = { metadata, agentId: 'codex', agentTargetKey: 'backend:codex', currentRunnerProcessIdentity: input.runner };
+    expect(readExactSessionActiveModelSelection(params)).toEqual(fact);
+    expect(readExactSessionActiveModelSelectionV1(params)).toBeNull();
+    expect(SessionActiveModelSelectionV1Schema.safeParse(fact).success).toBe(false);
+    expect(readExactSessionActiveModelSelection({ ...params, currentRunnerProcessIdentity: { pid: 43, processStartTimeMs: 1 } })).toBeNull();
+    const owner = createSessionOwnerMetadataV1({ metadata });
+    expect(owner).toMatchObject({ ok: true });
+    if (!owner.ok) throw new Error('Expected owner metadata');
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: projectSessionSharedMetadataV1(metadata),
+      ownerMetadata: SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata) }).sessionModelsV1?.activeSelectionV1).toEqual(fact);
+    expect(SessionActiveModelSelectionSchema.safeParse({ ...fact, secret: 'unexpected' }).success).toBe(false);
+    expect(createSessionActiveModelSelection({ ...input, teamCredentialModel: undefined })).toBeNull();
+    expect(createSessionActiveModelSelection({ ...input, selection: { ...input.selection, modelId: 'other' } })).toBeNull();
+    expect(createSessionActiveModelSelection({ ...input, teamCredentialModel: null })).toMatchObject({ v: 1, selection: input.selection });
+  });
+
   it('represents Team credential resources without fabricating a Provider Connection', () => {
     const selection = SessionModelSelectionV2Schema.parse({
       v: 2,

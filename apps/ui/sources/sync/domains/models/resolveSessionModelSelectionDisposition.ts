@@ -1,13 +1,11 @@
 import type { Metadata } from '@happier-dev/session-core/state';
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
-import {
-    readActiveSessionModelSelectionFromMetadata,
-    readSessionModelSelectionV2FromMetadata,
-} from '@happier-dev/agents';
+import { readSessionModelSelectionV2FromMetadata } from '@happier-dev/agents';
+import { readExactSessionActiveModelSelection } from '@happier-dev/protocol/providers/active-model-selection';
 import { readSessionModelSelectionIntentFromMetadata } from '@/sync/domains/models/readSessionModelSelectionIntent';
 import { readSessionProviderBindingMetadataStateV1, sessionProviderBindingMetadataMatchesRuntimeBasisV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import type { ProviderBoundModelRef, SessionModelSelectionIntentV1 } from '@happier-dev/protocol/providers/model-selection';
-import type { SessionModelSelectionV2 } from '@happier-dev/protocol/providers/selection/v2';
+import type { SessionActiveModelSelection, SessionModelRefV2, SessionModelSelectionV2 } from '@happier-dev/protocol/providers/selection/v2';
 
 export type CurrentSessionRunnerProcessIdentity = Readonly<{
     pid: number;
@@ -20,16 +18,26 @@ export type SessionModelSelectionDisposition = Readonly<{
     proposedSelection: ProviderBoundModelRef | null;
     proposedSelectionV2: SessionModelSelectionV2 | null;
     activeSelection: ProviderBoundModelRef | null;
+    activeRouteSelection: ProviderBoundModelRef | SessionModelRefV2 | null;
     /** Coherent runtime-applied history for presentation; never current runner/context authority. */
     lastAppliedSelection: ProviderBoundModelRef | null;
+    lastAppliedRouteSelection: ProviderBoundModelRef | SessionModelRefV2 | null;
     selectionTransitionPending: boolean;
     reportedSelection: ProviderBoundModelRef | null;
     reportedSelectionStatus: 'running' | 'last_used' | 'last_reported' | null;
     contextSelection: ProviderBoundModelRef | null;
+    contextRouteSelection: ProviderBoundModelRef | SessionModelRefV2 | null;
 }>;
 
 function normalizeModelId(value: string | null | undefined): string {
     return typeof value === 'string' ? value.trim() : '';
+}
+
+function routeSelection(fact: SessionActiveModelSelection | null): ProviderBoundModelRef | SessionModelRefV2 | null {
+    if (!fact) return null;
+    if (fact.v === 1) return fact.selection;
+    const { kind: _kind, ...ref } = fact.teamCredentialModel;
+    return { source: 'team_resource', ...ref };
 }
 
 /**
@@ -53,7 +61,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
     } catch {
         proposedIntent = null;
     }
-    const proposedSelection = proposedSelectionV2
+    const proposedSelection: ProviderBoundModelRef | null = proposedSelectionV2
         ? proposedSelectionV2.ref.source === 'team_resource'
             ? null
             : {
@@ -66,12 +74,11 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         : proposedIntent?.selection ?? null;
 
     const providerBindingState = readSessionProviderBindingMetadataStateV1(params.metadata);
-    const exactSelection = readActiveSessionModelSelectionFromMetadata(
-        params.metadata,
-        params.agentId,
-        params.agentTargetKey,
-        params.currentRunnerProcessIdentity,
-    );
+    const exactFact = readExactSessionActiveModelSelection({
+        metadata: params.metadata, agentId: params.agentId, agentTargetKey: params.agentTargetKey,
+        currentRunnerProcessIdentity: params.currentRunnerProcessIdentity,
+    });
+    const exactSelection = exactFact?.selection ?? null;
 
     const sessionModels = readSessionModelsState(params.metadata);
     const fallbackModelId = sessionModels?.agentId === params.agentId
@@ -109,40 +116,60 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
     // coherent applied history even while the replacement's model publication
     // is catching up. This history never supplies active/context authority;
     // a genuinely different selection still requires transition admission.
-    const lastAppliedSelection = exactSelection ?? readActiveSessionModelSelectionFromMetadata(
-        params.metadata,
-        params.agentId,
-        params.agentTargetKey,
-        params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
-    );
+    const lastAppliedFact = exactFact ?? readExactSessionActiveModelSelection({
+        metadata: params.metadata, agentId: params.agentId, agentTargetKey: params.agentTargetKey,
+        currentRunnerProcessIdentity: params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
+    });
+    const lastAppliedSelection = lastAppliedFact?.selection ?? null;
+    const exactRouteSelection = routeSelection(exactFact);
+    const activeRouteSelection = params.sessionActive ? exactRouteSelection : null;
+    const lastAppliedRouteSelection = exactFact ? exactRouteSelection : routeSelection(lastAppliedFact);
     const teamSelectionTransitionPending = proposedSelectionV2?.ref.source === 'team_resource'
         && (
-            params.currentRunnerProcessIdentity === null
-            || params.currentRunnerProcessIdentity.processStartTimeMs <= proposedSelectionV2.updatedAt
+            lastAppliedFact?.v !== 2
+            || lastAppliedFact.teamCredentialModel.teamId !== proposedSelectionV2.ref.teamId
+            || lastAppliedFact.teamCredentialModel.resourceId !== proposedSelectionV2.ref.resourceId
+            || lastAppliedFact.teamCredentialModel.expectedResourceRevision !== proposedSelectionV2.ref.expectedResourceRevision
+            || lastAppliedFact.teamCredentialModel.deliveryMode !== proposedSelectionV2.ref.deliveryMode
+            || lastAppliedFact.teamCredentialModel.agentTargetKey !== proposedSelectionV2.ref.agentTargetKey
+            || lastAppliedFact.teamCredentialModel.modelId !== proposedSelectionV2.ref.modelId
         );
     const selectionTransitionPending = params.sessionActive
         && (
-            teamSelectionTransitionPending
-            || (
-                proposedIntent !== null
-                // Session socket presence precedes native startup/model publication.
-                // The launch intent alone is not evidence of a changed runtime route.
-                // Leave active/context authority unknown until the producer publishes it.
-                && sessionModels !== null
-                && (
-                    lastAppliedSelection === null
-                    || proposedSelection === null
-                    || lastAppliedSelection.agentTargetKey !== proposedSelection.agentTargetKey
-                    || lastAppliedSelection.providerConnectionId !== proposedSelection.providerConnectionId
-                    || lastAppliedSelection.modelId !== proposedSelection.modelId
+            proposedSelectionV2?.ref.source === 'team_resource'
+                ? teamSelectionTransitionPending
+                : (
+                    (proposedSelectionV2 !== null && lastAppliedFact?.v === 2)
+                    || (
+                        proposedIntent !== null
+                        // Session socket presence precedes native startup/model publication.
+                        // The launch intent alone is not evidence of a changed runtime route.
+                        // Leave active/context authority unknown until the producer publishes it.
+                        && sessionModels !== null
+                        && (
+                            lastAppliedSelection === null
+                            || proposedSelection === null
+                            || lastAppliedSelection.agentTargetKey !== proposedSelection.agentTargetKey
+                            || lastAppliedSelection.providerConnectionId !== proposedSelection.providerConnectionId
+                            || lastAppliedSelection.modelId !== proposedSelection.modelId
+                        )
+                    )
                 )
-            )
         );
     const reportedSelectionStatus = reportedSelection === null
         ? null
         : exactSelection !== null
             ? params.sessionActive ? 'running' : 'last_used'
             : 'last_reported';
+    const contextSelection: ProviderBoundModelRef | null = params.sessionActive ? activeSelection : proposedSelection ?? reportedSelection;
+    const contextRouteSelection = params.sessionActive ? activeRouteSelection
+        : proposedSelectionV2?.ref ?? (
+            lastAppliedFact?.v === 2 && contextSelection
+            && contextSelection.agentTargetKey === lastAppliedFact.selection.agentTargetKey
+            && contextSelection.providerConnectionId === lastAppliedFact.selection.providerConnectionId
+            && contextSelection.modelId === lastAppliedFact.selection.modelId
+                ? lastAppliedRouteSelection : contextSelection
+        );
 
     return {
         sessionDisposition: params.sessionActive ? 'active' : 'next_launch',
@@ -150,12 +177,13 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         proposedSelection,
         proposedSelectionV2,
         activeSelection,
+        activeRouteSelection,
         lastAppliedSelection,
+        lastAppliedRouteSelection,
         selectionTransitionPending,
         reportedSelection,
         reportedSelectionStatus,
-        contextSelection: params.sessionActive
-            ? activeSelection
-            : proposedSelection ?? reportedSelection,
+        contextSelection,
+        contextRouteSelection,
     };
 }

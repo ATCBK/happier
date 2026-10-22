@@ -16,6 +16,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 import { createModelIntentV2MetadataCasCandidate } from '@happier-dev/agents/session/state/metadataWriters';
+import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 import { reloadConfiguration } from '@/configuration';
 import { PUBLIC_HANDOFF_AGENT_PROVIDER_ENV_KEY } from '@/daemon/agentRuntime/runnerManagedProviderPublicHandoff.fixture';
@@ -147,7 +149,7 @@ describe('attached Execution Run Team credential binding (composed runner → da
         reloadConfiguration();
     });
 
-    it('opens an independently selected Run for its own Agent, model and route, brokered and direct; an inheriting Run consumes the parent\'s live custody and is refused, never launched natively, once a live parent edit disagrees with it', async () => {
+    it('opens independently selected and applied-parent inherited Team Runs through installed Session controls; unavailable applied state refuses before launch', async () => {
         const {
             sessionId,
             session,
@@ -199,7 +201,20 @@ describe('attached Execution Run Team credential binding (composed runner → da
 
         // --- 1b. A Run that selected nothing inherits the parent's live custody. ---
         // `PLAN.md` §2.3: "An attached Run consumes its existing host/runtime custody."
-        const runInherit = await startRun('run-inherit', undefined, PARENT_AGENT_ID);
+        const resolveInherited = (available: boolean) => {
+            const applied = journey.readAppliedTeamCredentialModel();
+            if (!applied) throw new Error('Expected the parent runtime\'s applied Team selection');
+            return resolveExecutionRunChildSelection({
+                lifecycle: 'attached', backendTarget: { kind: 'backend', backendId: PARENT_AGENT_ID },
+                parent: available ? {
+                    status: 'applied', backendTarget: { kind: 'backend', backendId: PARENT_AGENT_ID },
+                    modelId: applied.modelId, teamCredentialModel: applied, connectedServices: null,
+                } : { status: 'unavailable' },
+            });
+        };
+        const inherited = resolveInherited(true);
+        expect(inherited.selectionSource).toBe('inherited');
+        const runInherit = await startRun('run-inherit', inherited.teamCredentialModel, PARENT_AGENT_ID);
         expect(openTeamCredentialProviderBinding).toHaveBeenCalledTimes(3);
         expect(openTeamCredentialProviderBinding).toHaveBeenLastCalledWith(expect.objectContaining({
             sessionId,
@@ -212,10 +227,9 @@ describe('attached Execution Run Team credential binding (composed runner → da
             modelId: 'model-a',
             consumer: { kind: 'execution_run', executionRunId: 'run-inherit' },
         }));
-        // It carries no selection of its own, so the daemon admits it on the
-        // tracked parent binding.
-        expect(runOpenOperations().at(-1)).not.toHaveProperty('teamId');
-        expect(runOpenOperations().at(-1)).not.toHaveProperty('deliveryMode');
+        // Host admission resolves omissions once; materialization consumes that
+        // exact selection, just as it does for an explicit child choice.
+        expect(runOpenOperations().at(-1)).toMatchObject({ teamId: 'team-a', deliveryMode: 'brokered' });
         expect(runAgent.launches.at(-1)).toMatchObject({
             runId: 'run-inherit',
             providerBinding: { source: { kind: 'team_resource', resourceId: 'resource-a' } },
@@ -253,15 +267,13 @@ describe('attached Execution Run Team credential binding (composed runner → da
             modelId: 'model-c',
         });
 
-        // --- 2b. An inheriting Run while the parent's custody (A) and the Home's
-        // accepted selection (C) disagree: a typed refusal, never a native launch
-        // (`02-…` §11.6 "no silent native fallback"; §11.8 "No default branch may
-        // reinterpret it as native"). ---
+        // --- 2b. Model the applied-state reader reporting unavailable during
+        // the transition. Admission refuses before any broker or Agent effect;
+        // the reader's transition detection is covered at its own boundary. ---
         const opensBeforeRefusal = openTeamCredentialProviderBinding.mock.calls.length;
         const launchesBeforeRefusal = runAgent.launches.length;
         const daemonOpsBeforeRefusal = runOpenOperations().length;
-        await expect(startRun('run-inherit-after-edit', undefined, PARENT_AGENT_ID))
-            .rejects.toMatchObject({ code: 'provider_binding_changed' });
+        expect(() => resolveInherited(false)).toThrowError(expect.objectContaining({ code: 'execution_run_parent_selection_unavailable' }));
         expect(openTeamCredentialProviderBinding).toHaveBeenCalledTimes(opensBeforeRefusal);
         expect(runAgent.launches).toHaveLength(launchesBeforeRefusal);
         expect(runOpenOperations()).toHaveLength(daemonOpsBeforeRefusal);
@@ -316,16 +328,15 @@ describe('attached Execution Run Team credential binding (composed runner → da
             modelSelectionIntentV2: { ref: { resourceId: 'resource-c', modelId: 'model-c' } },
         });
 
-        // --- 4. A model-only parent edit on the same resource also awaits the
-        // parent's restart: the inheriting Run is refused, not launched natively. ---
+        // --- 4. Unavailable applied state also refuses a model-only transition
+        // on the same resource, with no native fallback. ---
         editParentSelection({
             resourceId: 'resource-a',
             teamId: 'team-a',
             expectedResourceRevision: 3,
             modelId: 'model-a2',
         });
-        await expect(startRun('run-inherit-after-model-edit', undefined, PARENT_AGENT_ID))
-            .rejects.toMatchObject({ code: 'provider_binding_changed' });
+        expect(() => resolveInherited(false)).toThrowError(expect.objectContaining({ code: 'execution_run_parent_selection_unavailable' }));
         expect(runAgent.launches).toHaveLength(launchesBeforeRefusal + 2);
 
         // Each Run releases its own binding through the daemon when it ends.
@@ -336,6 +347,18 @@ describe('attached Execution Run Team credential binding (composed runner → da
         await runB2.dispose();
         expect(homeCleanups.filter((cleanup) => cleanup.mock.calls.length > 0).length).toBe(releasedBefore + 4);
         expect(homeCleanups[0]).not.toHaveBeenCalled();
+
+        // A Home refusal travels through the real runner/daemon transport. A
+        // missing installed opener would instead report connection_not_found.
+        const launchesBeforeHomeRefusal = runAgent.launches.length;
+        openTeamCredentialProviderBinding.mockRejectedValueOnce(createProviderErrorV1('provider_authorization_changed'));
+        await expect(startRun('run-inherited-home-refusal', inherited.teamCredentialModel, PARENT_AGENT_ID))
+            .rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        expect(runOpenOperations().at(-1)).toMatchObject({
+            resourceId: 'resource-a', modelId: 'model-a',
+            consumer: { kind: 'execution_run', executionRunId: 'run-inherited-home-refusal' },
+        });
+        expect(runAgent.launches).toHaveLength(launchesBeforeHomeRefusal);
     }, 180_000);
 
     it('SESSIONOPEN optional prompt asset producer retains available AUTO assets and reports unavailable optional extras', async () => {

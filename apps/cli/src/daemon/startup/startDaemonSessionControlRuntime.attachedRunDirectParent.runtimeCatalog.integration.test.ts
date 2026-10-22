@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
+import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
 
 import { reloadConfiguration } from '@/configuration';
 import { PUBLIC_HANDOFF_AGENT_PROVIDER_ENV_KEY } from '@/daemon/agentRuntime/runnerManagedProviderPublicHandoff.fixture';
@@ -43,7 +44,8 @@ vi.mock('@/daemon/controlServer', () => ({
 }));
 
 // OS boundary: process identity of the runner.
-vi.mock('@/daemon/processIdentity', () => ({
+vi.mock('@/daemon/processIdentity', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/daemon/processIdentity')>(),
     readProcessIdentityByPid: testState.readProcessIdentityByPid,
 }));
 
@@ -91,10 +93,6 @@ vi.mock('@/rpc/handlers/executionRuns', async (importOriginal) => {
     };
 });
 
-vi.mock('@/ui/logger', () => ({
-    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
-
 const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
 
 describe('attached Execution Run Team credential binding (composed runner → daemon)', () => {
@@ -113,18 +111,19 @@ describe('attached Execution Run Team credential binding (composed runner → da
     });
 
     it('refuses an inheriting Run of a DIRECT Team parent typed, and never launches it natively', async () => {
+        const journey = await composeAttachedRunJourney({
+            cleanups,
+            parentDeliveryMode: 'direct',
+            testState,
+            envScope,
+        });
         const {
             sessionId,
             openTeamCredentialProviderBinding,
             runAgent,
             startRun,
             runOpenOperations,
-        } = await composeAttachedRunJourney({
-            cleanups,
-            parentDeliveryMode: 'direct',
-            testState,
-            envScope,
-        });
+        } = journey;
 
         // The parent Session itself opened A over direct delivery.
         expect(openTeamCredentialProviderBinding).toHaveBeenCalledTimes(1);
@@ -138,8 +137,13 @@ describe('attached Execution Run Team credential binding (composed runner → da
         // Run cannot consume (the Run owner attests only a Run's OWN direct
         // selection). `02-…` §11.8: a typed operation-local incompatibility, and
         // "No default branch may reinterpret it as native."
-        await expect(startRun('run-inherit-direct', undefined, PARENT_AGENT_ID))
-            .rejects.toMatchObject({ code: 'provider_credential_transport_unavailable' });
+        const applied = journey.readAppliedTeamCredentialModel();
+        if (!applied) throw new Error('Expected the parent runtime\'s direct Team selection');
+        expect(() => resolveExecutionRunChildSelection({
+            lifecycle: 'attached', backendTarget: { kind: 'backend', backendId: PARENT_AGENT_ID },
+            parent: { status: 'applied', backendTarget: { kind: 'backend', backendId: PARENT_AGENT_ID },
+                modelId: applied.modelId, teamCredentialModel: applied, connectedServices: null },
+        })).toThrowError(expect.objectContaining({ code: 'execution_run_child_choice_required' }));
         expect(openTeamCredentialProviderBinding).toHaveBeenCalledTimes(1);
         expect(runOpenOperations()).toHaveLength(0);
         expect(runAgent.launches).toHaveLength(0);

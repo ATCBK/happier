@@ -38,6 +38,9 @@ import { readSessionTeamCredentialResourceCatalog, readSessionTeamCredentialProv
 import { createNativeSessionClientTestPort } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
+import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
+import { createSessionRuntimeModelsPublisher } from '@/agent/runtime/controls/sessionRuntimeModelsPublisher';
+import type { HostSessionRuntimeHookRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import { archiveSessionOnceInactive } from '@/session/services/archiveSessionOnceInactive';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -63,6 +66,9 @@ import { useNewSessionAuthoringState } from '../../../../ui/sources/components/s
 import { buildSessionSpawnNewInputV2FromAuthoringDraft } from '../../../../ui/sources/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import { createNewSessionPromptStore } from '../../../../ui/sources/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { DEFAULT_NEW_SESSION_AUTOMATION_DRAFT } from '../../../../ui/sources/sync/domains/automations/automationDraft';
+import { resolveSessionModelSelectionDisposition } from '../../../../ui/sources/sync/domains/models/resolveSessionModelSelectionDisposition';
+import { resolveSessionRoutePresentation } from '../../../../ui/sources/providers/session/resolveSessionRoutePresentation';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 import { settingsParse } from '../../../../ui/sources/sync/domains/settings/settings';
 import { sessionModelSelectionV2TeamBindingIntent } from '@happier-dev/protocol/providers/selection/v2';
 import { ConnectedAccountCatalogRowReadResponseV1Schema, emptyConnectedAccountCatalogRecordV1 }
@@ -166,6 +172,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     const brokerRefusals: unknown[] = [];
     const homeRequestPaths: string[] = [];
     let readLaunchPhases: () => unknown = () => [];
+    let readAcceptedBindingLogs: () => readonly unknown[] = () => [];
     let readLaunchMessages: () => readonly string[] = () => [];
     onTestFailed(() => { console.error('Team Pool deciding failure', { phase, runnerFailure, answersObserved, completedIngresses,
       brokerRefusals, homeRequestPaths, launchPhases: readLaunchPhases(), launchMessages: readLaunchMessages(), os: os.observed }); });
@@ -499,6 +506,34 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             mcpServers: {}, permissionHandler: { cancelByPluginTurn: async () => undefined },
             getPermissionMode: () => 'safe-yolo', memoryRecallGuidanceEnabled: false } as never);
           if (!runtime) throw new Error('External runtime unavailable');
+          if (uiAuthoring) {
+            const resolved = resolveHostSessionRuntimeFactoryResult(runtime);
+            const hookRuntime = (resolved.nativeRuntime ?? resolved.runtime) as HostSessionRuntimeHookRuntime;
+            const runner = { pid: os.pid, processStartTimeMs: 1 };
+            // Native catalog telemetry is an external Agent boundary. The Team
+            // identity comes from the real accepted attach/native-open path.
+            const snapshot = { currentModelId: offered.descriptor.id,
+              models: [{ id: offered.descriptor.id, name: offered.descriptor.name }] };
+            const publisher = createSessionRuntimeModelsPublisher({ agentId: worker.agentId,
+              agentTargetKey: worker.agentTargetKey, runnerProcessIdentity: runner, session,
+              readAppliedTeamCredentialModel: hookRuntime.readAppliedTeamCredentialModel,
+              source: { read: () => snapshot, subscribe(listener) {
+                listener(snapshot); return { dispose() {} };
+              } } });
+            try {
+              await publisher.flush();
+              const metadata = MetadataSchema.parse(session.getMetadataSnapshot());
+              const disposition = resolveSessionModelSelectionDisposition({ agentId: worker.agentId,
+                agentTargetKey: worker.agentTargetKey, metadata, sessionActive: true,
+                currentRunnerProcessIdentity: runner });
+              const route = resolveSessionRoutePresentation({ phase: 'running', selection: null,
+                appliedSelection: disposition.activeRouteSelection ?? disposition.activeSelection,
+                native: { label: 'Native', authSource: 'native', connectedCount: 0 },
+                teamSources: [{ teamId: team.id, resourceId: resource.id, displayName: 'Shared source' }] });
+              expect(route.applied).toMatchObject({ kind: 'team', teamId: team.id, resourceId: resource.id,
+                deliveryMode: 'brokered', modelId: offered.descriptor.id, sourceLabel: 'Shared source' });
+            } finally { publisher.dispose(); }
+          }
           const operations = (runtime as Readonly<{ operations: Readonly<{
             sendTurnPrompt(text: string, input: Readonly<{ turnId: string; localId: string; userMessageSeq: number }>): Promise<void>;
             subscribeRuntimeEvents(listener: (event: unknown) => void): (() => void) | void;
@@ -555,12 +590,15 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           });
           readLaunchMessages = () => launchMessages;
           const launchPhases: unknown[] = [];
+          const acceptedBindingLogs: unknown[] = [];
           const writeInfo = logger.infoFile.bind(logger);
           vi.spyOn(logger, 'infoFile').mockImplementation((...args) => {
             if (args[0] === '[DAEMON RUN] Spawn preparation phase') launchPhases.push(args[1]);
+            if (args[0] === '[DAEMON RUN] Team credential launch binding') acceptedBindingLogs.push(args[1]);
             writeInfo(...args);
           });
           readLaunchPhases = () => launchPhases;
+          readAcceptedBindingLogs = () => acceptedBindingLogs;
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
           const authoredSpawn = uiAuthoring ? await (async () => {
@@ -661,6 +699,8 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           expect(result, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
             message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ ok: true,
               result: { type: 'success', initialInput: { status: 'accepted' } } });
+          expect(readAcceptedBindingLogs()).toContainEqual(expect.objectContaining({ stage: 'session_commit',
+            code: 'accepted_brokered_provider_model', sessionId, resourceId: resource.id, teamId: team.id }));
           if (refusedSessionId) expect(sessionId).toBe(refusedSessionId);
           expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { active: true, archivedAt: true } }))
             .toEqual({ active: true, archivedAt: null });

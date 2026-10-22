@@ -5,6 +5,7 @@ const runtimeControlKeys = [
   'readCodingPromptBehavior',
   'readEffectiveInputConfiguration',
   'readAppliedChildSelection',
+  'prepareRunTeamCredentialProviderBinding',
   'withdrawWorkflowStepInput',
   'refreshGoal',
   'setGoal',

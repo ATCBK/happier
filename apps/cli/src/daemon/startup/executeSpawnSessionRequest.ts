@@ -880,6 +880,17 @@ export async function executeSpawnSessionRequest(
             }
 
             recordPreparationPhase('session_commit');
+            const acceptedTeamBinding = launchSessionAttachPayload?.snapshot?.acceptedTeamCredentialBinding;
+            if (acceptedTeamBinding?.slot.kind === 'provider_model' && acceptedTeamBinding.resourceId !== null) {
+                logger.infoFile('[DAEMON RUN] Team credential launch binding', {
+                    stage: 'session_commit',
+                    code: acceptedTeamBinding.deliveryMode === 'brokered' ? 'accepted_brokered_provider_model' : 'accepted_direct_provider_model',
+                    ...(diagnosticOperationId ? { operationId: diagnosticOperationId } : {}),
+                    ...(launchExistingSessionId ? { sessionId: launchExistingSessionId } : {}),
+                    resourceId: acceptedTeamBinding.resourceId,
+                    ...(acceptedTeamBinding.teamId ? { teamId: acceptedTeamBinding.teamId } : {}),
+                });
+            }
             if (requesterRuntime) {
                 const tag = launchOptions.sessionCreationTag;
                 const custody = normalizedExistingSessionId

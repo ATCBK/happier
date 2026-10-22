@@ -38,6 +38,8 @@ import {
     AgentRuntimeDaemonServiceRequestV1Schema,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { registerSessionClientRuntimeHandlers } from '@/api/session/client/executionRuns/registerSessionClientRuntimeHandlers';
+import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
+import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
 import { createAgentRuntimeDaemonServiceAuthorityPath } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
@@ -520,11 +522,16 @@ export async function composeAttachedRunJourney(params: Readonly<{
     // selection has no opener.
     const nativeParent = nativeRuntime as Readonly<{
         prepareRunTeamCredentialProviderBinding?: (...args: never[]) => Promise<unknown>;
+        readAppliedTeamCredentialModel?: () => TeamCredentialProviderModelSelectionV1 | null | undefined;
     }> | null;
     const prepareRunBinding = nativeParent?.prepareRunTeamCredentialProviderBinding;
     expect(typeof prepareRunBinding, 'the host Session nativeRuntime exposes the Run Team credential preparer')
         .toBe('function');
     if (!prepareRunBinding) throw new Error('Expected the Run Team credential preparer');
+    const sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
+    applySessionRuntimeControls(sessionRuntimeControls, {
+        prepareRunTeamCredentialProviderBinding: prepareRunBinding.bind(nativeParent) as NonNullable<SessionRuntimeControls['prepareRunTeamCredentialProviderBinding']>,
+    });
     registerSessionClientRuntimeHandlers({
         serverId: 'server-attached-run-broker',
         serverUrl: 'https://account.example.test',
@@ -537,9 +544,7 @@ export async function composeAttachedRunJourney(params: Readonly<{
         session: session as never,
         getSessionMetadata: () => session.getMetadataSnapshot(),
         // `runHostSessionRuntime` binds the native runtime's preparer exactly so.
-        sessionRuntimeControls: {
-            prepareRunTeamCredentialProviderBinding: prepareRunBinding.bind(nativeParent) as never,
-        },
+        sessionRuntimeControls,
         enqueueSessionUserMessage: vi.fn(),
         enqueueUserTextMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: false })),
         enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: false })),
@@ -591,6 +596,7 @@ export async function composeAttachedRunJourney(params: Readonly<{
         runAgent,
         startRun,
         runOpenOperations,
+        readAppliedTeamCredentialModel: () => nativeParent?.readAppliedTeamCredentialModel?.(),
         promptBridge: source.daemonTurnContributionsBridge,
         daemonRequests,
     };

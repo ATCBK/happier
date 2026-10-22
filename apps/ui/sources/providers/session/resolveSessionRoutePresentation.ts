@@ -98,8 +98,8 @@ function routeSourceLabel(route: SessionRoute, nativeLabel: string): string | nu
     switch (route.kind) {
         case 'unknown': return null;
         case 'native': return nativeLabel;
-        case 'provider':
-        case 'team': return route.sourceLabel;
+        case 'provider': return route.sourceLabel;
+        case 'team': return route.sourceLabel ?? t('teams.credentials.title');
     }
 }
 
