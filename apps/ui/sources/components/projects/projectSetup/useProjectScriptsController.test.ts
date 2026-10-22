@@ -74,8 +74,8 @@ describe('Project Scripts Setup controls', () => {
                     billing: { location: 'local', stoppedBilling: 'not-billed' }, retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] } },
             });
             await act(async () => { hook.getCurrent().chooseRunDestination('build', { kind: 'managed', draft }); });
-            const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
-            await act(async () => { await upsertServerProfile({ name: 'Refreshed picker scope', serverUrl: 'https://picker-scope.test' }); });
+            // A same-Account credential recheck retires the binding; a label change no longer does.
+            await act(async () => { await harness.switchAccount(home, 'alice'); });
             await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
             expect(hook.getCurrent().runChoices).toEqual({});
             expect(hook.getCurrent().managedCreations).toEqual({});

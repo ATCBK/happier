@@ -93,7 +93,8 @@ describe('Projects tree checkout facts', () => {
         const storageKey = buildRealmQualifiedMobileSurfaceStorageKey('project', source.profileScope!, 'workspace')!;
         source = { ...source, localSettings: { projectLastMobileSurfaceByWorkspaceRefId: { [storageKey]: 'code' } } };
         expect([...select(source, 1_100).values()][0]).toMatchObject({ newFromSession: false });
-        expect([...select(source, 121_001).values()][0]).toMatchObject({ attention: null });
+        // A pending request stays visible while its runtime is live, however long it has waited.
+        expect([...select(source, 121_001).values()][0]).toMatchObject({ attention: 'needs-you' });
         source.sessionListRowsByServerId = { 'home-a': { wait: session('wait', {
             metadata: { machineId: 'machine-1', path: '/repo' }, thinking: true, latestTurnStatus: 'completed',
         }) } };

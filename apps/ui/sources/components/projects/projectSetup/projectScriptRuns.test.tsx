@@ -225,8 +225,10 @@ describe('Scripts canonical operation subscriptions', () => {
             expect(selectors.selectAll(actionOperationStore.getSnapshot())).toEqual([]);
             const { ActionOperationDetailModal } = await import('@/components/inbox/actionOperations/ActionOperationDetailModal');
             const setChrome = vi.fn();
-            const screen = await renderScreen(<ActionOperationDetailModal serverId={serverId} operationId="retained-script"
-                onClose={NO_CHANGE} setChrome={setChrome} />);
+            const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+            // The Modal host sits inside the app's pane provider; the retained output embeds a terminal that reads it.
+            const screen = await renderScreen(<AppPaneProvider><ActionOperationDetailModal serverId={serverId} operationId="retained-script"
+                onClose={NO_CHANGE} setChrome={setChrome} /></AppPaneProvider>);
             expect(setChrome.mock.calls.at(-1)?.[0]?.title).toBe('Retained build');
             expect(screen.findByTestId('project-command-output')).not.toBeNull();
             expect(selectors.selectAll(actionOperationStore.getSnapshot())).toEqual([]);
