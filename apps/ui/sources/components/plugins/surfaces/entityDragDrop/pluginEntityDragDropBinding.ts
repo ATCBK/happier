@@ -1,4 +1,6 @@
 import { PluginInvocableActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { ListReorderOutputV1Schema } from '@happier-dev/protocol/actions/listReorderAction';
+import { entityReorderOutcome } from '@/components/ui/treeDragDrop/entityReorderOutcome';
 import { PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import { validatePluginDragSourceReferenceV1, isPluginDropTargetActionAllowedV1, type PluginDragSourceContributionV1, type PluginDropTargetContributionV1 } from '@happier-dev/protocol/plugins/contributions/entityDragDrop';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -55,6 +57,10 @@ export function settlePluginEntityDropActionResult(result: unknown, action: stri
         reason: { code: failure.diagnostics[0] ?? failure.code, message: failure.diagnostics[0] ?? failure.code } };
     if (typeof action === 'string' && PluginInvocableActionIdSchema.safeParse(action).success && result !== null && typeof result === 'object' && 'kind' in result && result.kind === 'approval_request_created') {
         return { status: 'refused', reason: { code: 'approval_required', message: 'Approval is required before applying this action.' } };
+    }
+    if (action === 'tasks.internal.reorder' || action === 'session.pending.reorder') {
+        const parsed = ListReorderOutputV1Schema.safeParse(result);
+        return entityReorderOutcome(parsed.success ? parsed.data : { status: 'unknown', reason: 'invalid_reorder_outcome' });
     }
     return { status: 'applied' };
 }

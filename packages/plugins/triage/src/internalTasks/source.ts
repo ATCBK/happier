@@ -11,8 +11,10 @@ import {
   type TriageSourceReadSessionLinksInputV1, type TriageSourceReadSessionLinksResultV1,
 } from '@happier-dev/triage-protocol/v1';
 
+import { INTERNAL_TASK_SOURCE_V1, internalTaskLocalRefV1, isInternalTaskReferenceV1 } from './identity.js';
+export { INTERNAL_TASK_SOURCE_V1, internalTaskLocalRefV1 } from './identity.js';
+
 /** This adapter owns the built-in source, never the Account todo model or CAS. */
-export const INTERNAL_TASK_SOURCE_V1 = Object.freeze({ pluginId: 'happier.triage', localId: 'internal' });
 export const INTERNAL_TASK_DRAFT_V1 = {
   v: 1, binding: { purpose: 'tasks', source: 'accountData' }, localInstanceKey: 'personal', keyStability: 'stable',
   configuration: { v: 1, token: 'happier-tasks-v1' }, locator: { v: 1, displayLabel: 'Happier tasks' },
@@ -31,9 +33,6 @@ export function internalTaskStateV1(state: Task['state']): TriageEntryStateV1 {
     : { presentation: 'active', stage: state, nativeLabel: state === 'backlog' ? 'Backlog' : state === 'started' ? 'Started' : 'Unstarted' };
 }
 
-export function internalTaskLocalRefV1(taskId: string): TriageSourceEntryLocalRefV1 {
-  return { kindId: 'task', collisionScope: 'personal', entryId: taskId };
-}
 function taskRef(id: string): TriageEntryRefV1 { return { source: INTERNAL_TASK_SOURCE_V1, ...internalTaskLocalRefV1(id) }; }
 export function isInternalTaskConfiguredInstanceV1(instance: TriageConfiguredSourceInstanceV1): boolean {
   return instance.instance.source.pluginId === INTERNAL_TASK_SOURCE_V1.pluginId && instance.instance.source.localId === INTERNAL_TASK_SOURCE_V1.localId
@@ -119,13 +118,10 @@ export async function getInternalTask(input: TriageGetInputV1, context: TriageDa
   } };
 }
 
-function localRelation(ref: TriageEntryRefV1): boolean {
-  return ref.source.pluginId === INTERNAL_TASK_SOURCE_V1.pluginId && ref.source.localId === INTERNAL_TASK_SOURCE_V1.localId && admitsRef(ref);
-}
 function fieldsFrom(fields: TriageTaskFieldsV1): TaskFields | null {
   const supported = ['title', 'body', 'assigneeIds', 'labelIds', 'dueDate', 'parent', 'blockedBy'];
   if (Object.keys(fields).some(field => !supported.includes(field)) || (fields.assigneeIds?.length ?? 0) > 1
-    || (fields.parent != null && !localRelation(fields.parent)) || fields.blockedBy?.some(ref => !localRelation(ref))) return null;
+    || (fields.parent != null && !isInternalTaskReferenceV1(fields.parent)) || fields.blockedBy?.some(ref => !isInternalTaskReferenceV1(ref))) return null;
   const dueAt = fields.dueDate == null ? fields.dueDate : Date.parse(fields.dueDate);
   if (typeof dueAt === 'number' && !Number.isFinite(dueAt)) return null;
   return {

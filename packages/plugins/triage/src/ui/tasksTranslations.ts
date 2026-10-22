@@ -78,6 +78,22 @@ const draftUnavailable = {
   ja: 'このタスクの下書きは利用できなくなりました。メッセージまたはアクションからもう一度開いてください。',
 } satisfies Record<keyof typeof messages, string>;
 
+const orderKeys = ['reorder', 'order.before', 'order.after', 'order.external', 'order.unavailable', 'order.unfinished'] as const;
+const orderMessages = {
+  en: ['Move task', 'Move before', 'Move after', 'External tasks keep their source order.', 'Task order is unavailable. Refresh and try again.', 'Only unfinished personal tasks in the same group can be reordered.'],
+  de: ['Aufgabe verschieben', 'Davor verschieben', 'Danach verschieben', 'Externe Aufgaben behalten die Reihenfolge ihrer Quelle.', 'Die Aufgabenreihenfolge ist nicht verfügbar. Aktualisiere und versuche es erneut.', 'Nur offene persönliche Aufgaben in derselben Gruppe können umgeordnet werden.'],
+  ru: ['Переместить задачу', 'Переместить перед', 'Переместить после', 'Внешние задачи сохраняют порядок источника.', 'Порядок задач недоступен. Обновите и повторите попытку.', 'Можно менять порядок только незавершённых личных задач в одной группе.'],
+  pl: ['Przenieś zadanie', 'Przenieś przed', 'Przenieś za', 'Zadania zewnętrzne zachowują kolejność źródła.', 'Kolejność zadań jest niedostępna. Odśwież i spróbuj ponownie.', 'Można zmieniać kolejność tylko niedokończonych osobistych zadań w tej samej grupie.'],
+  es: ['Mover tarea', 'Mover antes de', 'Mover después de', 'Las tareas externas conservan el orden de su fuente.', 'El orden de las tareas no está disponible. Actualiza e inténtalo de nuevo.', 'Solo se pueden reordenar las tareas personales sin terminar del mismo grupo.'],
+  fr: ['Déplacer la tâche', 'Déplacer avant', 'Déplacer après', 'Les tâches externes conservent l’ordre de leur source.', 'L’ordre des tâches est indisponible. Actualisez et réessayez.', 'Seules les tâches personnelles inachevées du même groupe peuvent être réordonnées.'],
+  it: ['Sposta attività', 'Sposta prima di', 'Sposta dopo', 'Le attività esterne mantengono l’ordine della loro origine.', 'L’ordine delle attività non è disponibile. Aggiorna e riprova.', 'Si possono riordinare solo le attività personali non completate dello stesso gruppo.'],
+  pt: ['Mover tarefa', 'Mover antes', 'Mover depois', 'As tarefas externas mantêm a ordem da origem.', 'A ordem das tarefas não está disponível. Atualize e tente novamente.', 'Só é possível reordenar tarefas pessoais não concluídas do mesmo grupo.'],
+  ca: ['Mou la tasca', 'Mou abans de', 'Mou després de', 'Les tasques externes conserven l’ordre de l’origen.', 'L’ordre de les tasques no està disponible. Actualitza i torna-ho a provar.', 'Només es poden reordenar tasques personals pendents del mateix grup.'],
+  'zh-Hans': ['移动任务', '移到之前', '移到之后', '外部任务保留其来源顺序。', '任务顺序不可用。请刷新后重试。', '只能重新排列同一组中未完成的个人任务。'],
+  'zh-Hant': ['移動任務', '移到之前', '移到之後', '外部任務保留其來源順序。', '任務順序無法使用。請重新整理後重試。', '只能重新排列同一組中尚未完成的個人任務。'],
+  ja: ['タスクを移動', '前に移動', '後に移動', '外部タスクは作成元の順序を維持します。', 'タスクの順序を取得できません。更新して再試行してください。', '同じグループ内の未完了の個人タスクのみ並べ替えられます。'],
+} satisfies Record<keyof typeof messages, TranslatedKeys<typeof orderKeys>>;
+
 export const TRIAGE_TASK_UI_TRANSLATIONS = Object.fromEntries(Object.entries(messages).map(([locale, values]) => [locale,
   Object.fromEntries([
     ...keys.map((key, index) => [`plugins.triage.tasks.${key}`, values[index]!]),
@@ -85,5 +101,6 @@ export const TRIAGE_TASK_UI_TRANSLATIONS = Object.fromEntries(Object.entries(mes
     ...emptyKeys.map((key, index) => [`plugins.triage.tasks.${key}`, emptyMessages[locale as keyof typeof emptyMessages][index]!]),
     ...pageKeys.map((key, index) => [`plugins.triage.tasks.${key}`, pageMessages[locale as keyof typeof pageMessages][index]!]),
     ...placeKeys.map((key, index) => [`plugins.triage.tasks.${key}`, placeMessages[locale as keyof typeof placeMessages][index]!]),
+    ...orderKeys.map((key, index) => [`plugins.triage.tasks.${key}`, orderMessages[locale as keyof typeof orderMessages][index]!]),
   ]),
 ])) as Readonly<Record<keyof typeof messages, Readonly<Record<string, string>>>>;

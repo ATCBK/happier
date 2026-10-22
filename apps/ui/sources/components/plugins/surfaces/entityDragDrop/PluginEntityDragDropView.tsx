@@ -75,6 +75,17 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
     const didEnd = React.useRef(false);
     const sourceRef = React.useRef(source);
     sourceRef.current = source;
+    const onDropOutcome = React.useRef(props.onDropOutcome);
+    onDropOutcome.current = props.onDropOutcome;
+    React.useEffect(() => {
+        let settled = false;
+        return runtime.subscribe(() => {
+            const snapshot = runtime.getSnapshot();
+            if (snapshot.sourceId === sourceId && snapshot.phase === 'settled' && snapshot.outcome) {
+                if (!settled) { settled = true; onDropOutcome.current?.(snapshot.outcome); }
+            } else settled = false;
+        });
+    }, [runtime, sourceId]);
     const attachDrag = useEntityDragDomBinding({ runtime, sourceId, enabled: enabled && pointerInteraction,
         canStart: canStartRowCarry, describe: () => runtime.describeSource(sourceId)?.title ?? '' });
     const gesture = React.useMemo(() => Gesture.Pan().minDistance(ENTITY_DRAG_ACTIVATION_DISTANCE_PX).runOnJS(true)

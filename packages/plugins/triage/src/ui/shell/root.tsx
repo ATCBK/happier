@@ -101,6 +101,7 @@ import {
 } from '../list/useBulkEntrySessions.js';
 import { planTriageListContinuationV1, readTriageWindowStatementV1 } from '../list/continuation.js';
 import { useTriageListSessionActivityV1 } from '../list/useListSessionActivity.js';
+import { usePersonalTaskOrder } from '../list/usePersonalTaskOrder.js';
 import {
   TriageListRowEnvironmentContext,
   readTriageRowSaysReasonV1,
@@ -473,6 +474,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     },
   );
   const taskAudience = surface.filters.tasks;
+  const personalTaskOrder = usePersonalTaskOrder(taskAudience !== undefined, window.snapshot.passes);
   const [doneOpen, setDoneOpen] = React.useState(false);
   const windowLens = readTriageWindowLensV1(surface);
   const completedSinceMs = windowLens.tasks?.completedSinceMs;
@@ -581,6 +583,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           ...(taskAudience === undefined ? {} : { tasks: {
             audience: taskAudience,
             completedSinceMs,
+            ...(personalTaskOrder.value === null ? {} : { personalOrder: personalTaskOrder.value.undoneOrder }),
             isTask: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
               ?.kinds.some((kind) => kind.id === entryRef.kindId && kind.task === true) === true,
             capabilitiesOf: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
@@ -592,7 +595,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       previousItems.current = planned;
       return planned;
     },
-    [completedSinceMs, listedStale, listedWindow, listsItems, marks.pins, sessionActivity.agentStates, sessionActivity.linkedSessions, surfaceContext.locale, surfaceContext.targetedContributions, taskAudience, text],
+    [completedSinceMs, listedStale, listedWindow, listsItems, marks.pins, personalTaskOrder.value, sessionActivity.agentStates, sessionActivity.linkedSessions, surfaceContext.locale, surfaceContext.targetedContributions, taskAudience, text],
   );
   /**
    * A suggestion every entry of a group shares ("Mentioned" on each of 52) is said once, beside the group's own
@@ -1671,6 +1674,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     organizing,
     sharedGroupReasons,
     tasks: taskAudience !== undefined,
+    taskItems: items,
+    personalTaskOrder: personalTaskOrder.available ? personalTaskOrder.value : null,
+    onTaskOrderOutcome: personalTaskOrder.onDropOutcome,
     onTaskApplied: refresh,
   });
   // Every row names its own selection below; the current detail must not

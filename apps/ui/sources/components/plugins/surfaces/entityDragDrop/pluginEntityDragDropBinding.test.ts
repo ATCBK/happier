@@ -75,6 +75,9 @@ describe('mounted plugin entity bridge', () => {
         binding.dispose(); await activation.unwind();
     });
     it('does not claim an approval artifact or lost Action acknowledgement applied a mutation', () => {
+        expect(settlePluginEntityDropActionResult({ status: 'refused', reason: 'todo_reorder_conflict' }, 'tasks.internal.reorder')).toMatchObject({ status: 'refused', reason: { code: 'todo_reorder_conflict' } });
+        expect(settlePluginEntityDropActionResult({ status: 'unknown', reason: 'task_receipt_incomplete' }, 'tasks.internal.reorder')).toMatchObject({ status: 'unknown' });
+        expect(settlePluginEntityDropActionResult({ status: 'unavailable' }, 'tasks.internal.reorder')).toMatchObject({ status: 'refused' });
         expect(settlePluginEntityDropActionResult({ kind: 'approval_request_created', artifactId: 'approval-1' }, 'teams.members.remove')).toMatchObject({ status: 'refused', reason: { code: 'approval_required' } });
         expect(settlePluginEntityDropActionResult(createPluginSurfaceHostApiError('unavailable', [PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE]), 'teams.members.remove')).toMatchObject({ status: 'unknown' });
         expect(settlePluginEntityDropActionResult(createPluginSurfaceHostApiError('timeout'), 'teams.members.remove')).toMatchObject({ status: 'unknown' });

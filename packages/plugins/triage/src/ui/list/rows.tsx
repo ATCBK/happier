@@ -41,7 +41,9 @@ import { TriageTaskRowStatusControl } from '../detail/taskFields.js';
 const NO_SHARED_GROUP_REASONS: ReadonlyMap<TriageListGroupIdV1, string> = new Map();
 const NO_TASK_REREAD = async () => undefined;
 import type { TriageAgentStatusV1 } from '../detail/agentState.js';
-import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1 } from './entryDragDrop.js';
+import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1, TRIAGE_PERSONAL_TASK_ORDER_TARGET_ID_V1 } from './entryDragDrop.js';
+import { isInternalTaskReferenceV1 } from '../../internalTasks/identity.js';
+import type { PersonalTaskOrder } from './usePersonalTaskOrder.js';
 
 /**
  * One PRs & Issues row.
@@ -540,6 +542,9 @@ export function useTriageListAnatomyV1(input: Readonly<{
    * the PR signal stay on PRs & Issues; the agent's state stays in Agent.
    */
   tasks?: boolean;
+  taskItems?: readonly TriageListItemV1[];
+  personalTaskOrder?: PersonalTaskOrder | null;
+  onTaskOrderOutcome?: () => void;
   /** After a row's status control wrote at the source: the list's authoritative reread. */
   onTaskApplied?: () => Promise<void>;
 }>): CollectionAnatomy<TriageListItemV1> {
@@ -552,17 +557,36 @@ export function useTriageListAnatomyV1(input: Readonly<{
   const { withAgent = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS, tasks = false, onTaskApplied = NO_TASK_REREAD } = input;
   const withSignal = input.withSignal && !tasks;
   const withReason = (input.withReason ?? true) && !tasks;
+  const { taskItems, personalTaskOrder, onTaskOrderOutcome } = input;
   return React.useMemo<CollectionAnatomy<TriageListItemV1>>(() => {
     const descriptorOf = (item: TriageListItemV1) => resolveTriageSourceDescriptorV1(targetedContributions, item.row.entryRef.source);
+    const unfinished = new Set(personalTaskOrder?.undoneOrder ?? []);
+    const orderByGroup = new Map<TriageListGroupIdV1, string[]>();
+    for (const item of taskItems ?? []) {
+      if (!isInternalTaskReferenceV1(item.row.entryRef) || !unfinished.has(item.row.entryRef.entryId)) continue;
+      const group = orderByGroup.get(item.group) ?? [];
+      group.push(item.row.entryRef.entryId); orderByGroup.set(item.group, group);
+    }
     return {
       wrapItem: (item, children) => {
         const { row, locator } = item;
         if (!row.materialized || row.sourceInstanceId === null || locator == null) return children;
         const context = readTriageEntryRowContextV1(row, descriptorOf(item), row.entryRef.source);
+        const sessionTarget = <DropTarget
+          targetId={TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1}
+          input={{ entryRef: row.entryRef, display: { locator, scopeLabel: row.scopeLabel }, preview: {
+            verb: text('plugins.triage.surface.drop.linkSession', 'Link Session'), target: row.title,
+            consequence: text('plugins.triage.sessionLinks.linkReassurance', 'Linking doesn’t change anything at the source.'),
+          } }} testID={`triage-entry-session-drop:${encodeURIComponent(row.key)}`}>{children}</DropTarget>;
+        const personal = isInternalTaskReferenceV1(row.entryRef);
+        const unavailableReason = !personal ? text('plugins.triage.tasks.order.external', 'External tasks keep their source order.')
+          : personalTaskOrder == null ? text('plugins.triage.tasks.order.unavailable', 'Task order is unavailable. Refresh and try again.')
+            : text('plugins.triage.tasks.order.unfinished', 'Only unfinished personal tasks in the same group can be reordered.');
         return (
           <DragSource
             sourceId={TRIAGE_ENTRY_DRAG_SOURCE_ID_V1}
             organizing={organizing}
+            {...(tasks && personal ? { onDropOutcome: onTaskOrderOutcome } : {})}
             reference={{
               entryRef: row.entryRef,
               sourceInstance: { source: row.entryRef.source, sourceInstanceId: row.sourceInstanceId },
@@ -572,21 +596,12 @@ export function useTriageListAnatomyV1(input: Readonly<{
             }}
             testID={`triage-entry-drag:${encodeURIComponent(row.key)}`}
           >
-            <DropTarget
-              targetId={TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1}
-              input={{
-                entryRef: row.entryRef,
-                display: { locator, scopeLabel: row.scopeLabel },
-                preview: {
-                  verb: text('plugins.triage.surface.drop.linkSession', 'Link Session'),
-                  target: row.title,
-                  consequence: text('plugins.triage.sessionLinks.linkReassurance', 'Linking doesn’t change anything at the source.'),
-                },
-              }}
-              testID={`triage-entry-session-drop:${encodeURIComponent(row.key)}`}
-            >
-              {children}
-            </DropTarget>
+            {tasks ? <DropTarget targetId={TRIAGE_PERSONAL_TASK_ORDER_TARGET_ID_V1}
+              input={{ ...(personalTaskOrder == null ? {} : { scope: personalTaskOrder.scope }),
+                targetId: row.entryRef.entryId, orderedIds: personal ? orderByGroup.get(item.group) ?? [] : [],
+                preview: { before: text('plugins.triage.tasks.order.before', 'Move before'), after: text('plugins.triage.tasks.order.after', 'Move after'), target: row.title },
+                unavailableReason,
+              }} testID={`triage-task-order-drop:${encodeURIComponent(row.key)}`}>{sessionTarget}</DropTarget> : sessionTarget}
           </DragSource>
         );
       },
@@ -729,7 +744,7 @@ export function useTriageListAnatomyV1(input: Readonly<{
         age: text('plugins.triage.surface.column.age', 'Age'),
       },
     };
-  }, [contributionSnapshotJson, locale, onTaskApplied, organizing, sharedGroupReasons, tasks, text, withAgent, withReason, withSignal]);
+  }, [contributionSnapshotJson, locale, onTaskApplied, organizing, sharedGroupReasons, tasks, text, withAgent, withReason, withSignal, taskItems, personalTaskOrder, onTaskOrderOutcome]);
 }
 
 const DAY_MS = 86_400_000;

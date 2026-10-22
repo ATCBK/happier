@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import type { JsonValue } from '@happier-dev/plugin-sdk';
+import type { EntityDropOutcomeV1, JsonValue } from '@happier-dev/plugin-sdk';
 import { Platform } from 'react-native';
 import { bindHostedEntityDragSource, bindHostedEntityDropTarget } from '@happier-dev/plugin-sdk/ui/client';
 import type { PluginHostedEntityDragSourceMount } from '@happier-dev/plugin-sdk/ui/client';
@@ -57,12 +57,18 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
   const translate = usePluginTranslation();
   const mountId = useId();
   const reference = useRef(props.reference);
+  const onDropOutcome = useRef(props.onDropOutcome);
+  onDropOutcome.current = props.onDropOutcome;
   reference.current = props.reference;
   const referenceKey = JSON.stringify(props.reference);
   useEffect(() => {
     if (!element.current || props.disabled) return;
+    let settled = false;
     const binding = bindHostedEntityDragSource({ hostApi, element: element.current, mountId, sourceId: props.sourceId, reference: reference.current, ...(grip.current ? { handle: grip.current } : {}),
       onState: state => {
+        if (state.current && state.phase === 'settled' && state.outcome) {
+          if (!settled) { settled = true; onDropOutcome.current?.(state.outcome); }
+        } else settled = false;
         setDestinations(state.destinations); destinationsRef.current = state.destinations;
         if (!state.current || (staged.current && (state.phase === 'idle' || state.phase === 'settled'))) {
           pendingPickup.current?.abort(); pendingPickup.current = null;
@@ -198,6 +204,8 @@ export type DragSourceProps = Readonly<{
   /** Sequential keyboard access; composite rows expose Move through their own menu and shortcut. */
   tabIndex?: -1 | 0;
   testID?: string;
+  /** Observe the original effect's settlement to reread domain data; never replay it. */
+  onDropOutcome?: (outcome: EntityDropOutcomeV1) => void;
 }>;
 
 /** A mounted instance of this plugin's declared target; its registration resolves admitted Actions. */

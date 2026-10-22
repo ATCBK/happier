@@ -13,6 +13,7 @@ import {
 } from '../marks/pinnedRows.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
 import { readTriageEntryAgentStatusV1, type TriageAgentStateV1, type TriageAgentStatusV1 } from '../detail/agentState.js';
+import { isInternalTaskReferenceV1 } from '../../internalTasks/identity.js';
 
 /**
  * The PRs & Issues rows and their ONE grouping axis (PLAN.md r0.41): **Needs you / With an agent / In review /
@@ -162,6 +163,8 @@ export function planTriageListItemsV1(input: Readonly<{
     capabilitiesOf?: (entryRef: TriageListRowV1['entryRef']) => TriageTaskCapabilitiesV1 | undefined;
     /** Caller supplies its calendar boundary. Unknown completion times cannot claim membership. */
     completedSinceMs?: number;
+    /** A read of tasks.internal.list; this projection never persists order. */
+    personalOrder?: readonly string[];
   }>;
 }>, previous: readonly TriageListItemV1[] = []): readonly TriageListItemV1[] {
   const pinIndex = indexTriagePinsByEntry(input.pins);
@@ -214,6 +217,19 @@ export function planTriageListItemsV1(input: Readonly<{
       locator: readTriageSelectedObservationV1(windowRow)?.observation.locator ?? null,
       ...(input.tasks === undefined ? {} : { task: readTaskFacts(windowRow, input.tasks.capabilitiesOf?.(windowRow.entryRef)) }),
     }));
+  }
+  if (input.tasks?.personalOrder !== undefined) {
+    const rank = new Map(input.tasks.personalOrder.map((id, index) => [id, index]));
+    const groups = new Map<TriageListGroupIdV1, { slots: number[]; items: TriageListItemV1[] }>();
+    for (const [index, item] of items.entries()) {
+      if (!isInternalTaskReferenceV1(item.row.entryRef) || !rank.has(item.row.entryRef.entryId)) continue;
+      const group = groups.get(item.group) ?? { slots: [], items: [] };
+      group.slots.push(index); group.items.push(item); groups.set(item.group, group);
+    }
+    for (const group of groups.values()) {
+      group.items.sort((left, right) => rank.get(left.row.entryRef.entryId)! - rank.get(right.row.entryRef.entryId)!);
+      group.slots.forEach((slot, index) => { items[slot] = group.items[index]!; });
+    }
   }
   // A Session transition changes its own item/group, not every unchanged
   // display row. Retain only the preceding projection; no history is kept.

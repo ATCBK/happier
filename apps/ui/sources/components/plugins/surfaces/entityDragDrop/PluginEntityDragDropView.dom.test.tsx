@@ -21,7 +21,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 it('offers a named focusable source entry without stealing RNW primary or secondary activation', async () => {
     const runtime = createEntityDragDropRuntime();
     const client = { artifactId: 'ui', exportName: 'activate' };
-    let writes = 0; let primary = 0; let overflow = 0;
+    let writes = 0; let primary = 0; let overflow = 0; let settlements = 0;
     const source = { descriptor: { id: 'pr', title: 'PR', client, platforms: ['web' as const], referenceSchema: { type: 'object' as const } },
         describe: () => ({ title: 'Review PR' }), isCurrent: () => true };
     const target = { descriptor: { id: 'detail', title: 'Detail', client, platforms: ['web' as const], acceptedKinds: ['plugin:acme.review/pr' as const], actions: [{ kind: 'plugin' as const, action: 'open' }] },
@@ -43,7 +43,7 @@ it('offers a named focusable source entry without stealing RNW primary or second
     const context = createSurfaceContext();
     const hostApi = createHostApiStub(context);
     const render = (interactive: boolean, tabIndex?: -1 | 0, composite = false) => <PluginUiProvider hostApi={hostApi} context={context}>
-        <PluginEntityDragSourceView binding={binding} sourceId="pr" reference={{ id: '42' }} testID="source" tabIndex={tabIndex}>
+        <PluginEntityDragSourceView binding={binding} sourceId="pr" reference={{ id: '42' }} testID="source" tabIndex={tabIndex} onDropOutcome={() => { settlements++; }}>
             {composite ? <List items={['42', '43']} keyForItem={item => item} accessibilityLabel="Reviews" accessibilityPattern="grid"
                 selection={{ selectedKey: null, onSelectedKeyChange: () => { primary++; } }}
                 renderItem={item => <List.Item title={`Review ${item}`} testID={`row:${item}`} />} />
@@ -66,6 +66,7 @@ it('offers a named focusable source entry without stealing RNW primary or second
         await key(entry, 'ArrowUp'); expect(runtime.getSnapshot().targetId).toBe(firstTarget);
         await key(entry, 'Escape'); expect(runtime.getSnapshot().phase).toBe('idle');
         await key(entry, ' '); await key(entry, 'Enter'); expect(writes).toBe(1);
+        expect(settlements).toBe(1);
         const more = container.querySelector<HTMLElement>('[data-testid="overflow"]')!;
         await activate(more, ' ');
         expect(overflow).toBe(1); expect(runtime.getSnapshot().phase).not.toBe('carrying');
@@ -97,6 +98,7 @@ it('offers a named focusable source entry without stealing RNW primary or second
         expect(document.activeElement).toBe(row);
         await activate(row, 'Enter');
         expect(writes).toBe(3);
+        expect(settlements).toBe(3);
         expect(primary).toBe(2);
         await act(async () => { row.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', altKey: true, bubbles: true, cancelable: true })); });
         await key(row, 'Escape');

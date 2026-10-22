@@ -76,6 +76,20 @@ function byGroup(items: readonly TriageListItemV1[]): Readonly<Record<string, re
 }
 
 describe('the PRs & Issues grouping axis', () => {
+  it('projects personal task order into only its existing slots, retaining external source order and status groups', () => {
+    const personal = (id: string, state: 'unstarted' | 'started' = 'unstarted') => {
+      const base = row(id, { kindId: 'task' });
+      const entryRef = { source: { pluginId: 'happier.triage', localId: 'internal' }, kindId: 'task', collisionScope: 'personal', entryId: id };
+      return { ...base, entryRef, content: { ...base.content!, outcome: { ...base.content!.outcome,
+        snapshot: { ...base.content!.outcome.snapshot, state: { presentation: 'active' as const, stage: state } } } } };
+    };
+    const rows = [personal('a'), row('external-1'), personal('working', 'started'), personal('b'), row('external-2'), personal('c')];
+    const tasks = { audience: 'everyone' as const, isTask: () => true, hasSessions: () => false, personalOrder: ['c', 'working', 'a', 'b'] };
+    const items = planTriageListItemsV1({ rows, pins: [], workflowSubjectOf: pullRequests, tasks });
+    expect(items.map(item => item.row.entryRef.entryId)).toEqual(['c', 'external-1', 'working', 'a', 'external-2', 'b']);
+    expect(byGroup(items).started).toEqual(['working']);
+    expect(byGroup(items).unstarted).toEqual(['c', 'external-1', 'a', 'external-2', 'b']);
+  });
   it('takes the completing capability from the selected connection, with runtime capabilities replacing the kind defaults', () => {
     const capabilities = (id: string) => ({ completingTransitionId: id,
       transitions: [{ id, label: 'Done', state: { presentation: 'resolved' as const } }] });

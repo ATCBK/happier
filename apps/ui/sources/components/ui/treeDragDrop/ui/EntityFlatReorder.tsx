@@ -28,6 +28,7 @@ import { useEntityDropOutcome } from './entityDropOutcome';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { entityReorderOutcome } from '../entityReorderOutcome';
 
 export type EntityFlatReorderBinding = Readonly<{
     scope: EntityDragScopeV1 | null;
@@ -77,8 +78,8 @@ async function executeEntityReorderAction(effect: EntityDropEffectV1,
         if (!result.ok) return entityReorderActionFailure(result.errorCode);
         const outcome = result.result;
         if (outcome && typeof outcome === 'object' && 'status' in outcome && outcome.status !== 'applied') {
-            const status = outcome.status === 'unknown' ? 'unknown' : 'refused';
-            return { status, reason: { code: 'reason' in outcome && typeof outcome.reason === 'string' ? outcome.reason : 'reorder_unavailable', message: t('entityDragDrop.reasons.gone') } };
+            return entityReorderOutcome({ status: outcome.status === 'unknown' ? 'unknown' : 'refused',
+                reason: 'reason' in outcome && typeof outcome.reason === 'string' ? outcome.reason : 'reorder_unavailable' });
         }
         return { status: 'applied' };
     } catch {

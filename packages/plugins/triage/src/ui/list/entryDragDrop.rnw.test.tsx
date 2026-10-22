@@ -9,6 +9,9 @@ import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/
 import { testkitEntryRef, testkitLocator } from '../../corpus/testkit/observations.test-support.js';
 import type { TriageListItemV1 } from './sections.js';
 import { useTriageListAnatomyV1 } from './rows.js';
+import { usePersonalTaskOrder, type PersonalTaskOrder } from './usePersonalTaskOrder.js';
+import { triagePersonalTaskOrderTargetRuntime } from './entryDragDrop.js';
+import { createTriageEphemeralSharedScopeFixture } from '../window/ephemeralSharedScope.test-support.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mounted: PluginUiTestkit[] = [];
@@ -27,11 +30,12 @@ function entry(materialized = true): TriageListItemV1 {
   };
 }
 
-async function renderAnatomy(item: TriageListItemV1, organizing = false) {
+async function renderAnatomy(item: TriageListItemV1, organizing = false, tasks = false,
+  personalTaskOrder?: PersonalTaskOrder, taskItems?: readonly TriageListItemV1[]) {
   let source: DragSourceProps | null = null;
   let target: DropTargetProps | null = null;
   const surface = defineUiSurface(function Probe() {
-    const anatomy = useTriageListAnatomyV1({ withSignal: false, organizing });
+    const anatomy = useTriageListAnatomyV1({ withSignal: false, organizing, tasks, personalTaskOrder, taskItems });
     const content = <Text value="The Collection still owns this row" />;
     const wrapped = anatomy.wrapItem?.(item, content) ?? content;
     // Inspect the public author boundary, then mount its actual children through
@@ -58,6 +62,63 @@ async function renderAnatomy(item: TriageListItemV1, organizing = false) {
 }
 
 describe('the real PR Collection public drag/drop binding', () => {
+  it('feeds actual row bindings through the strict target and refuses external or wrong-group tasks', async () => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    const base = entry();
+    const task = (id: string, group: TriageListItemV1['group'] = 'unstarted'): TriageListItemV1 => ({ ...base, key: id, group, row: { ...base.row, key: id,
+      entryRef: { source: { pluginId: 'happier.triage', localId: 'internal' }, kindId: 'task', collisionScope: 'personal', entryId: id } } });
+    const items = [task('a'), task('b'), task('working', 'started')];
+    const order: PersonalTaskOrder = { status: 'ok', scope, todos: [], undoneOrder: ['a', 'b', 'working'], completedOrder: [] };
+    const a = await renderAnatomy(items[0]!, false, true, order, items);
+    const b = await renderAnatomy(items[1]!, false, true, order, items);
+    const resolve = (reference: NonNullable<typeof a.source>['reference'], input: NonNullable<typeof b.target>['input']) => triagePersonalTaskOrderTargetRuntime.resolve({
+      item: { kind: 'plugin', scope, contribution: { pluginId: 'happier.triage', localId: 'entry-reference' }, reference },
+      targetInput: input ?? null, destination: null, input: 'pointer',
+    });
+    expect(resolve(a.source!.reference, b.target!.input)).toMatchObject({ status: 'allowed', effect: {
+      actionId: 'tasks.internal.reorder', input: { scope, sourceId: 'a', position: { anchorId: 'b', placement: 'after' } },
+    } });
+    const external = await renderAnatomy(base, false, true, order, items);
+    expect(resolve(external.source!.reference, b.target!.input)).toMatchObject({ status: 'refused' });
+    expect(resolve(a.source!.reference, external.target!.input)).toMatchObject({ status: 'refused', reason: { message: 'External tasks keep their source order.' } });
+    const working = await renderAnatomy(items[2]!, false, true, order, items);
+    expect(resolve(a.source!.reference, working.target!.input)).toMatchObject({ status: 'refused' });
+  });
+  it('rereads the existing Account order after settlement and retains the last order on a failed read', async () => {
+    let order = ['a', 'b'];
+    let fail = false;
+    let invalidate: (() => void) | undefined;
+    const surface = defineUiSurface(function OrderProbe() {
+      const read = usePersonalTaskOrder(true, 0);
+      invalidate = read.onDropOutcome;
+      return <Text value={`${read.value?.undoneOrder.join(',') ?? 'loading'}:${read.available}`} />;
+    });
+    let fixture!: PluginUiTestkit;
+    await act(async () => { fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'task-order-read', mountNonce: 'task-order-read' },
+      authorPlugin: { id: 'happier.triage', version: '0.0.0' }, surface,
+      surfaceContext: createSurfaceContextFixture(), adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: createTriageEphemeralSharedScopeFixture() }),
+      handlers: { executeAction: ({ action }) => {
+        expect(action).toBe('tasks.internal.list');
+        if (fail) throw new Error('Account unavailable');
+        return { status: 'ok', scope: { serverId: 'home', accountId: 'account' }, todos: [], undoneOrder: order, completedOrder: [] } satisfies PersonalTaskOrder;
+      } },
+    }); });
+    mounted.push(fixture);
+    await expect(fixture.getByText('a,b:true')).resolves.toBeDefined();
+    order = ['b', 'a'];
+    await act(async () => { invalidate?.(); });
+    await expect(fixture.getByText('b,a:true')).resolves.toBeDefined();
+    fail = true;
+    await act(async () => { invalidate?.(); });
+    await expect(fixture.getByText('b,a:false')).resolves.toBeDefined();
+  });
+  it('offers the Tasks successor reorder target without replacing the shared row or restoring Zen', async () => {
+    const item = entry();
+    const task: TriageListItemV1 = { ...item, group: 'unstarted', row: { ...item.row,
+      entryRef: { source: { pluginId: 'happier.triage', localId: 'internal' }, kindId: 'task', collisionScope: 'personal', entryId: 'task-a' } } };
+    expect((await renderAnatomy(task, false, true)).target?.targetId).toBe('personal-task-order');
+  });
   it('opts into the host-owned native grip only while the list is organizing', async () => {
     expect((await renderAnatomy(entry())).source).toMatchObject({ organizing: false });
     expect((await renderAnatomy(entry(), true)).source).toMatchObject({ organizing: true });

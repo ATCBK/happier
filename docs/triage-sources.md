@@ -295,8 +295,13 @@ no Account Action or Account runtime artifact. No-Machine personal Triage
 execution is therefore not an available development-source claim yet. Detail
 retains authoritative Session links when optional Session summary presentation
 is unavailable. Task reordering continues through the existing
-`tasks.internal.reorder` host Account Action and index CAS owner; the current
-Tasks page has no manual reorder control.
+`tasks.internal.reorder` host Account Action and index CAS owner. The 0.3
+development Tasks page reaches that same owner through the shared entity drag
+and drop controls and staged Move (row menu, Alt+M or Shift+F10; Space remains
+Peek). Only unfinished personal tasks within the same displayed group can move.
+The page rereads the canonical order after settlement; external entries retain
+their source order, and refused moves retain a reason. There is no separate
+Tasks order store.
 
 Internal task links live only in `todo.<id>.linkedSessions`. The optional
 `linkSession` and `readSessionLinks` source roles let the existing entry Session
