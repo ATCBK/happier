@@ -325,6 +325,11 @@ export async function fetchAndApplySessionById(params: Readonly<{
   const sessionId = String(params.sessionId ?? '').trim();
   if (!sessionId) return { ok: false, session: null, errorCode: 'invalid_session_id' };
   const isCurrent = () => !params.signal?.aborted && params.isCurrent?.() !== false;
+  // A retired caller scope is the more specific cause, so it wins over the
+  // witness' own terminal currentness failure and ends as a stale response.
+  const ensureAccountCurrentness = async () => {
+    if (isCurrent()) await params.ensureAccountCurrentness?.();
+  };
   const staleResult = () => ({
     ok: false as const,
     session: null,
@@ -371,7 +376,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     params.log.log(`[sessionById] Failed to fetch session ${sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
     return { ok: false, session: null, errorCode: isTransientConnectivityError(err) ? 'network_error' : 'request_failed' };
   }
-  await params.ensureAccountCurrentness?.();
+  await ensureAccountCurrentness();
   if (!isCurrent()) return staleResult();
 
   if (!responseOk) {
@@ -498,7 +503,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
       row, params.credentials, accountCurrentness, undefined,
       params.getExistingSession?.(sessionId), params.getCurrentSessionListRenderable?.(sessionId),
     );
-    await params.ensureAccountCurrentness?.();
+    await ensureAccountCurrentness();
     if (!isCurrent()) return staleResult();
     return { ok: true, session: null, encryptionMode, sessionListRenderable };
   }
@@ -579,7 +584,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     if (initializedScope) capturedEncryptionGeneration = initializedScope;
     if (!isHydrationCurrent()) return staleResult();
   }
-  await params.ensureAccountCurrentness?.();
+  await ensureAccountCurrentness();
   if (!isHydrationCurrent()) return staleResult();
   if (hydration.sessionEncryptionClears.includes(sessionId)) {
     params.sessionDataKeys.delete(sessionId);
@@ -671,7 +676,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
   );
 
   const sessionEncryption = encryptionMode === 'plain' ? null : params.encryption.getSessionEncryption(sessionId);
-  await params.ensureAccountCurrentness?.();
+  await ensureAccountCurrentness();
   if (!isSessionContentReadable(contentAvailability)) {
     // A frame's explicitly supplied key cannot be repaired with Account material.
     // Keep the shared hydration decision, but return its typed admission failure
@@ -755,7 +760,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     decryptedMetadataPromise,
     agentStatePromise,
   ]);
-  await params.ensureAccountCurrentness?.();
+  await ensureAccountCurrentness();
   if (!isHydrationCurrent()) return staleResult();
   const metadata = encryptionMode === 'plain'
     ? decryptedMetadata
@@ -976,7 +981,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
         : {}),
   };
 
-  await params.ensureAccountCurrentness?.();
+  await ensureAccountCurrentness();
   if (!isStoredSessionInResponseScope(previousSession, nextSession)) return staleResult();
   if (!isHydrationCurrent()) return staleResult();
   params.applySessions([nextSession]);
