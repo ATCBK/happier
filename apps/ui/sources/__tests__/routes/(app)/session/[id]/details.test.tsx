@@ -153,10 +153,12 @@ describe('/session/[id]/details', () => {
         })]));
         expect(runtime.pane.scopeState?.details.groups).toHaveLength(2);
     });
-    it('navigates back when there are no details tabs to display', async () => {
+    it('returns to the Session route when there are no details tabs to display', async () => {
         await renderScreen();
-        // Retain this navigation contract for the UI owner: current code replaces the Session href.
-        expect(routerBackSpy).toHaveBeenCalled();
+        // Responsive pane presentation replaces the Session route with Details, so its previous
+        // history entry need not be this Session: return by replacing with the Session href.
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?mobileSurface=chat');
+        expect(routerBackSpy).not.toHaveBeenCalled();
     });
     it('does not redirect away before the session has hydrated', async () => {
         mockServerId = runtime.serverId;
@@ -240,13 +242,13 @@ describe('/session/[id]/details', () => {
             details: 'commit', path: undefined, sha: 'abc1234', terminalInstanceId: undefined,
         }));
     });
-    it('passes an onRequestClose that closes the pane and navigates back', async () => {
+    it('passes an onRequestClose that closes the pane and returns to the Session route', async () => {
         const screen = await renderScreen(async () => { await openReadme(); await act(async () => runtime.pane.openRight()); });
         await act(async () => panel(screen).props.onRequestClose());
         expect(runtime.pane.scopeState?.details.isOpen).toBe(false);
         expect(runtime.pane.scopeState?.right.isOpen).toBe(false);
-        // Do not silently substitute a different navigation contract while migrating the fixture.
-        expect(routerBackSpy).toHaveBeenCalledTimes(1);
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?mobileSurface=chat');
+        expect(routerBackSpy).not.toHaveBeenCalled();
     });
     it('closes details pane state when the fullscreen details route unmounts', async () => {
         const screen = await renderScreen(openReadme);
@@ -254,12 +256,12 @@ describe('/session/[id]/details', () => {
         await screen.update(<></>);
         expect(runtime.pane.scopeState?.details.isOpen).toBe(false);
     });
-    it('falls back to the parent session route when there is no back stack', async () => {
+    it('returns to the parent session route when there is no back stack', async () => {
         canGoBack = false;
         const screen = await renderScreen(openReadme);
         await act(async () => panel(screen).props.onRequestClose());
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?mobileSurface=chat');
     });
     it('falls back to the source surface when a sourced details route has no back stack', async () => {
         canGoBack = false; mockServerId = runtime.serverId; mockSourceSurfaceParam = 'git';

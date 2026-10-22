@@ -320,6 +320,7 @@ describe('app stack modal header close buttons', () => {
 
     it('prevents a direct web modal backdrop dismissal and exposes a deterministic close', async () => {
         platformState.os = 'web';
+        settingState.useEnhancedSessionWizard = true;
         const { default: RootLayout } = await import('@/app/(app)/_layout');
         const screen = await renderScreen(<RootLayout />);
 
@@ -345,6 +346,7 @@ describe('app stack modal header close buttons', () => {
 
     it('keeps web modal backdrop dismissal enabled when /new has a prior stack route', async () => {
         platformState.os = 'web';
+        settingState.useEnhancedSessionWizard = true;
         stackNavigationState.index = 1;
         stackNavigationState.routes = [{ key: 'index-route' }, { key: 'new-route' }];
         stackNavigationMock.canGoBack.mockReturnValue(true);
@@ -356,8 +358,9 @@ describe('app stack modal header close buttons', () => {
         expect(options.gestureEnabled).toBe(true);
     });
 
-    it('presents the new-session route as a stack modal on web by default', async () => {
+    it('presents the wizard new-session route as a stack modal on web by default', async () => {
         platformState.os = 'web';
+        settingState.useEnhancedSessionWizard = true;
         const { default: RootLayout } = await import('@/app/(app)/_layout');
 
         const screen = await renderScreen(<RootLayout />);
@@ -366,8 +369,21 @@ describe('app stack modal header close buttons', () => {
         expect(options.presentation).toBe('modal');
     });
 
-    it('presents the new-session route as a stack modal on web when requested', async () => {
+    it('presents the simple new-session composer as a chrome-free transparent modal on web', async () => {
         platformState.os = 'web';
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        const screen = await renderScreen(<RootLayout />);
+
+        const options = getStackScreenOptions(screen, 'new/index');
+        expect(options.presentation).toBe('transparentModal');
+        expect(options.headerShown).toBe(false);
+        expect(options.headerRight).toBeUndefined();
+    });
+
+    it('presents the wizard new-session route as a stack modal on web when requested', async () => {
+        platformState.os = 'web';
+        settingState.useEnhancedSessionWizard = true;
         settingState.newSessionPresentationModeV1 = 'modal';
         const { default: RootLayout } = await import('@/app/(app)/_layout');
 
