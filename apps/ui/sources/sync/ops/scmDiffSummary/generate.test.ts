@@ -95,6 +95,24 @@ describe('SCM diff summary operations', () => {
         expect(await admission).toMatchObject({ ok: true, runId: 'run_1', viewModel: { status: 'running' } });
     });
 
+    it('projects uncertain admission through strict Action output and saved-result restoration without offering an implicit retry', async () => {
+        const { runId: _run, ...noRun } = pending;
+        const output = { ...noRun, admission: 'outcomeUnknown' as const };
+        const generate = vi.fn(async () => output);
+        const ops = createScmDiffSummaryOperations({ generateSummary: generate });
+        const response = await ops.generateFromUserAction(params);
+        expect(response).toMatchObject({ ok: true, runId: null, viewModel: { status: 'unknown', admission: 'outcomeUnknown',
+            resultId: pending.resultId, revision: 0, canRetry: false, executionRunId: null } });
+        const reopened = createScmDiffSummaryOperations();
+        const key = reopened.loadSavedResult({ sessionId: params.sessionId, scope: { serverId: 'home', accountId: 'account' }, result: {
+            resultId: pending.resultId, revision: 0, canUndo: false, output,
+        } });
+        expect(key && getScmDiffSummaryOperationState(reopened.getState(), key)).toMatchObject({ status: 'unknown', admission: 'outcomeUnknown', canRetry: false });
+        reopened.applySavedResult(key!, { resultId: pending.resultId, revision: 1, canUndo: false, output: { ...pending, revision: 1 } });
+        expect(getScmDiffSummaryOperationState(reopened.getState(), key!)).toMatchObject({ status: 'running', admission: null, executionRunId: pending.runId });
+        expect(generate).toHaveBeenCalledTimes(1);
+    });
+
     it('observes Machine output through the shared Run Action and caller-owned wait lifecycle', async () => {
         machineRpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {

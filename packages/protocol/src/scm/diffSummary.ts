@@ -284,6 +284,8 @@ export const ScmDiffSummaryReviewProvenanceSchema = lazyZodSchema(() => z.strict
 export type ScmDiffSummaryReviewProvenance = z.infer<typeof ScmDiffSummaryReviewProvenanceSchema>;
 
 const envelope = {
+  /** Start may still arrive. This observation never fails or advances the saved output revision. */
+  admission: z.optional(z.literal('outcomeUnknown')),
   comparison: z.optional(ScmComparisonSchema), requestedOutputs: z.optional(z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1))),
   outputs: z.optional(ScmDiffSummaryOutputsSchema), analysis: z.optional(ScmDiffSummaryAnalysisCoverageSchema),
   runId: z.optional(z.string().check(z.minLength(1))), resultId: z.optional(z.string().check(z.minLength(1))), revision: z.optional(z.number().check(z.int(), z.nonnegative())),

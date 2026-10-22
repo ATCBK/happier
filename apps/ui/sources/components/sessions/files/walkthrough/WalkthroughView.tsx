@@ -29,6 +29,7 @@ import {
   SCM_DIFF_SUMMARY_GENERIC_FAILURE,
   type ScmDiffSummaryFailurePresentation,
   type ScmDiffSummaryRestoreState,
+  type ScmDiffSummaryViewModel,
 } from '@/sync/domains/scm/diffSummary/state';
 import { WalkthroughContents } from './WalkthroughContents';
 import { WalkthroughEditorialHeader } from './WalkthroughEditorialHeader';
@@ -78,6 +79,9 @@ export type WalkthroughViewProps = Readonly<{
   reading: WalkthroughReading;
   restoreState?: ScmDiffSummaryRestoreState;
   onRetryRestore?: () => void;
+  /** Unknown Start observation, separate from the still-admissible pending output. UI recovery must reread before an explicit new attempt. */
+  admission?: ScmDiffSummaryViewModel['admission'];
+  onCheckAdmission?: () => void | Promise<void>;
   scopeLabel: string;
   scopeDetail?: string | null;
   modelLabel?: string | null;

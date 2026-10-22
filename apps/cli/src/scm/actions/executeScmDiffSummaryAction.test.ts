@@ -670,19 +670,36 @@ describe('executeScmDiffSummaryAction', () => {
         expect(JSON.stringify(output)).not.toContain('+Later pending changes');
     });
 
-    it('preserves captured evidence and unknown admission without retrying', async () => {
+    it.each(['lost response', 'unknown receipt', 'malformed receipt'] as const)('preserves typed unknown admission after %s across reads and matching requests without retrying', async outcome => {
         const fixture = await changedRepository();
-        const executeCanonicalAction = vi.fn(async () => ({
-            ok: false as const, errorCode: 'execution_run_target_unavailable', error: 'target unavailable',
-            details: { executionRunStart: { v: 1 as const, runCreation: 'outcomeUnknown' as const } },
-        }));
-        const output = await executeScmDiffSummaryAction({
-            request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
-            sessionId: 'session-1', backendTarget: BACKEND_TARGET, executeCanonicalAction,
+        const executeCanonicalAction = vi.fn(async () => {
+            if (outcome === 'lost response') throw new Error('Start acknowledgement lost');
+            if (outcome === 'malformed receipt') return { ok: true as const, result: {} };
+            return { ok: false as const, errorCode: 'execution_run_target_unavailable', error: 'target unavailable',
+                details: withExecutionRunStartFailureDetails(undefined, 'outcomeUnknown') };
         });
-        expect(output).toMatchObject({ success: true, revision: 0, comparison: { inventory: { state: 'complete' } },
+        const params = { request: { cwd: fixture.rootPath, source: { kind: 'workingTree' as const }, modelSelector: { modelId: 'explicit' } },
+            sessionId: 'session-1', backendTarget: BACKEND_TARGET, executeCanonicalAction };
+        const output = await executeScmDiffSummaryAction(params);
+        expect(output).toMatchObject({ success: true, admission: 'outcomeUnknown', revision: 0, comparison: { inventory: { state: 'complete' } },
             outputs: { summary: { state: 'pending' } } });
+        expect(output.runId).toBeUndefined();
+        expect(await executeScmDiffSummaryAction(params)).toEqual(output);
+        const scope = { cwd: fixture.rootPath, sessionId: params.sessionId, resultId: output.resultId! };
+        expect(await scmDiffSummaryResultStore.read(scope)).toMatchObject({ success: true, result: {
+            revision: 0, output: { admission: 'outcomeUnknown', outputs: { summary: { state: 'pending' } } },
+        } });
         expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
+        // The original late Start still owns revision zero. Its known Run clears uncertainty on the same result.
+        expect(await scmDiffSummaryResultStore.bindRun({ ...scope, expectedRevision: 0, runId: 'original-late-run' }))
+            .toMatchObject({ success: true });
+        const reconciled = await executeScmDiffSummaryAction(params);
+        expect(reconciled).toMatchObject({ resultId: output.resultId, runId: 'original-late-run' });
+        expect(reconciled).not.toHaveProperty('admission');
+        expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
+        const explicit = await executeScmDiffSummaryAction({ ...params, request: { ...params.request, cachePolicy: { mode: 'bypass' } } });
+        expect(explicit.resultId).not.toBe(output.resultId);
+        expect(executeCanonicalAction).toHaveBeenCalledTimes(2);
     });
 
     it.each([true, false])('publishes a fresh walkthrough through the initial Run input identity with explicit id %s', async explicitInputId => {

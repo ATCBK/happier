@@ -128,10 +128,11 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 ...(selector?.modelId ? { modelId: selector.modelId } : {}) } } : {}),
         });
         const scope = { cwd: params.request.cwd, resultId: saved.resultId, ...(sessionId ? { sessionId } : {}) };
-        const latestOutput = async (runId?: string, inputId?: string): Promise<ScmDiffSummaryGenerateOutput> => {
+        const latestOutput = async (runId?: string, inputId?: string, admission?: 'outcomeUnknown'): Promise<ScmDiffSummaryGenerateOutput> => {
             const latest = await scmDiffSummaryResultStore.read(scope);
             const output = latest.success ? latest.result.output : saved.output;
             return ScmDiffSummaryGenerateOutputSchema.parse({ ...output, ...(runId ? { runId } : {}),
+                ...(!runId && !output.runId && admission ? { admission } : {}),
                 ...(output.success && inputId ? { inputId } : {}) });
         };
         const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE',
@@ -172,7 +173,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         let startResult = await params.executeCanonicalAction('execution.run.start', startInput).catch(() => null);
         // Losing Start's observation does not revoke its saved revision: that
         // same request may still be preparing or publishing on the receiver.
-        if (!startResult) return latestOutput();
+        if (!startResult) return latestOutput(undefined, undefined, 'outcomeUnknown');
         if (!startResult.ok && startResult.errorCode === 'execution_run_parent_selection_unavailable'
             && readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated'
             && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId && selector?.modelId) {
@@ -193,11 +194,11 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                     modelId: selector.modelId,
                 },
             }).catch(() => null);
-            if (!startResult) return latestOutput();
+            if (!startResult) return latestOutput(undefined, undefined, 'outcomeUnknown');
         }
         if (!startResult.ok) {
             const noRunCreated = readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated';
-            if (!noRunCreated) return latestOutput();
+            if (!noRunCreated) return latestOutput(undefined, undefined, 'outcomeUnknown');
             if (noRunCreated && startResult.errorCode === 'execution_run_parent_selection_unavailable'
                 && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId) {
                 return failed('Diff-summary model is unavailable', 'MODEL_UNAVAILABLE');
@@ -211,6 +212,6 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         const started = ExecutionRunStartResponseSchema.safeParse(startResult.result);
         return started.success
             ? latestOutput(started.data.runId, inputId)
-            : latestOutput();
+            : latestOutput(undefined, undefined, 'outcomeUnknown');
     });
 }

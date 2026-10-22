@@ -35,10 +35,21 @@ const storedSchema = z.strictObject({
   undoWalkthroughProvenance: z.optional(ScmWalkthroughProvenanceSchema),
   reviewFindingCitations: z.optional(reviewFindingCitationsSchema),
   pullRequestDraftEvidence: z.optional(z.string()),
-  generation: z.optional(z.strictObject({ key: z.string().check(z.minLength(1)), runId: z.optional(z.string().check(z.minLength(1))), inputId: z.optional(z.string().check(z.minLength(1))) })),
+  generation: z.optional(z.strictObject({ key: z.string().check(z.minLength(1)), runId: z.optional(z.string().check(z.minLength(1))), inputId: z.optional(z.string().check(z.minLength(1))),
+    admission: z.optional(z.literal('outcomeUnknown')) })),
 });
 type Stored = z.infer<typeof storedSchema>;
 const storedReadSchema = createStoredReadSchema(storedSchema);
+/** Reconcile the receipt against this same saved result; a known Run supersedes an unknown Start observation. */
+function generationOutput(stored: Stored): ScmDiffSummaryGenerateOutput {
+  const output = stored.result.output;
+  const generation = stored.generation;
+  const runId = output.runId ?? generation?.runId;
+  return { ...output,
+    ...(runId ? { runId } : generation?.admission ? { admission: generation.admission } : {}),
+    ...(output.success && generation?.inputId && (!output.runId || output.runId === generation.runId) ? { inputId: generation.inputId } : {}),
+  };
+}
 /** Embedded captured evidence has the same resolved-source owner as the capture shelf. */
 function resolveStoredCapturedSources(stored: Stored): Stored {
   const resolveOutput = (output: ScmDiffSummaryGenerateOutput): ScmDiffSummaryGenerateOutput => {
@@ -234,15 +245,14 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
               || (stored.generation.runId && stored.result.output.runId && stored.generation.runId !== stored.result.output.runId)) continue;
             // Start can return before the profile binds its run. This is the actual
             // admission receipt, never authority to retry or provision another run.
-            return ScmDiffSummaryGenerateOutputSchema.parse({ ...stored.result.output,
-              ...(stored.result.output.success && stored.generation.inputId ? { inputId: stored.generation.inputId } : {}),
-              ...(!stored.result.output.runId && stored.generation.runId ? { runId: stored.generation.runId } : {}) });
+            return generationOutput(stored);
           }
         }
         const output = await generate();
         if (output.resultId) {
           await locked({ ...input, resultId: output.resultId }, async (stored) => {
             if (stored && !stored.pullRequestDraftEvidence) await save({ ...stored, generation: { key: input.key, ...(output.runId ? { runId: output.runId } : {}),
+              ...(output.admission ? { admission: output.admission } : {}),
               ...(output.success && output.inputId ? { inputId: output.inputId } : {}) } });
           });
         }
@@ -294,10 +304,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
     async read(scope) {
       const stored = await load(scope);
       if (!stored) return failure('result_not_found', 'Saved result is unavailable in this repository/session.');
-      const generation = stored.generation;
-      const output = stored.result.output;
-      return { success: true, result: output.success && generation?.inputId && (!output.runId || output.runId === generation.runId)
-        ? { ...stored.result, output: { ...output, inputId: generation.inputId } } : stored.result };
+      return { success: true, result: { ...stored.result, output: generationOutput(stored) } };
     },
     async readStoredScope(scope) {
       const stored = await load(scope);

@@ -17,7 +17,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 
 export const SCM_DIFF_SUMMARY_GENERATE_ACTION_ID = 'scm.diffSummary.generate' as const;
 
-export type ScmDiffSummaryRequestStatus = 'idle' | 'starting' | 'running' | 'succeeded' | 'failed';
+export type ScmDiffSummaryRequestStatus = 'idle' | 'starting' | 'running' | 'unknown' | 'succeeded' | 'failed';
 export type ScmDiffSummaryRestoreState = 'idle' | 'restoring' | 'ready' | 'unavailable';
 export type ScmDiffSummaryOperationIntent = 'generate' | 'regenerate' | 'copy';
 
@@ -132,6 +132,7 @@ export type ScmDiffSummaryViewModel = Readonly<{
     requestKey: string;
     observedAtMs: number | null;
     status: ScmDiffSummaryRequestStatus;
+    admission?: ScmDiffSummaryGenerateOutput['admission'] | null;
     actionId: typeof SCM_DIFF_SUMMARY_GENERATE_ACTION_ID;
     executionRunId: string | null;
     /** The generating Run's actual first admitted input, when the producer supplies it. */
@@ -265,6 +266,7 @@ function statusFromOutput(output: ScmDiffSummaryGenerateOutput | null, input: Sc
     const requested: readonly ScmDiffSummaryOutputKind[] = input.outputs ?? ['summary'];
     const states = requested.map((kind) => output.outputs?.[kind]?.state);
     if (states.some((status) => status === 'failed' || status === 'cancelled')) return 'failed';
+    if (output.admission === 'outcomeUnknown' && states.some(status => status === 'pending' || status === 'writing')) return 'unknown';
     return states.every((status) => status === 'complete' || status === 'partial') ? 'succeeded' : 'running';
 }
 
@@ -495,6 +497,7 @@ export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: s
         requestKey: key,
         observedAtMs: entry?.observedAtMs ?? null,
         status,
+        admission: output?.admission ?? null,
         actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
         executionRunId: entry?.executionRunId ?? null,
         inputId: (output?.success === true ? output.inputId : undefined) ?? summary?.output.inputId ?? null,

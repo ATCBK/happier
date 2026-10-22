@@ -101,6 +101,18 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const resultId = viewModel?.resultId;
     const runId = viewModel?.executionRunId ?? null;
     const initialInputId = viewModel?.inputId ?? null;
+    // Recheck the same saved receipt. A missing acknowledgement never authorizes another Start.
+    const checkAdmission = React.useCallback(async () => {
+        if (!operations || !cwd || !key || !resultId || !isCurrent()) return;
+        try {
+            const response = await operations.read({ cwd, resultId });
+            if (!isCurrent()) return;
+            if (response.success) { applySavedScmDiffSummaryResult(key, response.result); setError(null); }
+            else setError(response.error);
+        } catch (failure) {
+            if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
+        }
+    }, [operations, cwd, key, resultId, isCurrent]);
     // Run activity/reconnect is the existing invalidation owner. No polling timer or generated text authority.
     React.useEffect(() => {
         if (!scope || !binding || !machineReachable || !key || !viewModel || !operations || !cwd) return;
@@ -159,6 +171,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
         restoreState, retryRestore, machineReachability,
+        admission: viewModel?.admission ?? null, checkAdmission,
         error, setError,
         /** The typed refusal or failure of the comparison's generation; never its diagnostic code or message. */
         generationFailure: viewModel?.error && !(viewModel.error.reason === 'disabled' && explainEnabled) ? viewModel.error : null,

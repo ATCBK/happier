@@ -311,7 +311,15 @@ evidence and failed saved result available. This typed refusal carries
 reclassified as an unavailable model or retried. It leaves the saved output and
 revision unchanged: the original request may still be preparing, and must remain
 able to bind its captured revision and publish. Reconciliation reads that same
-saved result through the existing generation admission receipt. SCM Machine
+saved result through the existing generation admission receipt. Those
+receipts retain `admission: 'outcomeUnknown'` across ordinary generation
+reuse and saved-result reads, without changing the pending output or revision.
+A known original Run binding supersedes that observation. The UI state projection
+reports `unknown` with retry withheld; its `admission` and `onCheckAdmission` props
+are the handoff for an uncertain-reading notice. That callback rereads the exact
+saved result and never sends Start. A fresh attempt remains explicit Regenerate
+or deletion followed by generation; no eventual receiver or automatic resolution
+is guaranteed. SCM Machine
 effects use the captured Action's lifetime rather than a subordinate RPC deadline.
 Initial output admission and publication use the Run's existing initial input
 identity, including its host default when no explicit input id was supplied.

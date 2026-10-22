@@ -254,6 +254,8 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
                 restoreState={bound.restoreState}
                 onRetryRestore={bound.retryRestore}
+                admission={bound.admission}
+                onCheckAdmission={bound.checkAdmission}
                 scopeLabel={props.scopeLabel}
                 scopeDetail={props.scopeDetail}
                 modelLabel={viewModel?.producer?.modelId ?? null}
@@ -281,7 +283,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                     onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
                 failure={bound.generationFailure}
                 onEnableExplain={openExplainSetting}
-                onRetry={onStart}
+                onRetry={bound.admission ? undefined : onStart}
                 onChooseModel={modelChoice.choose}
                 endedConversation={saved && sessionId && discussion?.kind === 'unavailable' ? { onStartNew, onAskSession } : null}
                 notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId

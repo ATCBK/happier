@@ -6,7 +6,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
-const boundary = vi.hoisted(() => ({ inventory: null as unknown, results: {} as Record<string, unknown>, reads: [] as string[] }));
+const boundary = vi.hoisted(() => ({ inventory: null as unknown, results: {} as Record<string, unknown>, reads: [] as string[], methods: [] as string[] }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
@@ -14,6 +14,7 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     const rpc = async (request: { method: string; payload: unknown }) => {
+        boundary.methods.push(request.method);
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) return boundary.inventory;
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ) {
             const id = (request.payload as { resultId: string }).resultId;
@@ -28,6 +29,7 @@ const { renderHook, standardCleanup, createSessionFixture, createMachineFixture,
 const { getStorage } = await import('@/sync/domains/state/storage');
 await import('@/sync/syncEngine');
 const { useSessionScmWalkthrough, useScmWalkthroughState } = await import('./useSessionScmWalkthrough');
+const { useScmDiffSummaryBinding } = await import('../comparison/useScmDiffSummaryBinding');
 const { useMachinePresenceSummary } = await import('@/components/sessions/model/useMachinePresenceSummary');
 const { retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
 let serverId: string;
@@ -52,6 +54,7 @@ function inventory(results: ReturnType<typeof saved>[], sessionScoped = true) {
 }
 beforeEach(async () => {
     boundary.reads = [];
+    boundary.methods = [];
     installHomeGovernanceBoundaries(homes);
     serverId = await homes.addHome({ name: 'Restore', serverUrl: 'https://restore.example.test', accountId });
     const machine = createMachineFixture({ id: 'restore-machine', activeAt: Date.now() });
@@ -66,6 +69,26 @@ afterEach(async () => {
 });
 
 describe('saved output restoration', () => {
+    it('rechecks uncertain admission against the exact saved result without starting another Run', async () => {
+        const original = saved('uncertain-start', { walkthrough: { state: 'pending' } }, ['walkthrough']);
+        const uncertain = ScmDiffSummaryResultSchema.parse({ ...original, output: { ...original.output, admission: 'outcomeUnknown' } });
+        inventory([uncertain]);
+        const hook = await renderHook(() => useScmDiffSummaryBinding({ host: { sessionId }, serverId,
+            machine: { machineId: 'restore-machine', basePath: '/repo/exact' }, machineReachable: true,
+            canControl: true, canSend: false, launch: { canLaunchExecutionRuns: false },
+            comparison: { kind: 'workingTree', comparisonId: comparison.id }, output: 'walkthrough' }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().viewModel?.status).toBe('unknown'));
+        // Ignore initial hydration reads; only the explicit recheck's network effects matter.
+        boundary.methods = [];
+        await act(async () => { await hook.getCurrent().checkAdmission(); });
+        expect(boundary.methods).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ]);
+        expect(hook.getCurrent().admission).toBe('outcomeUnknown');
+        boundary.results[uncertain.resultId] = { success: true, result: ScmDiffSummaryResultSchema.parse({
+            ...original, revision: 2, output: { ...original.output, revision: 2, runId: 'original-start' },
+        }) };
+        await act(async () => { await hook.getCurrent().checkAdmission(); });
+        expect(hook.getCurrent().viewModel).toMatchObject({ status: 'running', admission: null, executionRunId: 'original-start', resultId: uncertain.resultId });
+    });
     it('keeps hydrated captured evidence through Home revalidation', async () => {
         const { useCapturedScmComparison } = await import('../comparison/useCapturedScmComparison');
         const observed: Array<unknown> = [];
