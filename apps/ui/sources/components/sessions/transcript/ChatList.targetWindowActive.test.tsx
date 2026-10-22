@@ -1,3 +1,4 @@
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -63,7 +64,7 @@ beforeEach(async () => {
             accountId: 'viewer-account', settings: {
                 transcriptGroupingMode: 'linear', transcriptMotionPreset: 'off', transcriptScrollPinOffsetThresholdPx: 72,
             } }],
-        route: ({ path, url }) => {
+        route: createSessionReadBatchHttpBoundary(({ path, url }) => {
             if (path === `/v1/sessions/${sessionId}/messages`) {
                 messageRequests.push(url);
                 if (url.searchParams.get('beforeSeq') === '21') return Response.json({
@@ -85,7 +86,7 @@ beforeEach(async () => {
             if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
             if (path === '/v1/artifacts' || path === '/v1/machines') return Response.json([]);
             return sessions.handle(url) ?? undefined;
-        },
+        }).handle,
     });
     expect(await sync.ensureSessionVisibleForMessageRoute(sessionId, {
         serverId, forceRefresh: true, awaitMessageHydration: true,

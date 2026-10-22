@@ -108,9 +108,9 @@ describe('concurrent session cache socket routing', () => {
             expect(rows()).toBe(initialRows);
             for (const row of encryptedRows) expect(rows()?.[row.id]).toBe(initialRows?.[row.id]);
             expect(rows()?.['encrypted-session-4']?.metadata?.name).toBe('Encrypted 4');
-            expect(h.requests('/v2/sessions/read-batch').filter(request =>
-                JSON.parse(String(request.init?.body)).sessionIds.includes('encrypted-session-0'))
-                .map(request => request.url.origin))
+            // The harness's batch boundary splits each read-batch POST into its per-Session
+            // component reads before this recorder, so the demanded reads are visible here.
+            expect(h.requests('/v2/sessions/encrypted-session-0').map(request => request.url.origin))
                 .toEqual([h.homeB.serverUrl, h.homeB.serverUrl]);
             expect(h.storage.getState().sessionListRowsByServerId[h.homeA.id]?.['encrypted-session-0']).toBeUndefined();
             expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);

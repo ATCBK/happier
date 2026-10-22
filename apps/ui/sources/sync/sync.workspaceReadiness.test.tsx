@@ -52,14 +52,11 @@ describe('Sync workspace readiness', () => {
             if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
             if (path === '/v2/account/session-drafts/list') return Response.json({ items: [record] });
             if (path === '/v2/account/session-drafts/read') return Response.json({ status: 'present', record });
-            if (path === '/v2/sessions/read-batch') {
-                // Draft pages read their Sessions' encryption contexts as one finite batch.
-                const requested: string[] = JSON.parse(String(init?.body)).sessionIds;
-                if (requested.includes(address.sessionId)) exactReads += 1;
-                return Response.json({ results: requested.map(sessionId => ({ sessionId,
-                    detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }) } },
-                    turns: { status: 200, body: { v: 1, sessionId, updatedAt: 1, turns: [] } } })) });
-            }
+            const sessionRoute = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+            if (sessionRoute && sessionRoute[1] !== 'active') return Response.json({
+                session: createPlainSessionCurrentProjectionRecordFixture({ id: decodeURIComponent(sessionRoute[1]!) }) });
+            const turnsRoute = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
+            if (turnsRoute) return Response.json({ v: 1, sessionId: decodeURIComponent(turnsRoute[1]!), updatedAt: 1, turns: [] });
             if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
             if (path === '/v2/cursor') return Response.json({ cursor: 0 });
             if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
@@ -67,6 +64,16 @@ describe('Sync workspace readiness', () => {
             if (path === '/v1/feed') return Response.json({ items: [], hasMore: false });
             if (path === '/v1/kv') return Response.json({ items: [] });
             return null;
+        });
+        // Draft pages read their Sessions' encryption contexts as one finite batch; the harness
+        // answers each batch through the per-Session routes above, so count the batch itself.
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const answerBatchesThroughResponder = network.request;
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.pathname === '/v2/sessions/read-batch' && init?.method === 'POST'
+                && (JSON.parse(String(init.body)).sessionIds as string[]).includes(address.sessionId)) exactReads += 1;
+            return answerBatchesThroughResponder(input, init);
         });
         await loadSyncSingletonForTests();
         const { upsertAndActivateServer } = await import('./domains/server/serverRuntime');

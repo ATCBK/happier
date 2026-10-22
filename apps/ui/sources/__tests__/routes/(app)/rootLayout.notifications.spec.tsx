@@ -7,6 +7,7 @@ import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugi
 import { createRootLayoutFeaturesResponse, createSessionFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainV2SessionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { storage } from '@/sync/domains/state/storage';
@@ -82,7 +83,7 @@ async function arrangeHomes(saved = [profile('srv_server_1', activeUrl)], active
     await seedPersistedHomeProfilesForTests({ activeServerId: activeId, profiles: saved });
     if (saved.length > 0) await saveHomeViewState({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: activeId });
     resetServerFeaturesClientForTests();
-    setRuntimeFetch(async (input, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
         const url = new URL(String(input));
         httpObservations.push({ origin: url.origin, pathname: url.pathname, method: init?.method ?? 'GET',
             ...(typeof init?.body === 'string' ? { body: init.body } : {}) });
@@ -99,7 +100,7 @@ async function arrangeHomes(saved = [profile('srv_server_1', activeUrl)], active
             if (row) return Response.json({ session: row });
         }
         return new Response('{}', { status: 404 });
-    });
+    }));
     for (const home of saved) {
         const write = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.serverIdentityId ?? home.id }, credentials);
         expect(write).toBeTruthy();

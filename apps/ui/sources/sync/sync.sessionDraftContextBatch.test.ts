@@ -38,6 +38,7 @@ const { storage } = await import('./domains/state/storage');
 const { profileDefaults } = await import('./domains/profiles/profile');
 const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 
 beforeEach(() => network.resetRequests());
 
@@ -86,30 +87,33 @@ describe('Session draft collection context batching', () => {
             if (path === '/v2/account/settings') return Response.json({ content: accountMode === 'plain' ? { t: 'plain', v: {} } : null, version: 1 });
             if (path === '/v2/account/session-drafts/list') return Response.json({ items: records });
             if (path === '/v2/account/session-drafts/read') return Response.json({ status: 'absent' });
-            if (path === '/v2/sessions/read-batch') {
-                const request = SessionReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
-                batches.push(request.sessionIds);
-                batchStarted?.resolve();
-                if (batchGate) await batchGate.promise;
-                if (incomplete) return Response.json({ results: [] });
-                return Response.json({ results: request.sessionIds.map(sessionId => ({ sessionId,
-                    ...(denied && sessionId.endsWith('missing-a') ? {
-                        detail: { status: 404, body: { error: 'Session not found' } },
-                    } : {
-                        detail: { status: 200, body: { session: row(sessionId) } },
-                        ...(request.includeTurns === false ? {} : { turns: { status: 200, body: { v: 1, sessionId, updatedAt: 1, turns: [] } } }),
-                    }),
-                })) });
-            }
             if (/^\/v2\/sessions\/draft-context-/.test(path)) {
-                sessionReads.push(path);
-                return Response.json({ session: row(path.split('/').at(-1)!) });
+                const sessionId = path.split('/').at(-1)!;
+                return denied && sessionId.endsWith('missing-a')
+                    ? Response.json({ error: 'Session not found' }, { status: 404 })
+                    : Response.json({ session: row(sessionId) });
             }
+            const turnsMatch = /^\/v1\/sessions\/(draft-context-[^/]+)\/turns$/.exec(path);
+            if (turnsMatch) return Response.json({ v: 1, sessionId: turnsMatch[1], updatedAt: 1, turns: [] });
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/friends') return Response.json({ friends: [] });
             if (path === '/v1/kv') return Response.json({ items: [] });
             if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
             return createEmptyAccountBootstrapHttpResponse(path, init);
+        });
+        // The harness answers each batch by reading its Sessions through the responder above, so a
+        // Session read outside a batch is the only way a single-record route is requested.
+        const answerBatchesThroughResponder = network.request;
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.pathname === '/v2/sessions/read-batch' && init?.method === 'POST') {
+                const request = SessionReadBatchRequestV1Schema.parse(JSON.parse(String(init.body)));
+                batches.push(request.sessionIds);
+                batchStarted?.resolve();
+                if (batchGate) await batchGate.promise;
+                if (incomplete) return Response.json({ results: [] });
+            } else if (/^\/v2\/sessions\/draft-context-/.test(url.pathname)) sessionReads.push(url.pathname);
+            return answerBatchesThroughResponder(input, init);
         });
         await upsertAndActivateServer({ serverUrl: home.serverUrl });
         await restoreConnectionToActiveServer(credentials);

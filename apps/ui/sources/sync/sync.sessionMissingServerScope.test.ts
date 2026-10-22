@@ -7106,6 +7106,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return currentPlainAccountEncryptionCurrentnessResponse();
+            // The scoped Machine socket waits for the Home's reachability probe to answer.
+            if (url.pathname === '/health') return new Response(null, { status: 200 });
+            if (url.pathname === '/v1/auth/ping') return Response.json({});
             const machine = createPlainMachineReadHttpResponseFixture(url.pathname, init,
                 url.origin === appliedServer.serverUrl ? 'account-a' : 'account-b');
             if (machine) return machine;

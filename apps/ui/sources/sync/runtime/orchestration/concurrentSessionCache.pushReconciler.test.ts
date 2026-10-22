@@ -230,8 +230,7 @@ describe('device-level push token reconciliation lifecycle', () => {
             listener({ kind: 'credentials_set', serverId: 'server-a', serverUrl: 'https://home-a.example' });
         }
 
-        await flushSchedulerTurn();
-        expect(mocks.registerPushToken).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(mocks.registerPushToken).toHaveBeenCalledTimes(1));
     });
 
     it('coalesces device attention policy writes into one enrollment reconciliation', async () => {

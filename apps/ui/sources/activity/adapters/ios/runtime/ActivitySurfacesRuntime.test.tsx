@@ -819,7 +819,7 @@ describe('ActivitySurfacesRuntime', () => {
         // occurrences. This Home's explicit All messages Follow admits the unread
         // candidate through the real delivery owner, independently of its read state.
         const follow = projectSessionFollowFactsV1({ following: true,
-            notificationLevel: 'all_messages', includeInVoice: false });
+            policy: { preset: 'everything' } });
         sessionsState.value = [
             createSessionFixture({
                 id: 'permission',
