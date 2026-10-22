@@ -1,4 +1,5 @@
 import type { ProviderConnectionsCatalogSnapshotV1, ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -18,10 +19,25 @@ export type ProviderCatalogSnapshot = Readonly<{
     cryptoAdmission: ProviderCatalogCryptoAdmission | null;
 }>;
 const snapshots = new Map<string, ProviderCatalogSnapshot>();
+type ModelProjection = Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }>;
+type ModelProjectionSnapshot = {
+    scope: ServerAccountScope;
+    data: ModelProjection | null;
+    requested: number;
+    accepted: number;
+    listeners: Set<() => void>;
+};
+// One display snapshot per exact credential/query, retired by the same credential
+// lifecycle as the Account catalog. Retention creates no read or polling demand.
+const modelProjections = new Map<string, ModelProjectionSnapshot>();
 const listeners = new Set<() => void>();
 let unsubscribeCredentials: (() => void) | null = null;
 
 function onCredentialChange(event: HomeCredentialMutationEvent): void {
+    for (const [key, snapshot] of modelProjections) {
+        if (!areServerProfileIdentifiersEquivalent(snapshot.scope.serverId, event.serverId)) continue;
+        withdrawModelProjection(key, snapshot);
+    }
     for (const snapshot of [...snapshots.values()]) {
         if (!snapshot.data || !snapshot.cryptoAdmission
             || !areServerProfileIdentifiersEquivalent(snapshot.scope.serverId, event.serverId)) continue;
@@ -43,12 +59,13 @@ function onCredentialChange(event: HomeCredentialMutationEvent): void {
         }
         if (reason) applyProviderCatalogSnapshot(snapshot.scope, { status: 'unavailable', reason }, true);
     }
+    syncCredentialSubscription();
 }
 
 function syncCredentialSubscription(): void {
     // Private display data can outlive its last mounted observer. Its admission ends
     // synchronously with the incumbent credential write, not a later render or GET.
-    const retainsPrivateData = [...snapshots.values()].some(snapshot => snapshot.data && snapshot.cryptoAdmission);
+    const retainsPrivateData = modelProjections.size > 0 || [...snapshots.values()].some(snapshot => snapshot.data && snapshot.cryptoAdmission);
     if (retainsPrivateData && !unsubscribeCredentials) unsubscribeCredentials = subscribeHomeCredentialChange(onCredentialChange);
     if (!retainsPrivateData && unsubscribeCredentials) {
         unsubscribeCredentials();
@@ -60,6 +77,56 @@ export function subscribeProviderCatalogSnapshots(listener: () => void): () => v
 }
 export function getProviderCatalogSnapshot(scope: ServerAccountScope | null | undefined): ProviderCatalogSnapshot | null {
     return scope ? snapshots.get(serverAccountScopeKeySuffix(scope)) ?? null : null;
+}
+function modelProjectionKey(scope: ServerAccountScope, credentialKey: string, queryKey: string): string {
+    return JSON.stringify([serverAccountScopeKeySuffix(scope), credentialKey, queryKey]);
+}
+export function getProviderModelProjectionSnapshot(scope: ServerAccountScope, credentialKey: string, queryKey: string): ModelProjection | null {
+    return modelProjections.get(modelProjectionKey(scope, credentialKey, queryKey))?.data ?? null;
+}
+function ensureModelProjectionSnapshot(scope: ServerAccountScope, key: string): ModelProjectionSnapshot {
+    let snapshot = modelProjections.get(key);
+    if (!snapshot) {
+        snapshot = { scope, data: null, requested: 0, accepted: 0, listeners: new Set() };
+        modelProjections.set(key, snapshot);
+        syncCredentialSubscription();
+    }
+    return snapshot;
+}
+function withdrawModelProjection(key: string, snapshot: ModelProjectionSnapshot): void {
+    const changed = snapshot.data !== null;
+    snapshot.data = null;
+    snapshot.accepted = ++snapshot.requested;
+    if (snapshot.listeners.size === 0) modelProjections.delete(key);
+    if (changed) for (const listener of [...snapshot.listeners]) listener();
+}
+export function subscribeProviderModelProjectionSnapshot(scope: ServerAccountScope, credentialKey: string, queryKey: string, listener: () => void): () => void {
+    const key = modelProjectionKey(scope, credentialKey, queryKey);
+    const snapshot = ensureModelProjectionSnapshot(scope, key);
+    snapshot.listeners.add(listener);
+    return () => {
+        snapshot.listeners.delete(listener);
+        if (snapshot.listeners.size === 0 && snapshot.data === null && snapshot.accepted >= snapshot.requested
+            && modelProjections.get(key) === snapshot) {
+            modelProjections.delete(key);
+            syncCredentialSubscription();
+        }
+    };
+}
+/** Each caller revalidates through its own Action; only admitted successes enter the shared display snapshot. */
+export function beginProviderModelProjectionRead(scope: ServerAccountScope, credentialKey: string, queryKey: string): (data: ModelProjection) => void {
+    const key = modelProjectionKey(scope, credentialKey, queryKey);
+    const target = ensureModelProjectionSnapshot(scope, key);
+    const request = ++target.requested;
+    return data => {
+        // A later successful revalidation wins over an older delayed reply.
+        // Cancellation/failure of a newer borrower does not discard a still-valid answer.
+        if (modelProjections.get(key) !== target || request < target.accepted) return;
+        target.accepted = request;
+        if (target.data && sameStrictJsonValue(target.data, data)) return;
+        target.data = data;
+        for (const listener of [...target.listeners]) listener();
+    };
 }
 export function applyAcknowledgedProviderCatalog(scope: ServerAccountScope, data: ProviderConnectionsCatalogV1, revision: number,
     current: boolean, cryptoAdmission: ProviderCatalogCryptoAdmission | null): void {
@@ -79,6 +146,12 @@ export function applyProviderCatalogSnapshot(scope: ServerAccountScope, catalog:
     const old = snapshots.get(key);
     const withdraw = catalog.status === 'unavailable' && ['account-mode-mismatch', 'encryption-material-unavailable',
         'unauthorized', 'forbidden', 'unsupported', 'account-not-found', 'account-inconsistent', 'invalid-stored-content'].includes(catalog.reason);
+    if (withdraw) {
+        for (const [modelKey, projection] of modelProjections) {
+            if (serverAccountScopeKeySuffix(projection.scope) === key) withdrawModelProjection(modelKey, projection);
+        }
+        syncCredentialSubscription();
+    }
     const candidate = catalog.status === 'ready' || catalog.status === 'partial' ? catalog.catalog : withdraw ? null : old?.data ?? null;
     const data = old?.data && JSON.stringify(old.data) === JSON.stringify(candidate) ? old.data : candidate;
     const next: ProviderCatalogSnapshot = { scope: old?.scope ?? scope, catalog, status: catalog.status, data,
@@ -98,5 +171,5 @@ export function invalidateProviderCatalogsForServer(serverId: string): void {
     for (const snapshot of snapshots.values()) if (snapshot.scope.serverId === serverId) beginProviderCatalogLoad(snapshot.scope);
 }
 export function resetProviderCatalogSnapshotsForTests(): void {
-    snapshots.clear(); listeners.clear(); syncCredentialSubscription();
+    snapshots.clear(); modelProjections.clear(); listeners.clear(); syncCredentialSubscription();
 }

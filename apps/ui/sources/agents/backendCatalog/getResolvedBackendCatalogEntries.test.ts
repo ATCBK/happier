@@ -43,6 +43,17 @@ function configuredAgentTargetKey(definitionId: string) {
 }
 
 describe('getResolvedBackendCatalogEntries', () => {
+    it('keeps opted-in display rows during revalidation while a fresh catalog replaces the retained record', () => {
+        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'retained-review', name: 'retained-review', title: 'Review',
+            launch: { kind: 'command', command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
+        const retainedAcpCatalogRecord = { v: 1 as const, definitions: [definition] };
+        expect(readBackendCatalog({ enabledAgentIds: [], acpCatalogSnapshot: { status: 'loading' }, retainedAcpCatalogRecord }))
+            .toEqual([expect.objectContaining({ kind: 'configuredBackend', backendId: definition.id })]);
+        expect(readBackendCatalog({ enabledAgentIds: [], acpCatalogSnapshot: { status: 'ready', revision: 2,
+            record: { v: 1, definitions: [] } }, retainedAcpCatalogRecord })).toEqual([]);
+        // Authority-sensitive consumers keep their existing fresh-only default.
+        expect(readBackendCatalog({ enabledAgentIds: [], acpCatalogSnapshot: { status: 'loading' } })).toEqual([]);
+    });
     it('filters the hydrated QA catalog through real profile compatibility without losing configured definitions', () => {
         // Target ids captured from the live QA composer; profile keys exercise
         // existing predecessor-key ingress, not a second compatibility parser.

@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { act } from 'react-test-renderer';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -13,7 +15,7 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { createAccountScopedCryptoMaterialSnapshotV1, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
-import { getAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
+import { applyAcpCatalogSnapshot, getAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { AccountSettingsV2HistoryMutationRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -49,6 +51,8 @@ let raw: Record<string, unknown>;
 const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] },
     createdAt: 1, updatedAt: 1 });
 let row: unknown;
+let catalogReads = 0;
+let pendingCatalogResponse: Promise<Response> | null = null;
 const promotionActionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {},
     approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'] } });
 const credentialsFor = (name: string): AuthCredentials => ({ token: `e30.${Buffer.from(JSON.stringify({ sub: `account-${name}` })).toString('base64url')}.signature` });
@@ -63,6 +67,8 @@ async function activateHome(name: string) {
     return next;
 }
 beforeEach(async () => {
+    catalogReads = 0;
+    pendingCatalogResponse = null;
     raw = {};
     row = { status: 'present', revision: 3, content: { t: 'plain', v: { v: 1, definitions: [definition] } } };
     setRuntimeFetch(async url => {
@@ -73,7 +79,10 @@ beforeEach(async () => {
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v2/account/settings') return Response.json({ version: 4, content: { t: 'plain', v: raw } });
         if (path === '/v1/artifacts') return Response.json([]);
-        if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(row);
+        if (path === ACP_CATALOG_ROWS_ROUTE_V1) {
+            catalogReads += 1;
+            return pendingCatalogResponse ?? Response.json(row);
+        }
         return new Response(null, { status: 404 });
     });
     scope = await activateHome('a');
@@ -84,6 +93,47 @@ afterEach(async () => {
     await disconnectActiveServerConnection(); retireActiveServerAccountScopeLifetime(); resetRuntimeFetch();
 });
 describe('ACP captured Account row snapshots', () => {
+    it.each(['picker', 'retained-page'] as const)('defers a closed picker catalog and revalidates retained rows once on reopen (%s)', async mode => {
+        let active = false;
+        let renders = 0;
+        const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(
+            PluginSurfaceFocusEligibilityProvider, { active: mode === 'picker' || active, children },
+        );
+        const hook = await renderHook(({ enabled }: { enabled: boolean }) => {
+            renders += 1;
+            return useAcpCatalog(scope, { enabled: mode === 'retained-page' || enabled });
+        }, {
+            initialProps: { enabled: false }, wrapper,
+        });
+        expect(catalogReads).toBe(0);
+        active = true;
+        await hook.rerender({ enabled: true });
+        await vi.waitFor(() => expect(hook.getCurrent().snapshot).toMatchObject({ stale: false, data: { definitions: [definition] } }));
+        expect(catalogReads).toBe(1);
+        const cachedData = hook.getCurrent().snapshot?.data;
+        active = false;
+        await hook.rerender({ enabled: false });
+        await act(async () => publishHomeAccountChange({ serverId: scope.serverId }));
+        expect(catalogReads).toBe(1);
+        renders = 0;
+        await act(async () => applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 4,
+            record: { v: 1, definitions: [definition] } }, true));
+        expect(renders).toBe(0);
+        const pending = createDeferred<Response>();
+        pendingCatalogResponse = pending.promise;
+        try {
+            active = true;
+            await hook.rerender({ enabled: true });
+            await vi.waitFor(() => expect(catalogReads).toBe(2));
+            expect(hook.getCurrent().snapshot).toMatchObject({ stale: true, catalog: { status: 'loading' } });
+            expect(hook.getCurrent().snapshot?.data).toBe(cachedData);
+            await act(async () => pending.resolve(Response.json(row)));
+            await vi.waitFor(() => expect(hook.getCurrent().snapshot?.stale).toBe(false));
+            expect(catalogReads).toBe(2);
+        } finally {
+            pending.resolve(Response.json(row));
+        }
+    });
     it.each([
         { status: 500, body: { error: 'internal' }, code: 'outcome_unknown' },
         { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },

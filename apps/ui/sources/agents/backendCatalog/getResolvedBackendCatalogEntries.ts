@@ -1,6 +1,6 @@
 import { readBackendTargetRefV2, type BackendTargetRefV2, type BackendTargetRefV2Input, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { AcpCatalogRecordV1, AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import type { AgentId } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
@@ -135,6 +135,8 @@ function buildCollapsedDiscoveredBackendIdSet(params: Readonly<{
 export function getResolvedBackendCatalogEntries(params: Readonly<{
     enabledAgentIds: readonly string[];
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
+    /** Display continuity only; callers keep selection authority tied to the fresh snapshot. */
+    retainedAcpCatalogRecord?: AcpCatalogRecordV1 | null;
     backendEnabledByTargetKey?: Readonly<Record<string, boolean>> | null;
     collapseConfiguredBackendProviderSentinels?: boolean;
     discoveredBackendIds?: readonly string[];
@@ -146,7 +148,7 @@ export function getResolvedBackendCatalogEntries(params: Readonly<{
     const catalog = {
         backends: params.acpCatalogSnapshot?.status === 'ready'
             ? params.acpCatalogSnapshot.record.definitions
-            : [],
+            : params.retainedAcpCatalogRecord?.definitions ?? [],
     };
 
     for (const enabledAgentIdRaw of params.enabledAgentIds) {

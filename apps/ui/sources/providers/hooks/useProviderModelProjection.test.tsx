@@ -2,7 +2,10 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
-import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness,
+    createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -13,13 +16,9 @@ const { describeProviderModels, projectionRequests } = vi.hoisted(() => ({
     describeProviderModels: vi.fn(),
     projectionRequests: [] as Readonly<{ serverId: string | null; payload: unknown }>[],
 }));
-// Replace only network delivery; the real client parses the daemon's strict response.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (request: Readonly<{ serverId: string | null; payload: unknown }>) => {
-        projectionRequests.push(request);
-        return describeProviderModels(request.payload);
-    },
-}));
+// The Socket boundary alone supplies daemon answers; Action/Machine admission and the resource store stay real.
+const rpc = createProviderSettingsHarness({ machines: ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, activeAt: Date.now() })) });
+installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 
@@ -36,12 +35,77 @@ await loadSyncSingletonForTests();
 afterEach(async () => {
     standardCleanup();
     await account.reset();
+    rpc.reset();
     describeProviderModels.mockReset();
     projectionRequests.length = 0;
 });
-beforeEach(async () => { serverId = (await account.restore({ waivedActions: ['providers.models.refresh'] })).serverId; });
+beforeEach(async () => {
+    rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request => {
+        projectionRequests.push(request);
+        return describeProviderModels(request.payload);
+    });
+    serverId = (await account.restore({ waivedActions: ['providers.models.refresh'] })).serverId;
+});
 
 describe('useProviderModelProjection', () => {
+    it('shares admitted display results across surfaces and paints cached content during reopen revalidation', async () => {
+        describeProviderModels.mockResolvedValueOnce(projection(['pc_first']));
+        const input = { enabled: true, machineId: 'machine-a', serverId,
+            agentTargetKey: 'agent:happier.agent.codex/codex' };
+        const first = await renderHook(() => useProviderModelProjection(input));
+        await flushHookEffects();
+        const initialData = first.getCurrent().data;
+        expect(initialData?.groups[0]?.connectionId).toBe('pc_first');
+        let completeSecond!: (value: unknown) => void;
+        describeProviderModels.mockImplementationOnce(() => new Promise(resolve => { completeSecond = resolve; }));
+        const second = await renderHook(() => useProviderModelProjection(input));
+        const secondWhileRefreshing = second.getCurrent();
+        await act(async () => completeSecond(projection(['pc_updated'])));
+        expect(secondWhileRefreshing.data).toBe(initialData);
+        expect(secondWhileRefreshing.loading).toBe(true);
+        expect(first.getCurrent().data).toBe(second.getCurrent().data);
+        expect(first.getCurrent().data?.groups[0]?.connectionId).toBe('pc_updated');
+        const updatedData = second.getCurrent().data;
+        await first.unmount();
+        await second.unmount();
+        let completeReopen!: (value: unknown) => void;
+        describeProviderModels.mockImplementationOnce(() => new Promise(resolve => { completeReopen = resolve; }));
+        const reopened = await renderHook(() => useProviderModelProjection(input));
+        const reopenedWhileRefreshing = reopened.getCurrent();
+        await act(async () => completeReopen(projection(['pc_revalidated'])));
+        expect(reopenedWhileRefreshing.data).toBe(updatedData);
+        expect(reopenedWhileRefreshing.loading).toBe(true);
+        expect(projectionRequests).toHaveLength(3);
+        expect(reopened.getCurrent().data?.groups[0]?.connectionId).toBe('pc_revalidated');
+    });
+
+    it('withdraws cached display results on same-Account credential replacement while closed', async () => {
+        describeProviderModels.mockResolvedValue(projection(['pc_old_credential']));
+        const input = { enabled: true, machineId: 'machine-a', serverId,
+            agentTargetKey: 'agent:happier.agent.codex/codex' };
+        const first = await renderHook((props: { active: boolean }) => useProviderModelProjection({ ...input, active: props.active }),
+            { initialProps: { active: true } });
+        await flushHookEffects();
+        expect(first.getCurrent().data?.groups[0]?.connectionId).toBe('pc_old_credential');
+        await first.rerender({ active: false });
+        const beforeReplacement = projectionRequests.length;
+        const [{ TokenStorage }, { getServerProfileById }] = await Promise.all([
+            import('@/auth/storage/tokenStorage'), import('@/sync/domains/server/serverProfiles'),
+        ]);
+        const serverUrl = getServerProfileById(serverId)!.serverUrl;
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+        expect(credentials).not.toBeNull();
+        await act(async () => {
+            await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+                ...credentials!, token: `${credentials!.token}-replacement`,
+            });
+        });
+        await flushHookEffects();
+        expect(first.getCurrent().data).toBeNull();
+        expect(projectionRequests).toHaveLength(beforeReplacement);
+        await first.unmount();
+    });
+
     it('changes source browsing without changing the exact selected tuple or favorite identity', async () => {
         describeProviderModels.mockResolvedValue(projection(['pc_a']));
         const currentSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'same' };

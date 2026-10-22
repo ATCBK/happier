@@ -6,12 +6,12 @@ import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { beginProviderModelProjectionRead, getProviderModelProjectionSnapshot, subscribeProviderModelProjectionSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
 
-type Success = Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }>;
 type ProjectionError = Extract<DaemonProviderModelProjectionResponseV1, { status: 'error' }>['error'];
 
 export type ProviderModelProjectionStatus = 'disabled' | 'pending' | 'error' | 'success';
@@ -19,7 +19,6 @@ export type ProviderModelProjectionStatus = 'disabled' | 'pending' | 'error' | '
 type ProjectionState = Readonly<{
     scopeKey: string | null;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
-    data: Success | null;
     error: ProjectionError | null;
     loading: boolean;
 }>;
@@ -41,7 +40,6 @@ export function useProviderModelProjection(input: Readonly<{
     const [state, setState] = React.useState<ProjectionState>({
         scopeKey: null,
         accountLifetime: null,
-        data: null,
         error: null,
         loading: false,
     });
@@ -53,14 +51,22 @@ export function useProviderModelProjection(input: Readonly<{
         ? sessionModelSelectionKey(input.currentSelection)
         : '';
     const scopeKey = JSON.stringify([
-        input.enabled, input.machineId, input.serverId, input.agentTargetKey, input.mode ?? 'picker', selectionKey,
+        input.enabled, input.machineId, input.agentTargetKey, input.mode ?? 'picker', selectionKey,
         input.sourceConnectionId ?? null, input.favoriteSelections?.map(sessionModelSelectionKey) ?? [],
-        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null,
+        resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : input.serverId,
+        binding?.credentialKey ?? null,
     ]);
     const scopeEnabled = Boolean(input.enabled && input.agentTargetKey);
     const stateMatchesScope = state.scopeKey === scopeKey
         && state.accountLifetime === accountLifetime;
-    const data = stateMatchesScope ? state.data : null;
+    const readSnapshot = React.useCallback(() => scopeEnabled && binding?.credentialKey && binding.isCurrent()
+        && (accountLifetime?.isCurrent() ?? true)
+        ? getProviderModelProjectionSnapshot(binding.scope, binding.credentialKey, scopeKey) : null,
+    [accountLifetime, binding, scopeEnabled, scopeKey]);
+    const subscribeSnapshot = React.useCallback((listener: () => void) => scopeEnabled && input.active !== false && binding?.credentialKey && binding.isCurrent()
+        ? subscribeProviderModelProjectionSnapshot(binding.scope, binding.credentialKey, scopeKey, listener) : () => {},
+    [binding, input.active, scopeEnabled, scopeKey]);
+    const data = React.useSyncExternalStore(subscribeSnapshot, readSnapshot, readSnapshot);
     const error = stateMatchesScope ? state.error : null;
     const loading = input.active !== false && scopeEnabled
         && (resolution.kind === 'resolving' || resolution.kind === 'bound')
@@ -80,7 +86,7 @@ export function useProviderModelProjection(input: Readonly<{
             if (currentAccountLifetimeRef.current !== accountLifetime) return;
             generation.current += 1;
             setState((current) => current.accountLifetime === accountLifetime
-                ? { scopeKey: null, accountLifetime: null, data: null, error: null, loading: false }
+                ? { scopeKey: null, accountLifetime: null, error: null, loading: false }
                 : current);
         });
         return () => registration?.dispose();
@@ -96,17 +102,18 @@ export function useProviderModelProjection(input: Readonly<{
         );
         if (!requestStillCurrent()) return null;
         if (!input.enabled || !input.agentTargetKey) {
-            setState({ scopeKey, accountLifetime, data: null, error: null, loading: false });
+            setState({ scopeKey, accountLifetime, error: null, loading: false });
             return null;
         }
-        if (!ready) return null;
+        if (!ready || !binding?.credentialKey) return null;
         pendingRead.current?.abort();
         const controller = new AbortController();
         pendingRead.current = controller;
         setState((current) => current.scopeKey === scopeKey
             && current.accountLifetime === accountLifetime
             ? { ...current, loading: true }
-            : { scopeKey, accountLifetime, data: null, error: null, loading: true });
+            : { scopeKey, accountLifetime, error: null, loading: true });
+        const publish = beginProviderModelProjectionRead(binding.scope, binding.credentialKey, scopeKey);
         try {
             const result = await describeProviderModels({
                 // Keep the refresh discriminator correlated with its required machine.
@@ -122,21 +129,19 @@ export function useProviderModelProjection(input: Readonly<{
             }, { signal: controller.signal });
             if (requestGeneration !== generation.current || !requestStillCurrent()) return null;
             if (result.status === 'success') {
+                publish(result);
                 setState({
-                    scopeKey, accountLifetime, data: result,
+                    scopeKey, accountLifetime,
                     error: null,
                     loading: true,
                 });
             } else {
-                setState((current) => ({
+                setState({
                     scopeKey,
                     accountLifetime,
-                    data: current.scopeKey === scopeKey && current.accountLifetime === accountLifetime
-                        ? current.data
-                        : null,
                     error: result.error,
                     loading: true,
-                }));
+                });
             }
             return result;
         } catch (caught) {
@@ -147,15 +152,12 @@ export function useProviderModelProjection(input: Readonly<{
                     ? { connectionId: input.currentSelection.providerConnectionId }
                     : {}),
             });
-            setState((current) => ({
+            setState({
                 scopeKey,
                 accountLifetime,
-                data: current.scopeKey === scopeKey && current.accountLifetime === accountLifetime
-                    ? current.data
-                    : null,
                 error: providerError,
                 loading: true,
-            }));
+            });
             return { status: 'error' as const, error: providerError };
         } finally {
             if (pendingRead.current === controller) pendingRead.current = null;

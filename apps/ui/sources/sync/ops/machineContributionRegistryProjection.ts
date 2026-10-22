@@ -15,8 +15,7 @@ import {
 } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
-import type { MachineRpcReadAdmission, MachineRpcReadAdmissionInput } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
+import { createMachineRpcReadAdmission, resetAdmittedMachineRpcReadsForTests, type MachineRpcReadAdmission, type MachineRpcReadAdmissionInput } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
@@ -256,13 +255,6 @@ function pluginRpcOperationOptions(opts: Readonly<{ timeoutMs?: number | null; s
 }
 
 /**
- * One pending physical acquisition per question and already-admitted authority.
- * Every caller reaches the canonical RPC admission before this owner can join.
- * Direct V2 grants are one-use operations and never enter this server binding.
- */
-const projectionReads = createScopedResolutionSingleFlight<unknown>();
-
-/**
  * The Account a read is for. Every handle of one Account shares its reads; a
  * successor Account never joins a read its predecessor started. Each caller
  * still fences what it does with the answer on its own lifetime.
@@ -273,15 +265,8 @@ function projectionReadAdmission(
     scope: MachineContributionRegistryProjectionScope,
     payload: unknown,
 ): MachineRpcReadAdmission {
-    const question = [machineContributionRegistryProjectionScopeKey(scope),
-        getMachineContributionRegistryProjectionRevision(scope), payload];
-    return {
-        async run<T>(input: MachineRpcReadAdmissionInput<T>): Promise<T> {
-            return await projectionReads.run(JSON.stringify([...question, input.binding.key]),
-                input.resolve, { signal: input.signal, scope: input.binding.scope,
-                    onPhysicalAcquire: input.onPhysicalAcquire }) as T;
-        },
-    };
+    return createMachineRpcReadAdmission(['machine-contribution-registry', machineContributionRegistryProjectionScopeKey(scope),
+        getMachineContributionRegistryProjectionRevision(scope), payload]);
 }
 
 async function readProjectionClientContext(machineId: string) {
@@ -899,7 +884,7 @@ const actionSchemaReadsByKey = new Map<string, ActionSchemaRead>();
 
 /** Forgets every shared in-flight projection read and memoised Action schema. */
 export function resetMachineProjectionReadsForTests(): void {
-    projectionReads.reset();
+    resetAdmittedMachineRpcReadsForTests();
     actionSchemaReadsByKey.clear();
 }
 

@@ -10,6 +10,7 @@ import { readProviderCatalogForMutationInContext,
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { createMachineRpcReadAdmission } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 
 export function createUiProviderActionExecuteV1(account: LazyActionAccountContext,
@@ -21,6 +22,10 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
       machineRpcWithServerScope<unknown, typeof request.input>({
         machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
         signal,
+        ...(request.actionId === 'providers.models.projection' ? {
+          readAdmission: createMachineRpcReadAdmission(['provider-model-projection', account.serverId,
+            account.accountId, machineId, request.input]),
+        } : {}),
         ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         onDispatched: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
       })),

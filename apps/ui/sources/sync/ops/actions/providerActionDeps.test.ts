@@ -14,6 +14,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 // Only Socket transport is substituted; Action admission and scoped Machine routing stay real.
 const providerHarness = createProviderSettingsHarness({ machines: [] });
@@ -50,6 +51,104 @@ async function executeSourceVisibility(serverId: string, accountId: string, show
 }
 
 describe('Provider Account source visibility Action', () => {
+    it.each(['same', 'other-machine', 'other-source', 'management', 'forced-refresh'] as const)(
+        'shares only the exact admitted descriptive model question: %s', async variant => {
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const otherMachine = createMachineFixture({ id: 'machine-b', activeAt: Date.now() });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine, otherMachine],
+            waivedActions: ['providers.models.refresh'] });
+        let release!: () => void;
+        const blocked = new Promise<void>(resolve => { release = resolve; });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async (_request, next) => {
+            await blocked;
+            return next();
+        });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const read = (second: boolean) => createDefaultActionExecutor().execute(
+            variant === 'forced-refresh' ? 'providers.models.refresh' : 'providers.models.projection', {
+            machineId: second && variant === 'other-machine' ? otherMachine.id : machine.id,
+            agentTargetKey: 'agent:happier.agent.codex/codex',
+            ...(second && variant === 'other-source' ? { sourceConnectionId: 'pc_a' } : {}),
+            ...(second && variant === 'management' ? { mode: 'management' } : {}),
+            ...(variant === 'forced-refresh' ? { forceRefresh: true } : {}),
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId });
+        const reads = [read(false), read(true)];
+        try {
+            await vi.waitFor(() => expect(providerHarness.state.requests.some(request =>
+                request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toBe(true));
+            await flushHookEffects({ cycles: 2, turns: 3 });
+        } finally {
+            release();
+        }
+        expect(await Promise.all(reads)).toMatchObject([{ ok: true }, { ok: true }]);
+        expect(providerHarness.state.requests.filter(request =>
+            request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(variant === 'same' ? 1 : 2);
+    });
+
+    it('cancels one admitted model borrower without cancelling the surviving reader', async () => {
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });
+        let release!: () => void;
+        const blocked = new Promise<void>(resolve => { release = resolve; });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async (_request, next) => {
+            await blocked;
+            return next();
+        });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const controller = new AbortController();
+        const read = (signal?: AbortSignal) => createDefaultActionExecutor().execute('providers.models.projection', {
+            machineId: machine.id, agentTargetKey: 'agent:happier.agent.codex/codex',
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId,
+            expectedAccountId: accountId, signal });
+        // Observe both promises immediately so an abort cannot become an unhandled rejection.
+        const reads = Promise.allSettled([read(controller.signal), read()]);
+        try {
+            await vi.waitFor(() => expect(providerHarness.state.requests.some(request =>
+                request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toBe(true));
+            await flushHookEffects({ cycles: 2, turns: 3 });
+            controller.abort();
+        } finally { release(); }
+        const [cancelled, surviving] = await reads;
+        expect(cancelled.status === 'rejected' || !cancelled.value.ok).toBe(true);
+        expect(surviving).toMatchObject({ status: 'fulfilled', value: { ok: true } });
+        expect(providerHarness.state.requests.filter(request =>
+            request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(1);
+    });
+
+    it('cancels the first model borrower during request-id preparation before physical dispatch', async () => {
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const controller = new AbortController();
+        const dispatched: string[] = [];
+        const firstExecutor = createDefaultActionExecutor({ onProviderRpcDispatched: () => dispatched.push('first') });
+        const secondExecutor = createDefaultActionExecutor({ onProviderRpcDispatched: () => dispatched.push('second') });
+        const randomUUID = globalThis.crypto.randomUUID.bind(globalThis.crypto);
+        let beforeDispatch: number | null = null;
+        // Request-id generation is the OS boundary after encoding, immediately before onIssued.
+        const randomBoundary = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementationOnce(() => {
+            beforeDispatch = providerHarness.state.requests.filter(request =>
+                request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION).length;
+            controller.abort();
+            return randomUUID();
+        });
+        const context = { surface: 'ui' as const, authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const }, serverId, expectedAccountId: accountId };
+        try {
+            const input = { machineId: machine.id, agentTargetKey: 'agent:happier.agent.codex/codex' };
+            const [first, second] = await Promise.allSettled([
+                firstExecutor.execute('providers.models.projection', input, { ...context, signal: controller.signal }),
+                secondExecutor.execute('providers.models.projection', input, context),
+            ]);
+            expect(beforeDispatch).toBe(0);
+            expect(first.status === 'rejected' || !first.value.ok).toBe(true);
+            expect(second).toMatchObject({ status: 'fulfilled', value: { ok: true } });
+            expect(dispatched).toEqual(['second']);
+            expect(providerHarness.state.requests.filter(request =>
+                request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(1);
+        } finally { randomBoundary.mockRestore(); }
+    });
+
     it.each(['providers.models.projection', 'providers.models.refresh'] as const)(
         'composes requester consent through the shared executor for %s', async actionId => {
             const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
