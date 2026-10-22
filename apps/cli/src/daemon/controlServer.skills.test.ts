@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
-import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { createSkillStore, EnsureSkillSessionDirResultSchema } from '@/prompts/skills/store/skillStore';
 import { createDaemonControlApp } from './controlServer';
 import { readSessionMarkerForPid } from './sessionRegistry';
 import { configuration } from '@/configuration';
@@ -50,15 +50,17 @@ it('serves the real authenticated skill store and rejects unknown authority fiel
         spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
         requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'secret', skillStore });
     const files = [{ path: 'SKILL.md', contentKind: 'utf8' as const, contentBase64: Buffer.from('Route-delivered skill').toString('base64') }];
-    const payload = { ownerKey: 'session-one', items: [{ skillId: 'guide', name: 'guide', files,
+    const payload = { ownerKey: 'session-one', items: [{ skillId: 'guide', name: 'guide', sourceFolderName: 'source-guide', files,
         digest: computePromptBundleDigestV1({ v: 1, entries: files, createdAtMs: 0, updatedAtMs: 0 }) }], nativeDisables: [] };
     try {
         expect((await app.inject({ method: 'POST', url: '/skills/session-dir', payload })).statusCode).toBe(401);
         const accepted = await app.inject({ method: 'POST', url: '/skills/session-dir', headers: { 'x-happier-daemon-token': 'secret' }, payload });
         expect(accepted.statusCode).toBe(200);
-        const delivery = accepted.json<{ pluginRoot: string; skillsRoot: string; failed: unknown[] }>();
+        const delivery = EnsureSkillSessionDirResultSchema.parse(accepted.json());
         expect(delivery.failed).toEqual([]);
-        expect(await readFile(join(delivery.skillsRoot, 'guide', 'SKILL.md'), 'utf8')).toBe('Route-delivered skill');
+        expect(delivery.items).toEqual([{ skillId: 'guide', name: 'guide', digest: payload.items[0]!.digest,
+          directory: join(delivery.skillsRoot, 'source-guide') }]);
+        expect(await readFile(join(delivery.items[0]!.directory, 'SKILL.md'), 'utf8')).toBe('Route-delivered skill');
         const rejected = await app.inject({ method: 'POST', url: '/skills/session-dir', headers: { 'x-happier-daemon-token': 'secret' }, payload: { ...payload, force: true } });
         expect(rejected.statusCode).toBe(400);
         const traversal = await app.inject({ method: 'POST', url: '/skills/session-dir', headers: { 'x-happier-daemon-token': 'secret' }, payload: { ...payload, ownerKey: '../escape' } });

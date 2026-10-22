@@ -608,7 +608,7 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
 
     const disposeRunToolBinding = vi.fn();
     const skills = { pluginRoot: '/skills/session-a/runs/run-a', skillsRoot: '/skills/session-a/runs/run-a/skills',
-      items: [{ name: 'child-only', skillId: 'child-skill', digest: 'sha256:child' }], nativeDisables: [] };
+      items: [{ name: 'child-only', skillId: 'child-skill', digest: 'sha256:child', directory: '/skills/session-a/runs/run-a/skills/child-only' }], nativeDisables: [] };
     let toolBindingRequest: NativeAgentSessionRunToolBindingRequest | null = null;
     const composeRunToolBinding = vi.fn(async (request: NativeAgentSessionRunToolBindingRequest) => {
       toolBindingRequest = request;

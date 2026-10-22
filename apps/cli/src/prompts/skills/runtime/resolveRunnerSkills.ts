@@ -17,7 +17,7 @@ import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from '@happier-dev/protoc
 import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
 import { readAccountPluginSkills } from '../library/readAccountPluginSkills';
 import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
-import { SkillOwnerKeySchema } from '../store/skillStore';
+import { SkillOwnerKeySchema, type EnsureSkillSessionDirResult } from '../store/skillStore';
 import { SkillSessionStartupIdentitySchema } from '../store/controlRoutes';
 import { createRealpathNormalizer, realpathReachRules } from '@/mcp/servers/createRealpathNormalizer';
 import { resolveSessionProjectPromptStack } from '@/agent/prompting/coding/sessionProjectPromptStack';
@@ -58,7 +58,7 @@ export type RunnerSkillsTransports = Readonly<{
     materialization?: 'copy';
     ownerKey: string; items: readonly Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string; files: import('@happier-dev/protocol/prompts/library/promptBundleSchemas').PromptBundleEntryV1[] }>[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[];
-  }>) => Promise<Readonly<{ pluginRoot: string; skillsRoot: string; failed: readonly Readonly<{ skillId: string; reason: 'materialize_failed'; detail?: string }>[] }>>;
+  }>) => Promise<EnsureSkillSessionDirResult>;
 }>;
 
 /** Preserve the captured Account authority across asynchronous resolution and native acknowledgement. */
@@ -191,7 +191,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       for (const item of plan.items) if (failures.has(item.skillId)) { item.state = 'unavailable'; item.reason = 'materialize_failed'; }
       return { reach, plan, indexItems: [], failureDetails: result.failed.flatMap(item => item.detail ? [{ skillId: item.skillId, detail: item.detail }] : []),
         delivery: { pluginRoot: result.pluginRoot, skillsRoot: result.skillsRoot,
-        items: delivered().map(({ skillId, name, digest }) => ({ skillId, name, digest })), nativeDisables } };
+        items: result.items, nativeDisables } };
     } catch (error) {
       const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
       const failureDetails = typeof code === 'string' ? delivered().map(item => ({ skillId: item.skillId, detail: code })) : undefined;

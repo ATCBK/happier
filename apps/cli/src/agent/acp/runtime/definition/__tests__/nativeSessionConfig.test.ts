@@ -56,7 +56,7 @@ describe('native session MCP config delivery', () => {
     const delivery = await prepareNativeSessionConfig({
       declaration: DECLARATION, cwd: home, env: { HOME: home }, mcpServers: {}, platform: 'linux',
       skills: { subdirectory: 'skills', delivery: { pluginRoot: join(home, 'session'), skillsRoot,
-        items: [{ name: 'delivered', skillId: 'delivered', digest: 'sha256:fixture' }], nativeDisables: [] } },
+        items: [{ name: 'delivered', skillId: 'delivered', digest: 'sha256:fixture', directory: join(skillsRoot, 'delivered') }], nativeDisables: [] } },
     });
     cleanups.push(delivery.cleanup);
     const privateRoot = delivery.env.XDG_CONFIG_HOME!;

@@ -29,7 +29,7 @@ it.each(['finite', 'retained'] as const)('records only the acknowledged %s Run d
     const skillObservationEffects: Promise<unknown>[] = [];
     const messages: unknown[] = [];
     const skills = { pluginRoot: '/private/run', skillsRoot: '/private/run/skills', nativeDisables: [],
-      items: [{ skillId: 'library:child-review', name: 'child-review', digest: `sha256:${'a'.repeat(64)}` }] };
+      items: [{ skillId: 'library:child-review', name: 'child-review', digest: `sha256:${'a'.repeat(64)}`, directory: '/private/run/skills/child-review' }] };
     let publishEvent: ((event: AgentSessionRuntimeEvent) => void) | undefined;
     let runtimeSessionId = '';
     let sequence = 0;
@@ -116,7 +116,7 @@ it.each(['finite', 'retained'] as const)('publishes actual Codex ACP skill refus
       }
     ` });
     const skills = { pluginRoot: join(directory, 'private-plugin'), skillsRoot: join(directory, 'private-plugin', 'skills'),
-      items: [{ skillId: 'child-review', name: 'child-review', digest: 'sha256:review' }], nativeDisables: [] };
+      items: [{ skillId: 'child-review', name: 'child-review', digest: 'sha256:review', directory: join(directory, 'private-plugin', 'skills', 'child-review') }], nativeDisables: [] };
     for (const withSkills of [false, true]) {
       const events: unknown[] = [];
       const controller = new AbortController();

@@ -107,6 +107,26 @@ the public surface; it does not create a separate stability tier per export.
 | `@happier-dev/plugin-sdk/voice/speech` | Speech-provider contract types. | `import type * as VoiceSpeech from '@happier-dev/plugin-sdk/voice/speech';` |
 | `@happier-dev/plugin-sdk/webhooks` | Daemon-realm webhook endpoint declarations, verification, and test fixtures. | `import type * as Webhooks from '@happier-dev/plugin-sdk/webhooks';` |
 
+## Agent skill delivery in development
+
+In unreleased 0.3 source, an Agent receives resolved skills on
+`AgentSessionOpenRequest.skills` or `AgentExecutionRunOpenRequest.skills`, typed
+by `AgentSessionSkillDelivery` from `/agents/runtime`. Each item carries its
+library `skillId`, frontmatter `name`, content `digest` and required absolute
+`directory`. The host materializes that read-only directory and owns its lifetime.
+
+Use `item.directory` for file reads, copies and catalog identity matching. An
+imported source folder can differ from `item.name`, including after a library
+rename. A private-home copy keeps the basename of `item.directory`, so references
+between selected sibling skills still resolve. Root-based native integrations
+continue to receive `skillsRoot` or `pluginRoot`.
+
+This replaces the earlier unpublished item shape: update Agent adapters and test
+fixtures to carry `directory`; do not reconstruct a fallback from `name`.
+`runAgentSkillDeliveryContract` from `/testing` checks this with a source folder
+different from the skill name, alongside its launch, supporting-file and cleanup
+checks. The contract applies to external and bundled Agent plugins alike.
+
 ## Advanced feature-protocol authoring
 
 `@happier-dev/plugin-sdk/protocol` is the browser-safe authoring boundary for

@@ -1,6 +1,6 @@
 import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterAll } from 'vitest';
 import type { AgentContribution } from '../agents.js';
 import type { AgentSessionRuntime } from '../agentRuntime/session.js';
@@ -52,8 +52,8 @@ runAgentSkillDeliveryContract({
         mkdirSync(join(privateHome, '.agents', 'skills'), { recursive: true });
         mkdirSync(join(privateHome, '.gemini'), { recursive: true });
         for (const item of request.skills?.items ?? []) {
-            const source = join(request.skills!.skillsRoot, item.name);
-            const destination = join(privateHome, '.agents', 'skills', item.name);
+            const source = item.directory;
+            const destination = join(privateHome, '.agents', 'skills', basename(item.directory));
             if (process.platform === 'win32') cpSync(source, destination, { recursive: true });
             else symlinkSync(source, destination, 'dir');
         }

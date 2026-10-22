@@ -2054,7 +2054,9 @@ describe('runHostSessionRuntime', () => {
       const ensure = vi.spyOn(daemonControl, 'ensureSkillSessionDirHttp').mockImplementation(async input => {
         ensured.push(input);
         if (scenario === 'daemon-unreachable') throw new Error('daemon_unreachable');
-        return { pluginRoot: `/skills/${input.ownerKey}`, skillsRoot: `/skills/${input.ownerKey}/skills`, failed: [] };
+        return { pluginRoot: `/skills/${input.ownerKey}`, skillsRoot: `/skills/${input.ownerKey}/skills`, failed: [],
+          items: input.items.map(({ skillId, name, digest, sourceFolderName }) => ({ skillId, name, digest,
+            directory: `/skills/${input.ownerKey}/skills/${sourceFolderName ?? name}` })) };
       });
       let skills: unknown;
       const createRuntime = harness.config.createSessionRuntime!;

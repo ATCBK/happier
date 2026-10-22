@@ -714,11 +714,12 @@ export type AgentSessionStartupInstructions = Readonly<{
 
 export type AgentSessionSkillDelivery = Readonly<{
   /** Host-owned, read-only to the Agent; the host deletes this root at runner exit.
-   * .claude-plugin/plugin.json declares name "happier"; skills/<name>/SKILL.md includes supporting files. */
+   * .claude-plugin/plugin.json declares name "happier"; skills/<source folder>/SKILL.md includes supporting files. */
   pluginRoot: string;
   /** The skills directory inside pluginRoot. */
   skillsRoot: string;
-  items: readonly Readonly<{ name: string; skillId: string; digest: string }>[];
+  /** directory is the materializer-admitted absolute skill folder; never derive it from name. */
+  items: readonly Readonly<{ name: string; skillId: string; digest: string; directory: string }>[];
   /** Native SKILL.md paths, supplied only when nativeDisable is supported. */
   nativeDisables: readonly Readonly<{ name: string; path: string }>[];
 }>;

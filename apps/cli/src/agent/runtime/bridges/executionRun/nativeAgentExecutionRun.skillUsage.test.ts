@@ -9,7 +9,7 @@ import * as controlClient from '@/daemon/controlClient';
 it.each(['finite', 'retained'] as const)('records delivered skill use from a %s Session-owned Run through the host projection', async mode => {
     const recorded = vi.spyOn(controlClient, 'recordDaemonSkillUse').mockResolvedValue();
     const skills = { pluginRoot: '/private/run', skillsRoot: '/private/run/skills', nativeDisables: [],
-        items: [{ name: 'guide', skillId: 'library-guide', digest: `sha256:${'a'.repeat(64)}` }] };
+        items: [{ name: 'guide', skillId: 'library-guide', digest: `sha256:${'a'.repeat(64)}`, directory: '/private/run/skills/guide' }] };
     const account = { accountId: 'parent-account', serverHttpBaseUrl: 'https://home.example.test' };
     let publish: ((event: AgentSessionRuntimeEvent) => void) | undefined;
     let admittedTurnId: string | undefined;

@@ -9,7 +9,7 @@ import { withCodexNativeAttachFixture } from './runtime.nativeAttach.test-suppor
 const skills: AgentSessionSkillDelivery = {
   pluginRoot: '/happier/skills/sessions/session-1',
   skillsRoot: '/happier/skills/sessions/session-1/skills',
-  items: [{ name: 'review', skillId: 'skill-review', digest: `sha256:${'a'.repeat(64)}` }],
+  items: [{ name: 'review', skillId: 'skill-review', digest: `sha256:${'a'.repeat(64)}`, directory: '/happier/skills/sessions/session-1/skills/review' }],
   nativeDisables: [{ name: 'review', path: 'C:\\Users\\Test User\\.agents\\skills\\review\\SKILL.md' }],
 };
 

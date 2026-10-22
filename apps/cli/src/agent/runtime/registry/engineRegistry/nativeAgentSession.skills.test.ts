@@ -54,7 +54,7 @@ describe('native Agent Session skill delivery', () => {
             }),
         });
         const skills = { pluginRoot: '/skills/skills-reader', skillsRoot: '/skills/skills-reader/skills',
-            items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review' }], nativeDisables: [] };
+            items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review', directory: '/skills/skills-reader/skills/review' }], nativeDisables: [] };
         const mcpServers = { docs: { command: '/tools/docs', enabledTools: ['read'] } };
         const mcpToolPolicy = { docs: { unlisted: 'ask', tools: { read: 'allow', write: 'off' } } } as const;
         if (!plan.config.createSessionRuntime) throw new Error('Missing native Session factory');

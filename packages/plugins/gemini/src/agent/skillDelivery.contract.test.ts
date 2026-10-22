@@ -81,7 +81,7 @@ runAgentSkillDeliveryContract({ agent, openSession, observeLaunch: observer.obse
 it('refuses unavailable skills while retaining Session startup and native skills', async () => {
   const session = await openSession({ kind: 'create', cwd: home, sessionId: 'unavailable-skill',
     skills: { pluginRoot: join(home, 'missing'), skillsRoot: join(home, 'missing', 'skills'),
-      items: [{ name: 'missing', skillId: 'fixture:missing', digest: 'sha256:missing' }], nativeDisables: [] },
+      items: [{ name: 'missing', skillId: 'fixture:missing', digest: 'sha256:missing', directory: join(home, 'missing', 'skills', 'missing') }], nativeDisables: [] },
   });
   const launch = observer.observeLaunch();
   const privateHome = launch.env.GEMINI_CLI_HOME!;

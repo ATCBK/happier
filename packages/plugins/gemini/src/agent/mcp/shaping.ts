@@ -1,6 +1,6 @@
 import { createSecureTempDirectorySync, linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { resolveGeminiConfigPaths } from '../utils/configPaths.js';
 import type { AgentSessionConfigurationSnapshot, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 
@@ -167,11 +167,11 @@ export async function prepareGeminiNativeMcpShaping(
     if (skills) {
       const destination = join(cliHomeDir, '.agents', 'skills');
       for (const item of skills.items) {
-        if (!statSync(join(skills.skillsRoot, item.name, 'SKILL.md')).isFile()) {
+        if (!statSync(join(item.directory, 'SKILL.md')).isFile()) {
           throw new Error('Gemini session skill is unavailable');
         }
-        if (process.platform === 'win32' && !existsSync(join(destination, item.name))) {
-          cpSync(join(skills.skillsRoot, item.name), join(destination, item.name), { recursive: true });
+        if (process.platform === 'win32' && !existsSync(join(destination, basename(item.directory)))) {
+          cpSync(item.directory, join(destination, basename(item.directory)), { recursive: true });
         }
       }
       if (process.platform !== 'win32') {

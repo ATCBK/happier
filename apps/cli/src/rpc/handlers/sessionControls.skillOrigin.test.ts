@@ -13,20 +13,22 @@ import { homedir } from 'node:os';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const delivery = { pluginRoot: '/happier/skills/sessions/session', skillsRoot: '/happier/skills/sessions/session/skills',
-  items: [{ name: 'sample', skillId: 'library', digest }], nativeDisables: [] };
+  items: [{ name: 'sample', skillId: 'library', digest, directory: '/happier/skills/sessions/session/skills/source-sample' }], nativeDisables: [] };
 
 describe('current Session skill origin', () => {
   it('recognizes session and canonical cache paths but never a same-name native or sibling path', () => {
-    expect(resolveHappierSkillIdentity({ name: 'sample', path: `${delivery.skillsRoot}/sample/SKILL.md` }, delivery, '/happier')).toBe('library');
+    expect(resolveHappierSkillIdentity({ name: 'sample', path: `${delivery.skillsRoot}/source-sample/SKILL.md` }, delivery, '/happier')).toBe('library');
     expect(resolveHappierSkillIdentity({ path: `/happier/skills/cache/${'a'.repeat(64)}/SKILL.md` }, delivery, '/happier')).toBe('library');
-    for (const path of ['/native/sample/SKILL.md', `${delivery.skillsRoot}/sample2/SKILL.md`,
-      `${delivery.skillsRoot}/sample/../../native/SKILL.md`, `/happier/skills/cache/${'b'.repeat(64)}/SKILL.md`]) {
+    for (const path of ['/native/sample/SKILL.md', `${delivery.skillsRoot}/source-sample2/SKILL.md`, `${delivery.skillsRoot}/sample/SKILL.md`,
+      `${delivery.skillsRoot}/source-sample/../../native/SKILL.md`, `/happier/skills/cache/${'b'.repeat(64)}/SKILL.md`]) {
       expect(resolveHappierSkillIdentity({ name: 'sample', path }, delivery, '/happier')).toBeNull();
     }
     expect(resolveHappierSkillIdentity({ name: 'happier:sample' }, delivery, '/happier')).toBe('library');
     expect(resolveHappierSkillIdentity({ name: 'sample' }, undefined, '/happier')).toBeNull();
-    const windows = { ...delivery, pluginRoot: 'C:\\Happier\\skills\\sessions\\session', skillsRoot: 'C:\\Happier\\skills\\sessions\\session\\skills' };
-    expect(resolveHappierSkillIdentity({ path: 'c:/HAPPIER/skills/sessions/session/skills/sample\\SKILL.md' }, windows, 'C:\\Happier')).toBe('library');
+    const windows = { ...delivery, pluginRoot: 'C:\\Happier\\skills\\sessions\\session', skillsRoot: 'C:\\Happier\\skills\\sessions\\session\\skills',
+      items: [{ ...delivery.items[0]!, directory: 'C:\\Happier\\skills\\sessions\\session\\skills\\source-sample' }] };
+    expect(resolveHappierSkillIdentity({ path: 'c:/HAPPIER/skills/sessions/session/skills/source-sample\\SKILL.md' }, windows, 'C:\\Happier')).toBe('library');
+    expect(resolveHappierSkillIdentity({ path: 'c:/HAPPIER/skills/sessions/session/skills/source-sample2\\SKILL.md' }, windows, 'C:\\Happier')).toBeNull();
     const userRoot = join(homedir(), '.happier');
     const userDelivery = { ...delivery, skillsRoot: join(userRoot, 'skills', 'sessions', 'session', 'skills') };
     for (const path of ['~/.happier/skills/cache/' + 'a'.repeat(64) + '/SKILL.md',

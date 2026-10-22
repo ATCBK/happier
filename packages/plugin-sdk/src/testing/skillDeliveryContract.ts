@@ -6,7 +6,7 @@ import type { AgentContribution } from '../agents.js';
 import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionSkillDelivery } from '../agentRuntime/session.js';
 import type { ObservedAgentLaunch } from './observeAgentLaunch.js';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
-import { resolveSessionSkillPlanV1, SessionSkillPlanV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
+import { AgentSessionSkillDeliveryV1Schema, resolveSessionSkillPlanV1, SessionSkillPlanV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 
 export type AgentSkillDeliveryContractInput = Readonly<{
     agent: AgentContribution;
@@ -89,7 +89,7 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             // Loss of the Action channel must not turn an index fallback into native delivery.
             for (const agentHasActionChannel of hasActionChannel ? [true, false] : [false]) {
                 const plan = SessionSkillPlanV1Schema.parse(resolveSessionSkillPlanV1({
-                    items: [{ skillId: 'contract:skill', name: 'contract-skill', digest: 'sha256:contract',
+                    items: [{ skillId: 'contract:skill', name: 'contract-skill', sourceFolderName: 'contract-source', digest: 'sha256:contract',
                         description: 'Contract skill', disableModelInvocation: false, userInvocable: true }],
                     selected: [{ kind: 'skill', id: 'contract:skill', name: 'contract-skill', selected: true,
                         selectable: true, reason: 'rule_on', decidedBy: null, sessionOverride: null }],
@@ -142,6 +142,7 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
                 'K5: launch must not write the native fixture home').toEqual([]);
         };
         const open = async (factory: AgentSkillDeliveryContractInput['openSession'], delivery?: AgentSessionSkillDelivery) => {
+            if (delivery) AgentSessionSkillDeliveryV1Schema.parse(delivery);
             const runtime = await factory(request(delivery));
             runtimes.push(runtime);
             // Check every launch: an adapter resetting its observer between cases
@@ -152,7 +153,7 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
         const assertDelivery = async () => {
             const launch = input.observeLaunch();
             if (ownsPrivateHome(launch)) {
-                const candidates = ['.agents', '.gemini'].map(root => join(launch.env.GEMINI_CLI_HOME!, root, 'skills', 'contract-skill'));
+                const candidates = ['.agents', '.gemini'].map(root => join(launch.env.GEMINI_CLI_HOME!, root, 'skills', 'contract-source'));
                 const delivered = [];
                 for (const candidate of candidates) {
                     try {
@@ -164,7 +165,7 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
                 }
                 expect(delivered, 'K1: one skill reaches the real private home').toHaveLength(1);
                 if (process.platform !== 'win32') {
-                    expect(await realpath(delivered[0]!)).toBe(await realpath(join(skills.skillsRoot, 'contract-skill')));
+                    expect(await realpath(delivered[0]!)).toBe(await realpath(join(skills.skillsRoot, 'contract-source')));
                 }
                 expect(await readFile(join(delivered[0]!, 'SKILL.md'), 'utf8')).toContain('Contract skill');
                 expect(await readFile(join(delivered[0]!, 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
@@ -179,9 +180,9 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
                 const deliveredRoot = join(root!, nativeConfig.directory, acpDelivery.subdirectory);
                 const directory = await lstat(deliveredRoot);
                 expect(directory.isDirectory() && !directory.isSymbolicLink(), 'K1: the native skill directory stays private and real').toBe(true);
-                expect(await realpath(join(deliveredRoot, 'contract-skill'))).toBe(await realpath(join(skills.skillsRoot, 'contract-skill')));
-                expect(await readFile(join(deliveredRoot, 'contract-skill', 'SKILL.md'), 'utf8')).toContain('Contract skill');
-                expect(await readFile(join(deliveredRoot, 'contract-skill', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
+                expect(await realpath(join(deliveredRoot, 'contract-source'))).toBe(await realpath(join(skills.skillsRoot, 'contract-source')));
+                expect(await readFile(join(deliveredRoot, 'contract-source', 'SKILL.md'), 'utf8')).toContain('Contract skill');
+                expect(await readFile(join(deliveredRoot, 'contract-source', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
                 return;
             }
             const strings = launchStrings(launch);
@@ -210,8 +211,8 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             });
             expect(references, 'K1: one session-private skills root reaches the Agent').toHaveLength(1);
             const deliveredRoot = references[0] === skills.pluginRoot ? join(references[0], 'skills') : references[0];
-            expect(await readFile(join(deliveredRoot, 'contract-skill', 'SKILL.md'), 'utf8')).toContain('Contract skill');
-            expect(await readFile(join(deliveredRoot, 'contract-skill', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
+            expect(await readFile(join(deliveredRoot, 'contract-source', 'SKILL.md'), 'utf8')).toContain('Contract skill');
+            expect(await readFile(join(deliveredRoot, 'contract-source', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
         };
         beforeEach(async () => {
             directory = await mkdtemp(join(tmpdir(), 'happier-skill-delivery-contract-'));
@@ -219,17 +220,17 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
             const skillsRoot = join(pluginRoot, 'skills');
             await mkdir(join(pluginRoot, '.claude-plugin'), { recursive: true });
             await writeFile(join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'happier' }));
-            await mkdir(join(skillsRoot, 'contract-skill', 'scripts'), { recursive: true });
-            await writeFile(join(skillsRoot, 'contract-skill', 'SKILL.md'), '---\nname: contract-skill\ndescription: Contract skill\n---\nRead scripts/nested.txt.\n');
-            await writeFile(join(skillsRoot, 'contract-skill', 'scripts', 'nested.txt'), 'supporting file');
-            skills = { pluginRoot, skillsRoot, items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract' }],
+            await mkdir(join(skillsRoot, 'contract-source', 'scripts'), { recursive: true });
+            await writeFile(join(skillsRoot, 'contract-source', 'SKILL.md'), '---\nname: contract-skill\ndescription: Contract skill\n---\nRead scripts/nested.txt.\n');
+            await writeFile(join(skillsRoot, 'contract-source', 'scripts', 'nested.txt'), 'supporting file');
+            skills = { pluginRoot, skillsRoot, items: [{ name: 'contract-skill', directory: join(skillsRoot, 'contract-source'), skillId: 'contract:skill', digest: 'sha256:contract' }],
                 nativeDisables: [{ name: 'contract-native-blocked', path: join(directory, 'native', 'contract-native-blocked', 'SKILL.md') }] };
         });
         afterEach(async () => {
             try { for (const runtime of runtimes.splice(0).reverse()) await runtime.dispose(); }
             finally { if (directory) await rm(directory, { recursive: true, force: true }); }
         });
-        it('K1 delivers the complete bundle exactly once when declared', async () => {
+        it('K0/K1 delivers the admitted source directory rather than reconstructing it from the skill name', async () => {
             const runtime = await open(input.openSession, skills);
             if (capability?.delivery === 'session_dir') {
                 expect(runtime.skillsDelivered).not.toBe(false);

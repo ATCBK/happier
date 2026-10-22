@@ -152,7 +152,7 @@ describe('Runner Agent protocol', () => {
     const skills = {
       pluginRoot: '/skills/session',
       skillsRoot: '/skills/session/skills',
-      items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review' }],
+      items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review', directory: '/skills/session/skills/source-review' }],
       nativeDisables: [{ name: 'native-review', path: '/native/review/SKILL.md' }],
     } satisfies NonNullable<AgentSessionOpenRequest['skills']>;
     const deliveredRequest = { ...request, skills, mcpServersStrictMode: true };
@@ -164,6 +164,7 @@ describe('Runner Agent protocol', () => {
       { ...skills, unexpected: true },
       { ...skills, pluginRoot: '' },
       { ...skills, items: [{ ...skills.items[0], digest: 42 }] },
+      { ...skills, items: [{ ...skills.items[0], directory: undefined }] },
       { ...skills, items: [{ ...skills.items[0], content: 'undeclared body' }] },
       { ...skills, nativeDisables: [{ ...skills.nativeDisables[0], unexpected: true }] },
     ]) {

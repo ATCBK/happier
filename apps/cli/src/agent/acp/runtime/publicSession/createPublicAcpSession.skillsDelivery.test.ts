@@ -85,7 +85,7 @@ async function skillFixture(dir: string): Promise<AgentSessionSkillDelivery> {
   await mkdir(join(skillsRoot, 'review', 'scripts'), { recursive: true });
   await writeFile(join(skillsRoot, 'review', 'SKILL.md'), 'Review skill');
   await writeFile(join(skillsRoot, 'review', 'scripts', 'nested.txt'), 'supporting file');
-  return { pluginRoot, skillsRoot, items: [{ name: 'review', skillId: 'review', digest: 'sha256:fixture' }],
+  return { pluginRoot, skillsRoot, items: [{ name: 'review', skillId: 'review', digest: 'sha256:fixture', directory: join(skillsRoot, 'review') }],
     nativeDisables: [{ name: 'native-off', path: join(dir, 'native', 'native-off', 'SKILL.md') }] };
 }
 function options(knob: PluginAgentAcpSkillsSessionDeliveryV2) {

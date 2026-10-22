@@ -149,7 +149,7 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
             sessionMetadata: Object.assign(createTestMetadata({ path: '/repo', machineId: 'machine' }),
               { workspaceId: 'checkout', projectId: 'project' }),
             contributes: { catalogEntriesById: { test: { skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported' } } } },
-          }, { ensureSessionDir: async () => ({ pluginRoot: '/session', skillsRoot: '/session/skills', failed: [] }) });
+          }, { ensureSessionDir: async () => ({ pluginRoot: '/session', skillsRoot: '/session/skills', items: [], failed: [] }) });
           if (failure === 'rules-conflict') {
             expect(result.unavailable).toBe(true);
             expect(result.delivery).toBeUndefined();

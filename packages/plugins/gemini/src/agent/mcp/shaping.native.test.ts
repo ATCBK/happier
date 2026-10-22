@@ -32,7 +32,7 @@ describe('prepareGeminiNativeMcpShaping', () => {
     writeFileSync(join(skillsRoot, 'session-skill', 'references', 'note.md'), 'Supporting file');
     const prepared = await prepareGeminiNativeMcpShaping({ HOME: sourceHome }, undefined, {
       pluginRoot: deliveryRoot, skillsRoot,
-      items: [{ name: 'session-skill', skillId: 'fixture:skill', digest: 'sha256:fixture' }],
+      items: [{ name: 'session-skill', skillId: 'fixture:skill', digest: 'sha256:fixture', directory: join(skillsRoot, 'session-skill') }],
       nativeDisables: [{ name: 'RETAINED', path: join(sourceHome, '.agents', 'skills', 'retained', 'SKILL.md') }],
     });
     cleanups.push(prepared.cleanup);

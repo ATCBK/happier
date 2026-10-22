@@ -19,6 +19,8 @@ import { join } from 'node:path';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createSkillStore } from '../store/skillStore';
 import { resolveRunnerSkills, type ResolveRunnerSkillsInput } from './resolveRunnerSkills';
+import { prepareGeminiNativeMcpShaping } from '../../../../../../packages/plugins/gemini/src/agent/mcp/shaping';
+import { resolveHappierSkillIdentity } from './resolveHappierSkillIdentity';
 import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
 import { publishRunnerSkillNotice } from './publishRunnerSkillNotice';
 import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
@@ -61,7 +63,7 @@ const bundle = (artifactId: string, name: string): AccountArtifact & AccountArti
     { path: 'references/note.md', contentKind: 'utf8', contentBase64: Buffer.from('Supporting file').toString('base64'), retainedAnnotation: 'read-only extension' },
   ] }),
 });
-async function fixture() {
+async function fixture(platform?: NodeJS.Platform) {
   const home = await mkdtemp(join(tmpdir(), 'happier-p3b-runner-')); dirs.push(home);
   const directory = join(home, 'project'); await mkdir(directory);
   const artifact = bundle('library', 'sample');
@@ -71,7 +73,7 @@ async function fixture() {
     list: async () => ({ items: [artifact, bundle('off', 'off')], coverage: 'complete' }),
     read: async id => { readIds.push(id); return id === 'library' ? artifact : bundle('off', 'off'); },
   };
-  const store = createSkillStore({ happyHomeDir: join(home, 'happier') });
+  const store = createSkillStore({ happyHomeDir: join(home, 'happier'), platform });
   stores.push(store);
   const input: ResolveRunnerSkillsInput = {
     ownerKey: 'session', agentId: 'test', machineId: 'machine', directory, home,
@@ -168,8 +170,9 @@ describe('runner skill resolution', () => {
   it.each([
     ['upload', 'source-b', false], ['upload', 'declared-b', false], ['upload', 'declared-b', true],
     ['link', 'source-b', false], ['link', 'declared-b', false], ['registry', 'declared-b', false], ['folder-link', 'declared-b', false],
-  ] as const)('delivers %s sibling source folders (declared %s, renamed %s) through Add and runner wiring', async (kind, declaredName, rename) => {
-    const f = await fixture();
+    ['upload', 'declared-b', true, 'win32'],
+  ] as const)('delivers %s sibling source folders (declared %s, renamed %s) through Add and runner wiring', async (kind, declaredName, rename, platform) => {
+    const f = await fixture(platform);
     const md = (name: string, body = '') => `---\nname: ${name}\n---\n${body}`;
     const prefix = kind === 'folder-link' ? 'skills/' : '';
     const sourceFiles = [
@@ -258,6 +261,21 @@ describe('runner skill resolution', () => {
     expect(delivered.delivery?.items.map(item => item.name)).toEqual(['a', rename ? 'renamed-b' : declaredName]);
     expect(await readdir(delivered.delivery!.skillsRoot)).toEqual(['a', 'source-b']);
     expect(await readFile(`${delivered.delivery!.skillsRoot}/a/../source-b/SKILL.md`, 'utf8')).toContain(`name: ${rename ? 'renamed-b' : declaredName}`);
+    const delivery = delivered.delivery!;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    // Allocate the host's real secure temp directory before emulating Windows copy semantics.
+    const shaping = prepareGeminiNativeMcpShaping({ HOME: f.home }, undefined, delivery);
+    let shaped: Awaited<typeof shaping>;
+    try {
+      if (platform) Object.defineProperty(process, 'platform', { value: platform });
+      shaped = await shaping;
+    } finally { Object.defineProperty(process, 'platform', originalPlatform); }
+    try {
+      const destination = join(shaped.env.HOME, '.agents', 'skills');
+      expect(await readFile(join(destination, 'a', '..', 'source-b', 'SKILL.md'), 'utf8')).toContain(`name: ${rename ? 'renamed-b' : declaredName}`);
+      if (platform) expect((await fs.lstat(join(destination, 'source-b'))).isSymbolicLink()).toBe(false);
+    } finally { await shaped.cleanup(); }
+    expect(resolveHappierSkillIdentity({ path: join(delivery.skillsRoot, 'source-b', 'SKILL.md') }, delivery)).toBe(added.skillIds[1]);
   });
   it('composes the registered Claude launch settings with masking and fails closed after registration retirement', async () => {
     const f = await fixture();
@@ -444,7 +462,8 @@ describe('runner skill resolution', () => {
         expect(result.plan.items.find(item => item.skillId === 'library')).toMatchObject({ state: 'unavailable', reason: 'materialize_failed' });
         expect(result.failureDetails).toEqual([{ skillId: 'library', detail: 'invalid_path' }]);
       } else {
-        expect(result.delivery?.items).toEqual(expect.arrayContaining([{ skillId: 'library', name: 'retained', digest: opened!.digest },
+        expect(result.delivery?.items).toEqual(expect.arrayContaining([{ skillId: 'library', name: 'retained', digest: opened!.digest,
+          directory: join(result.delivery!.skillsRoot, 'retained') },
           expect.objectContaining({ skillId: 'healthy', name: 'healthy' }),
           expect.objectContaining({ skillId: 'legacy', name: legacy.expectedName })]));
         expect(await readFile(join(result.delivery!.skillsRoot, 'retained', 'refs', 'CON.txt'), 'utf8')).toBe('Retained supporting bytes');
@@ -545,7 +564,7 @@ describe('runner skill resolution', () => {
   it('retains the daemon filesystem failure code without disclosing a partial skill', async () => {
     const { input, artifacts } = await fixture();
     const result = await resolveRunnerSkills(input, { artifacts, ensureSessionDir: async () => ({
-      pluginRoot: '/session', skillsRoot: '/session/skills', failed: [{ skillId: 'library', reason: 'materialize_failed', detail: 'EACCES' }],
+      pluginRoot: '/session', skillsRoot: '/session/skills', items: [], failed: [{ skillId: 'library', reason: 'materialize_failed', detail: 'EACCES' }],
     }) });
     expect(result.delivery?.items).toEqual([]);
     expect(result.failureDetails).toEqual([{ skillId: 'library', detail: 'EACCES' }]);
@@ -563,11 +582,11 @@ describe('runner skill resolution', () => {
     expect(result.plan.diagnostics).toHaveLength(1);
   });
   it('requires Account credentials but delivers known demand independently of partial inventory', async () => {
-    const { input, artifacts } = await fixture();
+    const { input, artifacts, store } = await fixture();
     const scoped = await resolveRunnerSkills({ ...input, credentials: null }, { artifacts: { ...artifacts, list: async () => { throw new Error('must_not_read'); } } });
     expect(scoped.delivery).toBeUndefined();
     const resolved = await resolveRunnerSkills(input, { artifacts: { ...artifacts, list: async () => ({ items: [], coverage: 'partial' }) },
-      ensureSessionDir: async () => ({ pluginRoot: '/session', skillsRoot: '/session/skills', failed: [] }) });
+      ensureSessionDir: value => store.ensureSkillSessionDir(value) });
     expect(resolved.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library', name: 'sample' })]);
   });
   it('serves an index without materializing a folder and without embedding skill bodies', async () => {

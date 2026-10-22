@@ -17,7 +17,7 @@ const digest = `sha256:${'a'.repeat(64)}`;
 const usageAccount = { accountId: 'account', serverHttpBaseUrl: 'https://home.example.test' };
 const skillDelivery: AgentSessionSkillDelivery = {
   pluginRoot: '/private/session', skillsRoot: '/private/session/skills', nativeDisables: [],
-  items: [{ skillId: 'library:review', name: 'review', digest }],
+  items: [{ skillId: 'library:review', name: 'review', digest, directory: '/private/session/skills/review' }],
 };
 const evidence = (skills: readonly { name: string; path?: string }[], sessionId = 'session') =>
   AgentSessionRuntimeEventSchema.parse({ kind: 'skill-usage', sequence: 1, sessionId, turnId: 'turn', emittedAtMs: 100, skills });

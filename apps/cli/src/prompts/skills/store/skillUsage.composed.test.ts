@@ -129,7 +129,7 @@ it('records captured vendor evidence through strict host projection, authenticat
         await actions('skills.list', { query: 'contract-skill' }, { surface: 'cli' }));
     const delivery: AgentSessionSkillDelivery = { pluginRoot: join(database.baseDir, 'session-plugin'),
         skillsRoot: join(database.baseDir, 'session-plugin', 'skills'), nativeDisables: [],
-        items: [{ name: 'contract-skill', skillId, digest: content.digest }] };
+        items: [{ name: 'contract-skill', skillId, digest: content.digest, directory: join(database.baseDir, 'session-plugin', 'skills', 'contract-skill') }] };
     let transcriptCommits = 0;
     const session = { sessionId: captured.assistant.session_id,
         enqueueAgentMessageCommitted: async () => { transcriptCommits += 1; return { persisted: true, delivered: true }; } };

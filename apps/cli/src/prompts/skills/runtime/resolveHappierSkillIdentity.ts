@@ -3,13 +3,13 @@ import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPat
 
 export function resolveHappierSkillIdentity(
   input: Readonly<{ name?: string; path?: string }>,
-  delivery: (Pick<AgentSessionSkillDelivery, 'items'> & Partial<Pick<AgentSessionSkillDelivery, 'skillsRoot'>>) | undefined,
+  delivery: Pick<AgentSessionSkillDelivery, 'items'> | undefined,
   happyHomeDir?: string,
 ): string | null {
   if (!delivery) return null;
   if (input.path) {
     for (const item of delivery.items) {
-      if ((delivery.skillsRoot && isCanonicalAbsolutePathInsideRoot(`${delivery.skillsRoot}/${item.name}`, input.path))
+      if (isCanonicalAbsolutePathInsideRoot(item.directory, input.path)
         || (happyHomeDir && isCanonicalAbsolutePathInsideRoot(
           `${happyHomeDir}/skills/cache/${item.digest.slice('sha256:'.length)}`, input.path,
         ))) return item.skillId;

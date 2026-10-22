@@ -518,7 +518,7 @@ type _SkillDeliveryShapeMustStayDataOnly = AssertTrue<
     Readonly<{
       pluginRoot: string;
       skillsRoot: string;
-      items: readonly Readonly<{ name: string; skillId: string; digest: string }>[];
+      items: readonly Readonly<{ name: string; skillId: string; digest: string; directory: string }>[];
       nativeDisables: readonly Readonly<{ name: string; path: string }>[];
     }>
   >

@@ -15,7 +15,7 @@ it('delivers two native user-only skills from Claude catalog through identity re
   const root = await mkdtemp(join(tmpdir(), 'happier-claude-mentions-'));
   const config = join(root, 'config');
   const skills = { pluginRoot: join(root, 'delivery'), skillsRoot: join(root, 'delivery/skills'),
-    items: [{ name: 'library', skillId: 'library-skill', digest: `sha256:${'a'.repeat(64)}` }], nativeDisables: [] };
+    items: [{ name: 'library', directory: join(root, 'delivery/skills/source-library'), skillId: 'library-skill', digest: `sha256:${'a'.repeat(64)}` }], nativeDisables: [] };
   const exec = createSdkExecFixture();
   const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
   const operations = createClaudeAgentSdkTurnOperations({ ctx, permissionMode: 'default', directory: root, launchEnv: { HOME: root, USERPROFILE: root, CLAUDE_CONFIG_DIR: config }, happierSessionId: 'skill-session', skills });
@@ -63,9 +63,9 @@ it('delivers two native user-only skills from Claude catalog through identity re
       await writeFile(join(config, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Fixture\ndisable-model-invocation: true\n---\nUser-only fixture body\n`);
     }
     await mkdir(join(skills.pluginRoot, '.claude-plugin'), { recursive: true });
-    await mkdir(join(skills.skillsRoot, 'library'), { recursive: true });
+    await mkdir(skills.items[0]!.directory, { recursive: true });
     await writeFile(join(skills.pluginRoot, '.claude-plugin/plugin.json'), JSON.stringify({ name: 'happier', version: '1.0.0' }));
-    await writeFile(join(skills.skillsRoot, 'library/SKILL.md'), '---\nname: library\ndescription: Library fixture\n---\nLibrary body\n');
+    await writeFile(join(skills.items[0]!.directory, 'SKILL.md'), '---\nname: library\ndescription: Library fixture\n---\nLibrary body\n');
     session = await sessions.open({ kind: 'create', sessionId: 'skill-session', cwd: root, skills,
       launchEnvironment: { values: { HOME: root, USERPROFILE: root, CLAUDE_CONFIG_DIR: config }, unset: [] } }, sessionContext);
     expect(sessions.catalog, 'Claude must expose its canonical Session skill catalog facet').toBeDefined();
@@ -73,12 +73,12 @@ it('delivers two native user-only skills from Claude catalog through identity re
     expect(catalog.status).toBe('ok');
     if (catalog.status !== 'ok' || catalog.kind !== 'skills') throw new Error('Expected Claude skills');
     expect(catalog.items.map(item => item.name).sort()).toEqual(['first', 'happier:library', 'second']);
-    expect(catalog.items.find(item => item.name === 'happier:library')).toMatchObject({ id: 'library-skill', path: join(skills.skillsRoot, 'library/SKILL.md') });
+    expect(catalog.items.find(item => item.name === 'happier:library')).toMatchObject({ id: 'library-skill', path: join(skills.items[0]!.directory, 'SKILL.md') });
     const listSkills = async () => SessionSkillCatalogListResponseV1Schema.parse({ skills: catalog.items });
     const library = await resolveStructuredInputProviderDispatchContext({ structuredInput: {
       v: 1, mentions: [{ kind: MENTION_KIND_V1.skill, ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'library-skill'), token: '$library' }],
     }, catalogs: { listSkills } });
-    expect(library.structuredInput?.skillMentions).toMatchObject([{ name: 'happier:library', path: join(skills.skillsRoot, 'library/SKILL.md') }]);
+    expect(library.structuredInput?.skillMentions).toMatchObject([{ name: 'happier:library', path: join(skills.items[0]!.directory, 'SKILL.md') }]);
     const text = 'Before $first and between $second after literal $WORD';
     const structuredInput = HappierStructuredInputV1Schema.parse({ v: 1, mentions: catalog.items.filter(item => item.name !== 'happier:library').map(item => ({
       kind: MENTION_KIND_V1.skill, ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, item.id),

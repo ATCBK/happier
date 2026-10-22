@@ -1406,7 +1406,14 @@ In 0.3 development source, `/components` and the package root form one Plugin UI
 The 0.3 development Agent SDK adds `AgentSessionSkillDelivery` on
 `AgentSessionOpenRequest.skills` and `AgentExecutionRunOpenRequest.skills`.
 It names the host-owned `pluginRoot`, its `skillsRoot`, delivered
-`{ name, skillId, digest }` items and native `{ name, path }` disables. The shared
+`{ name, skillId, digest, directory }` items and native `{ name, path }` disables.
+Each required `directory` is the absolute skill folder admitted by the daemon
+materializer. Imported source folders can differ from frontmatter `name`, including
+after a rename; path reads, private-home copies and catalog identity matching consume
+`directory` rather than reconstructing it from `skillsRoot` and `name`. Copies retain
+the directory's basename so selected siblings' relative references still resolve.
+The closed delivery schema and daemon response carry this same current-development
+shape, without a fallback for the unpublished predecessor shape. The shared
 Run-to-Session adapter preserves this delivery alongside MCP bindings. Plugins
 receive resolved delivery only through the open request, without a pull service
 or composer dependency carrier. `AgentSessionRuntime.skillsDelivered` can report
@@ -1416,6 +1423,8 @@ resolves skill selection in the host, materializes read-only content through
 the daemon, and gives Claude and Codex their session-only native path. The shared
 `testing` launch observer and skill delivery contract exercise native launch,
 disable overlays and unsupported variants; they also serve tool-policy tests.
+K0/K1 uses a source folder different from the declared name to reject plugins that
+ignore the admitted location.
 For Gemini's private-home launch, the same kit reads the delivered bundle and
 copied disable settings from that home, including supporting files and native
 home preservation; an argv directory reference is not required for this layout.

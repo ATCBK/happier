@@ -5,7 +5,7 @@ import type { AgentSessionOpenRequest, AgentSessionRuntime } from './session.js'
 it.each(['create', 'resume'] as const)('preserves skills and MCP policy through %s Run-to-Session opening', async (kind) => {
   const skills = {
     pluginRoot: '/host/skills/session/runs/run', skillsRoot: '/host/skills/session/runs/run/skills',
-    items: [{ name: 'guide', skillId: 'skill-1', digest: 'sha256:abc' }],
+    items: [{ name: 'guide', skillId: 'skill-1', digest: 'sha256:abc', directory: '/host/skills/session/runs/run/skills/source-guide' }],
     nativeDisables: [{ name: 'native', path: '/user/skills/native/SKILL.md' }],
   };
   const request = {

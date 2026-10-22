@@ -45,7 +45,7 @@ it.each([
     };
     const mcpServers = { guide: { command: 'guide-mcp', args: ['serve'], env: { GUIDE: 'yes' } } };
     const skills = { pluginRoot: join(dir, 'skill-plugin'), skillsRoot: join(dir, 'skill-plugin', 'skills'),
-      items: [{ skillId: 'review', name: 'review', digest: 'sha256:review' }], nativeDisables: [] };
+      items: [{ skillId: 'review', name: 'review', digest: 'sha256:review', directory: join(dir, 'skill-plugin', 'skills', 'review') }], nativeDisables: [] };
     const session = scope === 'session'
       ? await createPublicAcpSession({ kind: 'create', sessionId: 'session', cwd: dir, mcpServers,
         ...(withSkills ? { skills } : {}) }, options, dependencies) : null;

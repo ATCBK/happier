@@ -8,6 +8,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { SkillSourceFolderNameV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { AgentSessionSkillDeliveryV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
 import { logger } from '@/ui/logger';
 
@@ -31,6 +32,7 @@ export type SkillSessionItem = Readonly<{ skillId: string; name: string; sourceF
 export type EnsureSkillSessionDirInput = Readonly<{ ownerKey: string; materialization?: 'copy'; items: readonly SkillSessionDirItem[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[] }>;
 export const EnsureSkillSessionDirResultSchema = z.strictObject({ pluginRoot: z.string().check(z.minLength(1)), skillsRoot: z.string().check(z.minLength(1)),
+    items: AgentSessionSkillDeliveryV1Schema.shape.items,
     failed: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), reason: z.literal('materialize_failed'), detail: z.optional(z.string()) })) });
 export type EnsureSkillSessionDirResult = z.infer<typeof EnsureSkillSessionDirResultSchema>;
 export type SkillCachePaths = Readonly<{ reliable: boolean; paths: ReadonlySet<string> }>;
@@ -157,6 +159,9 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const pluginRoot = ownerDirectory(admitted.ownerKey); const skillsRoot = join(pluginRoot, 'skills');
                 const failed: EnsureSkillSessionDirResult['failed'] = [];
                 const items: SkillSessionItem[] = [];
+                const result = (): EnsureSkillSessionDirResult => ({ pluginRoot, skillsRoot, failed,
+                    items: items.map(({ skillId, name, digest, sourceFolderName }) => ({ skillId, name, digest,
+                        directory: join(skillsRoot, sourceFolderName ?? name) })) });
                 const materialized = new Map<string, string>();
                 for (const item of admitted.items) {
                     try {
@@ -176,7 +181,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     return await exists(entry) && !(await lstat(entry)).isSymbolicLink();
                 }))).every(Boolean);
                 const marketplaceManifest = join(pluginRoot, '.augment-plugin', 'marketplace.json');
-                if (unchanged && entriesPresent && copiesPresent && await exists(marketplaceManifest)) return { pluginRoot, skillsRoot, failed };
+                if (unchanged && entriesPresent && copiesPresent && await exists(marketplaceManifest)) return result();
                 await mkdir(pluginRoot, { recursive: true, mode: 0o700 });
                 await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
                 await chmod(skillsRoot, 0o700);
@@ -217,7 +222,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     if (platform === 'win32' && await exists(manifestPath)) await chmod(manifestPath, 0o600);
                     await rename(temporaryManifest, manifestPath);
                 } finally { await rm(temporaryManifest, { force: true }); }
-                return { pluginRoot, skillsRoot, failed };
+                return result();
             });
         },
         releaseSkillSessionDirs(sessionId: string): Promise<void> {

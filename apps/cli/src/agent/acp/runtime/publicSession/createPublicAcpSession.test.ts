@@ -4377,7 +4377,7 @@ describe('createPublicAcpSession', () => {
       const observer = createAgentLaunchObserver({ home });
       const boundaries = observer.boundaries as AgentLaunchObserverBoundaries;
       const skills = { pluginRoot: path.join(dir, 'private-plugin'), skillsRoot: path.join(dir, 'private-plugin', 'skills'),
-        items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract' }],
+        items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract', directory: path.join(dir, 'private-plugin', 'skills', 'contract-skill') }],
         nativeDisables: [{ name: 'contract-native-blocked', path: path.join(home, '.codex', 'skills', 'blocked', 'SKILL.md') }] };
       let baseline: ReturnType<typeof observer.observeLaunch> | undefined;
       for (const withSkills of [false, true, false]) {

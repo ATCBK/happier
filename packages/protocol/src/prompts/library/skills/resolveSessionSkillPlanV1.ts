@@ -27,7 +27,9 @@ export type SessionSkillPlanV1 = z.infer<typeof SessionSkillPlanV1Schema>;
 export const AgentSessionSkillDeliveryV1Schema = lazyZodSchema(() => z.strictObject({
   pluginRoot: identity,
   skillsRoot: identity,
-  items: z.array(z.pick(SessionSkillPlanV1Schema.shape.items._zod.def.element, { name: true, skillId: true, digest: true })),
+  items: z.array(z.extend(z.pick(SessionSkillPlanV1Schema.shape.items._zod.def.element, { name: true, skillId: true, digest: true }), {
+    directory: identity,
+  })),
   nativeDisables: z.array(z.pick(SessionSkillPlanV1Schema.shape.nativeDisables._zod.def.element, { name: true, path: true })),
 }));
 

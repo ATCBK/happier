@@ -63,7 +63,7 @@ async function attachSourcePaths(items: readonly SkillCatalogItemV1[], request: 
     // Native versions that omit provenance cannot disambiguate two physical sources.
     const resolved = !item.path && candidates?.size === 1 ? { ...item, path: [...candidates][0]! } : item;
     const delivered = request.skills?.items.find(delivery => `happier:${delivery.name}` === item.name
-      && resolved.path === join(request.skills!.skillsRoot, delivery.name, 'SKILL.md'));
+      && resolved.path === join(delivery.directory, 'SKILL.md'));
     return delivered ? { ...resolved, id: delivered.skillId, origin: 'happier' as const } : resolved;
   });
 }

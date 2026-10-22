@@ -121,7 +121,7 @@ runAgentSkillDeliveryContract({
 it('prepares SDK terminal launch skills once without treating preparation as an active terminal', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'happier-claude-sdk-terminal-skills-'));
     const skills = { pluginRoot: join(directory, 'private-plugin'), skillsRoot: join(directory, 'private-plugin', 'skills'),
-        items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract' }],
+        items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract', directory: join(directory, 'private-plugin', 'skills', 'contract-skill') }],
         nativeDisables: [{ name: 'contract-native-blocked', path: join(home, '.claude', 'skills', 'blocked', 'SKILL.md') }] };
     mkdirSync(skills.skillsRoot, { recursive: true });
     let runtime: AgentSessionRuntime | undefined;
