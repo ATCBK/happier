@@ -46,6 +46,10 @@ import { logger } from '@/ui/logger';
 import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1, ProviderBrokerOpenResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
 import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
+import { buildMachineResumeRequest } from '@/session/services/requestInactiveSessionResume';
+import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { partitionProviderSessionArgs } from '@/cli/providerSessionArgPartition';
+import { buildPluginHostSessionRuntimeOptions, buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 
 // Only process creation is replaced. Production daemon preparation creates
 // the bootstrap/attach files; the admitted external Agent runs in this worker.
@@ -135,7 +139,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
   afterEach(async () => { await harness?.close(); });
   afterAll(async () => { await pluginReloadController.shutdown(); });
 
-  const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed']) => withTempHappyCliEntrypoint(async entrypoint => {
+  const runJourney = async (brokerOnly: boolean, onTestFailed: TestContext['onTestFailed'], resumeOnly = false) => withTempHappyCliEntrypoint(async entrypoint => {
     let phase = 'setup';
     let runnerFailure: string | null = null;
     const answersObserved: string[] = [];
@@ -334,7 +338,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({ path: join(directory, 'device-local-key.json') });
         installProcessBoundary();
         // One process owns its applied registry for both independent ingress cases.
-        for (const surface of ['cli', 'rpc'] as const) {
+        for (const surface of (resumeOnly ? ['cli'] as const : ['cli', 'rpc'] as const)) {
         phase = `${surface}:launch`;
         const requestStart = requests.length;
         const tracked = new Map<number, import('../types').TrackedSession>();
@@ -347,13 +351,26 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         os.pid = process.pid + 1_000_000;
         const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
         const lifetime = new AbortController();
-        os.runner = (args, environment) => { runner = (async () => {
+        const runControlledRunner: NonNullable<typeof os.runner> = (args, environment) => { runner = (async () => {
           phase = `${surface}:startup-custody`;
           const startup = tracked.get(os.pid);
           if (!startup || await startup.acceptedSpawnMarkerGate === false) throw new Error('Daemon did not accept startup custody');
           const index = args.indexOf('--existing-session'); sessionId = args[index + 1]!;
           const attachPath = environment.HAPPIER_SESSION_ATTACH_FILE;
           if (!attachPath) throw new Error('Real daemon omitted protected attach');
+          const parsed = partitionProviderSessionArgs({ args, providerSubcommand: args[0] });
+          const launch = buildPluginHostSessionRuntimeOptions(buildPluginSessionBindingInput({
+            ...parsed, credentials, directory, sessionAttachFilePath: attachPath,
+            backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
+          }));
+          expect(launch.existingSessionId).toBe(sessionId);
+          expect(launch.teamCredentialBindings).toBeUndefined();
+          expect(launch.modelSelection?.ref).toMatchObject({ agentTargetKey: worker.agentTargetKey, modelId: 'gpt-5.5' });
+          // The accepted slot travels in protected attach, not fresh-create argv.
+          const attach = JSON.parse(await readFile(attachPath, 'utf8'));
+          expect(attach.snapshot.acceptedTeamCredentialBinding).toMatchObject({
+            resourceId: resource.id, teamId: team.id, deliveryMode: 'brokered',
+          });
           // Replace socket delivery only: the real Home presence owner admits
           // this process before its native runtime opens the Team broker.
           const presence = createSessionPublisherPresence();
@@ -365,10 +382,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           expect(registered, JSON.stringify(registered, (_key, value) => typeof value === 'bigint' ? String(value) : value))
             .toMatchObject({ status: 'registered' });
           phase = `${surface}:native-plan`;
+          // The OS adapter runs the external Agent in this test worker using
+          // its admitted lease, not a daemon runner's private runtime source.
+          // Consume its real parsed Session controls, not its process role.
           const plan = await new SessionHostBridge().createSessionRuntime(worker.agentId, {
-            credentials, directory, happyHomeDir: worker.happyHomeDir, existingSessionId: sessionId, sessionAttachFilePath: attachPath,
+            credentials, directory, happyHomeDir: worker.happyHomeDir,
+            existingSessionId: launch.existingSessionId, sessionAttachFilePath: launch.sessionAttachFilePath,
+            modelSelection: launch.modelSelection, resume: launch.resume,
             backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
-            modelSelection: { v: 1, updatedAt: 1, ref: { agentTargetKey: worker.agentTargetKey, providerConnectionId: null, modelId: 'gpt-5.5' } },
           }, { pluginRuntimeRegistryLease: worker.lease, prepareTeamCredentialProviderBinding: async input => {
             const opened = await openSessionTeamCredentialProviderBinding({ ...input, machineId: worker.machineId,
               agentId: worker.agentId, binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: input.resourceId,
@@ -426,8 +447,8 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           const timer = timeouts.get(os.pid); if (timer) clearTimeout(timer);
           resolvers.get(os.pid)?.({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: String(error) });
         }); };
-        const handler = createSpawnNewSessionLifecycleActionHandler({ serverId: configuration.activeServerId,
-          spawnSession: options => executeSpawnSessionRequest({ options, credentials, api,
+        os.runner = runControlledRunner;
+        const spawnSession = (options: Parameters<typeof executeSpawnSessionRequest>[0]['options']) => executeSpawnSessionRequest({ options, credentials, api,
             deviceLocalSecretStorage,
             activatePurposeBindings: worker.gateway!.purposeBindingOwner.activatePurposeBindings,
             activateSessionPurposeBindings: worker.gateway!.purposeBindingOwner.activateSessionPurposeBindings,
@@ -436,7 +457,8 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             pidToTrackedSession: tracked, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
             spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
             resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '', onChildExited() {},
-            processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true }) });
+            processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true });
+        const handler = createSpawnNewSessionLifecycleActionHandler({ serverId: configuration.activeServerId, spawnSession });
         try {
           // Observe the logging boundary without replacing launch logic; a
           // cleanup refusal must not hide the original preparation diagnostic.
@@ -465,7 +487,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
               source: 'team_resource', resourceId: resource.id, deliveryMode: 'brokered' } } },
             initialInput: { text: 'TEAM_POOL_NATIVE_PROMPT' },
           }, { surface, authority: 'present_user', actionCaller: { kind: 'host' } });
-          if (surface === 'cli') {
+          if (surface === 'cli' && !resumeOnly) {
             // Missing native tooling is a definite pre-runner refusal. Its
             // creation key must remain usable after the person installs it.
             const uninstalledCli = `${nativeCli}.uninstalled`;
@@ -481,7 +503,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             }
           }
           let refusedSessionId: string | undefined;
-          if (surface === 'cli') {
+          if (surface === 'cli' && !resumeOnly) {
             // The real daemon has committed its Team-bound row before the OS
             // refuses process creation. Repeating that refusal must stay typed;
             // once the OS permits launch, the SAME creation key must run it.
@@ -537,6 +559,25 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
               expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { active: true } }))
                 .toEqual({ active: false });
             } finally { os.runner = null; os.refuseStart = false; }
+            phase = `${surface}:normal-retained-resume`;
+            // A replacement daemon has no old process custody, just Home's
+            // retained Session. Use the real sparse resume producer/contract.
+            tracked.clear();
+            runner = undefined;
+            os.runner = runControlledRunner;
+            const resume = SpawnDaemonSessionRequestSchema.parse(buildMachineResumeRequest({ directory }, sessionId));
+            const resumed = await spawnSession({ directory: resume.directory, existingSessionId: resume.sessionId });
+            expect(resumed, JSON.stringify({ resumed, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
+              message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ type: 'success', sessionId });
+            expect(runner).toBeDefined();
+            await expect(runner).resolves.toBeUndefined();
+            expect(tracked.get(os.pid)?.spawnOptions?.teamCredentialBindings).toContainEqual(expect.objectContaining({
+              resourceId: resource.id, teamId: team.id, deliveryMode: 'brokered',
+            }));
+            expect(requests.slice(requestStart)).toEqual([
+              { model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' },
+              { model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' },
+            ]);
           }
           completedIngresses.push(surface);
         } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closePublisher?.(); await closeControlledRunner(); }
@@ -556,4 +597,6 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     ({ onTestFailed }) => runJourney(true, onTestFailed));
   it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach',
     ({ onTestFailed }) => runJourney(false, onTestFailed));
+  it('resumes a retained Team Session through sparse resume admission, runner argv and the real Session launch contract',
+    ({ onTestFailed }) => runJourney(false, onTestFailed, true));
 });
