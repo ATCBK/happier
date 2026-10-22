@@ -14,6 +14,8 @@ import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/se
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { daemonPost } from './controlHttp';
 
+// Source-only composition: loopback HTTP and the actual Follow dispatcher do
+// not launch the packaged CLI or require native-runtime build preparation.
 describe('private Session activity invalidation', () => {
   it('correlates a source occurrence before waiting for dispatch without logging its authored local id or evidence', async () => {
     const env = createEnvKeyScope(['HAPPIER_DAEMON_HTTP_TIMEOUT']);

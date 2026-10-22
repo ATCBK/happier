@@ -1778,7 +1778,7 @@
     "src/daemon/controlServer.requestAuth.runtimeCatalog.integration.test.ts",
     "src/daemon/controlServer.restart.runtimeCatalog.integration.test.ts",
     "src/daemon/controlServer.rootActionLifetime.test.ts",
-    "src/daemon/controlServer.sessionActivity.runtimeCatalog.integration.test.ts",
+    "src/daemon/controlServer.sessionActivity.runtimeCatalog.test.ts",
     "src/daemon/controlServer.sessionRunners.runtimeCatalog.integration.test.ts",
     "src/daemon/controlServer.simulator.runtimeCatalog.integration.test.ts",
     "src/daemon/controlServer.skills.test.ts",
