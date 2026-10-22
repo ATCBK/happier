@@ -1484,6 +1484,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const armedComposerTarget = resolveArmedComposerContinuation({
         armedContinuationTarget: props.armedContinuationTarget,
     });
+    const engineChipAgentId = armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId ?? agentId;
+    // Explicit authoring selection may be public even when owner metadata is unavailable.
+    // A runtime policy default supplies no identity evidence for an existing Session.
+    const engineChipMarkAgentId = armedComposerTarget?.agentId ?? props.agentType ?? resolvedSessionAgentId
+        ?? (props.sessionId ? null : engineChipAgentId);
+
     /**
      * Effective Session-authoring policy, resolved by the shared owner.
      *
@@ -2774,13 +2780,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     );
 
     const effectiveAgentLabel = React.useMemo(() => {
+        if (engineChipMarkAgentId === null) return t('status.unknown');
         if (typeof props.agentLabel === 'string' && props.agentLabel.length > 0) {
             return props.agentLabel;
         }
         return props.agentType && isBundledAgentId(props.agentType)
             ? resolveAgentCatalogTitle(props.agentType)
             : '';
-    }, [props.agentLabel, props.agentType]);
+    }, [engineChipMarkAgentId, props.agentLabel, props.agentType]);
 
     const currentAgentPickerRow = React.useMemo<AgentInputChipPickerOption | null>(() => (
         props.agentType
@@ -3060,6 +3067,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      */
     const engineChipLabel = React.useMemo(() => {
         if (props.engineLabel !== undefined) return props.engineLabel;
+        if (engineChipMarkAgentId === null) return t('status.unknown');
         const picker = props.modelPickerPresentation;
         if (picker?.selected?.providerConnectionId && (
             !armedComposerTarget || armedComposerTarget.backendTargetKey === picker.agentTargetKey
@@ -3073,7 +3081,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             return armedComposerTarget.modelLabel ?? armedComposerTarget.label;
         }
         return hasAgentPickerOptions ? selectedModelLabel : resolvedAgentLabel;
-    }, [props.engineLabel, props.modelPickerPresentation, armedComposerTarget, hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel]);
+    }, [props.engineLabel, props.modelPickerPresentation, armedComposerTarget, engineChipMarkAgentId, hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel]);
     /**
      * The mark on the engine chip: the armed Agent while one is armed, otherwise
      * the Agent running this Session.
@@ -3082,12 +3090,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * because permission modes, model options and session modes are facts about
      * what is running — only this one control is about what runs next.
      */
-    const engineChipAgentId = (
-        armedComposerTarget
-            ? armedComposerTarget.agentId
-            : (props.agentType ?? agentId)
-    );
     const engineChipIdentityIcon = React.useMemo(() => {
+        if (engineChipMarkAgentId === null) {
+            return <AgentIcon agentId={null} size={16} color={theme.colors.composer.chipTint} testID="agent-input-agent-chip-logo" />;
+        }
         const identity = props.agentCatalogIdentity;
         if (identity) {
             const entryMatches = engineChipAgentId === identity.entry.agentId
@@ -3120,6 +3126,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         agentPickerOptions,
         effectiveAgentPickerSelectedOptionId,
         engineChipAgentId,
+        engineChipMarkAgentId,
         props.agentCatalogIdentity,
         theme.colors.composer.chipTint,
     ]);

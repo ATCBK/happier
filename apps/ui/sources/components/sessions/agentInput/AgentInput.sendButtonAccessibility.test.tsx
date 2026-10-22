@@ -836,6 +836,20 @@ describe('AgentInput (send button accessibility)', () => {
         await screen.unmount();
     });
 
+    it('keeps an unknown existing Session engine neutral instead of branding its policy default', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderScreen(<AgentInput
+            sessionId="unknown-session" value="" placeholder="Type"
+            metadata={{ path: '/repo', host: 'home' }} agentLabel="status.unknown" onAgentClick={() => {}}
+            onChangeText={() => {}} onSend={() => {}}
+            autocompleteKinds={[]} autocompleteSuggestions={async () => []}
+        />);
+        const chip = screen.findByTestId('agent-input-agent-chip');
+        expect(chip?.findAllByType('AgentIcon' as any).map(node => node.props.agentId)).toEqual([null]);
+        expect(chip?.props.accessibilityLabel).toBe('status.unknown');
+        await screen.unmount();
+    });
+
     it('names the armed engine on the chip before anything has been typed', async () => {
         // Selection IS the arming: there is no confirm step, so the chip reports the
         // choice the moment the rail is used. Requiring a keystroke first reinstates
@@ -1004,7 +1018,7 @@ describe('AgentInput (send button accessibility)', () => {
         await screen.unmount();
     });
 
-    it('returns the chip to the running engine when the switch is disarmed', async () => {
+    it('returns the chip to the public running engine without owner metadata when the switch is disarmed', async () => {
         const { AgentInput } = await import('./AgentInput');
 
         const screen = await renderScreen(<AgentInput
