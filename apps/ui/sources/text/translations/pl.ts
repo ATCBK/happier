@@ -9976,6 +9976,7 @@ settingsSession: {
       checking: "Sprawdzanie…",
       failedGeneric: "Aktualizacja nie została ukończona. Spróbuj ponownie.",
       remoteUnsupported: "Ta maszyna nie może zdalnie zaktualizować swojego wiersza poleceń. Zaktualizuj go bezpośrednio na maszynie.",
+      archiveExpandedByteLimit: "Pobrane środowisko przekracza limit rozmiaru po rozpakowaniu. Zaktualizuj Happier przed ponowną próbą.",
       updateNotVerified: "Aktualizacja się wykonała, ale wersja się nie zmieniła.",
       rolledBackLocal: "Aktualizacja się nie uruchomiła, więc ten komputer wrócił do poprzedniej wersji.",
       smokeFailed: "Nowa wersja nie zadziałała na tym komputerze, więc nic się nie zmieniło.",

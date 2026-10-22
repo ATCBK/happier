@@ -9615,6 +9615,7 @@ settingsSession: {
       checking: "正在检查…",
       failedGeneric: "更新未完成，请重试。",
       remoteUnsupported: "这台机器无法远程更新其命令行工具。请在该机器上直接更新。",
+      archiveExpandedByteLimit: "下载的运行时超过了解压大小限制。请更新 Happier 后重试。",
       updateNotVerified: "更新已运行，但版本没有变化。",
       rolledBackLocal: "更新未能启动，因此这台电脑已恢复到之前的版本。",
       smokeFailed: "新版本无法在这台电脑上运行，因此没有任何更改。",

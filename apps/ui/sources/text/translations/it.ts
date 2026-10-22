@@ -10299,6 +10299,7 @@ settingsSession: {
       checking: "Controllo…",
       failedGeneric: "L’aggiornamento non è stato completato. Riprova.",
       remoteUnsupported: "Questa macchina non può aggiornare la riga di comando da remoto. Aggiornala direttamente sulla macchina.",
+      archiveExpandedByteLimit: "Il runtime scaricato supera il limite di dimensione per l’estrazione. Aggiorna Happier prima di riprovare.",
       updateNotVerified: "L’aggiornamento è stato eseguito, ma la versione non è cambiata.",
       rolledBackLocal: "L’aggiornamento non è partito, quindi questo computer è tornato alla versione precedente.",
       smokeFailed: "La nuova versione non ha funzionato su questo computer, quindi non è cambiato nulla.",

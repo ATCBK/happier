@@ -9403,6 +9403,7 @@ settingsSession: {
             checking: 'Vérification…',
             failedGeneric: 'La mise à jour n’a pas abouti. Réessaie.',
             remoteUnsupported: 'Cette machine ne peut pas mettre à jour sa ligne de commande à distance. Fais-le directement sur la machine.',
+            archiveExpandedByteLimit: "Le moteur téléchargé dépasse la limite de taille d’extraction. Mettez Happier à jour avant de réessayer.",
             updateNotVerified: 'La mise à jour s’est exécutée, mais la version n’a pas changé.',
             rolledBackLocal: 'La mise à jour n’a pas démarré, cet ordinateur est donc revenu à la version précédente.',
             smokeFailed: 'La nouvelle version n’a pas fonctionné sur cet ordinateur, rien n’a donc changé.',
