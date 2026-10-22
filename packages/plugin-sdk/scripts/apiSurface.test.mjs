@@ -1043,6 +1043,36 @@ test('generation exposes canonical source entries before packaged realm conditio
   }
 });
 
+test('generation projects split browser barrels from canonical symbol realms', () => {
+  const realms = ['any', 'browser', 'client', 'react-native', 'daemon', 'build'];
+  const generated = createApiSurfaceGenerationPlan(validInventory({
+    entrypoints: [{
+      ...AUTHOR_ENTRYPOINT,
+      conditions: {
+        ...AUTHOR_ENTRYPOINT.conditions,
+        browser: './dist/actions/index.browser.js',
+      },
+    }, ...HOST_ENTRYPOINTS],
+    symbols: [
+      ...realms.map((realm) => ({
+        ...AUTHOR_SYMBOL,
+        exportName: `${realm.replace('-', '')}Service`,
+        realm,
+      })),
+      ...HOST_SYMBOLS,
+    ],
+  }));
+
+  assert.equal(generated.sourceBarrels['src/actions/index.browser.ts'], [
+    "export type { ActionsService as anyService } from './service.js';",
+    "export type { ActionsService as browserService } from './service.js';",
+    "export type { ActionsService as clientService } from './service.js';",
+    '',
+  ].join('\n'));
+  assert.match(generated.sourceBarrels['src/actions/index.ts'], /daemonService/u);
+  assert.equal(Object.hasOwn(generated.sourceBarrels, 'src/host/ui/index.browser.ts'), false);
+});
+
 test('generation is deterministic regardless of inventory row ordering', () => {
   const forward = createApiSurfaceGenerationPlan(validateApiSurfaceInventory(validInventory()));
   const reverse = createApiSurfaceGenerationPlan(validateApiSurfaceInventory(validInventory({

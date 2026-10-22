@@ -1,183 +1,177 @@
+export type { ActionConfirmationWhen } from './definePlugin.js';
 export type { ActionOperationDeclarationV1 } from './definePlugin.js';
-export type { PluginAccountApi, PluginAccountActivationModule } from './activation.js';
+export type { BuiltinUsagePublicPresentationV1 } from './usage.js';
+export { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 } from './composer.js';
+export type { ComposerAttachmentAuthorDeclaration } from './definePlugin.js';
+export type { ComposerAttachmentAuthorDisplay } from './definePlugin.js';
+export type { ComposerAttachmentAuthorPreview } from './definePlugin.js';
+export type { ComposerContentHandleV1 } from './composer.js';
+export type { ComposerContentInspectRequestV1 } from './composer.js';
+export type { ComposerContentInspectResultV1 } from './composer.js';
+export type { ComposerContentMediaKindV1 } from './composer.js';
+export type { ComposerContentMimeTypeV1 } from './composer.js';
+export type { ComposerContentPickMediaRequestV1 } from './composer.js';
+export type { ComposerControlAuthorInteraction } from './definePlugin.js';
+export type { ComposerMediaContentCapabilityV1 } from './composer.js';
+export { ComposerReferenceCandidateIdV1Schema } from './composerReferenceProviders.js';
+export type { ComposerReferenceCandidatePageV1 } from './composerReferenceProviders.js';
+export type { ComposerReferenceResolutionV1 } from './composerReferenceProviders.js';
+export type { ComposerRendererChainAuthorInput } from './definePlugin.js';
+export type { ComposerSessionMediaContentV1 } from './composer.js';
+export type { ComposerStagedMediaContentV1 } from './composer.js';
+export type { ComposerValueSchema } from './composer.js';
+export type { ContributionAdmittedEntry } from './targetedContributionAuthoring.js';
+export type { ContributionOperationContracts } from './targetedContributionAuthoring.js';
+export type { ContributionSurfaceHandles } from './targetedContributionAuthoring.js';
 export type { DefinePluginInput } from './definePlugin.js';
+export type { DefinedContributionPointRef } from './targetedContributionAuthoring.js';
+export type { DefinedContributionPoints } from './targetedContributionAuthoring.js';
 export type { DefinedPlugin } from './definePlugin.js';
 export type { DefinedPluginActionContracts } from './definePlugin.js';
 export type { DefinedPluginContributes } from './definePlugin.js';
 export type { DefinedPluginManifest } from './definePlugin.js';
-export type {
-    PluginCaptureSourceDefinition,
-    PluginConnectedAccountDefinition,
-    ReadonlyAuthorDeclaration,
-} from './definePlugin.js';
-export type {
-    EntityDragItemV1,
-    EntityDragKindV1,
-    EntityDragScopeV1,
-    EntityDropAdmissionV1,
-    EntityDropEffectV1,
-    EntityDropOutcomeV1,
-    EntityDropPreviewV1,
-    EntityDropReasonV1,
-    PluginDragSourceRuntime,
-    PluginDropTargetRuntime,
-} from './entityDragDrop.js';
-export type {
-    PluginCaptureCodecIdV1,
-    PluginCaptureFrameV1,
-    PluginCaptureReceiptV1,
-    PluginCaptureSourceDeclaration,
-    PluginCaptureSourceRuntime,
-} from './captureSources.js';
-export type {
-    PluginDragSourceContributionV1,
-    PluginDropTargetContributionV1,
-    PluginInputTypeReferenceV1,
-    PluginProjectNativeAdapterContributionV1,
-    PluginWorkflowContributionV1,
-} from './manifest.js';
-export type {
-    PluginProjectNativeAdapterDeclarationV1,
-    PluginProjectNativeAdapterDefinitionV1,
-    PluginProjectNativeAdapterRuntimeV1,
-    PluginProjectNativeCommandRequestV1,
-    PluginProjectNativeCommandResultV1,
-    PluginProjectNativeCommandV1,
-    PluginProjectNativeEnvironmentRequestV1,
-    PluginProjectNativeEnvironmentResultV1,
-    PluginProjectNativeFailureV1,
-    PluginProjectNativeFileFactV1,
-    PluginProjectNativeInspectionV1,
-    ProjectDefinitionDetectionV1,
-    ProjectEnvironmentSelectionV1,
-    ProjectNativeAdapterRoleV1,
-    ProjectNativeRefV1,
-} from './projectNativeAdapters.js';
-export type {
-    ComposerAttachmentAuthorDeclaration,
-    ComposerAttachmentAuthorDisplay,
-    ComposerAttachmentAuthorPreview,
-    ComposerControlAuthorInteraction,
-    ComposerRendererChainAuthorInput,
-    PluginComposerAttachmentDefinition,
-    PluginComposerControlDefinition,
-    PluginComposerDefinition,
-    PluginComposerReferenceDefinition,
-    PluginComposerRegionDefinition,
-} from './definePlugin.js';
-export type {
-    ProtocolActionSchemaInput,
-    ProtocolActionSchemaOutput,
-} from './definePlugin.js';
-export type {
-    PluginAccountCollectionMigrationRuntimeProjection,
-    PluginDaemonDatabaseDeclaration,
-    PluginDaemonDatabaseDefinition,
-    PluginDaemonDatabaseRuntimeProjection,
-} from './definePlugin.js';
-export type { Disposable, PluginCancellationOptions } from './lifecycle.js';
-export type {
-    JsonValue,
-    PluginContributionLocalId,
-    PluginContributionRef,
-    PluginIdentity,
-    PluginInvocationContributionIdentity,
-    PluginJsonValueV2,
-    PluginReference,
-} from './identity.js';
+export type { Disposable } from './lifecycle.js';
+export type { EntityDragItemV1 } from './entityDragDrop.js';
+export type { EntityDragKindV1 } from './entityDragDrop.js';
+export type { EntityDragScopeV1 } from './entityDragDrop.js';
+export type { EntityDropAdmissionV1 } from './entityDragDrop.js';
+export type { EntityDropEffectV1 } from './entityDragDrop.js';
+export type { EntityDropOutcomeV1 } from './entityDragDrop.js';
+export type { EntityDropPreviewV1 } from './entityDragDrop.js';
+export type { EntityDropReasonV1 } from './entityDragDrop.js';
+export type { JsonValue } from './identity.js';
+export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from './searchProviders.js';
+export type { PluginAccountActivationModule } from './activation.js';
+export type { PluginAccountApi } from './activation.js';
+export type { PluginAccountCollectionMigrationRuntimeProjection } from './definePlugin.js';
+export type { PluginAtmospherePictureContributionV1 } from './manifest.js';
+export type { PluginCancellationOptions } from './lifecycle.js';
+export type { PluginCaptureCodecIdV1 } from './captureSources.js';
+export type { PluginCaptureFrameV1 } from './captureSources.js';
+export type { PluginCaptureReceiptV1 } from './captureSources.js';
+export type { PluginCaptureSourceDeclaration } from './captureSources.js';
+export type { PluginCaptureSourceDefinition } from './definePlugin.js';
+export type { PluginCaptureSourceRuntime } from './captureSources.js';
 export type { PluginClientActivationModule } from './activation.js';
 export type { PluginClientApi } from './activation.js';
-export type { PluginRequestInterceptorDefinition } from './definePlugin.js';
+export type { PluginComposerAttachmentDefinition } from './definePlugin.js';
+export type { PluginComposerControlDefinition } from './definePlugin.js';
+export type { PluginComposerDefinition } from './definePlugin.js';
+export type { PluginComposerReferenceDefinition } from './definePlugin.js';
+export type { PluginComposerRegionDefinition } from './definePlugin.js';
+export type { PluginConnectedAccountDefinition } from './definePlugin.js';
+export type { PluginContributionLocalId } from './identity.js';
+export type { PluginContributionRef } from './identity.js';
+export type { PluginDaemonDatabaseDeclaration } from './definePlugin.js';
+export type { PluginDaemonDatabaseDefinition } from './definePlugin.js';
+export type { PluginDaemonDatabaseRuntimeProjection } from './definePlugin.js';
 export type { PluginDiagnosticData } from './diagnostics.js';
-export type {
-    PluginEphemeralSharedScope,
-    PluginEphemeralSharedValueLease,
-} from './ephemeralSharedScope.js';
+export type { PluginDragSourceContributionV1 } from './manifest.js';
+export type { PluginDragSourceRuntime } from './entityDragDrop.js';
+export type { PluginDropTargetContributionV1 } from './manifest.js';
+export type { PluginDropTargetRuntime } from './entityDragDrop.js';
+export type { PluginEphemeralSharedScope } from './ephemeralSharedScope.js';
+export type { PluginEphemeralSharedValueLease } from './ephemeralSharedScope.js';
+export { PluginError } from './errors.js';
 export type { PluginErrorData } from './errors.js';
-export type { PluginOperationAvailability, PluginRemediationData } from './availability.js';
-export { isPluginError, PluginError } from './errors.js';
+export type { PluginIdentity } from './identity.js';
+export type { PluginInputTypeReferenceV1 } from './manifest.js';
+export type { PluginInvocationContributionIdentity } from './identity.js';
+export type { PluginJsonValueV2 } from './identity.js';
+export type { PluginLanguageServerContributionV1 } from './manifest.js';
+export type { PluginOperationAvailability } from './availability.js';
+export type { PluginProjectNativeAdapterContributionV1 } from './manifest.js';
+export type { PluginProjectNativeAdapterDeclarationV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeAdapterDefinitionV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeAdapterRuntimeV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeCommandRequestV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeCommandResultV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeCommandV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeEnvironmentRequestV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeEnvironmentResultV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeFailureV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeFileFactV1 } from './projectNativeAdapters.js';
+export type { PluginProjectNativeInspectionV1 } from './projectNativeAdapters.js';
+export type { PluginReference } from './identity.js';
+export type { PluginRegistrySourceContributionV1 } from './manifest.js';
+export type { PluginRemediationData } from './availability.js';
+export type { PluginRequestInterceptorDefinition } from './definePlugin.js';
+export type { PluginSearchItemV1 } from './searchProviders.js';
+export { PluginSearchItemV1Schema } from './searchProviders.js';
+export type { PluginSearchProviderContributionV1 } from './searchProviders.js';
+export type { PluginSearchQueryV1 } from './searchProviders.js';
+export { PluginSearchQueryV1Schema } from './searchProviders.js';
+export type { PluginSearchResultV1 } from './searchProviders.js';
+export { PluginSearchResultV1Schema } from './searchProviders.js';
+export type { PluginSkillContributionV1 } from './manifest.js';
+export type { PluginWorkItemCategoryV1 } from './workItems.js';
+export type { PluginWorkItemTransitionInputV1 } from './workItems.js';
+export type { PluginWorkItemV1 } from './workItems.js';
+export type { PluginWorkItemsContributionV1 } from './workItems.js';
+export type { PluginWorkItemsFindLinkedRequestV1 } from './workItems.js';
+export type { PluginWorkItemsResolveRequestV1 } from './workItems.js';
+export type { PluginWorkItemsResolveResultV1 } from './workItems.js';
+export type { PluginWorkItemsRuntime } from './workItems.js';
+export type { PluginWorkItemsWatchRequestV1 } from './workItems.js';
+export type { PluginWorkflowContributionV1 } from './manifest.js';
+export type { ProjectDefinitionDetectionV1 } from './projectNativeAdapters.js';
+export type { ProjectEnvironmentSelectionV1 } from './projectNativeAdapters.js';
+export type { ProjectNativeAdapterRoleV1 } from './projectNativeAdapters.js';
+export type { ProjectNativeRefV1 } from './projectNativeAdapters.js';
+export type { ProtocolActionSchemaInput } from './definePlugin.js';
+export type { ProtocolActionSchemaOutput } from './definePlugin.js';
+export type { PublicProfileReadResultV1 } from './usage.js';
+export type { PublicProfileSnapshotV1 } from './usage.js';
+export type { PublicProfileViewV1 } from './usage.js';
+export type { PublicUsageFactsV1 } from './usage.js';
+export type { ReadonlyAuthorDeclaration } from './definePlugin.js';
+export type { TargetedContributionAdmittedEntry } from './services/targetedContributions.js';
+export type { TargetedContributionObservation } from './services/targetedContributions.js';
+export type { TargetedContributionPointRef } from './services/targetedContributions.js';
+export type { TargetedContributionSelectionResult } from './services/targetedContributions.js';
+export type { TargetedContributionSelectionUnavailableReason } from './services/targetedContributions.js';
+export type { TargetedContributionSnapshot } from './services/targetedContributions.js';
+export type { TargetedContributionsService } from './services/targetedContributions.js';
+export type { UiSurface } from './ui/surface.js';
+export type { UiSurfaceAppPageDefinition } from './ui/surface.js';
+export type { UiSurfaceAppPageDefinitionFor } from './ui/surface.js';
+export type { UiSurfaceDeclarativeDefinition } from './ui/surface.js';
+export type { UiSurfaceDeclarativeRendererDefinition } from './ui/surface.js';
+export type { UiSurfaceDefinition } from './ui/surface.js';
+export type { UiSurfaceDetailedDefinition } from './ui/surface.js';
+export type { UiSurfaceDetailedDefinitionFor } from './ui/surface.js';
+export type { UiSurfaceHostedHtmlRendererDefinition } from './ui/surface.js';
+export type { UiSurfaceHostedWebDefinition } from './ui/surface.js';
+export type { UiSurfaceHostedWebRendererDefinition } from './ui/surface.js';
+export type { UiSurfacePlacement } from './ui/surface.js';
+export type { UiSurfaceReactNativeDefinition } from './ui/surface.js';
+export type { UiSurfaceReactNativeRendererDefinition } from './ui/surface.js';
+export type { UiSurfaceRendererDefinition } from './ui/surface.js';
+export type { UiSurfaceRendererOnlyDefinition } from './ui/surface.js';
+export type { UiSurfaceSettingsPageDefinition } from './ui/surface.js';
+export type { UsageRunLengthObservation } from './usage.js';
+export type { UsageRunLengthObservationSummary } from './usage.js';
+export type { UsageRunLengthSummary } from './usage.js';
+export { arePluginMachineExecutionOriginsEqual } from './executionOrigin.js';
+export { arePluginMachineMaterializationRefsEqual } from './executionOrigin.js';
 export { computeCanonicalDomainSeparatedDigest } from './identity.js';
 export { createCanonicalJsonSigningInput } from './identity.js';
-export {
-  arePluginMachineExecutionOriginsEqual,
-  getPluginMachineExecutionOriginRef,
-  arePluginMachineMaterializationRefsEqual,
-} from './executionOrigin.js';
+export { defineComposerAttachment } from './composer.js';
+export { defineComposerControl } from './composer.js';
+export { defineComposerReference } from './composer.js';
+export { defineComposerRegion } from './composer.js';
 export { definePlugin } from './definePlugin.js';
-export {
-    defineComposerAttachment,
-    defineComposerControl,
-    defineComposerReference,
-    defineComposerRegion,
-} from './composer.js';
-export {
-    COMPOSER_MEDIA_CONTENT_CAPABILITY_V1,
-} from './composer.js';
-export type {
-    ComposerContentHandleV1,
-    ComposerContentInspectRequestV1,
-    ComposerContentInspectResultV1,
-    ComposerContentMediaKindV1,
-    ComposerContentMimeTypeV1,
-    ComposerContentPickMediaRequestV1,
-    ComposerMediaContentCapabilityV1,
-    ComposerSessionMediaContentV1,
-    ComposerStagedMediaContentV1,
-} from './composer.js';
 export { defineUiSurfaceDefinition } from './ui/surface.js';
-export type {
-    UiSurface,
-    UiSurfaceAppPageDefinition,
-    UiSurfaceAppPageDefinitionFor,
-    UiSurfaceDeclarativeDefinition,
-    UiSurfaceDeclarativeRendererDefinition,
-    UiSurfaceDefinition,
-    UiSurfaceDetailedDefinition,
-    UiSurfaceDetailedDefinitionFor,
-    UiSurfaceHostedHtmlRendererDefinition,
-    UiSurfaceHostedWebDefinition,
-    UiSurfaceHostedWebRendererDefinition,
-    UiSurfacePlacement,
-    UiSurfaceReactNativeDefinition,
-    UiSurfaceReactNativeRendererDefinition,
-    UiSurfaceRendererDefinition,
-    UiSurfaceRendererOnlyDefinition,
-    UiSurfaceSettingsPageDefinition,
-} from './ui/surface.js';
-export type {
-    ContributionAdmittedEntry,
-    ContributionOperationContracts,
-    ContributionSurfaceHandles,
-    DefinedContributionPointRef,
-    DefinedContributionPoints,
-} from './targetedContributionAuthoring.js';
-export { ComposerReferenceCandidateIdV1Schema } from './composerReferenceProviders.js';
-export {
-    MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1,
-    PluginSearchItemV1Schema,
-    PluginSearchQueryV1Schema,
-    PluginSearchResultV1Schema,
-} from './searchProviders.js';
-export type {
-    ComposerReferenceCandidatePageV1,
-    ComposerReferenceResolutionV1,
-} from './composerReferenceProviders.js';
-export type {
-    PluginSearchItemV1,
-    PluginSearchProviderContributionV1,
-    PluginSearchQueryV1,
-    PluginSearchResultV1,
-} from './searchProviders.js';
+export { getPluginMachineExecutionOriginRef } from './executionOrigin.js';
+export { isPluginError } from './errors.js';
+export { isRecord } from './sessions/fileStores/records.js';
+export { parseJsonLine } from './sessions/fileStores/records.js';
+export { parseTimestampMs } from './sessions/fileStores/records.js';
+export { projectPluginFailureText } from './diagnostics.js';
+export { readString } from './sessions/fileStores/records.js';
+export { readTrimmedString } from './sessions/fileStores/records.js';
+export { redactBugReportSensitiveText } from './diagnostics.js';
+export { resolveUsageCalendarInstant } from './usage.js';
 export { selectCurrentTargetedContribution } from './services/targetedContributions.js';
-export {
-    isRecord,
-    parseJsonLine,
-    parseTimestampMs,
-    readString,
-    readTrimmedString,
-} from './sessions/fileStores/records.js';
-export {
-    projectPluginFailureText,
-    redactBugReportSensitiveText,
-    trimBugReportTextToMaxBytes,
-} from './diagnostics.js';
+export { summarizeUsageRunLengthObservations } from './usage.js';
+export { trimBugReportTextToMaxBytes } from './diagnostics.js';

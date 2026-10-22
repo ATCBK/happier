@@ -705,6 +705,13 @@ export function createApiSurfaceGenerationPlan(input) {
       ...conditions,
     };
     sourceBarrels[entrypoint.sourceModule] = renderBarrel(entrypoint, entrypointSymbols);
+    if (entrypoint.conditions.browser && entrypoint.conditions.browser !== entrypoint.conditions.default) {
+      const browserSourceModule = apiSurfaceEntrypointBrowserSourceModule(entrypoint.specifier);
+      sourceBarrels[browserSourceModule] = renderBarrel(
+        { ...entrypoint, sourceModule: browserSourceModule },
+        entrypointSymbols.filter(({ realm }) => realm === 'any' || realm === 'browser' || realm === 'client'),
+      );
+    }
     if (entrypoint.visibility !== 'author') continue;
     const names = entrypointSymbols.map((symbol) => symbol.exportName).sort(compareCodePoints);
     authorDeclarationAssertions[entrypoint.specifier] = names;

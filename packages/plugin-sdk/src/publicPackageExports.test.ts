@@ -1,7 +1,11 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
+import { build } from 'esbuild';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import ts from 'typescript';
 
@@ -361,15 +365,31 @@ describe('CORE-A curated package exports', () => {
         )).toThrow();
 
         const registrationApi = await import('@happier-dev/plugin-sdk/host/registration');
-        expect(Object.keys(registrationApi)).toEqual([
+        expect(Object.keys(registrationApi).sort()).toEqual([
+            'buildPluginUiRendererContributionKey',
+            'createAdmittedTargetedOperationExecutionHandle',
             'createExecutionRunHostBackendFromSessionRuntime',
+            'createManifestTargetedContributionsService',
             'createPluginActionHandlerNotStartedError',
             'createPluginRegistrationScope',
+            'createTargetedContributionsService',
+            'dropTargetedContributionAdmissionDiagnostics',
+            'mergeTargetedContributionManifestDeclarations',
             'normalizePluginAccountCollectionMigrationRuntimeProjection',
             'normalizePluginDaemonDatabaseRuntimeProjection',
+            'projectAdmittedTargetedContributionSnapshot',
             'projectPluginAccountCollectionDeclaration',
+            'projectTargetedContributionActionDefinition',
+            'readAdmittedTargetedOperationExecutionBinding',
             'readPluginActionInputParser',
             'readPluginActionResultParser',
+            'requireAdmittedTargetedOperationExecutionBinding',
+            'resolveAdmittedTargetedContributions',
+            'resolveAdmittedTargetedOperationInput',
+            'resolveManifestTargetedContributions',
+            'resolvePluginUiRendererChain',
+            'validateTargetedOperationInput',
+            'validateTargetedOperationResult',
         ]);
         expectTypeOf<PackagePluginRuntimeRegistration>()
             .toEqualTypeOf<SourcePluginRuntimeRegistration>();
@@ -391,7 +411,7 @@ describe('CORE-A curated package exports', () => {
 
         expect(packageJson.version).toBe('0.0.0');
         expect(packageJson.private).toBe(true);
-        expect(packageJson.dependencies.zod).toBe('4.3.6');
+        expect(packageJson.dependencies.zod).toBe('4.6.7');
         expect(packageJson.devDependencies.zod).toBeUndefined();
         expect(packageJson.happier.publicSdkRelease).toMatchObject({
             posture: 'developer_preview',
@@ -440,6 +460,48 @@ describe('CORE-A curated package exports', () => {
             .filter(({ kind }) => kind === 'value')
             .map(({ exportName }) => exportName)
             .sort());
+
+        for (const entrypoint of inventory.entrypoints) {
+            const target = entrypoint.conditions.browser;
+            if (!target || target === entrypoint.conditions.default || entrypoint.specifier === '.') continue;
+            expect([...(await readNamedBarrelExports(sourceModuleForRuntimeCondition(target)))].sort())
+                .toEqual(inventory.symbols
+                    .filter(({ specifier, realm }) => specifier === entrypoint.specifier
+                        && (realm === 'any' || realm === 'browser' || realm === 'client'))
+                    .map(({ exportName }) => exportName)
+                    .sort());
+        }
+    });
+
+    inventoryIt('resolves restored root values in an external plugin browser bundle', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'plugin-sdk-browser-consumer-'));
+        try {
+            const scope = join(root, 'node_modules', '@happier-dev');
+            await mkdir(scope, { recursive: true });
+            await symlink(fileURLToPath(new URL('..', import.meta.url)), join(scope, 'plugin-sdk'),
+                process.platform === 'win32' ? 'junction' : 'dir');
+            const result = await build({
+                stdin: {
+                    contents: "import { summarizeUsageRunLengthObservations } from '@happier-dev/plugin-sdk';"
+                        + '\nglobalThis.summary = summarizeUsageRunLengthObservations([]);',
+                    resolveDir: root,
+                    sourcefile: 'external-plugin.ts',
+                    loader: 'ts',
+                },
+                bundle: true,
+                platform: 'browser',
+                format: 'iife',
+                write: false,
+                metafile: true,
+            });
+            expect(Object.keys(result.metafile!.inputs).map((path) => resolve(path)))
+                .toContain(fileURLToPath(new URL('../dist/index.browser.js', import.meta.url)));
+            const context = { TextDecoder, TextEncoder, summary: undefined as unknown };
+            runInNewContext(result.outputFiles[0]!.text, context);
+            expect(context.summary).toEqual({ sampleCount: 0, byAgent: [] });
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
     });
 
     inventoryIt('keeps External Sessions authoring on its final inventory-owned path', async () => {
@@ -869,11 +931,14 @@ describe('CORE-A curated package exports', () => {
             'PluginUiSemanticTargetSchema',
             'PluginUiSemanticTextTargetSchema',
             'SURFACE_CONTEXT_THEME_FIXTURE',
+            'createAgentLaunchObserver',
             'createAgentSessionRuntimeHarness',
             'createPluginTestkit',
             'createPluginUiTestkit',
             'createSurfaceContextFixture',
             'readPluginUiTestkitTargetedSurfaceAdmission',
+            'runAgentMcpToolPolicyContract',
+            'runAgentSkillDeliveryContract',
         ]);
     });
 });
