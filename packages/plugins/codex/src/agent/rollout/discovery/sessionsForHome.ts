@@ -1,6 +1,6 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import type { Dirent, Stats } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import {
   parseCodexRolloutFilename,
   isMatchingCodexRolloutIdentity,
@@ -430,7 +430,7 @@ async function readRolloutInventoryDirectory(codexHome: string, dir: string): Pr
 /** Contribution-lifetime native directory facts, with no matching or transcript
  * authority. Both observation and resumable callers use the inventory below. */
 export class CodexRolloutObservationInventory {
-  private readonly directories = new Map<string, Readonly<{ signature: string; entries: RolloutInventoryEntry[] }>>();
+  private readonly directories = new Map<string, Readonly<{ signature: string; physicalPath: string; entries: RolloutInventoryEntry[] }>>();
   readonly sessionMetaCache: CodexSessionMetaCache = new Map();
 
   clear(): void { this.directories.clear(); this.sessionMetaCache.clear(); }
@@ -439,7 +439,9 @@ export class CodexRolloutObservationInventory {
     const changed = changedFiles === undefined ? null : new Set(changedFiles);
     if (changed?.size === 0) return;
     for (const directory of this.directories.values()) for (const entry of directory.entries) {
-      if (!changed || changed.has(entry.filePath)) { entry.facts = undefined; entry.matches = undefined; }
+      if (!changed || changed.has(entry.filePath) || changed.has(join(directory.physicalPath, basename(entry.filePath)))) {
+        entry.facts = undefined; entry.matches = undefined;
+      }
     }
   }
 
@@ -462,7 +464,7 @@ export class CodexRolloutObservationInventory {
         entry.matches = previous.matches;
       }
     }
-    this.directories.set(dir, { signature, entries });
+    this.directories.set(dir, { signature, physicalPath: await realpath(dir), entries });
     return entries;
   }
 
