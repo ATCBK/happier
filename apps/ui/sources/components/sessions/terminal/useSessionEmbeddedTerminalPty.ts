@@ -43,7 +43,7 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
         readOnly: target?.kind === 'terminal_view',
         workspace: target?.kind === 'terminal_view' ? target.workspace : undefined,
         sessionId: params.sessionId,
-        machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: explicitMachinePresence.reachability !== 'unknown', machineIsOnline: explicitMachinePresence.reachability === 'reachable' }) : machineReachable,
+        machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: explicitMachinePresence.machineIsKnown ?? explicitMachinePresence.reachability !== 'unknown', machineIsOnline: explicitMachinePresence.reachability === 'reachable' }) : machineReachable,
         machineRpcTargetAvailable: explicitMachineId ? true : machineRpcTargetAvailable,
         terminalKey: params.terminalKey,
         scopeId: params.scopeId,
