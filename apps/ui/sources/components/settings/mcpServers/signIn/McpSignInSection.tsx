@@ -7,6 +7,7 @@ import { CapabilityStatusChip } from '@/components/capabilities/status/Capabilit
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { QRCode } from '@/components/qr';
 import { ConnectedAccountOAuthForm } from '@/components/settings/connectedServices/account/ConnectedAccountOAuthForm';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -518,31 +519,37 @@ export function McpSignInSection(props: Props) {
   }
   if (editingApp && view.state !== 'signing' && view.state !== 'finishing') {
     body = <SectionContentRow testID={`${testID}:own-app-form`}>
-      <View style={styles.stack}>
-        <Text variant="label" emphasis="semiBold" style={styles.title}>{t('capabilities.mcpSignIn.useOwnApp')}</Text>
-        <Text variant="body" style={styles.body}>{t(view.state === 'invalid_client' ? 'capabilities.mcpSignIn.invalidClientBody' : 'capabilities.mcpSignIn.ownAppBody')}</Text>
-        {view.state === 'no_machine_online' ? <Text variant="body" style={styles.body}>{t('capabilities.mcpSignIn.noMachineBody')}</Text> : null}
+      <View style={styles.form}>
+        <View style={styles.stack}>
+          <Text variant="label" emphasis="semiBold" style={styles.title}>{t('capabilities.mcpSignIn.useOwnApp')}</Text>
+          <Text variant="body" style={styles.body}>{t(view.state === 'invalid_client' ? 'capabilities.mcpSignIn.invalidClientBody' : 'capabilities.mcpSignIn.ownAppBody')}</Text>
+          {view.state === 'no_machine_online' ? <Text variant="body" style={styles.body}>{t('capabilities.mcpSignIn.noMachineBody')}</Text> : null}
+        </View>
         <FieldItem label={t('capabilities.mcpSignIn.callbackUrl')}>
-          <Text variant="body" selectable style={styles.body}>{MCP_OAUTH_CALLBACK_URL_V1}</Text>
-          <Link testID={`${testID}:copy-callback`} label={t(callbackCopied ? 'common.copied' : 'common.copy')}
-            onPress={() => void setClipboardStringSafe(MCP_OAUTH_CALLBACK_URL_V1).then(setCallbackCopied)} />
+          <FieldTextInput testID={`${testID}:callback-url`} value={MCP_OAUTH_CALLBACK_URL_V1} editable={false} monospace
+            accessibilityLabel={t('capabilities.mcpSignIn.callbackUrl')}
+            trailing={<IconButton testID={`${testID}:copy-callback`} iconName={callbackCopied ? 'check' : 'copy'} variant="plain" size={20}
+              accessibilityLabel={t(callbackCopied ? 'common.copied' : 'common.copy')}
+              onPress={() => void setClipboardStringSafe(MCP_OAUTH_CALLBACK_URL_V1).then(setCallbackCopied)} />} />
         </FieldItem>
         <FieldItem label={t('capabilities.mcpSignIn.clientId')} labelNativeID={`${testID}:client-id-label`}>
-          <FieldTextInput testID={`${testID}:client-id`} value={clientId} onChangeText={setClientId}
+          <FieldTextInput testID={`${testID}:client-id`} value={clientId} onChangeText={setClientId} monospace
             accessibilityLabel={t('capabilities.mcpSignIn.clientId')} accessibilityLabelledBy={`${testID}:client-id-label`} editable={!signIn.busy} />
         </FieldItem>
         <FieldItem label={t('capabilities.mcpSignIn.clientSecret')} labelNativeID={`${testID}:client-secret-label`}>
           <FieldTextInput testID={`${testID}:client-secret`} value={clientSecret} onChangeText={setClientSecret} secureTextEntry
             accessibilityLabel={t('capabilities.mcpSignIn.clientSecret')} accessibilityLabelledBy={`${testID}:client-secret-label`} editable={!signIn.busy} />
         </FieldItem>
-        <RoundButton testID={`${testID}:own-app-sign-in`} size="small" title={t('capabilities.mcpSignIn.signIn')}
-          loading={signIn.busy} disabled={signIn.busy || !clientId.trim() || view.state === 'no_machine_online'}
-          onPress={() => void signIn.start({ client: { clientId: clientId.trim(), ...(clientSecret ? { clientSecret } : {}) } })} />
-        <View style={styles.links}>
-          <Link testID={`${testID}:own-app-cancel`} label={t('common.cancel')} disabled={signIn.busy} onPress={() => { setEditingApp(false); setClientSecret(''); }} />
+        <View style={styles.formActions}>
           {view.state === 'connected' || view.state === 'expired' || view.state === 'invalid_client' ?
             <Link testID={`${testID}:remove-own-app`} label={t('capabilities.mcpSignIn.removeOwnApp')} disabled={signIn.busy}
               onPress={() => { setEditingApp(false); setClientSecret(''); void signIn.start({ client: null }); }} /> : null}
+          <View style={styles.formActionsEnd}>
+            <Link testID={`${testID}:own-app-cancel`} label={t('common.cancel')} disabled={signIn.busy} onPress={() => { setEditingApp(false); setClientSecret(''); }} />
+            <RoundButton testID={`${testID}:own-app-sign-in`} size="small" title={t('capabilities.mcpSignIn.signIn')}
+              loading={signIn.busy} disabled={signIn.busy || !clientId.trim() || view.state === 'no_machine_online'}
+              onPress={() => void signIn.start({ client: { clientId: clientId.trim(), ...(clientSecret ? { clientSecret } : {}) } })} />
+          </View>
         </View>
       </View>
     </SectionContentRow>;
@@ -578,6 +585,10 @@ const stylesheet = StyleSheet.create((theme) => ({
   body: { color: theme.colors.text.secondary },
   meta: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
   stack: { gap: theme.space.s6, minWidth: 0, flex: 1 },
+  /** The own-app form: the statement, then each field on the sheet's rhythm, then its actions at the end (lab ms B "API key"). */
+  form: { gap: theme.space.s16, minWidth: 0, flex: 1 },
+  formActions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s16 },
+  formActionsEnd: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16, marginLeft: 'auto' },
   waitingRow: {
     flexDirection: 'row',
     alignItems: 'center',
