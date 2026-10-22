@@ -1135,14 +1135,6 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         const annotationNode = annotation
             ? paint.node.querySelector<HTMLElement>(`[slot="${paint.instance.getAnnotationSlotName(annotation)}"]`) : null;
         const annotationRect = annotationNode?.getBoundingClientRect();
-        // Find lands on the mounted row itself, mid-viewport, in whichever scroller holds the diff: Pierre's
-        // virtualizer may be bound to the document while the review's own list scrolls, where its offset
-        // scroll moves nothing, and a top-aligned line would sit under the sticky file header and Find bar.
-        if (props.findActive && el && !annotationNode && typeof el.scrollIntoView === 'function') {
-            el.scrollIntoView({ block: 'center' });
-            lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
-            return;
-        }
         if (paint.virtualizer && paint.instance instanceof VirtualizedFileDiff) {
             const position = paint.instance.getLinePosition(lineNumber, side);
             if (!position) return;
@@ -1150,7 +1142,12 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 annotationRect && annotationRect.height > 0
                     ? annotationRect.top - paint.node.getBoundingClientRect().top : position.top
             );
-            paint.virtualizer.scrollTo({ top });
+            // Find lands its match mid-viewport, as the plain-DOM landing below does, clear of the sticky
+            // file header and the Find bar that a top-aligned line would sit under.
+            const scrollRoot = paint.virtualizer.getRoot();
+            const viewportHeight = scrollRoot instanceof HTMLElement ? scrollRoot.clientHeight : window.innerHeight;
+            const lead = props.findActive && !annotation ? Math.max(0, (viewportHeight - position.height) / 2) : 0;
+            paint.virtualizer.scrollTo({ top: Math.max(0, top - lead) });
             // A virtualized target may mount on the next paint. Keep that landing pending.
             if (annotation ? !annotationRect || annotationRect.height <= 0 : !el) return;
         } else {

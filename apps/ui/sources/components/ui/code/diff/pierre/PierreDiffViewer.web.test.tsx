@@ -434,7 +434,7 @@ describe('PierreDiffViewer (web)', () => {
         instance.cleanUp();
         virtualizer.cleanUp();
     });
-    it('lands a Find match on its mounted row mid-viewport, whichever scroller holds the diff', async () => {
+    it('lands a Find match mid-viewport through the plain virtualizer, clear of the sticky chrome', async () => {
         fileDiffSpy.mockClear();
         const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
@@ -445,6 +445,9 @@ describe('PierreDiffViewer (web)', () => {
         vi.spyOn(instance, 'revealLine').mockReturnValue(false);
         vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
         vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        const scrollRoot = document.createElement('div');
+        Object.defineProperty(scrollRoot, 'clientHeight', { value: 600 });
+        vi.spyOn(virtualizer, 'getRoot').mockReturnValue(scrollRoot);
         const scroll = vi.spyOn(virtualizer, 'scrollTo').mockImplementation(() => {});
         const context = (await import('@pierre/diffs/react')).VirtualizerContext;
         const screen = await renderScreen(<context.Provider value={virtualizer}>
@@ -455,11 +458,11 @@ describe('PierreDiffViewer (web)', () => {
         const root = host.attachShadow({ mode: 'open' });
         root.innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
         const row = root.querySelector<HTMLElement>('[data-line="1"]')!;
-        const intoView = vi.fn();
-        row.scrollIntoView = intoView;
+        row.scrollIntoView = vi.fn();
         await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
-        expect(intoView).toHaveBeenCalledWith({ block: 'center' });
-        expect(scroll).not.toHaveBeenCalled();
+        // 120 (file offset) + 400 (line) - (600 viewport - 20 line) / 2: the same virtualizer landing as go-to-change.
+        expect(scroll).toHaveBeenCalledWith({ top: 230 });
+        expect(row.scrollIntoView).not.toHaveBeenCalled();
         instance.cleanUp();
         virtualizer.cleanUp();
     });

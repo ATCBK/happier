@@ -678,4 +678,55 @@ describe('PierreScrollRootVirtualizerProvider (web)', () => {
             root.unmount();
         });
     });
+    it('binds the list scroller when its content outgrows the viewport long after the first probes', async () => {
+        // The review list only overflows once its diff has rendered, which can be well after the diff demanded
+        // Pierre. The resolved root must follow the list becoming scrollable, not stay on `document` for good.
+        vi.resetModules();
+        setupSpy.mockClear();
+        cleanUpSpy.mockClear();
+        const resizeCallbacks: Array<() => void> = [];
+        const observed: Element[] = [];
+        (globalThis as any).IntersectionObserver = class {};
+        (globalThis as any).ResizeObserver = class {
+            private callback: () => void;
+            constructor(callback: () => void) { this.callback = callback; resizeCallbacks.push(callback); }
+            // Like a browser: observing a target reports its initial size once.
+            observe(target: Element) { if (observed.push(target) === 1) queueMicrotask(this.callback); }
+            unobserve() {}
+            disconnect() {}
+        };
+        const { PierreScrollRootVirtualizerProvider } = await loadDemandedProvider();
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        let scrollRoot: HTMLDivElement | null = null;
+        await act(async () => {
+            root.render(
+                <PierreScrollRootVirtualizerProvider>
+                    <div ref={(node) => {
+                        if (!node || node === scrollRoot) return;
+                        scrollRoot = node;
+                        node.style.overflowY = 'auto';
+                        defineSizeProperty(node, 'clientHeight', 400);
+                        defineSizeProperty(node, 'scrollHeight', 400);
+                    }}><div /></div>
+                </PierreScrollRootVirtualizerProvider>,
+            );
+        });
+        // Let the initial frame-by-frame probing finish on the document fallback.
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 900)); });
+        expect(setupSpy.mock.calls.at(-1)?.[0]).toBe(document);
+
+        expect(setupSpy.mock.calls.at(-1)?.[0]).toBe(document);
+        const setups = setupSpy.mock.calls.length;
+        defineSizeProperty(scrollRoot!, 'scrollHeight', 1600);
+        await act(async () => { for (const callback of resizeCallbacks) callback(); });
+
+        expect(observed.some((target) => target === scrollRoot || target.parentElement === scrollRoot)).toBe(true);
+        expect(setupSpy.mock.calls.at(-1)?.[0]).toBe(scrollRoot);
+        expect(setupSpy.mock.calls.at(-1)?.[1]).toBeUndefined();
+        expect(setupSpy.mock.calls.length).toBe(setups + 1);
+
+        await act(async () => { root.unmount(); });
+    });
 });

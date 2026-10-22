@@ -21,13 +21,14 @@ export function usePierreScrollRootVirtualizer(create: (() => PierreVirtualizer)
     return instance;
 }
 
-function isElementScrollable(el: HTMLElement): boolean {
+function canScrollVertically(el: HTMLElement): boolean {
     if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return false;
-    const style = window.getComputedStyle(el);
-    const overflowY = style?.overflowY ?? null;
-    const scrollOk = overflowY === 'auto' || overflowY === 'scroll';
-    if (!scrollOk) return false;
-    return el.scrollHeight > el.clientHeight + 5;
+    const overflowY = window.getComputedStyle(el)?.overflowY ?? null;
+    return overflowY === 'auto' || overflowY === 'scroll';
+}
+
+function isElementScrollable(el: HTMLElement): boolean {
+    return canScrollVertically(el) && el.scrollHeight > el.clientHeight + 5;
 }
 
 /**
@@ -44,9 +45,10 @@ function isElementScrollable(el: HTMLElement): boolean {
  * bound to a small inner scroller that would produce huge empty buffer spacers.
  *
  * With no owned scroller the fallback is `document`: Pierre then measures against the window, which
- * writes nothing the app owns.
+ * writes nothing the app owns. Owned scrollers that exist but do not overflow yet (a list whose rows
+ * have not rendered) are returned as `waiting`, so the caller can rebind when one outgrows its viewport.
  */
-function findOwnedScrollRoot(anchor: HTMLElement): HTMLElement | Document {
+function findOwnedScrollRoot(anchor: HTMLElement): Readonly<{ root: HTMLElement | Document; waiting: readonly HTMLElement[] }> {
     type Candidate = Readonly<{
         el: HTMLElement;
         depth: number;
@@ -66,12 +68,16 @@ function findOwnedScrollRoot(anchor: HTMLElement): HTMLElement | Document {
     };
 
     const candidates: Candidate[] = [];
+    const waiting: HTMLElement[] = [];
     for (const candidate of iterateWebDescendantElements(anchor, { maxNodes: 1500 })) {
         // Bounded diff bodies own their scrolling; the shared list must not adopt a child's
         // viewport merely because that viewport is taller than a short enclosing pane.
         const diffOwner = candidate.closest('.happier-pierre-diff-wrapper');
         if (diffOwner && anchor.contains(diffOwner)) continue;
-        if (!isElementScrollable(candidate)) continue;
+        if (!isElementScrollable(candidate)) {
+            if (candidate.clientHeight > 0 && canScrollVertically(candidate)) waiting.push(candidate);
+            continue;
+        }
         candidates.push({
             el: candidate,
             depth: computeDescendantDepth(candidate),
@@ -87,8 +93,8 @@ function findOwnedScrollRoot(anchor: HTMLElement): HTMLElement | Document {
         return candidate.depth > acc.depth ? candidate : acc;
     }, null);
 
-    if (best) return best.el;
-    return typeof document !== 'undefined' ? document : (anchor.ownerDocument ?? document);
+    if (best) return { root: best.el, waiting };
+    return { root: typeof document !== 'undefined' ? document : (anchor.ownerDocument ?? document), waiting };
 }
 
 const UNTRACKED_CONNECT = new WeakMap<PierreVirtualizer, PierreVirtualizer['connect']>();
@@ -142,10 +148,40 @@ export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: 
         let attempts = 0;
         const maxAttempts = 30;
         let lastRoot: HTMLElement | Document | null = null;
+        let growthObserver: ResizeObserver | null = null;
+
+        // A list that is mounted but not yet overflowing (its diffs are still rendering) becomes the root
+        // the moment its content outgrows it; a resize of the scroller or its content is that moment.
+        const watchGrowth = (waiting: readonly HTMLElement[]) => {
+            growthObserver?.disconnect();
+            growthObserver = null;
+            if (waiting.length === 0 || typeof ResizeObserver === 'undefined') return;
+            try {
+                // A ResizeObserver reports every target once when it starts observing; that is not growth.
+                let delivered = false;
+                const observer = new ResizeObserver(() => {
+                    if (!delivered) {
+                        delivered = true;
+                        return;
+                    }
+                    if (growthObserver !== observer) return;
+                    observer.disconnect();
+                    growthObserver = null;
+                    bindToCurrentRoot();
+                });
+                for (const scroller of waiting) {
+                    observer.observe(scroller);
+                    for (const content of Array.from(scroller.children)) observer.observe(content);
+                }
+                growthObserver = observer;
+            } catch {
+                // Best-effort, like the rest of the binding.
+            }
+        };
 
         const bindToCurrentRoot = () => {
             if (cancelled) return;
-            const root = findOwnedScrollRoot(anchor);
+            const { root, waiting } = findOwnedScrollRoot(anchor);
             if (root !== lastRoot) {
                 try {
                     instance.cleanUp();
@@ -179,12 +215,17 @@ export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: 
             // bounds the case where no owned scroller ever appears (a non-virtualized inline diff),
             // where `document` stays the resolved root.
             if (lastRoot !== null && !(lastRoot instanceof Document)) return;
-            if (attempts >= maxAttempts) return;
+            if (attempts >= maxAttempts) {
+                watchGrowth(waiting);
+                return;
+            }
             raf(() => bindToCurrentRoot());
         };
 
         cleanupRef.current = () => {
             cancelled = true;
+            growthObserver?.disconnect();
+            growthObserver = null;
             try {
                 instance.cleanUp();
             } catch {
