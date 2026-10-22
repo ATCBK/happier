@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -96,8 +97,14 @@ printf '%s' '${archive}' > "$destination/pnpm-fixture.tgz"
 printf '[{"filename":"pnpm-fixture.tgz"}]\\n'
 ` });
   writeFakeBin({ root: checkout, binDirName: '.fixture-pnpm/bin', name: 'pnpm', content: `#!/bin/sh
-[ "$#:\${1-}" = '1:--version' ] || exit 97
-printf '%s\\n' '${version}'
+case "$#:\${1-}:\${2-}" in
+  '1:--version:') printf '%s\\n' '${version}' ;;
+  '2:install:--frozen-lockfile')
+    mkdir -p node_modules
+    printf 'packageManager: pnpm@${version}\\nlayoutVersion: 5\\nnodeLinker: hoisted\\n' > node_modules/.modules.yaml
+    ;;
+  *) exit 97 ;;
+esac
 ` });
   const launcher = join(bin, 'hstack-exec');
   await Promise.all([
@@ -164,10 +171,12 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       await mkdir(output, { recursive: true });
       await writeFile(join(output, 'index.js'), `export * from ${JSON.stringify(owner)};\n`);
     }
-    // The installer boundary has no dependencies to extract. The real owner
-    // records this tree only after that installation response completes.
+    // The external installer produces metadata for this dependency-free tree.
+    // The real refresh owner alone records proof after that process completes.
     await withDependencyRefresh({ installDir: checkout, componentDir: join(checkout, 'apps/stack'),
-      env: { ...buildNativeAdmissionFixtureEnv(), HAPPIER_STACK_HOME_DIR: root } }, async () => {});
+      env: { ...buildNativeAdmissionFixtureEnv(), HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_STACK_HOME_DIR: root } }, async ({ env }) => {
+      execFileSync(join(packageBin, 'pnpm'), ['install', '--frozen-lockfile'], { cwd: checkout, env, stdio: 'pipe' });
+    });
   }
   await writeFile(join(proc, 'service_memory.mjs'), `
 import { readFileSync } from 'node:fs';

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, readFile, readdir, readlink, realpath, unlink } from 'node:fs/promises';
+import { lstat, readFile, readdir, readlink, realpath, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -350,7 +350,7 @@ async function repairSelfReferentialNodeModulesLink(installDir) {
   return true;
 }
 
-export async function inspectDependencyRefresh({ installDir, componentDir = installDir, runtimeIdentity, installMode }) {
+export async function inspectDependencyRefresh({ installDir, componentDir = installDir, runtimeIdentity, installMode, env = process.env }) {
   const nodeModules = join(installDir, 'node_modules');
   const inputPaths = await collectDependencyInputPaths({ installDir, componentDir });
   const inputSnapshot = await readInputSnapshot({ inputPaths, installDir, componentDir });
@@ -360,6 +360,22 @@ export async function inspectDependencyRefresh({ installDir, componentDir = inst
   // and replacing node_modules naturally invalidates the old publication.
   const markerPath = resolveDependencyRefreshMarkerPath(installDir);
   const markerState = await readJsonIfExists(markerPath).catch(() => null);
+  // v6 input freshness never proved that pnpm started from a clean tree: it
+  // can retain unrecorded Yarn packages even alongside current .modules.yaml.
+  // Worker-only provenance is published by an actual install below, then bound
+  // to pnpm's produced metadata without another package inventory or parser.
+  const workerPnpmModules = String(env.HAPPIER_DEV_TARGET_EXECUTION ?? '') === '1'
+    && dependencyIdentity.packageManager.startsWith('pnpm@')
+    ? await readInputSnapshot({ installDir, componentDir, inputPaths: [
+        join(nodeModules, '.modules.yaml'), join(nodeModules, '.yarn-integrity'),
+      ] }) : null;
+  const workerPnpmTreeNeedsCleanInstall = workerPnpmModules !== null && (
+    markerState?.identity?.packageManager !== dependencyIdentity.packageManager
+    ||
+    workerPnpmModules.find(entry => entry.path === 'install:node_modules/.modules.yaml')?.kind !== 'file'
+    || workerPnpmModules.find(entry => entry.path === 'install:node_modules/.yarn-integrity')?.kind !== 'missing'
+    || !snapshotsMatch(markerState?.workerPnpmModules, workerPnpmModules)
+  );
   const nodeModulesPresent = await pathExists(nodeModules);
   const selfReferentialNodeModulesLinkPath = nodeModulesPresent
     ? await inspectSelfReferentialNodeModulesLink(installDir)
@@ -371,12 +387,13 @@ export async function inspectDependencyRefresh({ installDir, componentDir = inst
   ) {
     const inputsMatch = snapshotsMatch(markerState.inputs, inputSnapshot);
     return {
-      admitted: nodeModulesPresent && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true,
-      admittedState: nodeModulesPresent && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true
+      admitted: nodeModulesPresent && !workerPnpmTreeNeedsCleanInstall && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true,
+      admittedState: nodeModulesPresent && !workerPnpmTreeNeedsCleanInstall && selfReferentialNodeModulesLinkPath === null && markerState.superseded !== true
         // A warm prerequisite action may publish the proven projection without
         // installation. Stale raw admissions never acquire a current baseline.
         ? { ...markerState, inputs: inputsMatch ? inputSnapshot : markerState.inputs } : null,
       required: !nodeModulesPresent
+        || workerPnpmTreeNeedsCleanInstall
         || selfReferentialNodeModulesLinkPath !== null
         || markerState.superseded === true
         || !inputsMatch,
@@ -385,6 +402,8 @@ export async function inspectDependencyRefresh({ installDir, componentDir = inst
       dependencyIdentity,
       markerPath,
       selfReferentialNodeModulesLinkPath,
+      workerPnpmModules,
+      workerPnpmTreeNeedsCleanInstall,
     };
   }
   return {
@@ -396,6 +415,8 @@ export async function inspectDependencyRefresh({ installDir, componentDir = inst
     dependencyIdentity,
     markerPath,
     selfReferentialNodeModulesLinkPath,
+    workerPnpmModules,
+    workerPnpmTreeNeedsCleanInstall,
   };
 }
 
@@ -424,7 +445,7 @@ export async function assertDependenciesReady({ installDir, componentDir = insta
   const inspect = isYarnPredecessor
     ? (await import(pathToFileURL(join(installDir, 'apps/stack/scripts/utils/proc/dependency_refresh.mjs')).href)).inspectDependencyRefresh
     : inspectDependencyRefresh;
-  const readiness = await inspect({ installDir, componentDir, runtimeIdentity, installMode });
+  const readiness = await inspect({ installDir, componentDir, runtimeIdentity, installMode, env });
   if (readiness.required) requireRefresh('stale-or-unadmitted');
   if (!isYarnPredecessor) {
     const failures = await inspectUiPostinstallOutputs(join(installDir, 'apps', 'ui'), installDir, { env });
@@ -454,7 +475,7 @@ export async function withDependencyRefresh({
     // consumers, and wait as a reader when an installer is active. Release
     // before requesting a real refresh; never upgrade a held reader to writer.
     const readiness = await withDependencyConsumption({ installDir, env }, () =>
-      inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode }));
+      inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env }));
     if (!readiness.required) return { refreshed: false, reason: 'up-to-date' };
     if (!refreshExisting && readiness.selfReferentialNodeModulesLinkPath === null) {
       return { refreshed: false, reason: 'refresh-disabled' };
@@ -462,15 +483,15 @@ export async function withDependencyRefresh({
   }
 
   return await withDependencyRefreshLock({ installDir, env }, async ({ lockPath, owner }) => {
-    const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
+    const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
     if (!force && !afterDependencyLock.required && !shouldRunDependencyReadyAction) return { refreshed: false, reason: 'up-to-date' };
     const mutate = async () => {
-      let beforeMutation = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
+      let beforeMutation = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
       let result = { refreshed: false, reason: 'up-to-date' };
       if (beforeMutation.selfReferentialNodeModulesLinkPath !== null) {
         const repaired = await repairSelfReferentialNodeModulesLink(installDir);
         if (repaired) {
-          beforeMutation = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
+          beforeMutation = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
           result = {
             refreshed: false,
             reason: 'repaired-self-referential-node-modules-link',
@@ -485,6 +506,14 @@ export async function withDependencyRefresh({
           if (error?.code !== 'ENOENT') throw error;
         });
         const didRefresh = (force || beforeMutation.required) && refreshExisting;
+        if (didRefresh && beforeMutation.workerPnpmTreeNeedsCleanInstall) {
+          // Only this worker's root install region is discarded, under its
+          // existing writer lock. rm does not follow workspace symlinks into
+          // source-owned private closures such as the SDK's Protocol payload.
+          const nodeModules = join(installDir, 'node_modules');
+          console.log(`[local] reconciling unproven worker pnpm installation: ${nodeModules}`);
+          await rm(nodeModules, { recursive: true, force: true });
+        }
         // The refresh runs under this writer lock; its installer spawns with this environment.
         if (didRefresh) await refresh({ env: resolveLockedInstallEnv(env, { lockPath, owner }) });
         if (onDependenciesReady) await onDependenciesReady();
@@ -512,6 +541,15 @@ export async function withDependencyRefresh({
           componentDir,
         });
         const refreshedDependencyIdentity = await resolveDependencyIdentity({ installDir, runtimeIdentity, installMode });
+        const installed = beforeMutation.workerPnpmModules !== null && didRefresh
+          ? await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env }) : null;
+        if (installed && (
+          installed.workerPnpmModules?.find(entry => entry.path === 'install:node_modules/.modules.yaml')?.kind !== 'file'
+          || installed.workerPnpmModules?.find(entry => entry.path === 'install:node_modules/.yarn-integrity')?.kind !== 'missing'
+        )) {
+          throw Object.assign(new Error('Worker pnpm installation did not produce clean modules metadata'),
+            { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+        }
         const superseded = !snapshotsMatch(beforeMutation.inputSnapshot, refreshedInputSnapshot)
           || !dependencyIdentitySatisfies(beforeMutation.dependencyIdentity, refreshedDependencyIdentity);
         await writeJsonAtomic(beforeMutation.markerPath, {
@@ -522,6 +560,7 @@ export async function withDependencyRefresh({
           // of treating the install as an unknown/unpublished attempt forever.
           inputs: superseded ? beforeMutation.inputSnapshot : refreshedInputSnapshot,
           superseded,
+          ...(installed ? { workerPnpmModules: installed.workerPnpmModules } : {}),
         });
         if (didRefresh) result = { refreshed: true, reason: force ? 'forced-refresh' : 'stale-inputs' };
       }

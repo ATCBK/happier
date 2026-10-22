@@ -31,21 +31,21 @@ test('development input changes refresh installed dependencies before source bui
   const fixture = await createMinimalMonorepoFixture(t, { prefix: 'hstack-dev-auto-deps-' });
   await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
   await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# initial\n');
-  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   await fs.mkdir(fixture.path('node_modules'));
   await fs.mkdir(fixture.path('patches'));
-  const yarn = fixture.path('yarn.cjs');
+  const pnpm = fixture.path('pnpm.cjs');
   const installed = fixture.path('installed');
-  await fs.writeFile(yarn, [
+  await fs.writeFile(pnpm, [
     "const fs = require('node:fs');",
-    "if (process.argv[2] === '--version') console.log('1.22.22');",
+    "if (process.argv[2] === '--version') console.log('12.14.0');",
     `else fs.appendFileSync(${JSON.stringify(installed)}, process.argv.slice(2).join(' ') + '\\n');`,
   ].join('\n'));
   const env = { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
-    npm_execpath: yarn, HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
+    npm_execpath: pnpm, HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' };
   await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
   await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# stale at startup\n');
-  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   let watcher;
   let sourceBuilds = 0;
   const failures = [];
@@ -85,7 +85,7 @@ test('development input changes refresh installed dependencies before source bui
 
   // UI-only/no-watch startup must also perform real dependency admission.
   await fs.writeFile(fixture.path('pnpm-lock.yaml'), '# UI-only startup\n');
-  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   const uiReload = await createDevDependencyReload({ repoDir: fixture.root, env });
   const uiCoordinator = startDevReloadCoordinator({ observeChanges: false,
     descriptors: [uiReload.descriptor], executors: [uiReload.executor],
@@ -199,6 +199,7 @@ test('server startup recovery observes transitive workspace inputs, not unrelate
   const fixture = await createTempFixture(t, { prefix: 'hstack-server-transitive-recovery-' });
   const serverDir = fixture.path('apps/server');
   await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
   for (const [path, name, dependencies] of [
     ['apps/server', '@fixture/server', { '@happier-dev/plugin-ui': 'workspace:*' }],
     ['packages/plugin-ui', '@happier-dev/plugin-ui', { '@happier-dev/plugin-sdk': 'workspace:*' }],
@@ -1296,6 +1297,7 @@ test('a restart failure can request one bounded coordinator retry without anothe
 test('retained server build drift cold-starts through the coordinator and retries fresh output once', async t => {
   const fixture = await createMinimalMonorepoFixture(t, { prefix: 'hstack-retained-server-reload-' });
   await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await fs.writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
   const serverDir = fixture.path('apps/server');
   await fs.mkdir(serverDir, { recursive: true });
   await fs.writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server' }));

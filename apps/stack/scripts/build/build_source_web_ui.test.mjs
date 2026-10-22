@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,6 +21,108 @@ import { sanitizeStackTestRunnerEnv } from '../utils/test/test_env.mjs';
 import { recordStackRuntimeStart, readStackRuntimeStateFile } from '../utils/stack/runtime_state.mjs';
 import { beginPendingSourceStart } from '../runtime/shared/pending_source_start.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
+import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
+
+test('captured Metro crawls workspace-local installed dependencies', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-captured-metro-dependencies-', registerCleanup: false });
+  let metro;
+  t.after(async () => { await metro?.end(); await fixture.cleanup(); });
+  const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
+  const repoDir = fixture.path('source');
+  await prepareFiniteSourceWebFixture({ sourceRepo, repoDir });
+  const uiPackagePath = join(repoDir, 'apps/ui/package.json');
+  const uiPackage = JSON.parse(await readFile(uiPackagePath, 'utf8'));
+  delete uiPackage.type; // The production Metro config is CommonJS.
+  await writeFile(uiPackagePath, JSON.stringify(uiPackage));
+  const dependencies = ['apps/ui/node_modules/@capture-fixture/local/index.js',
+    'apps/ui/node_modules/capture-local/index.js', 'node_modules/capture-root/index.js'];
+  for (const dependency of dependencies) {
+    await mkdir(dirname(join(repoDir, dependency)), { recursive: true });
+    await writeFile(join(repoDir, dependency), 'module.exports = "installed-dependency";');
+  }
+  const capture = await captureSourceWebBuildInputs({ repoDir, outputDir: fixture.path('capture') });
+  const require = createRequire(join(capture.uiProjectDir, 'package.json'));
+  withPatchedProcessEnv(t, { HAPPIER_UI_METRO_NARROW_WATCH_FOLDERS: '1', EXPO_NO_METRO_WORKSPACE_ROOT: '1' });
+  const config = require('./metro.config.js');
+  for (const directory of ['apps/docs', 'packages/tests']) assert.equal(
+    config.watchFolders.includes(join(sourceRepo, directory)), false,
+    'installed workspace aliases must not add unrelated authored source roots');
+  const installedFiles = await Promise.all(dependencies.map(dependency => realpath(join(capture.repoDir, dependency))));
+  // Restrict this file-map check to the roots chosen by the real config that
+  // can contain this dependency; it needs no transform or unrelated UI graph.
+  const contains = (root, file) => {
+    const path = relative(root, file);
+    return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+  };
+  const roots = [config.projectRoot, ...config.watchFolders].filter(root => installedFiles.some(file => contains(root, file)));
+  for (const file of installedFiles) assert.ok(roots.some(root => contains(root, file)),
+    'resolved workspace-local and root bytes must be inside Metro crawl roots');
+  config.watchFolders = roots;
+  config.maxWorkers = 1;
+  config.resolver.useWatchman = false;
+  config.fileMapCacheDirectory = fixture.path('metro-cache');
+  await mkdir(config.fileMapCacheDirectory);
+  config.reporter = { update() {} };
+  metro = await require('metro').createConnectMiddleware(config, { watch: false, waitForBundler: true });
+  const graph = await metro.metroServer.getBundler().getBundler().getDependencyGraph();
+  for (const file of installedFiles) assert.equal((await graph.getOrComputeSha1(file)).sha1,
+    createHash('sha1').update(await readFile(file)).digest('hex'));
+});
+
+test('unchanged source export failure is terminal despite a Metro source diagnostic', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-web-unchanged-failure-' });
+  const repoDir = fixture.path('repo');
+  const { uiInput, uiSource } = await prepareFiniteSourceWebFixture({
+    sourceRepo: fileURLToPath(new URL('../../../../', import.meta.url)), repoDir,
+  });
+  const failure = Object.assign(new Error('Failed to get the SHA-1 for: installed/index.js (file is not watched)'),
+    { code: 1, sourceDrift: true });
+  let attempts = 0;
+  const cancellation = new AbortController();
+  let deadline;
+  t.after(() => clearTimeout(deadline));
+  await assert.rejects(exportSourceWebUi({ repoDir, baseDir: fixture.path('state'), outputDir: fixture.path('export'), signal: cancellation.signal,
+    env: { ...process.env, EXPO_PUBLIC_DEBUG: '0' },
+    runImpl: async () => {
+      attempts++;
+      await writeFile(uiInput, uiSource); // A new timestamp with identical bytes is not source drift.
+      deadline ??= setTimeout(() => cancellation.abort(new Error('unchanged export kept waiting for source edits')), 30000);
+      throw failure;
+    } }), error => {
+    assert.equal(error, failure, 'unchanged source must expose the original Metro error without waiting for edits');
+    assert.equal(error.sourceDrift, false);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
+
+test('source export retries a failed attempt only after authored input bytes changed', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-web-changed-failure-' });
+  const repoDir = fixture.path('repo');
+  const { uiInput } = await prepareFiniteSourceWebFixture({
+    sourceRepo: fileURLToPath(new URL('../../../../', import.meta.url)), repoDir,
+  });
+  let attempts = 0;
+  const cancellation = new AbortController();
+  let deadline;
+  t.after(() => clearTimeout(deadline));
+  const built = await exportSourceWebUi({ repoDir, baseDir: fixture.path('state'), outputDir: fixture.path('export'),
+    signal: cancellation.signal, env: { ...process.env, EXPO_PUBLIC_DEBUG: '0' },
+    runImpl: async (_command, args, { cwd }) => {
+      if (++attempts === 1) {
+        deadline = setTimeout(() => cancellation.abort(), 180000);
+        await writeFile(uiInput, 'export const changed = true;');
+        throw Object.assign(new Error('Metro export failed while inputs moved'), { code: 1 });
+      }
+      assert.equal(await readFile(join(cwd, 'sources/app/_layout.tsx'), 'utf8'), 'export const changed = true;');
+      const web = args[args.indexOf('--output-dir') + 1];
+      await mkdir(web);
+      await writeFile(join(web, 'index.html'), '<script src="./app.js"></script>');
+      await writeFile(join(web, 'app.js'), 'globalThis.changed = true;');
+    } });
+  assert.equal(attempts, 2);
+  assert.equal(await readFile(join(built.uiDir, 'app.js'), 'utf8'), 'globalThis.changed = true;');
+});
 
 test('stack web source reload preserves other roles when the served export is unavailable', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-web-reload-command-' });

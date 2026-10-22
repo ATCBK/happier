@@ -19,6 +19,7 @@ import { captureBuildInputFiles, mountCapturedWorkspaceDependencies, readBuildIn
 import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
+import { BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH } from '../../../../packages/cli-common/bundledPluginPublicationPolicy.mjs';
 
 import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -739,19 +740,23 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   let migrationSource;
   let sqliteMigration = false;
   const pluginMetadata = [];
+  const daemonProjectionRoot = join(repoDir, '.source-daemon-projections');
+  let derivesDaemonProjections = false;
   const outputPrefix = component === 'daemon' ? 'apps/cli' : 'apps/server';
   if (component === 'daemon') {
-    const cli = await readCliSourceEntries({repoDir, manifest, transform});
-    if (cli.pluginMetadata.length > 0) {
-      // Check the same captured declarations that selected runner entrypoints.
-      // A moving checkout may contain a new registration and older generated
-      // locators; the canonical publisher must reject that mixed closure.
+    const generatorPath = join(projectDir, 'scripts/build-owned/generateBundledPluginEntries.ts');
+    derivesDaemonProjections = existsSync(generatorPath) || existsSync(join(repoDir, 'packages/plugins'));
+    if (derivesDaemonProjections) {
+      // Derive the locator/declaration closure from these captured inputs.
+      // Committed projections remain the package/CI checker's responsibility.
       await run(process.execPath, ['--conditions=happier-source', '--experimental-strip-types',
-        join(projectDir, 'scripts/build-owned/generateBundledPluginEntries.ts'),
-        '--mode', 'check', '--scope', 'projections', '--daemon-projections'], {
+        generatorPath, '--daemon-projections', '--daemon-output-root', daemonProjectionRoot], {
         cwd: repoDir, env, signal, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
       });
+      await lstat(join(daemonProjectionRoot, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'));
     }
+    const cli = await readCliSourceEntries({repoDir, manifest, transform,
+      projectionRoot: derivesDaemonProjections ? daemonProjectionRoot : repoDir});
     Object.assign(entries, cli.entries);
     pluginMetadata.push(...cli.pluginMetadata.map(item => ({...item, dir:join(outputDir,item.prefix)})));
   } else {
@@ -770,6 +775,13 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const plugin = {
     name: 'source-runtime-boundaries',
     setup(builder) {
+      if (derivesDaemonProjections) {
+        const path = join(daemonProjectionRoot, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
+        builder.onResolve({ filter: /(?:^|[/\\])generatedBundledPluginManifests(?:\.ts)?$/ }, () => ({path, namespace: 'daemon-projections'}));
+        builder.onLoad({ filter: /.*/, namespace: 'daemon-projections' }, async () => ({
+          contents: await readFile(path, 'utf8'), loader: 'ts', resolveDir: projectDir,
+        }));
+      }
       if (component === 'server') builder.onLoad({ filter: /publicProfileFonts\.ts$/ }, async args => {
         if (args.path !== join(projectDir, 'sources/app/account/profile/render/publicProfileFonts.ts')) return;
         // This physical asset reader belongs to the retained server package,
@@ -900,6 +912,13 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
     Object.assign(result.metafile.inputs,sidecars.metafile.inputs);
     Object.assign(result.metafile.outputs,sidecars.metafile.outputs);
     if (existsSync(join(projectDir, 'assets'))) await cp(join(projectDir, 'assets'), join(runtimeDir, 'assets'), { recursive: true });
+    const projectedCli = join(daemonProjectionRoot, 'apps/cli');
+    if (derivesDaemonProjections) {
+      if (existsSync(join(projectedCli, 'assets'))) await cp(join(projectedCli, 'assets'), join(runtimeDir, 'assets'), { recursive: true });
+      const failuresPath = join(runtimeDir, BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH);
+      await mkdir(dirname(failuresPath), { recursive: true });
+      await cp(join(projectedCli, BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH), failuresPath);
+    }
     const nativeSource = join(projectDir, 'native/processcustody');
     const buildsProcessCustody = existsSync(join(nativeSource, 'go.mod'));
     const buildsCliProxyApi = pluginMetadata.some(item => item.package.name === '@happier-dev/plugins-cliproxyapi');

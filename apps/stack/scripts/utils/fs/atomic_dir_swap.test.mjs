@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import fs from 'node:fs';
 
@@ -166,38 +166,53 @@ test('buildIntoTempThenReplace retries transient Windows rename locks', async (t
 });
 
 test('mounted publication replaces workspace links without changing their producer, and restores links on failure', async (t) => {
-  for (const fail of [false, true]) await t.test(fail ? 'rollback' : 'success', async (t) => {
+  for (const linkState of ['live', 'dangling', 'nested-dangling']) for (const fail of [false, true]) await t.test(`${linkState} link ${fail ? 'rollback' : 'success'}`, async (t) => {
     const root = await withTempRoot(t);
     const producer = join(root, 'producer');
     const outDir = join(root, 'consumer');
+    const nested = linkState === 'nested-dangling';
+    const targetExists = linkState === 'live';
+    const packageDir = nested ? join(outDir, 'package') : outDir;
     await mkdir(producer);
     await writeFile(join(producer, 'package.json'), '{"scripts":{"build":"authored"}}\n');
-    await symlink(producer, outDir, process.platform === 'win32' ? 'junction' : 'dir');
+    if (nested) await mkdir(outDir);
+    const linkTarget = process.platform === 'win32' ? producer : relative(dirname(packageDir), producer);
+    await symlink(linkTarget, packageDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const originalLink = await readlink(packageDir);
+    if (!targetExists) await rm(producer, { recursive: true });
     // The mounted publisher accepts filesystem adapters directly; exercise its
     // rollback at that real boundary rather than substituting its logic.
     if (fail) {
       const { publishStagedDirectoryMountedSync } = await import('@happier-dev/cli-common/workspaceRuntimeDependencies');
       const stage = join(root, 'stage');
-      await mkdir(stage);
-      await writeFile(join(stage, 'index.js'), 'new\n');
-      await writeFile(join(stage, 'package.json'), '{"private":true}\n');
+      const stagedPackage = nested ? join(stage, 'package') : stage;
+      await mkdir(stagedPackage, { recursive: true });
+      await writeFile(join(stagedPackage, 'index.js'), 'new\n');
+      await writeFile(join(stagedPackage, 'package.json'), '{"private":true}\n');
       const fs = await import('node:fs');
       assert.throws(() => publishStagedDirectoryMountedSync({ stagedDir: stage, liveDir: outDir,
         rollbackDir: join(root, 'rollback'), fsOps: { renameSync(from, to) {
-          if (from === join(stage, 'package.json')) throw new Error('publication failure');
+          if (from === join(stage, 'package.json') || (nested && from === stagedPackage)) throw new Error('publication failure');
           fs.renameSync(from, to);
         } } }), /publication failure/);
-      assert.equal((await lstat(outDir)).isSymbolicLink(), true);
+      assert.equal((await lstat(packageDir)).isSymbolicLink(), true);
+      assert.equal(await readlink(packageDir), originalLink);
     } else {
       await buildIntoTempThenReplace(outDir, async (tmp) => {
-        await writeFile(join(tmp, 'index.js'), 'export const value = 1;\n');
-        await writeFile(join(tmp, 'package.json'), '{"private":true}\n');
+        const stagedPackage = nested ? join(tmp, 'package') : tmp;
+        await mkdir(stagedPackage, { recursive: true });
+        await writeFile(join(stagedPackage, 'index.js'), 'export const value = 1;\n');
+        await writeFile(join(stagedPackage, 'package.json'), '{"private":true}\n');
       }, { preserveDestinationPath: true });
-      assert.equal((await lstat(outDir)).isDirectory(), true);
-      assert.equal(await readFile(join(outDir, 'package.json'), 'utf8'), '{"private":true}\n');
+      assert.equal((await lstat(packageDir)).isDirectory(), true);
+      assert.equal(await readFile(join(packageDir, 'package.json'), 'utf8'), '{"private":true}\n');
     }
-    assert.equal(await readFile(join(producer, 'package.json'), 'utf8'), '{"scripts":{"build":"authored"}}\n');
-    assert.deepEqual(await readdir(producer), ['package.json']);
+    if (targetExists) {
+      assert.equal(await readFile(join(producer, 'package.json'), 'utf8'), '{"scripts":{"build":"authored"}}\n');
+      assert.deepEqual(await readdir(producer), ['package.json']);
+    } else {
+      await assert.rejects(lstat(producer), { code: 'ENOENT' });
+    }
   });
 });
 

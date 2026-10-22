@@ -95,7 +95,7 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
       .includes(relative(repoDir, root).replaceAll('\\', '/'))).map(([name]) => name);
   // Generated CLI entries use discovered shippable membership, which can be
   // newer than package.json's projected dependency list.
-  if (component === 'daemon' || component === 'expo') roots.push(...readBundledPluginPackageNames(repoDir));
+  if (component === 'daemon' || component === 'expo') roots.push(...readBundledPluginPackageNames(repoDir, { requireManifestSource: false }));
   if (component === 'expo') {
     const cli = [...packages.values()].find(({ root }) => relative(repoDir, root).replaceAll('\\', '/') === 'apps/cli');
     roots.push(...(cli?.manifest.bundledDependencies ?? []));

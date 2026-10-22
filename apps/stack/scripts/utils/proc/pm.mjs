@@ -687,7 +687,7 @@ async function ensureComponentDependenciesInstalled(
   const sharedUiDir = monorepoRoot && resolve(monorepoRoot) === resolve(installDir)
     ? join(monorepoRoot, 'apps', 'ui') : null;
   const needsSharedUiRepair = sharedUiDir && (
-    (await inspectDependencyRefresh({ installDir, componentDir })).required
+    (await inspectDependencyRefresh({ installDir, componentDir, env })).required
     || (await inspectUiPostinstallOutputs(sharedUiDir, installDir, { env })).length > 0
   );
   const guardedDependencyReadyAction = onDependenciesReady || prepareComponentOutputs || needsSharedUiRepair
@@ -709,7 +709,7 @@ async function ensureComponentDependenciesInstalled(
   // Stale or incomplete trees fall through to the owner's writer path.
   const admitCurrentTree = async ({ refreshExisting }) => {
     if (pm.name !== 'pnpm' || onDependenciesReady || needsSharedUiRepair) return false;
-    const readiness = await inspectDependencyRefresh({ installDir, componentDir });
+    const readiness = await inspectDependencyRefresh({ installDir, componentDir, env });
     if (readiness.required || (await inspectUiPostinstallOutputs(componentDir, installDir, { env })).length > 0) return false;
     await withDependencyRefresh({ installDir, componentDir, env, refreshExisting }, refreshDependencies);
     if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });

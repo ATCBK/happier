@@ -7,8 +7,10 @@ import test from 'node:test';
 
 import { inspectDependencyRefresh, isDependencyRefreshLockActive, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock, resolveDependencyRefreshLockPath } from './dependency_refresh.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
 import { withWorkspaceBuildResources } from './workspace_build_admission.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
+import { adoptInstalledDependencies } from '../dev_targets/remote_dependency_bootstrap.mjs';
 
 test('dependency refresh installs new verifier dependencies before probing UI outputs', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-verifier-prerequisite-' });
@@ -53,6 +55,69 @@ test('pnpm lockfile, workspace configuration and patch bytes invalidate installe
   }
 });
 
+test('worker pnpm admission cleans an unproven tree once and binds proof to installed metadata', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-worker-pnpm-lineage-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1' };
+  const componentDir = fixture.path('apps', 'stack');
+  const nodeModules = fixture.path('node_modules');
+  const metadata = join(nodeModules, '.modules.yaml');
+  const privateSource = fixture.path('packages', 'plugin-sdk', 'node_modules', '@happier-dev', 'protocol');
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+  await mkdir(privateSource, { recursive: true });
+  await writeFile(join(privateSource, 'package.json'), '{"name":"@happier-dev/protocol"}');
+  const install = async () => {
+    await mkdir(join(nodeModules, 'react-test-renderer'), { recursive: true });
+    await mkdir(join(nodeModules, 'react'), { recursive: true });
+    await writeFile(join(nodeModules, 'react', 'index.js'), 'module.exports = {};\n');
+    await writeFile(join(nodeModules, 'react-test-renderer', 'package.json'), '{"name":"react-test-renderer"}');
+    // Package-manager output is the external boundary. The real admission,
+    // root cleanup, writer custody and warm reuse remain live.
+    await writeFile(metadata, 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n');
+  };
+  await install();
+  await mkdir(join(nodeModules, '@happier-dev'), { recursive: true });
+  await symlink(fixture.path('packages', 'plugin-sdk'), join(nodeModules, '@happier-dev', 'plugin-sdk'), process.platform === 'win32' ? 'junction' : 'dir');
+  await mkdir(join(nodeModules, 'react-test-renderer', 'node_modules', 'react'), { recursive: true });
+  await writeFile(join(nodeModules, 'react-test-renderer', 'node_modules', 'react', 'index.js'), 'module.exports = {};\n');
+  await writeFile(join(nodeModules, '.yarn-integrity'), '{}');
+  // The previous admission proves input freshness, never clean pnpm lineage.
+  await withDependencyRefresh({ installDir: fixture.root, componentDir, env: { ...env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
+  let installs = 0;
+  const refresh = async () => {
+    installs++;
+    assert.equal(isDependencyRefreshLockActive({ installDir: fixture.root, env }), true);
+    await assert.rejects(lstat(nodeModules), { code: 'ENOENT' }, 'the complete root must be cold before pnpm runs');
+    await install();
+  };
+  assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env }, refresh)).refreshed, true);
+  await assert.rejects(lstat(join(nodeModules, 'react-test-renderer', 'node_modules', 'react')), { code: 'ENOENT' });
+  assert.equal(await readFile(join(privateSource, 'package.json'), 'utf8'), '{"name":"@happier-dev/protocol"}');
+  assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env }, refresh)).refreshed, false);
+  assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env, onDependenciesReady: async () => {} }, refresh)).refreshed, false);
+  assert.equal((await withDependencyRefresh({ installDir: fixture.root, componentDir, env }, refresh)).refreshed, false);
+  assert.equal(installs, 1, 'an unchanged proven pnpm installation stays warm');
+  assert.deepEqual(await adoptInstalledDependencies({ repoDir: fixture.root, env }), { refreshed: false, reason: 'up-to-date' });
+  let queuedAdoption;
+  await withDependencyRefreshLock({ installDir: fixture.root, env }, async () => {
+    queuedAdoption = adoptInstalledDependencies({ repoDir: fixture.root, env });
+    const waiters = `${resolveDependencyRefreshLockPath(fixture.root, env)}.waiters`;
+    while (!(await readdir(waiters)).some(name => /^\d+\.json$/.test(name))) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    // Replace manager output after the initial inspection but before admission
+    // takes custody. Adoption must never cold-clean bytes it cannot reinstall.
+    await writeFile(metadata, 'packageManager: yarn@1.22.22\n');
+  });
+  await assert.rejects(queuedAdoption, { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  assert.equal(await readFile(metadata, 'utf8'), 'packageManager: yarn@1.22.22\n', 'queued adoption must leave invalidated installed bytes intact');
+  await writeFile(metadata, 'packageManager: yarn@1.22.22\n');
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, componentDir, env })).required, true);
+  await assert.rejects(adoptInstalledDependencies({ repoDir: fixture.root, env }), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  assert.equal(await readFile(metadata, 'utf8'), 'packageManager: yarn@1.22.22\n', 'adoption cannot mutate or certify unproven worker bytes');
+  await rm(metadata);
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, componentDir, env })).required, true);
+});
+
 test('readiness without installation shares a long consumer even when source inputs are stale', { timeout: 10000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-readonly-dependency-readiness-' });
   const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
@@ -85,6 +150,14 @@ test('readiness without installation shares a long consumer even when source inp
 });
 
 test('readiness queued during installation remains a reader and waits for complete installed bytes', { timeout: 10000 }, async t => {
+  // This independent fixture consumer does not inherit the runner's already
+  // admitted finite build or its prohibition on waiting for further resources.
+  withPatchedProcessEnv(t, {
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined,
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: undefined,
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: undefined,
+    HAPPIER_BUILD_DEPENDENCY_CUSTODY: undefined,
+  });
   const fixture = await createTempFixture(t, { prefix: 'happier-dependency-install-readiness-order-' });
   const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
   delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
@@ -555,6 +628,8 @@ test('dependency readiness survives relocation of a byte-identical installed tre
   let refreshCount = 0;
   await withDependencyRefresh({ installDir: sourceRoot }, async () => {
     refreshCount += 1;
+    await mkdir(join(sourceRoot, 'node_modules'), { recursive: true });
+    await writeFile(join(sourceRoot, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nnodeLinker: hoisted\n');
   });
   assert.equal(refreshCount, 1);
   const sourceInspection = await inspectDependencyRefresh({ installDir: sourceRoot });
@@ -598,7 +673,10 @@ test('dependency readiness rejects legacy markers and a different toolchain iden
   };
   const x64Identity = { ...armIdentity, architecture: 'x64' };
 
-  await withDependencyRefresh({ installDir: root, runtimeIdentity: armIdentity }, async () => {});
+  await withDependencyRefresh({ installDir: root, runtimeIdentity: armIdentity }, async () => {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await writeFile(join(root, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nnodeLinker: hoisted\n');
+  });
   const admitted = await inspectDependencyRefresh({ installDir: root, runtimeIdentity: armIdentity });
   assert.equal(admitted.required, false);
   assert.equal(

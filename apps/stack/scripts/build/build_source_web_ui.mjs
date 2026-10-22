@@ -43,13 +43,13 @@ export async function exportSourceWebUi({ repoDir, baseDir, outputDir, stackBase
     stackBaseDir = null;
   }
   if (stackBaseDir) {
-    const built = await prepareSourceComponent({ repoDir, target: 'expo', env, signal,
+    const built = await prepareSourceWebComponent({ repoDir, env, signal,
       prepare: () => exportSharedSourceWebUi({ repoDir, baseDir, stackBaseDir, requestId: pending.requestId, env, signal }) });
     await pending.setPhase({ phase: 'prepared', component: 'ui' });
     return built;
   }
   let createdOutput = false;
-  const built = await prepareSourceComponent({ repoDir, target: 'expo', env, signal,
+  const built = await prepareSourceWebComponent({ repoDir, env, signal,
     prepare: async () => {
       // This call's private partial export is never selected or served. A retry
       // must rerun preparation in an empty directory, preserving EEXIST for a
@@ -110,6 +110,22 @@ async function sourceWebBuildOptions({ repoDir, env }) {
 async function sourceWebInputIdentity({ repoDir }) {
   const { files } = await readSourceComponentBuildInputs({ repoDir, component: 'expo' });
   return await readBuildInputIdentity({ sourceDir: repoDir, files });
+}
+
+async function prepareSourceWebComponent({ repoDir, env, signal, prepare }) {
+  return await prepareSourceComponent({ repoDir, target: 'expo', env, signal, prepare: async () => {
+    const before = await sourceWebInputIdentity({ repoDir });
+    try {
+      return await prepare();
+    } catch (error) {
+      // Diagnostics alone cannot distinguish a missing watch root from source
+      // churn. Reuse the canonical input-byte identity for this attempt, across
+      // both private and shared subprocess exports, before deciding to retry.
+      error.sourceDrift = !signal?.aborted && !error.signal
+        && before !== await sourceWebInputIdentity({ repoDir });
+      throw error;
+    }
+  } });
 }
 
 async function webOutputDigests(directory, prefix = '') {

@@ -55,6 +55,9 @@ export async function createDevDependencyReload({ repoDir, env = process.env }) 
 // failures. Unknown configuration/OS errors retain their fail-fast behavior.
 export function isDevStartupSourceDrift(error, target) {
   if (error?.signal || error?.name === 'AbortError') return false;
+  // Finite producers can compare the actual input bytes. Their negative
+  // observation is stronger than a compiler/Metro diagnostic heuristic.
+  if (error?.sourceDrift === false) return false;
   if (error?.code === 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED') {
     return isDevStartupSourceDrift(error.cause, target);
   }
@@ -62,7 +65,8 @@ export function isDevStartupSourceDrift(error, target) {
   // Expo startup can be dependency installation or process admission instead.
   // Finite source builders retain this observation from compiler/Metro output.
   // A numeric exit alone also covers admission, dependency and config failures.
-  // Metro's missing SHA-1 means a source file was added or removed mid-bundle.
+  // A missing SHA-1 can follow source churn or incomplete Metro watch roots;
+  // the finite producer's explicit observation above takes precedence.
   // A workspace build's child output can report a declared export whose file is still being written.
   if (/EACCES|EPERM|ENOSPC|EADDRINUSE|permission denied/i.test(String(error?.message ?? ''))) return false;
   const sourceDiagnostic = (error?.code === 'EEXIT' || (Number.isInteger(error?.code) && error.code > 0))

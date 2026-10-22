@@ -25,7 +25,8 @@ test('CLI source preparation stages admitted native custody and releases publica
   const nativeSource = join(cliDir, 'native/processcustody/main.go');
   writeFileSync(nativeSource, 'native-custody');
   writeFileSync(join(repoDir, 'package.json'), '{"private":true}');
-  writeFileSync(join(repoDir, 'yarn.lock'), '# source fixture');
+  writeFileSync(join(repoDir, 'pnpm-lock.yaml'), '# source fixture');
+  writeFileSync(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   const buildRecord = join(root, 'native-build');
   // Go and physical capacity are OS boundaries. The real source setup,
   // native admission, authenticated lease and staging owner remain live.
@@ -66,8 +67,9 @@ printf 'compiled\\n' >> '${buildRecord}'
 
 test('typecheck readers consume last-green declarations while publication leases remain held', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-held-publication-' });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   const metadata = { name: '@happier-dev/protocol', type: 'module', main: './dist/index.js', types: './dist/index.d.ts',
     scripts: { build: 'fixture-compiler' } };
   const dependency = join(root, 'packages/protocol');
@@ -113,7 +115,8 @@ test('typecheck readers consume last-green declarations while publication leases
 test('runtime preparation publishes captured inputs and preserves last-green after compiler failure', async t => {
   for (const scenario of ['warm', 'cold', 'damaged', 'compiler-error']) await t.test(scenario, async t => {
     const { root } = await createTempFixture(t, { prefix: 'hstack-finite-preparation-drift-' });
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
     for (const app of ['cli', 'ui', 'server']) {
       mkdirSync(join(root, 'apps', app), { recursive: true });
       writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}`,
@@ -184,8 +187,9 @@ test('runtime preparation publishes captured inputs and preserves last-green aft
 test('cold CLI artifact publication builds the selected plugin before invoking its artifact consumer', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-cold-plugin-dist-' });
   const native = await installWorkspaceAdmissionProcessFixture(t, root);
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module', workspaces: ['apps/*', 'packages/plugins/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/plugins/*"\n');
   const cli = join(root, 'apps/cli');
   const plugin = join(root, 'packages/plugins/claude');
   for (const name of ['ui', 'server']) {
@@ -226,8 +230,9 @@ writeFileSync(root + '/published-plugin', dist);`);
 
 test('source-test and typecheck readers leave cold, current and stale outputs to their producers', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-preparation-' });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   const cli = join(root, 'apps/cli');
   const protocol = join(root, 'packages/protocol');
   mkdirSync(cli, { recursive: true });
@@ -295,8 +300,9 @@ export default { plugins: [createWorkspacePackageSourcesPlugin([{ packageName: '
 test('artifact-consuming preparation publishes cold outputs, reuses current outputs and rebuilds stale outputs', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-artifact-preparation-' });
   const native = await installWorkspaceAdmissionProcessFixture(t, root);
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   for (const name of ['ui', 'cli', 'server']) {
     mkdirSync(join(root, 'apps', name), { recursive: true });
     writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}`, version: '1.0.0' }));
@@ -380,8 +386,9 @@ test('remote validation preparation delegates component dependency outputs to th
 
 test('remote development validation isolates an optional plugin at the real package build boundary', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-optional-validation-' });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/plugins/*'] }));
-  writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/plugins/*"\n');
   const ui = join(root, 'apps/ui');
   const inspector = join(root, 'packages/plugins/inspector');
   mkdirSync(ui, { recursive: true });

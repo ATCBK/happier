@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { execPnpm } from '../../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { resolveRemoteValidationPreparationEnv } from './validation_env.mjs';
-import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { assertDependenciesReady, inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';
 import { isYarnWorkspace } from '../proc/workspace_package_manifests.mjs';
@@ -72,6 +72,12 @@ export async function adoptInstalledDependencies({
 } = {}) {
   if (!existsSync(join(repoDir, 'node_modules'))) {
     throw new Error(`[local] cannot adopt dependencies at ${repoDir}: node_modules is missing`);
+  }
+  const readiness = await inspectDependencyRefresh({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
+  if (readiness.workerPnpmTreeNeedsCleanInstall) {
+    // Adoption may reuse current worker proof, but cannot certify an old or
+    // externally replaced tree without the worker's canonical cold install.
+    await assertDependenciesReady({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
   }
   return await withDependencyRefreshImpl(
     {

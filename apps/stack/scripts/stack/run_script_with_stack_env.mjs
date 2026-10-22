@@ -1150,7 +1150,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
             const outFd = logHandle?.fd ?? null;
             const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], {
               cwd: rootDir,
-              env: childEnv,
+              env: { ...childEnv, ...(background ? { HAPPIER_STACK_RUNNER_LOG_PATH: logPath } : {}) },
               stdio: background ? ['ignore', outFd ?? 'ignore', outFd ?? 'ignore'] : 'inherit',
               shell: false,
               detached: background && process.platform !== 'win32',
@@ -1354,7 +1354,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
             const logHandle = await open(logPath, 'a');
             const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], {
               cwd: rootDir,
-              env,
+              env: { ...env, HAPPIER_STACK_RUNNER_LOG_PATH: logPath },
               stdio: ['ignore', logHandle.fd, logHandle.fd],
               shell: false,
               detached: process.platform !== 'win32',

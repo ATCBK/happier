@@ -15,6 +15,7 @@ import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDepen
 import { resolveRemoteCommandPolicy } from './remote_commands.mjs';
 import { ensureWorkspacePackagesBuiltForComponent, inspectWorkspaceQaStalePackages, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { execPnpm } from '../../../../../scripts/workspaces/execPnpmCommand.mjs';
 import {
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
@@ -54,6 +55,66 @@ test('remote dev startup refreshes a stale installed tree before publishing read
 // These fixtures model worker mirrors. Local validation opts in explicitly;
 // the real bootstrap entry point defaults to read-only primary admission.
 const bootstrapRemoteDependencies = options => bootstrapDependencies({ executionPlacement: 'remote', ...options });
+
+test('worker bootstrap restores server generated dependencies before publishing readiness', {
+  skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
+}, async t => {
+  for (const owner of ['bootstrap', 'package-manager', 'worktree']) for (const failGeneration of [false, true]) await t.test(`${owner}: ${failGeneration ? 'generation failure withholds admission' : 'generated client precedes admission'}`, async t => {
+    const fixture = await createTempFixture(t, { prefix: 'happier-worker-server-generation-' });
+    await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@12.14.0' }));
+    await writeFile(fixture.path('pnpm-lock.yaml'), '# fixture\n');
+    await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+    for (const component of ['stack', 'ui', 'cli', 'server']) {
+      await mkdir(fixture.path('apps', component), { recursive: true });
+      await writeFile(fixture.path('apps', component, 'package.json'), JSON.stringify({
+        name: component === 'server' ? '@happier-dev/server' : `@fixture/${component}`,
+        ...(component === 'server' ? { scripts: { 'generate:providers': 'node generate.mjs' } } : {}),
+      }));
+    }
+    const marker = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+    const generated = fixture.path('node_modules', '.prisma', 'client', 'index.js');
+    const binDir = fixture.path('bin');
+    await mkdir(binDir);
+    // Only the package-manager process is replaced: real bootstrap, the shared
+    // server prerequisite producer, writer locking and readiness remain live.
+    await writeFile(join(binDir, 'pnpm'), `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('12.14.0'); process.exit(0); }
+if (!fs.existsSync(${JSON.stringify(fixture.path('.project', 'tmp', 'dependency-install.lock'))})) throw new Error('Missing install custody');
+if (fs.existsSync(${JSON.stringify(marker)})) throw new Error('Premature admission');
+if (args[0] === 'install') {
+  fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(process.cwd(), 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\\nnodeLinker: hoisted\\n');
+} else if (args.join(' ') === '--filter @happier-dev/server run --silent generate:providers') {
+  if (${JSON.stringify(failGeneration)}) process.exit(47);
+  fs.mkdirSync(path.dirname(${JSON.stringify(generated)}), { recursive: true });
+  fs.writeFileSync(${JSON.stringify(generated)}, 'module.exports = { PrismaClient: class PrismaClient {} };\\n');
+} else throw new Error('Unexpected package-manager operation');
+`);
+    await chmod(join(binDir, 'pnpm'), 0o755);
+    const env = { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      npm_execpath: '', npm_node_execpath: '', HAPPIER_DEV_TARGET_EXECUTION: '1',
+      HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_ENV_FILE: '' };
+    const prepare = owner === 'bootstrap'
+      ? bootstrapRemoteDependencies({ repoDir: fixture.root, validationKind: 'source-test', componentRelativeDir: 'apps/stack', env })
+      : owner === 'package-manager'
+        ? ensureDepsInstalled(fixture.path('apps', 'cli'), 'fixture CLI', { env, prepareComponentOutputs: false })
+        : withPnpmInstallGuard({ installDir: fixture.root, env }, async ({ env: installEnv }) =>
+            execPnpm(REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS, { cwd: fixture.root, env: installEnv }));
+    if (failGeneration) {
+      await assert.rejects(prepare, error => error.status === 47);
+      await assert.rejects(stat(marker), { code: 'ENOENT' });
+    } else {
+      await prepare;
+      assert.equal(typeof createRequire(import.meta.url)(generated).PrismaClient, 'function');
+      assert.equal((await inspectDependencyRefresh({ installDir: fixture.root,
+        componentDir: owner === 'bootstrap' ? fixture.path('apps', 'stack') : owner === 'package-manager' ? fixture.path('apps', 'cli') : fixture.root,
+        env, ...(owner === 'bootstrap' ? { installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE } : {}) })).required, false);
+    }
+  });
+});
 
 test('warm worker bootstrap waits for a live refresh instead of refusing the admitted tree', { timeout: 10000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-warm-worker-refresh-' });
@@ -168,10 +229,8 @@ test('scriptless CLI bootstrap admits native pnpm patches and repairs warm patch
   await cp(join(sourceRepoDir, 'packages/brand'), join(repoDir, 'packages/brand'), {
     recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist'),
   });
-  await mkdir(join(repoDir, 'node_modules'), { recursive: true });
-  for (const name of ['esbuild', '@esbuild', 'diff', 'yaml']) {
-    await symlink(join(sourceRepoDir, 'node_modules', name), join(repoDir, 'node_modules', name));
-  }
+  await mkdir(join(patchedDir, 'node_modules'), { recursive: true });
+  await writeFile(join(patchedDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nnodeLinker: hoisted\n');
   const patches = [];
   for (const [selector, patchFile] of Object.entries(workspace.patchedDependencies)) {
     const packageName = selector.slice(0, selector.lastIndexOf('@'));
@@ -225,6 +284,12 @@ if (args[0] === 'install') {
     fs.rmSync(path.join(${JSON.stringify(repoDir)}, 'node_modules', packageName), { recursive: true, force: true });
   }
   fs.cpSync(${JSON.stringify(patchedDir)}, ${JSON.stringify(repoDir)}, { recursive: true });
+  for (const packageName of ['esbuild', '@esbuild', 'diff', 'yaml']) {
+    const destination = path.join(${JSON.stringify(repoDir)}, 'node_modules', packageName);
+    if (!fs.lstatSync(destination, { throwIfNoEntry: false })) {
+      fs.symlinkSync(path.join(${JSON.stringify(sourceRepoDir)}, 'node_modules', packageName), destination);
+    }
+  }
 } else if (args.join(' ') === '--filter @happier-dev/app run --silent postinstall:real') {
   const result = spawnSync(process.execPath, [${JSON.stringify(join(uiDir, 'tools/postinstall.mjs'))}], { env: process.env, stdio: 'inherit' });
   process.exit(result.status ?? 1);
@@ -237,6 +302,7 @@ if (args[0] === 'install') {
   const options = { repoDir, validationKind: 'source-test', componentRelativeDir: 'apps/cli', env: {
     ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`, npm_execpath: '',
     HAPPIER_STACK_HOME_DIR: join(repoDir, 'home'), HAPPIER_STACK_ENV_FILE: '', HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
+    HAPPIER_DEV_TARGET_EXECUTION: '1',
   } };
   await bootstrapRemoteDependencies(options);
   verifyUiPatchedDependencies({ uiPackageDir: uiDir });
@@ -293,7 +359,7 @@ for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local val
     await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
   }
   await mkdir(join(repoDir, 'node_modules'));
-  await withDependencyRefresh({ installDir: repoDir }, async () => {});
+  await withDependencyRefresh({ installDir: repoDir, env: { ...process.env, HAPPIER_DEV_TARGET_EXECUTION: '' } }, async () => {});
   const markerPath = join(repoDir, 'node_modules/.happier-stack-dependencies-ready');
   const admittedBytes = await readFile(markerPath, 'utf8');
   await writeFile(join(repoDir, 'pnpm-lock.yaml'), '# changed inputs\n');
@@ -651,13 +717,15 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
   // The compiler process is an external boundary. Make unnecessary publication
   // fail deliberately rather than relying on unrelated Protocol diagnostics.
   await writeFile(join(protocolDir, 'compile.mjs'), "throw new Error('UI source tests do not consume Protocol dist; publication must not gate postinstall readiness');\n");
-  await mkdir(join(repoDir, 'node_modules', '@happier-dev'), { recursive: true });
+  const installedDependenciesDir = join(repoDir, 'installed-dependencies');
+  await mkdir(join(installedDependenciesDir, '@happier-dev'), { recursive: true });
   for (const entry of await readdir(join(sourceRepoDir, 'node_modules'))) {
-    if (entry === '@happier-dev' || entry === '.bin' || entry === 'react-native-enriched-markdown') continue;
-    await symlink(join(sourceRepoDir, 'node_modules', entry), join(repoDir, 'node_modules', entry));
+    if (['@happier-dev', '.bin', '.modules.yaml', '.yarn-integrity', '.happier-stack-dependencies-ready', 'react-native-enriched-markdown'].includes(entry)) continue;
+    await symlink(join(sourceRepoDir, 'node_modules', entry), join(installedDependenciesDir, entry));
   }
-  await symlink(protocolDir, join(repoDir, 'node_modules', '@happier-dev', 'protocol'));
-  await symlink(join(repoDir, 'packages', 'cli-common'), join(repoDir, 'node_modules', '@happier-dev', 'cli-common'));
+  await symlink(protocolDir, join(installedDependenciesDir, '@happier-dev', 'protocol'));
+  await symlink(join(repoDir, 'packages', 'cli-common'), join(installedDependenciesDir, '@happier-dev', 'cli-common'));
+  await writeFile(join(installedDependenciesDir, '.modules.yaml'), 'packageManager: pnpm@12.14.0\nnodeLinker: hoisted\n');
   const protocolDependencyDir = join(sourceRepoDir, 'packages', 'protocol', 'node_modules');
   if (await stat(protocolDependencyDir).then(() => true, (error) => {
     if (error.code === 'ENOENT') return false;
@@ -694,7 +762,7 @@ const args = process.argv.slice(2);
 if (args[0] === '--version') {
   console.log('12.14.0');
 } else if (args[0] === 'install') {
-  fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
+  fs.cpSync(${JSON.stringify(installedDependenciesDir)}, path.join(process.cwd(), 'node_modules'), { recursive: true });
 } else if (args.join(' ') === '-s build' && process.cwd() === ${JSON.stringify(protocolDir)}) {
   throw new Error('UI source tests do not consume Protocol dist; publication must not gate postinstall readiness');
 } else if (args.join(' ') === '--filter @happier-dev/app run --silent postinstall:real'
@@ -719,6 +787,7 @@ if (args[0] === '--version') {
       ...process.env,
       PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
       npm_execpath: '',
+      HAPPIER_DEV_TARGET_EXECUTION: '1',
       HAPPIER_STACK_HOME_DIR: join(repoDir, 'home'),
       HAPPIER_STACK_ENV_FILE: '',
       HAPPIER_TEST_UI_PATCH_INPUT: patchInputDir,

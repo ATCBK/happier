@@ -227,7 +227,7 @@ test('sibling command configuration preserves placement overrides and excludes s
   const configPath = join(root, 'stack/dev-targets.json');
   await mkdir(repoRoot);
   await mkdir(join(root, 'stack'));
-  await writeFile(join(repoRoot, 'package.json'), '{}');
+  await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ packageManager: 'yarn@1.22.22', workspaces: [] }));
   await writeFile(join(repoRoot, 'yarn.lock'), '# sibling lock');
   const config = {
     version: 3,
@@ -482,7 +482,7 @@ test('sibling preparation reads its own persisted service placement', async t =>
   const env = { ...process.env, HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks') };
   await mkdir(repoRoot);
   await mkdir(join(root, 'producer'));
-  await writeFile(join(repoRoot, 'package.json'), '{}');
+  await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ packageManager: 'yarn@1.22.22', workspaces: [] }));
   await writeFile(join(repoRoot, 'yarn.lock'), '# fixture');
   const target = { name: 'mac-host', platform: 'posix', ssh: 'mac-ssh',
     repoDir: '/mirror/0.2', cliHomeDir: '/home/mac' };
