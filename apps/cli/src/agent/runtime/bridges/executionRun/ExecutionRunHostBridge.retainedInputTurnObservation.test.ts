@@ -179,7 +179,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
         // Pending delivery. Exercise their real saved-state admission here.
         if (!input.resultId) {
             const saved = await readOrCreateSavedScmResult(run, run.structuredMeta?.payload);
-            run = { ...run, intentInput: { ...input, resultId: saved.result.resultId } };
+            run = { ...run, intentInput: { ...input, resultId: saved.result.resultId, resultInitialInputId: localId } };
             const initial = await ScmDiffSummaryProfile.onStarted?.({ start: run, rawText: '', finishedAtMs: 1 });
             run = { ...run, structuredMeta: initial?.structuredMeta, latestToolResult: initial?.toolResultOutput };
             internals.runs.set('run-1', run);
@@ -454,12 +454,17 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
                 } } });
         } finally { await attachment?.release(); }
     });
-    it('observes walkthrough completion through publication while the retained Run stays running', async () => {
+    it.each([
+        { modelId: 'selected-model', effectiveModelId: undefined, expectedModelId: 'selected-model' },
+        { modelId: 'selected-model', effectiveModelId: 'native-model', expectedModelId: 'native-model' },
+        { modelId: undefined, effectiveModelId: undefined, expectedModelId: undefined },
+    ])('observes walkthrough completion through publication with Run model attribution ($expectedModelId)', async ({ modelId, effectiveModelId, expectedModelId }) => {
         const { manager, internals, attachment, emitRuntimeEvent, acceptInput } = composeRetainedRun();
         const controller = internals.controllers.get('run-1')!;
         const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'workingTree' },
             repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
-        internals.runs.set('run-1', { ...internals.runs.get('run-1')!, intent: 'scm_diff_summary', intentInput: {
+        internals.runs.set('run-1', { ...internals.runs.get('run-1')!, intent: 'scm_diff_summary', modelId,
+            ...(effectiveModelId ? { effectiveEngine: { agentId: TEST_BACKEND_ID, modelId: effectiveModelId } } : {}), intentInput: {
             source: comparison.source, comparison, outputs: ['walkthrough'], sourceKey: comparison.id,
             metadata: { source: comparison.source, sourceKey: comparison.id },
         } });
@@ -474,6 +479,12 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
             emitRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', sequence: 2, emittedAtMs: 2, turnId: 'walkthrough-turn' });
             expect(await observed).toMatchObject({ structuredMeta: { payload: { outputs: { walkthrough: { state: 'complete' } } } } });
             expect(manager.get('run-1')).toMatchObject({ status: 'running', structuredMeta: { payload: { outputs: { walkthrough: { state: 'complete' } } } } });
+            const scope = { cwd: '/repo', sessionId: 'session-1',
+                resultId: (internals.runs.get('run-1')!.intentInput as { resultId: string }).resultId };
+            const saved = await scmDiffSummaryResultStore.read(scope);
+            if (!saved.success) throw new Error(saved.error);
+            expect(saved.result.output.outputs?.walkthrough?.state).toBe('complete');
+            expect(saved.result.output.producer?.modelId).toBe(expectedModelId);
         } finally { await attachment?.release(); }
     });
     it.each(['native-failure', 'malformed-model'] as const)('settles prior admission uncertainty after current %s publishes failed walkthrough output', async (failure) => {
@@ -778,6 +789,12 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
         try {
             for (const [index, summary] of ['First part.', 'Integrated explanation.'].entries()) {
                 const turnId = `summary-turn-${index}`;
+                if (index > 0) {
+                    const input = internals.runs.get('run-1')!.intentInput as { resultId: string };
+                    const admitted = await scmDiffSummaryResultStore.beginInput({ cwd: '/repo', sessionId: 'session-1',
+                        resultId: input.resultId, inputId: `summary-input-${index}`, outputs: ['summary'] });
+                    if (!admitted.success) throw new Error(admitted.error);
+                }
                 await acceptInput(`summary-input-${index}`, turnId);
                 controller.buffer = JSON.stringify({ summaryMarkdown: summary });
                 emitRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', sequence: index + 2,

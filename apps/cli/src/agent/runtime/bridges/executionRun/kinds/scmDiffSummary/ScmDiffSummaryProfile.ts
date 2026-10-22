@@ -21,7 +21,7 @@ import {
 } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheStore';
 import type { ScmDiffSummaryCacheKeyInput } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheKey';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
-import { buildPendingScmDiffSummaryOutput, publishSavedScmDiffSummaryTurn, readOrCreateSavedScmResult, readInitialScmDiffSummaryInputId } from './publishSavedScmDiffSummaryTurn';
+import { buildPendingScmDiffSummaryOutput, publishSavedScmDiffSummaryTurn, readOrCreateSavedScmResult, readInitialScmDiffSummaryInputId, readScmDiffSummaryProducerModelId } from './publishSavedScmDiffSummaryTurn';
 import { buildReviewNarrationInputContext, readReviewNarration, readReviewFindingCitationContext } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
 import { findingCitationInstructions, publishReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 import { resolveScmDiffSummarySettings } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
@@ -106,9 +106,10 @@ function withReviewNarrationProvenance(params: ExecutionRunProfileTurnCompletePa
   const narration = readReviewNarration(params.start.intentInput);
   if (!narration) return completion;
   const output = ScmDiffSummaryGenerateOutputSchema.parse(completion.toolResultOutput);
+  const modelId = readScmDiffSummaryProducerModelId(params.start);
   const annotated = ScmDiffSummaryGenerateOutputSchema.parse({ ...output, producer: {
     kind: 'review', runId: params.start.runId,
-    ...(params.start.effectiveEngine?.modelId ? { modelId: params.start.effectiveEngine.modelId } : {}),
+    ...(modelId ? { modelId } : {}),
     ...narration.provenance, reviewedBy: [...new Set(narration.provenance.reviewedRuns.map(run => run.backendId))],
     narratedAtMs: params.finishedAtMs,
   } });
@@ -167,6 +168,7 @@ function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: 
   for (const kind of requestedOutputs) {
     outputs[kind] ??= { state: 'partial', reason: 'The completed turn omitted this requested output.' };
   }
+  const modelId = readScmDiffSummaryProducerModelId(start);
   const result = ScmDiffSummaryGenerateOutputSchema.parse({
     ...(previous?.success && previous.data.success ? previous.data : {}),
     success: true, sourceKey, metadata: metadata.data,
@@ -182,7 +184,7 @@ function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: 
           .filter((ref) => !supplied.includes(ref)),
       },
       producer: { kind: 'generation', runId: start.runId,
-        ...(start.effectiveEngine?.modelId ? { modelId: start.effectiveEngine.modelId } : {}) },
+        ...(modelId ? { modelId } : {}) },
     } : {}),
   });
   return { status: 'succeeded', summary: 'Diff summary generated.', toolResultOutput: result,

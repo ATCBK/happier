@@ -449,11 +449,13 @@ describe('ScmDiffSummaryProfile', () => {
   it('persists confirmed part admissions once without losing the admitted publication basis', async () => {
     const active = { ...input(), scmAnalysis: { phase: 'evidence', current: ['change-1'],
       pending: [{ refs: ['change-1'] }], parts: [], supplied: [], analysed: [], failures: [], failedRefs: [] } };
-    const admitted = await admitInitial(start(active));
+    const selectedStart = (intentInput: unknown) => ({ ...start(intentInput), modelId: 'selected-parts-model' });
+    const admitted = await admitInitial(selectedStart(active));
     const first = await ScmDiffSummaryProfile.onTurnComplete?.({ ...admitted, turnId: 'first-part', finishedAtMs: 2,
       rawText: JSON.stringify({ summaryMarkdown: 'First part' }) });
-    expect(first?.toolResultOutput).toMatchObject({ analysis: { parts: { admitted: 1, completed: 1, total: 2 } } });
-    const nextStart = start(first!.nextInput!.intentInput);
+    expect(first?.toolResultOutput).toMatchObject({ analysis: { parts: { admitted: 1, completed: 1, total: 2 } },
+      producer: { modelId: 'selected-parts-model' } });
+    const nextStart = selectedStart(first!.nextInput!.intentInput);
     await ScmDiffSummaryProfile.onBeforeRetainedInput?.({ start: nextStart, localId: first!.nextInput!.localId });
     const receipt = await ScmDiffSummaryProfile.onRetainedInputAdmitted?.({ start: nextStart, localId: first!.nextInput!.localId });
     expect(receipt?.toolResultOutput).toMatchObject({ analysis: { parts: { admitted: 2, completed: 1, total: 2 } } });
@@ -461,7 +463,8 @@ describe('ScmDiffSummaryProfile', () => {
     expect(await ScmDiffSummaryProfile.onRetainedInputAdmitted?.({ start: current, localId: first!.nextInput!.localId })).toBeNull();
     const second = await ScmDiffSummaryProfile.onTurnComplete?.({ start: current, turnId: 'second-part',
       inputIds: [first!.nextInput!.localId], finishedAtMs: 3, rawText: JSON.stringify({ summaryMarkdown: 'Second part' }) });
-    expect(second?.toolResultOutput).toMatchObject({ analysis: { parts: { admitted: 2, completed: 2, total: 2, phase: 'merge' } } });
+    expect(second?.toolResultOutput).toMatchObject({ analysis: { parts: { admitted: 2, completed: 2, total: 2, phase: 'merge' } },
+      producer: { modelId: 'selected-parts-model' } });
   });
 
   it('presents aliases in retained multipart integration and resolves the final aliases to host references', () => {

@@ -13,6 +13,11 @@ export function readScmDiffSummaryIntent(input: unknown): Readonly<Record<string
   return input && typeof input === 'object' && !Array.isArray(input) ? input as Readonly<Record<string, unknown>> : {};
 }
 
+export function readScmDiffSummaryProducerModelId(start: ExecutionRunProfileStartParams): string | undefined {
+  // Native usage wins; without it, retain the Run's admitted model selection.
+  return start.effectiveEngine?.modelId ?? start.modelId;
+}
+
 export function readInitialScmDiffSummaryInputId(start: ExecutionRunProfileStartParams): string {
   const inputId = readScmDiffSummaryIntent(start.intentInput).resultInitialInputId;
   return resolveExecutionRunInitialInputLocalId(start.runId,
@@ -111,9 +116,10 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
     return null;
   }
   const completion = pending.stopIds || pending.reviewExplanation ? undefined : complete(currentParams) ?? undefined;
+  const modelId = readScmDiffSummaryProducerModelId(params.start);
   const response = await scmDiffSummaryResultStore.publish({ ...saved.scope, inputId: pending.inputId, modelOutput: parsed,
     runId: params.start.runId, generatedAtMs: params.finishedAtMs,
-    ...(params.start.effectiveEngine?.modelId ? { modelId: params.start.effectiveEngine.modelId } : {}),
+    ...(modelId ? { modelId } : {}),
     ...(completion ? { outputEnvelope: ScmDiffSummaryGenerateOutputSchema.parse(completion.toolResultOutput) } : {}) });
   if (!response.success) await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
   return publicationNotice(saved.scope, response, completion);

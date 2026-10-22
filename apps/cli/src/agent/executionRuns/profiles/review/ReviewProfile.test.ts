@@ -103,7 +103,7 @@ describe('ReviewProfile', () => {
     const comparison = ScmComparisonSchema.parse({ id: 'review-comparison', source: { kind: 'workingTree' },
       repository: { rootPath: cwd }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
     const start: ExecutionRunProfileStartParams = { sessionId: 'review-session', runId: `review-${cwd}`, callId: 'review-call',
-      sidechainId: 'review-call', intent: 'review', backendId: 'claude',
+      sidechainId: 'review-call', intent: 'review', backendId: 'claude', modelId: 'selected-review-model',
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, instructions: 'Review the captured changes.',
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', startedAtMs: 1,
       intentInput: { cwd, comparison, comparisonId: comparison.id, sourceKey: comparison.id, metadata: { source: comparison.source, sourceKey: comparison.id },
@@ -139,7 +139,7 @@ describe('ReviewProfile', () => {
         rawText: JSON.stringify({ walkthrough: { title: 'Captured changes', intro: 'No changes.', stops: [], otherChangeRefs: [] } }), finishedAtMs: 3 });
       const output = ScmDiffSummaryGenerateOutputSchema.parse(second?.toolResultOutput);
       expect(output).toMatchObject({ runId: start.runId, comparison, outputs: { walkthrough: { state: 'complete' } },
-        producer: { kind: 'review', runId: start.runId, narrationMode: 'continued_review' } });
+        producer: { kind: 'review', runId: start.runId, modelId: 'selected-review-model', narrationMode: 'continued_review' } });
       expect(output.resultId).toBeTruthy();
       expect(ReviewProfile.listAvailableActionIds?.({ start: writingStart, structuredMeta: second?.structuredMeta })).toEqual(
         expect.arrayContaining(['review.triage', 'review.walkthrough', 'review.explain_findings']));

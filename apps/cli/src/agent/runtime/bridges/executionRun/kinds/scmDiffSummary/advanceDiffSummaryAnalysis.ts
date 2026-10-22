@@ -10,6 +10,7 @@ import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { presentScmDiffSummaryModelContext } from './presentScmDiffSummaryModelContext';
 import { buildReviewNarrationInputContext, readReviewNarration } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
 import { findingCitationInstructions } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
+import { readScmDiffSummaryProducerModelId } from './publishSavedScmDiffSummaryTurn';
 
 const FragmentSchema = z.strictObject({ path: z.string(), startOffset: z.number().check(z.int(), z.nonnegative()),
   endOffset: z.number().check(z.int(), z.nonnegative()), hunkHeader: z.string(), contextBefore: z.string(), contextAfter: z.string(),
@@ -357,13 +358,14 @@ export function advanceDiffSummaryAnalysis(params: ExecutionRunProfileTurnComple
     Object.assign(progress, { [kind]: { state: next ? 'writing' : output ? complete ? 'complete' : 'partial' : 'failed',
       ...(output ? { value: output } : {}), ...(!complete ? { reason } : {}) } });
   }
+  const modelId = readScmDiffSummaryProducerModelId(params.start);
   const result = ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: comparison.id,
     metadata: metadata.data, comparison, requestedOutputs: outputs, outputs: progress, runId: params.start.runId,
     ...(value.summaryMarkdown ? { summaryMarkdown: value.summaryMarkdown } : {}),
     analysis: { suppliedChangeRefs: state.supplied, analysedChangeRefs: state.analysed,
       remainingChangeRefs: allRefs(comparison).filter((ref) => !state.analysed.includes(ref)),
       parts: readDiffSummaryPartProgress({ scmAnalysis: state }) },
-    producer: { kind: 'generation', runId: params.start.runId },
+    producer: { kind: 'generation', runId: params.start.runId, ...(modelId ? { modelId } : {}) },
   });
   const nextLocalId = `scm-analysis-part:${params.start.runId}:${params.turnId}`;
   if (next) state.expectedInputId = nextLocalId;
