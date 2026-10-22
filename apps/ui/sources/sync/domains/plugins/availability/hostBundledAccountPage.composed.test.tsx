@@ -40,6 +40,10 @@ function AccountPage() {
             try { setResult(await hostApi.executeAction("read", {})); }
             catch (error) { setResult({ code: error.code, message: error.message, diagnostics: error.diagnostics }); }
         } }, "Read Account"),
+        React.createElement("Text", { testID: "account-page-nested-invoke", onPress: async () => {
+            try { setResult(await hostApi.executeAction("nested", {})); }
+            catch (error) { setResult({ code: error.code, diagnostics: error.diagnostics }); }
+        } }, "Read selected source"),
         result ? React.createElement("Text", { testID: "account-page-result" }, JSON.stringify(result)) : null,
         detail ? React.createElement(TargetedSurface, { surface: detail, input: { id: "personal" } }) : null,
         sharedValue
@@ -143,10 +147,20 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
         entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifactGraph, accountGraph]),
         normalizedManifest: manifest, artifactGraphs: [artifactGraph, accountGraph],
         declaredExecution: { daemonActions: true, contributionPoints: true } };
+    const pointlessManifest = PluginPortableReleaseManifestV1Schema.parse({ ...manifest, id: 'happier.pointless-fixture',
+        contributes: { ...manifest.contributes, pluginContributionPoints: [], targetedPluginContributions: [],
+            ui: { ...manifest.contributes.ui, views: [{ id: 'machine-page', container: 'rightSidebarTab',
+                target: { kind: 'app' }, renderer: 'account', title: 'Current Machine page' }] } } });
+    const pointlessDeclaration = { ...uiDeclaration, pluginId: pointlessManifest.id, normalizedManifest: pointlessManifest,
+        entriesById: projectPluginPortableUiDeclarationsV1(pointlessManifest, [artifactGraph, accountGraph]),
+        declaredExecution: { daemonActions: true, contributionPoints: false } };
     return { BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [artifactGraph, accountGraph].map((graph, index) => ({
         pluginId: manifest.id, releaseVersion: manifest.version, artifactId: graph.artifactId, tier: graph.tier,
         digest: graph.digest, artifactGraph: graph, uiDeclaration, files: [{ relativePath: graph.entry, asset: index + 1 }],
-    })), BUNDLED_PLUGIN_BRAND_MARKS: [] };
+    })).concat([artifactGraph, accountGraph].map((graph, index) => ({
+        pluginId: pointlessManifest.id, releaseVersion: pointlessManifest.version, artifactId: graph.artifactId, tier: graph.tier,
+        digest: graph.digest, artifactGraph: graph, uiDeclaration: pointlessDeclaration, files: [{ relativePath: graph.entry, asset: index + 1 }],
+    }))), BUNDLED_PLUGIN_BRAND_MARKS: [] };
 });
 vi.mock('expo-asset', () => ({ Asset: { fromModule: () => ({
     localUri: 'file:///test-app/entry.cjs.bundle', downloadAsync: async () => undefined,
@@ -514,6 +528,107 @@ it.each([false, true])('invokes an Account Action from the real mounted Account 
         expect(screen.tree.root.findByProps({ testID: 'account-page-result' }).props.children)
             .toBe(JSON.stringify({ surface: 'ui', caller: 'plugin' }));
         expect(packaged.machineRpc).not.toHaveBeenCalled();
+    } finally { await screen.unmount(); }
+});
+
+it('uses the current Machine action map on a pointless physical surface while retaining Account callees', async () => {
+    const pluginId = 'happier.pointless-fixture';
+    const machineId = 'current-pointless-machine';
+    await account.restore({ machines: [createMachineFixture({ id: machineId, active: true, activeAt: Date.now() })],
+        features: enabledPluginFeatures, serverIdentityId: 'srv_pointless_machine' });
+    const lifetime = captureActiveServerAccountScopeLifetime()!;
+    replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+    } });
+    const declaration = BUNDLED_PLUGIN_UI_APP_ARTIFACTS.find(row => row.pluginId === pluginId)!.uiDeclaration!;
+    const { PluginProjectionV2Schema, RPC_METHODS } = await import('@happier-dev/protocol');
+    const { DaemonPluginUiArtifactBytesReadRequestSchema, DaemonPluginUiArtifactBytesReadResponseSchema,
+        DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema,
+    } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+    const { DaemonPluginStructuredMessageActionExecuteRequestSchema } = await import('@happier-dev/protocol/plugins/actions/daemonInvocationV1');
+    const { encodeBase64 } = await import('@/encryption/base64');
+    const { readReusableDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+    const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+    const { readPluginAccountAvailability } = await import('./projection');
+    const sourceCustody = { kind: 'development' as const, registeredRootId: 'pointless-source-root' };
+    const origin = (id: string) => ({ serverIdentityId: 'srv_pointless_machine', sourceRef: { machineId,
+        pluginId: id, sourceCustody } });
+    const providerId = 'acme.provider-source';
+    const provider = { id: 'list', pluginId: providerId, occurrenceId: 'provider-current', title: 'List',
+        scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'safe', execution: { target: 'daemon' },
+        available: true, executionOrigin: origin(providerId),
+        authorization: { generation: { targetGeneration: 'provider-current', desiredGeneration: 'provider-current', appliedGeneration: 'provider-current' },
+            resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } };
+    const wire = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+        installedPackagesById: Object.fromEntries([pluginId, providerId].map(id => [id, { id, displayName: id,
+            version: '1.0.0', enabled: true, source: { kind: 'localPath', locator: 'pointless-source-root' },
+            occurrenceId: id === pluginId ? 'page-current' : 'provider-current', sourceCustody,
+            executionOrigin: origin(id), declaresContributionPoints: false }])),
+        actionsById: { [`${providerId}/list`]: provider },
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(Object.entries(declaration.entriesById)
+            .map(([id, entry]) => [id, { ...entry, occurrenceId: 'page-current', executionOrigin: origin(pluginId) }])) } },
+    });
+    const inputs = publishDaemonMergedProjectionInputs({ projection: wire });
+    const union = unionPluginUiProjections([{ machineId, serverId: lifetime.scope.serverId,
+        serverIdentityId: 'srv_pointless_machine', projection: inputs.pluginUiProjection,
+        phase: 'current', interactionEnabled: true }]);
+    const globalProjection = mergeInstalledPluginUiProjections(
+        [readPluginAccountAvailability(lifetime.scope).readAccountUiProjection()!], union.pluginUiProjection,
+    )!;
+    expect(inputs.pluginUiProjection.actionsById[`${providerId}/list`]?.occurrenceId).toBe('provider-current');
+    expect(globalProjection.actionsById[`${providerId}/list`]?.occurrenceId).toBeUndefined();
+    const invocations: ReturnType<typeof DaemonPluginStructuredMessageActionExecuteRequestSchema.parse>[] = [];
+    packaged.machineRpc.mockImplementation(request => {
+        if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection: wire };
+        if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ) {
+            const query = DaemonPluginUiArtifactBytesReadRequestSchema.parse(request.payload);
+            expect(query.machineId).toBe(machineId);
+            const graph = BUNDLED_PLUGIN_UI_APP_ARTIFACTS.find(row => row.pluginId === pluginId
+                && row.digest === query.cacheIdentity.artifactDigest)?.artifactGraph;
+            if (!graph) throw new Error('Requested bytes must belong to the actual fixture graph');
+            return DaemonPluginUiArtifactBytesReadResponseSchema.parse({ ok: true, artifactFamily: 'reactNative',
+                cacheIdentity: { artifactDigest: graph.digest }, artifact: { artifactKind: 'reactNativeBundle',
+                    digest: graph.digest, format: 'plainJs', byteSize: packaged.bytes.byteLength },
+                files: graph.files.map(file => ({ ...file, bytesBase64: encodeBase64(packaged.bytes) })) });
+        }
+        if (request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) {
+            expect(DaemonPluginActionSchemasReadRequestSchema.parse(request.payload)).toMatchObject({
+                machineId, expectedOccurrenceId: 'provider-current', qualifiedActionId: `${providerId}/list`,
+            });
+            return DaemonPluginActionSchemasReadResponseSchema.parse({ ok: true, inputSchema: { type: 'object', additionalProperties: false } });
+        }
+        if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) {
+            invocations.push(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload));
+            return { ok: true, result: { rows: ['current Machine'] } };
+        }
+        throw new Error(`Unexpected Machine method ${request.method}`);
+    });
+    const page = inputs.pluginUiProjection.surfacePlacementsById[`surfacePlacement:${pluginId}:machine-page`];
+    if (!page) throw new Error('Expected authored current Machine view');
+    const screen = await renderWithAppProviders(<AppShellPluginUiProjectionProvider>
+        <PluginSurfacePlacementHost placement={page} pluginUiProjection={globalProjection}
+            machineId={machineId} serverId={lifetime.scope.serverId}
+            platform="web" projectionInteractionEnabled />
+    </AppShellPluginUiProjectionProvider>);
+    try {
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.tree.root.findAllByProps({ testID: 'account-page-nested-invoke' })).toHaveLength(1);
+            const cached = readReusableDaemonMergedProjectionCacheEntry({ machineId, serverId: lifetime.scope.serverId,
+                accountLifetime: lifetime });
+            expect(cached?.kind).toBe('ready');
+            if (cached?.kind === 'ready') expect(cached.inputs.pluginUiProjection.actionsById[`${providerId}/list`]?.occurrenceId)
+                .toBe('provider-current');
+            const action = readCurrentAppShellPluginUiProjection()?.actionsById[`${pluginId}/nested`];
+            expect(action && resolvePluginUiClientActionRegistration({ action, platform: 'web' })).not.toBeNull();
+        });
+        await act(async () => { await screen.tree.root.findByProps({ testID: 'account-page-nested-invoke' }).props.onPress(); });
+        expect(JSON.parse(screen.tree.root.findByProps({ testID: 'account-page-result' }).props.children))
+            .toEqual({ rows: ['current Machine'] });
+        expect(invocations).toHaveLength(1);
+        expect(invocations[0]).toMatchObject({ machineId, expectedContributorOccurrenceId: 'provider-current',
+            qualifiedActionId: `${providerId}/list`, invocation: { kind: 'clientPluginAction',
+                clientActionBinding: { pluginId, sourceCustody: { kind: 'bundled_first_party' } } } });
     } finally { await screen.unmount(); }
 });
 

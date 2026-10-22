@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod/mini';
+import { RPC_METHODS } from '@happier-dev/protocol';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderWithAppProviders } from '@/dev/testkit/render/renderWithAppProviders';
@@ -91,7 +92,8 @@ vi.mock('@/modal', async () => {
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     return createServerScopedMachineRpcBoundaryMock(async input => {
-        packaged.machineRpc(input);
+        const reply = packaged.machineRpc(input);
+        if (reply !== undefined) return reply;
         throw new Error('No Machine is selected');
     });
 });
@@ -131,20 +133,86 @@ afterEach(async () => {
     clearPluginAccountAvailabilityProjection();
     await account.reset();
     storage.setState(storage.getInitialState(), true);
-    packaged.machineRpc.mockClear();
+    packaged.machineRpc.mockReset();
     vi.mocked(Modal.show).mockClear();
 });
 
-it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine'] as const)(
+it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine', 'available Machine sources'] as const)(
     'runs actual Triage through the UI Account dispatcher: %s', async scenario => {
-    const withMachine = scenario === 'unavailable optional Machine';
-    const withGithub = scenario === 'mixed sources';
+    const availableMachine = scenario === 'available Machine sources';
+    const withMachine = scenario === 'unavailable optional Machine' || availableMachine;
+    const withGithub = scenario === 'mixed sources' || availableMachine;
     const machineId = 'optional-unavailable-machine';
-    await account.restore({ machines: withMachine ? [createMachineFixture({ id: machineId, active: false, activeAt: 0 })] : [], serverIdentityId: 'srv_triage_account_dispatch',
+    await account.restore({ machines: withMachine ? [createMachineFixture({ id: machineId, active: availableMachine, activeAt: availableMachine ? Date.now() : 0 })] : [], serverIdentityId: 'srv_triage_account_dispatch',
         features: createRootLayoutFeaturesResponse({ features: { plugins: { enabled: true,
             ui: { enabled: true, hostedWeb: { enabled: true }, reactNativeBundles: { enabled: true } } } } }) });
     const lifetime = captureActiveServerAccountScopeLifetime()!;
     const declaration = BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!;
+    if (availableMachine) {
+        const github = BUNDLED_PLUGIN_UI_APP_ARTIFACTS[1]!.uiDeclaration!;
+        const manifest = github.normalizedManifest!;
+        const occurrenceId = 'github-current';
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'github-source-root' };
+        const executionOrigin = { serverIdentityId: 'srv_triage_account_dispatch', sourceRef: {
+            machineId, pluginId: manifest.id, sourceCustody,
+        } };
+        const { PluginProjectionV2Schema, RPC_METHODS } = await import('@happier-dev/protocol');
+        const { TriageScanResultV1Schema } = await import('@happier-dev/triage-protocol/v1');
+        const { DaemonPluginUiTargetedContributionsReadResponseSchema,
+            DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema,
+        } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const { DaemonPluginStructuredMessageActionExecuteRequestSchema } = await import('@happier-dev/protocol/plugins/actions/daemonInvocationV1');
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [manifest.id]: { id: manifest.id, displayName: manifest.displayName,
+                version: manifest.version, enabled: true, source: { kind: 'local', locator: '/plugins/scm-github' },
+                occurrenceId, sourceCustody, executionOrigin, declaresContributionPoints: false } },
+            // The daemon DTO is the genuine RPC boundary. The CLI projector's
+            // @/ imports belong to its separate process; keep this strict wire
+            // fixture to its published fields, not author-only schemas/access declarations.
+            actionsById: Object.fromEntries(manifest.contributes.actions.map(action => [`${manifest.id}/${action.id}`, {
+                id: action.id, title: action.title, description: action.description,
+                scopes: action.scopes, surfaces: action.surfaces, execution: action.execution,
+                placementBindings: action.placementBindings, dangerLevel: action.dangerLevel,
+                operation: action.operation, confirmation: action.confirmation, confirmationWhen: action.confirmationWhen,
+                inputHints: action.inputHints, priority: action.priority, icon: action.icon, slash: action.slash,
+                pluginId: manifest.id, occurrenceId, executionOrigin, available: true,
+                authorization: { generation: { targetGeneration: occurrenceId, desiredGeneration: occurrenceId, appliedGeneration: occurrenceId },
+                    resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] },
+            }])),
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(Object.entries(github.entriesById)
+                .map(([id, entry]) => [id, { ...entry, occurrenceId, executionOrigin }])) } },
+        });
+        const targeted = DaemonPluginUiTargetedContributionsReadResponseSchema.parse({ status: 'sourceDeclarations',
+            pluginId: declaration.pluginId, sourceDeclarations: [{ manifest: { id: manifest.id, contributes: {
+                actions: manifest.contributes.actions, pluginContributionPoints: manifest.contributes.pluginContributionPoints,
+                targetedPluginContributions: manifest.contributes.targetedPluginContributions.filter(entry => entry.target.pluginId === declaration.pluginId),
+                ui: { renderers: manifest.contributes.ui.renderers },
+            } }, occurrenceId, sourceCustody }] });
+        const scanResult = TriageScanResultV1Schema.parse({ kind: 'complete', observations: [], evidence: { kind: 'walkFinished' } });
+        packaged.machineRpc.mockImplementation(request => {
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return { protocolVersion: 1, projection };
+            }
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ) return targeted;
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) {
+                const query = DaemonPluginActionSchemasReadRequestSchema.parse(request.payload);
+                expect(query.machineId).toBe(machineId);
+                expect(query.expectedOccurrenceId).toBe(occurrenceId);
+                const action = manifest.contributes.actions.find(row => `${manifest.id}/${row.id}` === query.qualifiedActionId);
+                if (!action) throw new Error('Schema request must name a declared GitHub Action');
+                return DaemonPluginActionSchemasReadResponseSchema.parse({ ok: true,
+                    inputSchema: action.inputSchema, outputSchema: action.resultSchema });
+            }
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) {
+                expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse(request.payload)).toMatchObject({
+                    machineId, expectedContributorOccurrenceId: occurrenceId,
+                    qualifiedActionId: `${manifest.id}/triage/scan-github`,
+                });
+                return { ok: true, result: scanResult };
+            }
+            throw new Error(`Unexpected Machine method ${request.method}`);
+        });
+    }
     const contracts = declaration.normalizedManifest!.contributes.accountCollections.map(contribution =>
         normalizePluginAccountCollectionContractV1({ pluginId: declaration.pluginId, contribution }));
     const rows = new Map<string, ReturnType<typeof PluginCollectionRowV1Schema.parse>>();
@@ -252,7 +320,7 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine'] as co
             resolveContributedAction: identity => createPluginUiProjectedActionResolver(
                 readCurrentAppShellPluginUiProjection()?.actionsById,
             )(identity),
-            interactionEnabled: true, daemonInteractionEnabled: false,
+            interactionEnabled: true, daemonInteractionEnabled: availableMachine,
         }, binding: { executeHostAction: scopedHomeActionExecutor(lifetime.scope) } });
         const dispatch = controller.dispatchAction;
         try {
@@ -261,7 +329,7 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine'] as co
                 const result = await dispatch('tasks/list-v1', { v: 1,
                     sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 0 } });
                 expect(result).toMatchObject({ window: { rows: [{ entryRef: { entryId: 'personal-task' } }] } });
-                if (withGithub) expect(result).toMatchObject({ configuredSources: expect.arrayContaining([
+                if (withGithub && !availableMachine) expect(result).toMatchObject({ configuredSources: expect.arrayContaining([
                     expect.objectContaining({ sourceInstanceId: '11111111-1111-4111-8111-111111111111' }),
                     expect.objectContaining({ sourceInstanceId: '22222222-2222-4222-8222-222222222222' }),
                 ]), window: { lanes: expect.arrayContaining([
@@ -269,6 +337,13 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine'] as co
                         health: expect.objectContaining({ kind: 'unavailable',
                             error: expect.objectContaining({ code: 'plugin_action_machine_required' }) }) }),
                 ]) } });
+                if (availableMachine) {
+                    expect(packaged.machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE)).toBe(true);
+                    expect(result).toMatchObject({ window: { lanes: expect.arrayContaining([
+                        expect.objectContaining({ source: { pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 },
+                            health: expect.objectContaining({ kind: 'walkFinished' }) }),
+                    ]) } });
+                }
             } else {
                 const created = TriageTaskWriteResultV1Schema.parse(await dispatch('tasks/create-v1', {
                     v: 1, source: INTERNAL_TASK_SOURCE_V1, sourceInstanceId: '11111111-1111-4111-8111-111111111111',
