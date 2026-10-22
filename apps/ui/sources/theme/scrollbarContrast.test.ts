@@ -66,7 +66,8 @@ describe('web scrollbar thumb contrast', () => {
                 const thumb = compositeThemeColorOver(parseThemeColor(readToken(theme, cssVarToTokenId(thumbVar))), track);
                 const ratio = themeContrastRatio(thumb, track);
 
-                expect(Number(ratio.toFixed(2)), `${thumbVar} on ${trackVar}`).toBeGreaterThanOrEqual(
+                // WCAG 1.4.11 forbids rounding a computed ratio up to the threshold.
+                expect(ratio, `${thumbVar} on ${trackVar}`).toBeGreaterThanOrEqual(
                     SCROLLBAR_THUMB_MIN_RATIO,
                 );
             });
