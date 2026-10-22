@@ -6,7 +6,7 @@ import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
-import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
+import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import {
     shouldShowTranscriptRowActions,
     shouldShowTranscriptRowPinAction,
@@ -18,6 +18,7 @@ import type { TranscriptFindRowSnapshot } from '@/components/sessions/transcript
 
 export const TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID = 'tool-timeline-row-reveal-slot';
 export const TOOL_TIMELINE_ROW_PIN_SLOT_TEST_ID = 'tool-timeline-row-pin-slot';
+export const TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID = 'tool-timeline-row-hover-host';
 
 const TOOL_TIMELINE_ROW_OPEN_SLOT_WIDTH = 26;
 const TOOL_TIMELINE_ROW_REVEAL_ACTION_WIDTH = 28;
@@ -77,10 +78,11 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
     const revealAction = props.revealAction ?? null;
     const hasRevealSlot = canOpen || revealAction != null;
     const trackHoverState = hoverEnabled || (Platform.OS === 'web' && (Boolean(props.onPress) || hasRevealSlot));
-    const [isHovered, setIsHovered] = React.useState(false);
-
-    const handleHoverIn = React.useCallback(() => setIsHovered(true), []);
-    const handleHoverOut = React.useCallback(() => setIsHovered(false), []);
+    // The hover host is the whole header, not the row's pressable: the reveal slots sit beside the
+    // pressable, so a pressable-only host hid the open action again as the pointer crossed toward it.
+    const { isHovered, hoverProps } = useRowActionHoverHost();
+    const handleHoverIn = hoverProps.onPointerEnter;
+    const handleHoverOut = hoverProps.onPointerLeave;
     const handleOpenPress = React.useCallback((event?: { stopPropagation?: () => void }) => {
         event?.stopPropagation?.();
         props.onOpen?.();
@@ -106,13 +108,16 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
 
     return (
         <>
-        <View style={styles.container}>
+        <View
+            testID={TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID}
+            style={styles.container}
+            onPointerEnter={trackHoverState ? handleHoverIn : undefined}
+            onPointerLeave={trackHoverState ? handleHoverOut : undefined}
+        >
             <Pressable
                 testID={props.testID}
                 onPress={props.onPress ?? undefined}
                 disabled={!props.onPress}
-                onHoverIn={trackHoverState ? handleHoverIn : undefined}
-                onHoverOut={trackHoverState ? handleHoverOut : undefined}
                 style={({ pressed }) => [
                     styles.row,
                     props.density === 'compact' ? styles.rowCompact : null,
@@ -196,8 +201,6 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                             <Pressable
                                 testID={props.openActionTestID}
                                 onPress={handleOpenPress}
-                                onHoverIn={trackHoverState ? handleHoverIn : undefined}
-                                onHoverOut={trackHoverState ? handleHoverOut : undefined}
                                 accessibilityRole="button"
                                 accessibilityLabel={t('toolView.open')}
                                 style={({ pressed }) => [styles.open, pressed && styles.openPressed]}

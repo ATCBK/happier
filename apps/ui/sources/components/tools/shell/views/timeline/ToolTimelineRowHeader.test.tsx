@@ -214,7 +214,11 @@ describe('ToolTimelineRowHeader', () => {
     });
 
     it('keeps the open action visually hidden until hover on web', async () => {
-        const { ToolTimelineRowHeader, TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID } = await import('./ToolTimelineRowHeader');
+        const {
+            ToolTimelineRowHeader,
+            TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID,
+            TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID,
+        } = await import('./ToolTimelineRowHeader');
 
         const screen = await renderScreen(
             <ToolTimelineRowHeader
@@ -233,11 +237,20 @@ describe('ToolTimelineRowHeader', () => {
 
         expect(readSlotOpacity(TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID)).toBe(0);
 
+        // The pointer entering anywhere over the row reveals the action. The slot sits beside the row's
+        // pressable, so the host must be the whole header: a pressable-only hover hid the action again the
+        // moment the pointer crossed toward it, leaving it reachable by keyboard only.
         await act(async () => {
-            screen.findByTestId('tool-timeline-row-open')?.props.onHoverIn?.();
+            screen.findByTestId(TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID)?.props.onPointerEnter?.();
         });
 
         expect(readSlotOpacity(TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID)).toBe(1);
+
+        await act(async () => {
+            screen.findByTestId(TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID)?.props.onPointerLeave?.();
+        });
+
+        expect(readSlotOpacity(TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID)).toBe(0);
     });
 
     it('keeps a pinned row pin visible without dragging the open-details icon into view', async () => {
@@ -313,7 +326,7 @@ describe('ToolTimelineRowHeader', () => {
     });
 
     it('crossfades the left icon to a chevron-down on hover when expandable (web)', async () => {
-        const { ToolTimelineRowHeader } = await import('./ToolTimelineRowHeader');
+        const { ToolTimelineRowHeader, TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID } = await import('./ToolTimelineRowHeader');
 
         const screen = await renderScreen(
             <ToolTimelineRowHeader
@@ -339,7 +352,7 @@ describe('ToolTimelineRowHeader', () => {
         expect(getChevronLayerOpacity()).toBe(0);
 
         await act(async () => {
-            screen.findByTestId('tool-timeline-row')?.props.onHoverIn?.();
+            screen.findByTestId(TOOL_TIMELINE_ROW_HOVER_HOST_TEST_ID)?.props.onPointerEnter?.();
         });
 
         expect(getChevronLayerOpacity()).toBe(1);
