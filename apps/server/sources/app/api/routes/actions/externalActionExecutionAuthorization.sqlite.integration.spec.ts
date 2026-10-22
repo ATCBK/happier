@@ -1586,7 +1586,7 @@ describe("external Action execution authorization", () => {
         const runId = crypto.randomUUID();
         const target = { kind: 'machine' as const, machineId: fixture.machine.id,
             project: { machineId: fixture.machine.id, directory: '/repo' } };
-        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get' | 'workflow.run.wait') => {
+        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get' | 'workflow.run.wait', timeoutSeconds = 300) => {
             const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
                 caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
                 sourceTurnId: 'workflow-turn', callerPermissionMode: 'default', causalPermissionAuthority: null,
@@ -1594,7 +1594,7 @@ describe("external Action execution authorization", () => {
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId, target,
                 input: actionId === 'workflow.run.start' ? { runId,
                     source: { kind: 'inline', definition: { version: 1, blocks: ['work'] } } }
-                    : actionId === 'workflow.run.wait' ? { runId, conditions: ['terminal'], timeoutSeconds: 300 } : { runId } });
+                    : actionId === 'workflow.run.wait' ? { runId, conditions: ['terminal'], timeoutSeconds } : { runId } });
             const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
             const installationProof = signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
                 payload: { version: 1, accountId: fixture.account.id, ...source, externalActionOrigin: {
@@ -1800,12 +1800,19 @@ describe("external Action execution authorization", () => {
                     await eventRouter.emitUpdate({ userId: fixture.account.id, recipientFilter: { type: 'account-stored-content-v3' }, payload: {
                         id: 'workflow-deadline', seq: 2, createdAt: Date.now(), body: { t: 'account-change' },
                     } });
-                    await expect(pending).resolves.toMatchObject({ ok: true, result: { observation: 'timeout',
+                    const activeWaitResult = await pending;
+                    expect(activeWaitResult, JSON.stringify(activeWaitResult)).toMatchObject({ ok: true, result: { observation: 'timeout',
                         run: { id: runId, state: 'interrupted' } } });
-                    const interruptedAuthorization = await issue('workflow.run.wait');
+                    // Cross the publisher proof's five-minute lifetime in real
+                    // time. Advancing Date while a signed request is in flight
+                    // tests an expired individual request, not proof reuse by
+                    // a parked observation. No midpoint wake refreshes this wait.
+                    vi.useRealTimers();
+                    const interruptedStartedAt = Date.now();
+                    const interruptedAuthorization = await issue('workflow.run.wait', 301);
                     const connectedAgain = new Promise<void>(resolve => socket.once('connection', () => resolve()));
                     const initiallyInterruptedRead = nextRead();
-                    const initiallyInterrupted = cli.execute('workflow.run.wait', { runId, conditions: ['terminal'], timeoutSeconds: 300 }, {
+                    const initiallyInterrupted = cli.execute('workflow.run.wait', { runId, conditions: ['terminal'], timeoutSeconds: 301 }, {
                         ...context, externalActionExecutionAuthorization: interruptedAuthorization,
                     });
                     void initiallyInterrupted.catch(() => {});
@@ -1817,11 +1824,9 @@ describe("external Action execution authorization", () => {
                     await expect(cli.execute('workflow.run.get', { runId }, { ...context,
                         externalActionExecutionAuthorization: concurrentInterruptedGet })).resolves.toMatchObject({ ok: true,
                         result: { run: { id: runId, state: 'interrupted' } } });
-                    vi.setSystemTime(initialTime + 602_000);
-                    await eventRouter.emitUpdate({ userId: fixture.account.id, recipientFilter: { type: 'account-stored-content-v3' }, payload: {
-                        id: 'interrupted-deadline', seq: 3, createdAt: Date.now(), body: { t: 'account-change' },
-                    } });
-                    await expect(initiallyInterrupted).resolves.toMatchObject({ ok: true, result: { observation: 'timeout',
+                    const interruptedWaitResult = await initiallyInterrupted;
+                    expect(Date.now() - interruptedStartedAt).toBeGreaterThanOrEqual(301_000);
+                    expect(interruptedWaitResult, JSON.stringify(interruptedWaitResult)).toMatchObject({ ok: true, result: { observation: 'timeout',
                         run: { id: runId, state: 'interrupted' } } });
                     const getAuthorization = await issue('workflow.run.get');
                     await expect(cli.execute('workflow.run.get', { runId }, { ...context,
@@ -1841,7 +1846,7 @@ describe("external Action execution authorization", () => {
             else await db.machine.update({ where: { id: fixture.machine.id }, data: { revokedAt: new Date() } });
             expect((await post(start, read)).statusCode).toBe(401);
         } finally { await app.close(); }
-    });
+    }, 420_000);
 
     it.each(['scm.diffSummary.reviewed.mark', 'scm.diffSummary.reviewed.unmark',
         'scm.diffSummary.result.delete', 'scm.diffSummary.result.clear'] as const)(

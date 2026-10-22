@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import tweetnacl from 'tweetnacl';
+import { encodeBase64 } from '@happier-dev/protocol';
+import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationManifestPublisherHeaderV1Schema } from '@happier-dev/protocol/plugins/installations/manifests';
+import * as currentMachineInstallation from '@/daemon/identity/currentMachineInstallation';
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('axios', () => ({ default: { post } }));
@@ -88,6 +92,39 @@ describe('workflow Run storage client', () => {
     expect(post).toHaveBeenCalledWith('https://home.test/v3/automations/runs/workflow-storage', body, expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer token', 'x-happier-plugin-installation-manifest-publisher': 'signed-publisher' }),
     }));
+  });
+
+  it('mints fresh publisher proofs for signed observation reads after a long idle', async () => {
+    const keyPair = tweetnacl.sign.keyPair();
+    // Installation files are the boundary; keep the default signer and storage
+    // client real so caching an encoded proof cannot satisfy this contract.
+    const installation = vi.spyOn(currentMachineInstallation, 'readCurrentMachineInstallation').mockResolvedValue({
+      machineId: 'machine-1', identity: { version: 1, installationId: 'installation-1', createdAt: 1,
+        publicKey: encodeBase64(keyPair.publicKey, 'base64url'),
+        privateKey: encodeBase64(keyPair.secretKey, 'base64url') },
+    });
+    const client = createWorkflowRunStorageClient({ token: 'token', machineId: 'machine-1', serverHttpBaseUrl: 'https://home.test' });
+    const startedAt = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    post.mockResolvedValue({ data: { observed: true } });
+    try {
+      for (const elapsed of [0, 301_000, 602_000]) {
+        vi.setSystemTime(startedAt + elapsed);
+        for (const operation of ['get', 'wait', 'invocations.list'] as const) {
+          await expect(client.execute({ operation, runId: 'run-1' }, { publisherMachineId: 'machine-1' }))
+            .resolves.toEqual({ observed: true });
+          const request = post.mock.lastCall;
+          expect(request?.[1].publisherMachineId).toBe('machine-1');
+          const header = PluginInstallationManifestPublisherHeaderV1Schema.parse(JSON.parse(Buffer.from(
+            request?.[2].headers[PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1], 'base64url').toString('utf8')));
+          expect(header.proof.issuedAt).toBe(Date.now());
+          expect(header.proof.path).toBe('/v3/automations/runs/workflow-storage');
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+      installation.mockRestore();
+    }
   });
 
   it.each(['get', 'list', 'invocations.list', 'pause', 'cancel', 'delete'] as const)(
