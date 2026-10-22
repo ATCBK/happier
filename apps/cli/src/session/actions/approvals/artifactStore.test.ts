@@ -472,8 +472,7 @@ describe('createCliApprovalsArtifactStore', () => {
     });
     const created = await store.approvalsCreate({ request: approved, serverId: null });
     mockPost.mockClear();
-    // approvalsUpdate reads once to validate the transition and once more to
-    // preserve the existing encrypted data key while performing the CAS.
+    // Transition validation and CAS share this one fresh row and its encrypted key.
     mockGet.mockResolvedValue({ status: 200, data: {
       ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'e2ee',
       ...createdPayload!,
@@ -832,9 +831,7 @@ describe('createCliApprovalsArtifactStore', () => {
     const approved = ExecutionRunHostActionApprovalRequestV1Schema.parse({
       ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 },
     });
-    mockGet
-      .mockImplementationOnce(async () => fullRecord(openPayload!, 1))
-      .mockImplementationOnce(async () => fullRecord(openPayload!, 1));
+    mockGet.mockImplementationOnce(async () => fullRecord(openPayload!, 1));
     mockPost.mockImplementationOnce(async (_url: string, body: unknown) => {
       approvedPayload = body as EncryptedArtifactPayload;
       return { status: 200, data: { success: true, headerVersion: 2, bodyVersion: 2 } };
@@ -933,9 +930,7 @@ describe('createCliApprovalsArtifactStore', () => {
       body: payload.body, bodyVersion: version, dataEncryptionKey: createdPayload.dataEncryptionKey,
       seq: version, createdAt: 1, updatedAt: version,
     } });
-    mockGet
-      .mockImplementationOnce(async () => fullRecord(createdPayload, 1))
-      .mockImplementationOnce(async () => fullRecord(createdPayload, 1));
+    mockGet.mockImplementationOnce(async () => fullRecord(createdPayload, 1));
     mockPost.mockImplementationOnce(async (_url: string, body: any) => { approvedPayload = body; return { status: 200, data: { success: true, headerVersion: 2, bodyVersion: 2 } }; });
     const approved = TargetActionApprovalRequestV1Schema.parse({
       ...open, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 },
@@ -956,9 +951,7 @@ describe('createCliApprovalsArtifactStore', () => {
     const executing = TargetActionApprovalRequestV1Schema.parse({
       ...approved, status: 'executing', updatedAtMs: 3,
     });
-    mockGet
-      .mockImplementationOnce(async () => fullRecord(approvedPayload, 2))
-      .mockImplementationOnce(async () => fullRecord(approvedPayload, 2));
+    mockGet.mockImplementationOnce(async () => fullRecord(approvedPayload, 2));
     mockPost.mockImplementationOnce(async (_url: string, body: any) => {
       executingPayload = body;
       return { status: 200, data: { success: true, headerVersion: 3, bodyVersion: 3 } };
@@ -981,9 +974,7 @@ describe('createCliApprovalsArtifactStore', () => {
       updatedAtMs: 4,
       execution: { executedAtMs: 4, ok: true, result: { published: true } },
     });
-    mockGet
-      .mockImplementationOnce(async () => fullRecord(executingPayload, 3))
-      .mockImplementationOnce(async () => fullRecord(executingPayload, 3));
+    mockGet.mockImplementationOnce(async () => fullRecord(executingPayload, 3));
     mockPost.mockImplementationOnce(async (_url: string, body: any) => {
       executedPayload = body;
       return { status: 200, data: { success: true, headerVersion: 4, bodyVersion: 4 } };

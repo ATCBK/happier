@@ -149,6 +149,12 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   const accountArtifactStore = { ...rawAccountArtifactStore,
     read: (...args: Parameters<typeof rawAccountArtifactStore.read>) => timeWebLatencyPhase('approval.artifact.read', () => rawAccountArtifactStore.read(...args)),
     update: (...args: Parameters<typeof rawAccountArtifactStore.update>) => timeWebLatencyPhase('approval.artifact.update', () => rawAccountArtifactStore.update(...args)),
+    readForUpdate: async (artifactId: string) => {
+      const current = await timeWebLatencyPhase('approval.artifact.read', () =>
+        rawAccountArtifactStore.readForUpdate(artifactId, { prepareRecipients: false }));
+      return current ? { artifact: current.artifact,
+        update: (content: Parameters<typeof current.update>[0]) => timeWebLatencyPhase('approval.artifact.update', () => current.update(content)) } : null;
+    },
   };
   // Decisions read current content under the Artifact's normal access/mode
   // checks. Recipient repair is a separate write, owned by creation/rejoin and
@@ -266,8 +272,9 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return parsed;
     },
     executionRunHostActionApprovalsUpdate: async ({ artifactId, request }) => {
-      const artifact = await readApprovalArtifact(artifactId);
-      if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const current = await accountArtifactStore.readForUpdate(artifactId);
+      if (!current) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const { artifact } = current;
       const existingHeader = artifact.header;
       const existing = readExecutionRunHostActionApprovalArtifact(existingHeader, artifact.body);
       if (!existing || !executionRunHostActionApprovalSubjectsEqual(existing, request)) {
@@ -279,7 +286,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         || request.updatedAtMs < existing.updatedAtMs) {
         return { ok: false, errorCode: 'invalid_transition', error: 'execution_run_host_action_approval_invalid_transition' };
       }
-      const updated = await accountArtifactStore.update({ artifactId, expectedRevision: artifact.revision,
+      const updated = await current.update({
         header: buildExecutionRunHostActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) });
       return updated.ok ? { ok: true } : updated;
     },
@@ -299,8 +306,9 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       return parsed;
     },
     targetActionApprovalsUpdate: async ({ artifactId, request }) => {
-      const artifact = await readApprovalArtifact(artifactId);
-      if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const current = await accountArtifactStore.readForUpdate(artifactId);
+      if (!current) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const { artifact } = current;
       const existingHeader = artifact.header;
       const existingRequest = readTargetActionApprovalArtifact(existingHeader, artifact.body);
       if (!existingRequest) {
@@ -309,7 +317,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const transition = admitTargetActionApprovalTransition(existingRequest, request);
       if (!transition.ok) return transition;
       if (transition.unchanged) return { ok: true };
-      const updated = await accountArtifactStore.update({ artifactId, expectedRevision: artifact.revision,
+      const updated = await current.update({
         header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) });
       return updated.ok ? { ok: true } : updated;
     },
@@ -422,8 +430,9 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     },
 
     approvalsUpdate: async ({ artifactId, request, serverId }) => {
-      const artifact = await readApprovalArtifact(artifactId);
-      if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const current = await accountArtifactStore.readForUpdate(artifactId);
+      if (!current) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
+      const { artifact } = current;
       const existingHeader = artifact.header;
       if (!existingHeader) {
         return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
@@ -454,7 +463,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const header = buildApprovalRequestArtifactHeaderV1(request, {
         legacyServerId: existing.v === 1 ? normalizeArtifactServerId(existingHeader.serverId) : null,
       });
-      const updated = await accountArtifactStore.update({ artifactId, expectedRevision: artifact.revision,
+      const updated = await current.update({
         header, body: JSON.stringify(request) });
 
       if (updated.ok) return { ok: true };

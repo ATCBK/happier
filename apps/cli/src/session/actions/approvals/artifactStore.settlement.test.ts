@@ -188,27 +188,16 @@ describe('approval settlement through the real CLI Artifact store', () => {
     const executor = createExecutor(store, { homeDomainAction: async () => ({}) });
     const artifactId = await createDeferred(executor, 'identity.providers.secret.replace', providerSecretInput);
     const open = ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId: null }));
-    const read = http.get.getMockImplementation()!;
-    const samples: { reads: number; elapsedMs: number }[] = [];
-    for (let sample = 0; sample < 3; sample++) {
-      const original = rows.get(artifactId)!;
-      let reads = 0;
-      http.get.mockImplementation(async (...args) => {
-        reads++;
-        await new Promise(resolve => setTimeout(resolve, 20));
-        return read(...args);
-      });
-      const started = performance.now();
-      const result = await store.approvalsUpdate({ artifactId, serverId: null, request: {
-        ...open, status: 'approved', updatedAtMs: open.updatedAtMs + 1,
-        decision: { kind: 'approve', decidedAtMs: open.updatedAtMs + 1 },
-      } });
-      samples.push({ reads, elapsedMs: Math.round(performance.now() - started) });
-      expect(result).toEqual({ ok: true });
-      expect(storedBody(artifactId)).toContain('approved');
-      rows.set(artifactId, original);
-    }
-    expect(samples.map(sample => sample.reads)).toEqual([1, 1, 1]);
+    http.get.mockClear();
+    const result = await store.approvalsUpdate({ artifactId, serverId: null, request: {
+      ...open, status: 'approved', updatedAtMs: open.updatedAtMs + 1,
+      decision: { kind: 'approve', decidedAtMs: open.updatedAtMs + 1 },
+    } });
+    expect(result).toEqual({ ok: true });
+    expect(storedBody(artifactId)).toContain('approved');
+    // This count is the performance contract: validation and sealing must
+    // consume the same fresh row, while the write retains its revision CAS.
+    expect(http.get.mock.calls.filter(([url]) => String(url).endsWith(`/v1/artifacts/${artifactId}`))).toHaveLength(1);
   });
 
   it.each(['succeeded', 'failed_after_admission', 'materialization_failed', 'rejected'] as const)(

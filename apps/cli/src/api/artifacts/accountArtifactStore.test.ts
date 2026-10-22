@@ -67,6 +67,25 @@ vi.mock('@/configuration', async (importOriginal) => {
 });
 
 describe('createAccountArtifactStore', () => {
+  it.each(['mode', 'cancellation'] as const)('keeps read-for-update admission when %s retires before the write', async change => {
+    const controller = new AbortController();
+    const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
+      getAccountEncryptionMode: async options => {
+        return change === 'mode' && options?.usage === 'fresh-authority' ? 'e2ee' : 'plain';
+      } });
+    mockGet.mockResolvedValue({ status: 200, data: { id: 'approval', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent({ kind: 'example.v1' }),
+      body: encodePlainArtifactStoredContent({ body: 'original' }), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } });
+    mockPost.mockResolvedValue({ status: 200, data: { success: true, headerVersion: 2, bodyVersion: 2 } });
+    const current = await store.readForUpdate('approval', { signal: controller.signal, prepareRecipients: false });
+    expect(current?.artifact.body).toBe('original');
+    if (!current) throw new Error('Missing read-for-update fixture');
+    if (change === 'cancellation') controller.abort(new Error('cancelled'));
+    await expect(current.update({ header: current.artifact.header, body: 'replacement' }))
+      .rejects.toMatchObject(change === 'mode' ? { code: 'artifact_account_mode_mismatch' } : { message: 'cancelled' });
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it.each(['plain', 'e2ee'] as const)('opens qualified %s envelopes with the existing codec and refuses Account mode mismatches', async mode => {
     const machineKey = new Uint8Array(randomBytes(32));
     const credentials = mode === 'plain' ? { token: 'token', encryption: null }

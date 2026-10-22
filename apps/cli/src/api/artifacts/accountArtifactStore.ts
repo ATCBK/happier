@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
@@ -531,7 +532,7 @@ export function createAccountArtifactStore(params: Readonly<{
     signal?.throwIfAborted();
     return { current, shared };
   };
-  const read = async (artifactId: string, options?: Readonly<{
+  const projectStoredArtifact = async (stored: StoredArtifact, options?: Readonly<{
     signal?: AbortSignal;
     authorizationHeaders?: ArtifactRequestAuthorizationHeaders;
     /** Decision preparation observes content without repairing recipient key delivery. */
@@ -540,15 +541,15 @@ export function createAccountArtifactStore(params: Readonly<{
     includeSharedAudience?: boolean;
   }>): Promise<AccountArtifact | null> => {
     options?.signal?.throwIfAborted();
-    const stored = await fetchStored(artifactId, options?.signal, options?.authorizationHeaders);
-    if (!stored) return null;
-    const codec = await openStored(stored, undefined, options);
-    const header = decode(codec, stored.header);
-    const body = decodeBody(codec, stored.body);
-    const provenance = readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion);
+    const codec = await timeWebLatencyPhase('artifact.read.open', () => openStored(stored, undefined, options));
+    const { header, body, provenance } = await timeWebLatencyPhase('artifact.read.decode', async () => ({
+      header: decode(codec, stored.header), body: decodeBody(codec, stored.body),
+      provenance: readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion),
+    }));
     if (!header || typeof header !== 'object' || Array.isArray(header)) return null;
     requireBodyForArtifactKind(header as Readonly<Record<string, unknown>>, body);
-    if (options?.prepareRecipients !== false) await prepare(stored, codec, options?.signal, options?.authorizationHeaders);
+    if (options?.prepareRecipients !== false) await timeWebLatencyPhase('artifact.read.recipients', () =>
+      prepare(stored, codec, options?.signal, options?.authorizationHeaders));
     options?.signal?.throwIfAborted();
     const sharing = options?.includeSharedAudience === false ? undefined
       : await sharedWriteContext(stored, header as Readonly<Record<string, unknown>>, header as Readonly<Record<string, unknown>>, options?.signal);
@@ -560,6 +561,14 @@ export function createAccountArtifactStore(params: Readonly<{
       ...(provenance ? { provenance } : {}),
       revision: { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion },
       seq: stored.seq, createdAt: stored.createdAt, updatedAt: stored.updatedAt };
+  };
+  const readStoredArtifact = async (artifactId: string, options?: Parameters<typeof projectStoredArtifact>[1]) => {
+    options?.signal?.throwIfAborted();
+    return timeWebLatencyPhase('artifact.read.http', () => fetchStored(artifactId, options?.signal, options?.authorizationHeaders));
+  };
+  const read = async (artifactId: string, options?: Parameters<typeof projectStoredArtifact>[1]): Promise<AccountArtifact | null> => {
+    const stored = await readStoredArtifact(artifactId, options);
+    return stored ? projectStoredArtifact(stored, options) : null;
   };
   const validateHtmlContent = async (header: Readonly<Record<string, unknown>>, content: ArtifactWriteContent,
     artifactId: string, signal?: AbortSignal): Promise<void> => {
@@ -713,8 +722,90 @@ export function createAccountArtifactStore(params: Readonly<{
     }
     return items;
   };
+  const update = async (input: Readonly<{ artifactId: string; expectedRevision: AccountArtifactRevision; header: Readonly<Record<string, unknown>>; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal; beforeWrite?: () => void | Promise<void> }> & ArtifactWriteContent, storedBasis?: StoredArtifact) => {
+    input.signal?.throwIfAborted();
+    if (input.memoryDecisionSource && typeof input.body !== 'string')
+      return { ok: false, errorCode: 'memory_decision_source_unsupported', error: 'memory_decision_source_unsupported' } as const;
+    const stored = storedBasis ?? await fetchStored(input.artifactId, input.signal);
+    if (!stored) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' } as const;
+    const codec = await openStored(stored);
+    await validateHtmlContent(input.header, input, input.artifactId, input.signal);
+    const content = await prepareWriteContent(codec, input);
+    requireBodyForArtifactKind(input.header, content.body);
+    const blob: ArtifactBlobWriteV1 | null | undefined = content.blob
+      ?? (ArtifactBlobReferenceV1Schema.safeParse(decodeBody(codec, stored.body)).success ? null : undefined);
+    input.signal?.throwIfAborted();
+    const currentHeader = ArtifactHeaderMetadataV1Schema.safeParse(decode(codec, stored.header));
+    if (!currentHeader.success) throw new ArtifactEncryptionMaterialUnavailableError();
+    const context = await sharedWriteContext(stored, currentHeader.data, input.header, input.signal, content.body);
+    const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body, context), content.body);
+    const header = codec.encode(nextHeader);
+    const kind = deriveArtifactCoarseKindV1(nextHeader);
+    const body = codec.encode({ body: content.body });
+    const source = readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion)?.source;
+    const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: input.expectedRevision.bodyVersion + 1, savedBy: input.savedBy, source, signal: input.signal }, stored, codec);
+    let response;
+    try {
+      response = await retryArtifactRevisionUpdate(async () => {
+        input.signal?.throwIfAborted();
+        if (input.beforeWrite) await input.beforeWrite();
+        await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal: input.signal });
+        input.signal?.throwIfAborted();
+        const result = blob?.content
+          ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
+            kind: 'update', artifactId: input.artifactId, blobId: blob.blobId, header, body, ...provenance.wire,
+            artifactKind: kind,
+            expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
+          }, blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
+            ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
+          : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}${input.memoryDecisionSource ? '/memory-decision' : blob !== undefined ? '/content/binary' : ''}`, {
+            header, expectedHeaderVersion: input.expectedRevision.headerVersion,
+            body, expectedBodyVersion: input.expectedRevision.bodyVersion,
+            ...provenance.wire, kind,
+            ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
+            ...(blob !== undefined ? { blob } : {}),
+          }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
+        if (result.status >= 500) {
+          const storageError = result.status === 503 ? readArtifactStorageFailureCode(result.data?.error) : null;
+          throw createHttpStatusError(result.status, storageError ?? 'artifact_update_unavailable', storageError ?? undefined);
+        }
+        return result;
+      });
+    } catch (error) {
+      if (error instanceof HttpStatusError && (readHttpStatus(error) ?? 0) >= 500) {
+        const storageError = readArtifactStorageFailureCode('code' in error ? error.code : undefined);
+        if (storageError) return { ok: false, errorCode: storageError, error: storageError } as const;
+        return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
+      }
+      throw error;
+    }
+    const quota = readQuotaFailure(response);
+    if (quota) return quota;
+    const sourceError = MemoryDecisionSourceErrorCodeV1Schema.safeParse(response.data?.error);
+    if ((response.status < 200 || response.status >= 300) && sourceError.success)
+      return { ok: false, errorCode: sourceError.data, error: sourceError.data } as const;
+    if (response.status === 404 && input.memoryDecisionSource && response.data?.error !== 'Artifact not found')
+      return { ok: false, errorCode: 'memory_decision_source_unsupported', error: 'memory_decision_source_unsupported' } as const;
+    if (response.status === 404) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' } as const;
+    if (response.status < 200 || response.status >= 300) return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
+    if (response.data?.success === false && response.data?.error === 'version-mismatch') return { ok: false, errorCode: 'version_mismatch', error: 'artifact_version_mismatch' } as const;
+    if (response.data?.success === true) await provenance.prepareRecipients?.();
+    return response.data?.success === true
+      ? { ok: true, revision: readAcknowledgedRevision(response.data) } as const
+      : { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
+  };
   const store = {
     read,
+    /** One operation's read/validate/CAS, without a second row/key fetch. */
+    readForUpdate: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => {
+      const stored = await readStoredArtifact(artifactId, options);
+      if (!stored) return null;
+      const artifact = await projectStoredArtifact(stored, options);
+      if (!artifact) return null;
+      return { artifact, update: (content: Pick<AccountArtifact, 'header'> & Readonly<{ body: ArtifactBodyV1 }>) => update({ ...content,
+        artifactId: stored.id, expectedRevision: { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion },
+        ...(options?.signal ? { signal: options.signal } : {}) }, stored) };
+    },
     /** Qualified host APIs admit their own identity; reuse the Account codec, not ordinary Artifact visibility. */
     openStoredEnvelope: async (envelope: Readonly<{ header: string; body: string; dataEncryptionKey: string }>,
       options?: Readonly<{ signal?: AbortSignal }>): Promise<Readonly<{ header: Readonly<Record<string, unknown>>; body: ArtifactBodyV1 | null }>> => {
@@ -997,78 +1088,7 @@ export function createAccountArtifactStore(params: Readonly<{
       const revision = readAcknowledgedRevision(response.data);
       return { artifactId, revision };
     },
-    update: async (input: Readonly<{ artifactId: string; expectedRevision: AccountArtifactRevision; header: Readonly<Record<string, unknown>>; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal; beforeWrite?: () => void | Promise<void> }> & ArtifactWriteContent) => {
-      input.signal?.throwIfAborted();
-      if (input.memoryDecisionSource && typeof input.body !== 'string')
-        return { ok: false, errorCode: 'memory_decision_source_unsupported', error: 'memory_decision_source_unsupported' } as const;
-      const stored = await fetchStored(input.artifactId, input.signal);
-      if (!stored) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' } as const;
-      const codec = await openStored(stored);
-      await validateHtmlContent(input.header, input, input.artifactId, input.signal);
-      const content = await prepareWriteContent(codec, input);
-      requireBodyForArtifactKind(input.header, content.body);
-      const blob: ArtifactBlobWriteV1 | null | undefined = content.blob
-        ?? (ArtifactBlobReferenceV1Schema.safeParse(decodeBody(codec, stored.body)).success ? null : undefined);
-      input.signal?.throwIfAborted();
-      const currentHeader = ArtifactHeaderMetadataV1Schema.safeParse(decode(codec, stored.header));
-      if (!currentHeader.success) throw new ArtifactEncryptionMaterialUnavailableError();
-      const context = await sharedWriteContext(stored, currentHeader.data, input.header, input.signal, content.body);
-      const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body, context), content.body);
-      const header = codec.encode(nextHeader);
-      const kind = deriveArtifactCoarseKindV1(nextHeader);
-      const body = codec.encode({ body: content.body });
-      const source = readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion)?.source;
-      const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: input.expectedRevision.bodyVersion + 1, savedBy: input.savedBy, source, signal: input.signal }, stored, codec);
-      let response;
-      try {
-        response = await retryArtifactRevisionUpdate(async () => {
-          input.signal?.throwIfAborted();
-          if (input.beforeWrite) await input.beforeWrite();
-          await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal: input.signal });
-          input.signal?.throwIfAborted();
-          const result = blob?.content
-            ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
-              kind: 'update', artifactId: input.artifactId, blobId: blob.blobId, header, body, ...provenance.wire,
-              artifactKind: kind,
-              expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
-            }, blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
-              ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
-            : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}${input.memoryDecisionSource ? '/memory-decision' : blob !== undefined ? '/content/binary' : ''}`, {
-              header, expectedHeaderVersion: input.expectedRevision.headerVersion,
-              body, expectedBodyVersion: input.expectedRevision.bodyVersion,
-              ...provenance.wire, kind,
-              ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
-              ...(blob !== undefined ? { blob } : {}),
-            }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
-          if (result.status >= 500) {
-            const storageError = result.status === 503 ? readArtifactStorageFailureCode(result.data?.error) : null;
-            throw createHttpStatusError(result.status, storageError ?? 'artifact_update_unavailable', storageError ?? undefined);
-          }
-          return result;
-        });
-      } catch (error) {
-        if (error instanceof HttpStatusError && (readHttpStatus(error) ?? 0) >= 500) {
-          const storageError = readArtifactStorageFailureCode('code' in error ? error.code : undefined);
-          if (storageError) return { ok: false, errorCode: storageError, error: storageError } as const;
-          return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
-        }
-        throw error;
-      }
-      const quota = readQuotaFailure(response);
-      if (quota) return quota;
-      const sourceError = MemoryDecisionSourceErrorCodeV1Schema.safeParse(response.data?.error);
-      if ((response.status < 200 || response.status >= 300) && sourceError.success)
-        return { ok: false, errorCode: sourceError.data, error: sourceError.data } as const;
-      if (response.status === 404 && input.memoryDecisionSource && response.data?.error !== 'Artifact not found')
-        return { ok: false, errorCode: 'memory_decision_source_unsupported', error: 'memory_decision_source_unsupported' } as const;
-      if (response.status === 404) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' } as const;
-      if (response.status < 200 || response.status >= 300) return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
-      if (response.data?.success === false && response.data?.error === 'version-mismatch') return { ok: false, errorCode: 'version_mismatch', error: 'artifact_version_mismatch' } as const;
-      if (response.data?.success === true) await provenance.prepareRecipients?.();
-      return response.data?.success === true
-        ? { ok: true, revision: readAcknowledgedRevision(response.data) } as const
-        : { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
-    },
+    update: (input: Parameters<typeof update>[0]) => update(input),
     delete: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal; expectedRevision?: AccountArtifactRevision }>) => {
       options?.signal?.throwIfAborted();
       // The revision route keeps deletion atomic at the Artifact owner.
