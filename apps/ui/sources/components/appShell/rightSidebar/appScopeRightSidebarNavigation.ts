@@ -64,7 +64,10 @@ export function openAppRightSidebarTab(input: OpenAppRightSidebarTabInput): void
 export function useOpenAppRightSidebarTab(): (destination: PluginUiDestinationReferenceV1) => void {
     const router = useRouter();
     const pathname = usePathname();
-    const pane = useOptionalAppPaneContext();
+    const pane = useOptionalAppPaneContext(value => ({
+        dispatch: value.dispatch,
+        activeScopeId: value.state.activeScopeId,
+    }));
     const sidePanesAvailable = useDetailsPaneAvailable();
     // Read at press time, so the callback stays stable across navigation and pane changes.
     const latest = React.useRef({ router, pathname, pane, sidePanesAvailable });
@@ -75,7 +78,7 @@ export function useOpenAppRightSidebarTab(): (destination: PluginUiDestinationRe
         if (!dispatch) return;
         openAppRightSidebarTab({
             destination,
-            activeScopeId: facts.pane?.state.activeScopeId ?? null,
+            activeScopeId: facts.pane?.activeScopeId ?? null,
             sidePanesAvailable: facts.sidePanesAvailable,
             pathname: facts.pathname,
             select: (scopeId, selected) => dispatch({ type: 'selectRightDestination', scopeId, destination: selected }),
@@ -125,11 +128,14 @@ export function createAppScopeRightSidebarDestinationHandler(input: Readonly<{
 export function useAppScopeRightSidebarDestinationHandler(): PluginSurfaceDestinationContainerHandler {
     const router = useRouter();
     const pathname = usePathname();
-    const paneContext = useOptionalAppPaneContext();
+    const paneContext = useOptionalAppPaneContext(value => ({
+        dispatch: value.dispatch,
+        activeScopeId: value.state.activeScopeId,
+    }));
     const sidePanesAvailable = useDetailsPaneAvailable();
     const store = usePluginSurfacePaneLaunchScope()?.store ?? null;
     const dispatch = paneContext?.dispatch ?? null;
-    const activeScopeId = paneContext?.state.activeScopeId ?? null;
+    const activeScopeId = paneContext?.activeScopeId ?? null;
     const open = React.useMemo(() => (dispatch
         ? (destination: PluginUiDestinationReferenceV1, instanceKey?: PluginUiInstanceKeyV1) => openAppRightSidebarTab({
             destination,

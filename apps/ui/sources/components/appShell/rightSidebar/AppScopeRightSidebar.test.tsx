@@ -29,6 +29,7 @@ import {
 } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import {
     APP_PANE_SCOPE_ID,
+    useOpenAppRightSidebarTab,
     useAppScopeRightSidebarDestinationHandler,
 } from './appScopeRightSidebarNavigation';
 
@@ -295,6 +296,27 @@ describe('AppScopeRightSidebar', () => {
         accountLifetimeState.lifetime = captureActiveServerAccountScopeLifetime();
         ({ PluginSurfacePlacementHost: ActualSurfaceHost } = await import('@/components/plugins/surfaces'));
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now() })]);
+    });
+
+    it('keeps the shell destination owners idle while file state changes inside the active pane', async () => {
+        let renders = 0;
+        function NavigationProbe() {
+            useOpenAppRightSidebarTab();
+            useAppScopeRightSidebarDestinationHandler();
+            renders += 1;
+            return null;
+        }
+        const screen = await renderScreen(<NavigationProbe />);
+        try {
+            const initialRenders = renders;
+            await act(async () => runtime.pane.openDetailsTab({
+                key: 'file:notes.txt', kind: 'file', title: 'notes.txt',
+                resource: { kind: 'file', path: 'notes.txt' },
+            }));
+            await act(async () => runtime.pane.patchDetailsTabState('file:notes.txt', { scrollTop: 120 }));
+            expect(runtime.pane.scopeState?.details.activeTabKey).toBe('file:notes.txt');
+            expect(renders - initialRenders).toBe(0);
+        } finally { await screen.unmount(); }
     });
 
     it('mounts an available app-scope plugin tab surface through the canonical host', async () => {
