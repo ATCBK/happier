@@ -31,7 +31,7 @@ const { useNewSessionCapabilitiesPopover, useExistingSessionCapabilitiesPopover 
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 
 const presentation = { rules: () => [], mcpStatus: () => [], skillStatus: () => [],
-    names: { agentName: () => 'Codex', machineName: () => 'MacBook', projectName: (key: string) => key, folderLabel: () => '~/repo' },
+    names: { agentName: () => 'Codex', agentNames: (ids: readonly string[]) => ids.map(() => 'Codex'), machineName: () => 'MacBook', projectName: (key: string) => key, folderLabel: () => '~/repo' },
     nativeSkills: { items: [{ name: 'native-review', path: '/skills/review' }], canDisable: true, machineName: 'MacBook', agentName: 'Codex',
         applyTiming: { t: 'next_turn' as const } }, machineOnline: true, machineName: 'MacBook', turnSettled: true };
 const preview = { ok: true, machinePlatform: 'posix', mcp: { strictMode: false, items: [], detected: [] },

@@ -96,6 +96,7 @@ export const CLOSED_DETAIL: Detail = {
   skillStatus: () => NO_STATUSES,
   names: {
     agentName: (id) => id,
+    agentNames: (ids) => ids,
     machineName: (id) => id,
     projectName: (key) => key,
     folderLabel: (_machineId, root) => root,

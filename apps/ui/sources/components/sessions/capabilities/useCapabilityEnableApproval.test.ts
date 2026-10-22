@@ -250,7 +250,7 @@ it.each(['always', 'reject', 'cannot_resume', 'tray', 'tray_failed', 'tray_accou
             latest = useCapabilityEnableApproval({ artifact: { id: artifactId,
         header: { kind: 'approval_request.v1', title: null, serverId } }, approval: current, sessionId, decidedBy: decision.decidedBy,
         projectKey: 'happier', machineId: 'machine', itemTitle: 'Linear', agentName: 'Gemini',
-        names: { agentName: () => 'Gemini', projectName: key => key, machineName: () => 'MacBook', folderLabel: () => '~/repo' } });
+        names: { agentName: () => 'Gemini', agentNames: ids => ids.map(() => 'Gemini'), projectName: key => key, machineName: () => 'MacBook', folderLabel: () => '~/repo' } });
             return React.createElement(CapabilityEnableApprovalView, { chrome: 'card', decisionsAvailable: latest.ready,
                 onChoose: choice => { pendingDecision = latest.choose?.(choice); }, model: { title: latest.title ?? '', reason: latest.reason, offLine: null, alwaysLine: null,
                     cost: null, timing: null, connected: false, allowLabel: 'Allow for this session', alwaysLabel: latest.alwaysLabel,

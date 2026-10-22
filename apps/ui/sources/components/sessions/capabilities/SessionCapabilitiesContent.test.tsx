@@ -35,6 +35,7 @@ const names = {
   machineName: () => 'nl2',
   projectName: () => 'happier',
   agentName: () => 'Codex',
+  agentNames: (ids: readonly string[]) => ids.map(() => 'Codex'),
   folderLabel: () => '~/happier',
 };
 

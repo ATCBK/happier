@@ -9,7 +9,7 @@ import { sessionCapabilityApplyNotice } from './sessionCapabilityApplyNotice';
 import { resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 const context = { machineId: 'machine', machinePlatform: 'posix', projectKey: 'project', directory: '/repo', agentId: 'codex' } as const;
-const names = { machineName: () => 'MacBook', projectName: () => 'Project', agentName: () => 'Codex', folderLabel: () => '~/repo' };
+const names = { machineName: () => 'MacBook', projectName: () => 'Project', agentName: () => 'Codex', agentNames: (ids: readonly string[]) => ids.map(() => 'Codex'), folderLabel: () => '~/repo' };
 const rules = [{ id: 'project', target: { t: 'project', projectKey: 'project' }, enabled: true, createdAt: 1, updatedAt: 1 }] as const;
 function fixture() {
     const selection = setSessionCapabilitySelectionItemV1({}, 'skill', 'review', 'on');

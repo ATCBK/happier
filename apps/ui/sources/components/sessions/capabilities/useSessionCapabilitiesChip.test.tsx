@@ -134,7 +134,7 @@ it('composes the real rules lookup and sheet model without showing Off before th
   const hook = await renderHook(() => {
     const lookup = useReachRulesLookup(scope);
     return buildSessionCapabilitiesModel({ view, selection: {}, context, state: 'ready', readOnly: false, rules: lookup.rules,
-      mcpStatus: () => [], skillStatus: () => [], names: { machineName: id => id, projectName: id => id, agentName: id => id, folderLabel: (_id, path) => path } });
+      mcpStatus: () => [], skillStatus: () => [], names: { machineName: id => id, projectName: id => id, agentName: id => id, agentNames: ids => ids, folderLabel: (_id, path) => path } });
   });
   expect(hook.getCurrent().groups[0]?.rows[0]).toMatchObject({ id: 'review', scope: '', dimmed: false });
   const catalog = await loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () => PromptLibraryRowsListResponseV1Schema.parse({
