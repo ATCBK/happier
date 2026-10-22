@@ -814,7 +814,7 @@ through `createDefaultActionExecutor` and its mounted domain adapters; there is
 no second Find, prompt or Next executor. Find, Next and the picker are exposed
 to Agents and MCP.
 
-Session-bound Find, picker and composer calls select the app viewing the addressed
+Session-bound Find, picker, composer, Next and conversation-search calls select the app viewing the addressed
 Session, through the same channel's Session-qualified method. An explicit composer Session takes precedence over
 the invoking Session. The app's current-UI owner advertises that method only
 while the Session is viewed and rechecks it before execution. No matching view
@@ -823,8 +823,9 @@ returns the Action's unavailable result; multiple matching clients return
 require a single answering client. They never fall back to an arbitrary app.
 Other client Actions retain their existing placement-specific routing.
 
-Account-wide Next and conversation search use the generic connected-client room
-and require one answering client, independently of the invoking Session's view.
+Next and conversation search still operate across their requested Account scope;
+the invoking Session selects which app executes them. Unbound calls use the
+generic connected-client room and require one answering client.
 Availability advertisements are routing hints; the server's current registration selection decides absence
 and ambiguity, so a missed advertisement cannot by itself return `noClient`.
 Current-context reads use their dedicated mounted-current-context room.

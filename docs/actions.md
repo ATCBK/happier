@@ -3650,8 +3650,10 @@ provenance, so defaults, explicit Ask-first settings and waivers apply separatel
 The existing server routing selects the lexicographically first eligible socket
 id advertising the method in that Account's machine/method room, excluding the
 calling socket, or refuses multiple receivers when the invocation requires one.
-Next and conversation search use the generic client room independently of the
-invoking-Session view; both require one receiver.
+Session-bound Next and conversation search select the app viewing the invoking
+Session through its Session-qualified method, while retaining their Account-wide
+operation scope. No matching view is `noClient`; multiple matching views are
+`client_ambiguous`. Unbound calls use the generic client room and require one receiver.
 Daemon availability advertisements are hints, and the server's current
 registration selection decides absence rather than a daemon-local negative.
 Action inputs still address their exact Session, composer or
