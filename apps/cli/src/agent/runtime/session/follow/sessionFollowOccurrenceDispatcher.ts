@@ -624,8 +624,9 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       while (afterSeq < throughSeq && await current()) {
         const pageStart = afterSeq;
         checkpoint(diagnostic, 'range_transcript', 'started', { sourceSessionId, afterSeq, throughSeq });
+        // Frontiers count sidechain rows too; the occurrence reader excludes their events.
         const page = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => fetchEncryptedTranscriptMessagesPage({
-          token: input.credentials.token, sessionId: sourceSessionId, afterSeq,
+          token: input.credentials.token, sessionId: sourceSessionId, afterSeq, scope: 'all',
           limit: SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1, signal: input.signal }));
         if (!await current()) break;
         let unavailable = false;

@@ -17,7 +17,13 @@ import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/session
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(['failed', 'completed', 'waiting', 'stalled'] as const)('dispatches a no-original manager Turn through receiver recovery (%s)', async status => {
+it.each([
+  { status: 'failed', sidechainSuffix: false },
+  { status: 'completed', sidechainSuffix: false },
+  { status: 'waiting', sidechainSuffix: false },
+  { status: 'stalled', sidechainSuffix: false },
+  { status: 'failed', sidechainSuffix: true },
+] as const)('dispatches a no-original manager Turn through receiver recovery ($status, sidechain suffix: $sidechainSuffix)', async ({ status, sidechainSuffix }) => {
   const sourceSessionId = 'c111111111111111111111111';
   const destinationSessionId = 'c222222222222222222222222';
   const metadata = { machineId: 'machine', path: '/receiver', host: 'host', flavor: 'codex', codexSessionId: 'native-session',
@@ -27,15 +33,15 @@ it.each(['failed', 'completed', 'waiting', 'stalled'] as const)('dispatches a no
   let delivered = SESSION_FOLLOW_ZERO_FRONTIER_V1;
   const observation = () => ({ sourceSessionId, destinationSessionId, relation: 'manager' as const, attachedAt: 1,
     policy: { preset: 'everything' as const }, delivered,
-    observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, turn: { id: 'source-turn', status } } });
+    observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: sidechainSuffix ? 1 : 0, turn: { id: 'source-turn', status } } });
   const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
-    metadata: JSON.stringify(metadata), ownerAccountId: 'account-1', origin: { kind: 'none' }, seq: 0,
+    metadata: JSON.stringify(metadata), ownerAccountId: 'account-1', origin: { kind: 'none' }, seq: sidechainSuffix ? 1 : 0,
     latestTurnId: 'source-turn', latestTurnStatus: status === 'stalled' ? 'in_progress' : status,
     active: status !== 'stalled', activeAt: 0, pendingReviewRuns: 0 });
   const destination = () => createSessionRecordFixture({ id: destinationSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
     metadata: JSON.stringify({ ...metadata, ...(held ? { sessionExplicitStopV1: {
       v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 1 } } : {}) }), active: false });
-  vi.spyOn(axios, 'get').mockImplementation(async url => {
+  vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
@@ -43,7 +49,10 @@ it.each(['failed', 'completed', 'waiting', 'stalled'] as const)('dispatches a no
     if (path === '/v2/account/session-follow-preferences') return { status: 200, data: { assigned: false, direct: false, team: false, group: false } };
     if (path === `/v2/sessions/${sourceSessionId}`) return { status: 200, data: { session: source } };
     if (path === `/v2/sessions/${destinationSessionId}`) return { status: 200, data: { session: destination() } };
-    if (path.endsWith('/messages')) return { status: 200, data: { messages: [], hasMore: false } };
+    if (path.endsWith('/messages')) return { status: 200, data: { messages: sidechainSuffix
+      && (options?.params?.scope ?? new URL(String(url)).searchParams.get('scope')) === 'all'
+      ? [{ id: 'sidechain-row', seq: 1, localId: null, createdAt: 1, sidechainId: 'child-run',
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Child run output' } } } }] : [], hasMore: false } };
     if (path.endsWith('/execution-runs')) return { status: 200, data: { runs: [] } };
     return { status: 404, data: {} };
   });
