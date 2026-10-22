@@ -47,12 +47,13 @@ describe('present-user UI approval origin at the Action host', () => {
             return { body: { v: 1, ok: true, progress } };
         } });
         const originServerId = 'creator-device-local-home';
+        const originIdentityId = binding === 'foreign' ? 'srv_different_home' : serverIdentityId;
         const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId }, requestedSurface: 'agent', discussionDraftReview: true,
             executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
-                serverId: originServerId, serverIdentityId: binding === 'foreign' ? 'srv_different_home' : serverIdentityId,
+                serverId: originServerId, serverIdentityId: originIdentityId,
                 accountId: 'alice', sessionId, machineId: 'reviewer-machine', actionId: 'discussion.reply', requestId: 'private-answer',
-                discussionReplyReturn: { serverId: originServerId, requestLocalId, acceptedTurnId } },
+                discussionReplyReturn: { serverId: originIdentityId, requestLocalId, acceptedTurnId } },
             actionId: 'discussion.reply', actionArgs: { discussionId: discussion.discussionId, localId: 'private-answer',
                 content: { v: 1, parts: [{ t: 'text', text: 'Private draft' }] },
                 replyTarget: { kind: 'message', messageId: discussion.messageId } }, summary: 'Reply in a discussion.' });

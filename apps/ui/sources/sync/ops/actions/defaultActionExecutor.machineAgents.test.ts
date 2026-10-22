@@ -152,14 +152,18 @@ describe('UI machine Agent inventory Action transport', () => {
             { surface: 'ui', authority: 'present_user', serverId })).toEqual({ ok: true, result: { updated: true } });
         expect(catalog.read('role-overrides')).toEqual({ key: 'role-overrides', value: { v: 1,
             overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } });
-        // The row receipt is immediate; the canonical Account maintenance tail
-        // retains legacy content before its separate Settings cleanup commits.
-        await waitForHomeGovernance(() => {
-            expect(harness.artifacts(serverId).readPlainBody(legacy.artifactId)).toBe(JSON.stringify(legacy.role));
-            expect(raw).not.toHaveProperty('executionRunsGuidanceEntries');
-            expect(raw).not.toHaveProperty('rolesV1');
-            expect(readLegacyRolesV1(raw, 'alice')).toEqual([]);
-        });
+        // The row receipt is immediate; the app's observed Account catalog owns the
+        // maintenance tail that retains legacy content before its Settings cleanup commits.
+        const { observePromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+        const stopObserving = observePromptLibraryCatalog({ serverId, accountId: 'alice' });
+        try {
+            await waitForHomeGovernance(() => {
+                expect(harness.artifacts(serverId).readPlainBody(legacy.artifactId)).toBe(JSON.stringify(legacy.role));
+                expect(raw).not.toHaveProperty('executionRunsGuidanceEntries');
+                expect(raw).not.toHaveProperty('rolesV1');
+                expect(readLegacyRolesV1(raw, 'alice')).toEqual([]);
+            });
+        } finally { stopObserving(); }
     });
 
     it('preserves the persisted override winner when the Prompt Library row CAS refuses a stale revision', async () => {

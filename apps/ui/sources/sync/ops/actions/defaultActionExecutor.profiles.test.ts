@@ -26,6 +26,7 @@ import { PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, ProfileRowReadR
     type ProfileRowV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/profiles/profileActionsV1';
 import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -124,7 +125,7 @@ async function fixture() {
     let conflictFavorite = false;
     let rows: ProfileRowV1[] = [];
     const catalogAfterWrite = { pending: false, readStarted: false, release: undefined as (() => void) | undefined };
-    const settingsAfterWrite = { pending: false, readStarted: false, release: undefined as (() => void) | undefined };
+    const settingsAfterWrite = { pending: false, readStarted: false, readsAfterWrite: 0, release: undefined as (() => void) | undefined };
     const delayedProfileReceipt = { pending: false, committed: false, release: undefined as (() => void) | undefined };
     const historyCleanup = { active: false, pending: false, release: undefined as (() => void) | undefined };
     const transferControl = () => historyCleanup.active ? { status: 'present', revision: 1, content: { t: 'plain', v: {
@@ -176,7 +177,10 @@ async function fixture() {
                 return Response.json({ success: true, version: settingsVersion });
             }
             // Hold the refresh read, not the separate authoritative remembered-selection cleanup read.
-            if (settingsAfterWrite.pending && !settingsAfterWrite.readStarted && profileMutations.some(mutation => mutation.settingsCleanup)) {
+            // The cleanup read is the Action's own awaited step and reaches the Home first; the refresh
+            // read follows its Account currentness check.
+            if (settingsAfterWrite.pending && !settingsAfterWrite.readStarted && profileMutations.some(mutation => mutation.settingsCleanup)
+                && ++settingsAfterWrite.readsAfterWrite === 2) {
                 settingsAfterWrite.readStarted = true;
                 await new Promise<void>(resolve => { settingsAfterWrite.release = resolve; });
             }
@@ -277,8 +281,9 @@ async function fixture() {
                 artifacts.set(stored.id, stored);
                 return Response.json(stored);
             }
-            // Artifact inventory is the released array response, not an object-wrapped collection.
-            return Response.json([...artifacts.values()]);
+            // The unfiltered inventory is the released array; a kind-filtered one is wrapped with its classification flag.
+            const items = [...artifacts.values()].filter(row => !target.searchParams.has('kind') || (row as { kind?: string }).kind === target.searchParams.get('kind'));
+            return Response.json(target.searchParams.has('kind') ? { items, hasUnclassified: false } : items);
         }
         if (target.pathname.startsWith('/v1/artifacts/')) {
             const artifact = artifacts.get(decodeURIComponent(target.pathname.slice('/v1/artifacts/'.length)));
@@ -290,6 +295,12 @@ async function fixture() {
                 await new Promise<void>(resolve => { historyCleanup.release = resolve; });
             }
             return Response.json({ snapshots: [] });
+        }
+        // This Home publishes no Machines: each exact id the batch read asks for is absent.
+        if (target.pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+            const demand = MachineReadBatchRequestV1Schema.parse(JSON.parse(String(init.body)));
+            return Response.json(MachineReadBatchResponseV1Schema.parse({
+                results: demand.machineIds.map(machineId => ({ machineId, status: 'not_found' })) }));
         }
         return Response.json({ error: 'not_found' }, { status: 404 });
     };
@@ -620,7 +631,7 @@ describe('UI Profile Action front door', () => {
             contentBase64: encodeBase64(new TextEncoder().encode('---\nname: lint\n---\nRun the linter.')) }] });
         f.artifacts().set('lint-skill', { id: 'lint-skill', header: encodePlainArtifactStoredContent(header),
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-            ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } as Artifact);
+            ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', kind: 'skill', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } as Artifact);
         const hook = await renderHook(() => ({ save: useSaveLaunchProfile(), collection: useProfilesCollection() }));
         const profile = hook.getCurrent().collection.resolveProfile('editable');
         if (!profile) throw new Error('Fixture Profile unavailable');

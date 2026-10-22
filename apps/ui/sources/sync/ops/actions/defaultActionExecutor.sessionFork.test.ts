@@ -27,6 +27,7 @@ import { getAgentCore, publishRuntimeCapabilities } from '@happier-dev/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { MINIMUM_CLI_SESSION_FORK_REQUEST_ID_VERSION } from '@/utils/system/versionUtils';
 import { readMachineDaemonCliVersionForServerScope } from '@/sync/domains/machines/readMachineDaemonCliVersionForServerScope';
@@ -184,7 +185,7 @@ describe('default Action executor Session lifecycle contracts', () => {
       params: expect.objectContaining({ v: 1, parentSessionId: 'sess_parent', forkPoint: { type: 'latest' } }) }));
     expect(homes.requests.filter(({ path }) => path.split('?')[0] === '/v2/sessions/sess_child'))
       .toContainEqual(expect.objectContaining({ serverId }));
-    expect(storage.getState().sessions.sess_child?.metadata?.forkV1).toMatchObject({ parentSessionId: 'sess_parent' });
+    expect(readSessionOwnerMetadataView(storage.getState().sessions.sess_child!)?.forkV1).toMatchObject({ parentSessionId: 'sess_parent' });
     expect(openSession).toHaveBeenCalledWith('sess_child', { serverId });
   });
 

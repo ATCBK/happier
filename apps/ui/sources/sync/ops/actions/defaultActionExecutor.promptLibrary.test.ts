@@ -896,8 +896,11 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 pluginSkills[0]!.files[0]!.contentBase64 = Buffer.from('---\nname: acme-check\ndescription: Current plugin source\n---\nUpdated instructions').toString('base64');
                 projected = publishVersion('3.0.0');
                 await hook.rerender();
-                await vi.waitFor(() => expect(heldListResponses).toHaveLength(2));
+                // One Account list read is in flight and joined by this newer publication; its answer predates
+                // the publication, so the follow-up read starts only once it settles.
+                expect(heldListResponses).toHaveLength(1);
                 await act(async () => { heldListResponses[0]!.resolve(); });
+                await vi.waitFor(() => expect(heldListResponses).toHaveLength(2));
                 await flushHookEffects();
                 expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: true });
                 expect(hook.getCurrent().items.find(item => item.skillId === pluginSkills[0]!.skillId)?.description).toBe(previousDescription);
@@ -1156,6 +1159,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         expect(batched.body.session.ownerMetadata).toEqual(exact.ownerMetadata);
         expect(exact.metadataVersion).toBeGreaterThan(session.metadataVersion);
         const undo = () => executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: receipt.reversal }, { serverId, surface: 'ui' });
+        // Apply invalidated the mounted query owner; its refreshed snapshot admits the one-shot Undo query.
+        await resource.refresh();
         const undone = await undo();
         expect(undone, JSON.stringify(undone)).toMatchObject({ ok: true, result: { kind: 'undone' } });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection).toEqual(heavy);

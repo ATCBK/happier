@@ -578,7 +578,7 @@ describe('UI MCP per-Agent tool facts', () => {
             { agentId: 'acme.mcp-facts/native', off: 'hidden', approval: 'native', loading: 'on_demand', tokens: null },
             { agentId: 'acme.mcp-facts/host', off: 'blocked', approval: 'host', loading: 'every_turn', tokens: null },
         ]);
-        expect(describeMcpToolAgents(listed.perAgent, id => toolFactsProjection.agentsById[id]!.title!,
+        expect(describeMcpToolAgents(listed.perAgent, ids => ids.map(id => toolFactsProjection.agentsById[id]!.title!),
             ['acme.mcp-facts/native', 'acme.mcp-facts/host'])).toEqual({
             onDemand: ['Native Agent'], notApply: [], blocked: ['Host Agent'], hidden: ['Native Agent'],
         });

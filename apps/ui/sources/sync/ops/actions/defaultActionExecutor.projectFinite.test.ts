@@ -86,14 +86,19 @@ let serverId: string;
 let requesterHomeId: string;
 const serverUrl = 'https://finite-requester.test';
 const requesterToken = createAccountTokenForTests('requester', { currentAccount: true });
+function omitRunnerClaim<T extends { runnerClaim?: unknown }>(row: T): Omit<T, 'runnerClaim'> {
+    const { runnerClaim: _runnerClaim, ...published } = row;
+    return published;
+}
 function answerOwnMachineActions(homeId: string, accountId: string, serverIdentityId = 'srv_finite_requester'): void {
     const machines = ['source', 'selected-worker'].map(id => ({
         ...createPlainMachineRowFixture({ id, accountId }),
-        ...ExternalActionMachineBootstrapV1Schema.parse({
+        // The strict published Machine row has no runner claim; the Action bootstrap schema defaults one.
+        ...omitRunnerClaim(ExternalActionMachineBootstrapV1Schema.parse({
         id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
         installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
         access: { custodian: { accountId, displayName: accountId }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-    }) }));
+    })) }));
     homes.answer(homeId, '/v1/machines', { body: machines });
     for (const machine of machines) homes.answer(homeId, `GET /v1/machines/${machine.id}`, { body: { machine } });
     for (const actionId of ['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect'] as const) {

@@ -162,8 +162,9 @@ describe('FSP search production composition', () => {
         // A previous target-unavailable reply remains authoritative until an explicit probe succeeds.
         recordMachineRequestFailed({ ...scope, machineId: machine.id });
         expect(isMachineReachable(scope, machine)).toBe(false);
-        expect(await executor.execute('search.conversations', input, context)).toMatchObject({ ok: true,
-            result: { machines: [{ machineId: 'fsp-machine', status: 'offline', standardSearchEnabled: false }] } });
+        // An unreachable Machine is not asked for its settings, so its standard-search state stays unknown.
+        expect(await executor.execute('search.conversations', input, context)).toEqual({ ok: true,
+            result: expect.objectContaining({ machines: [{ machineId: 'fsp-machine', status: 'offline' }] }) });
         const retried = await executor.execute('search.conversations', { ...input, retryUnreachableMachines: true }, context);
         expect(retried).toMatchObject({ ok: true,
             result: { machines: [{ machineId: 'fsp-machine', status: 'ok', standardSearchEnabled: true }],

@@ -100,6 +100,11 @@ afterEach(async () => {
     const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
+    // An HTTP 503 answer marks the Home offline in its supervisors; that must not outlive its test.
+    const { resetEndpointSupervisorPoolForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
+    const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+    await resetEndpointSupervisorPoolForTests();
+    await resetServerReachabilitySupervisors();
     getStorage().setState(initial, true);
     standardCleanup();
     const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
