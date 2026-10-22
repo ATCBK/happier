@@ -2985,7 +2985,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             storedMetadata = handler(storedMetadata);
             return 'published' as const;
         });
-        const stopSessionForRemoval = vi.fn(async (_sessionId: string, _options?: unknown) => ({ status: 'stopped' as const }));
+        const stopSessionForRemoval = vi.fn(async (_sessionId: string) => ({ status: 'stopped' as const }));
         let onDeletedSession: ((change: Readonly<{ sessionId: string }>) => void | Promise<void>) | undefined;
         const fakeConnectedApiMachine = {
             ...createApiMachineTransportFixture(),
@@ -3075,7 +3075,7 @@ describe('bootstrapMachineSyncRuntime', () => {
         if (!onConnect) throw new Error('expected machine connect options');
         if (!onDeletedSession) throw new Error('expected managed directory deletion subscription');
         await onDeletedSession({ sessionId: 'deleted-session' });
-        expect(stopSessionForRemoval).toHaveBeenCalledWith('deleted-session', { intent: 'lifecycle' });
+        expect(stopSessionForRemoval).toHaveBeenCalledWith('deleted-session');
         // This obligation appears after bootstrap; reconnect must discover the
         // canonical marker rather than relying on the initial in-memory list.
         await writeSessionMarker({ pid, happySessionId: 'startup-orphan', startedBy: 'daemon', processStartTimeMs });
