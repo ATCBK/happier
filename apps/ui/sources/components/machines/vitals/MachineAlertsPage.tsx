@@ -106,7 +106,7 @@ export function MachineAlertsPage(
   );
   const published = readMachinePublishedResources(daemonState);
   const readOnlyNote =
-    policy.readOnlyReason === 'offline'
+    policy.readOnlyReason === 'unknown' ? t('common.unavailable') : policy.readOnlyReason === 'offline'
       ? t('machineVitals.alerts.readOnly.offline', {
           machine: props.machineName,
         })

@@ -26,6 +26,7 @@ import type {
   VoiceProviderLocalAvailability,
 } from '@/voice/settings/voiceProviderLocalAvailability';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { projectVoiceExecutionMachineReadiness, type VoiceExecutionMachineSelection } from '@/voice/settings/executionMachine';
 import {
   projectVoiceDaemonModelReadinessFact,
   projectVoiceDaemonRuntimeReadinessFact,
@@ -141,7 +142,7 @@ export function resolveVoiceDictationReadiness(input: Readonly<{
   settings: any;
   platform: VoiceRuntimePlatform | 'unknown';
   executionMachineId: string | null;
-  executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+  executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
   localAvailability: VoiceProviderLocalAvailability;
   /** Passive installed-pack fact for the exact native Local Neural STT selection. */
   nativeLocalNeuralModel?: VoiceReadinessFact;
@@ -178,9 +179,7 @@ export function resolveVoiceDictationReadiness(input: Readonly<{
     localAvailability: input.localAvailability,
     facts: {
       settings: settingsProjection?.status ?? 'ready',
-      executionMachine: input.executionMachineSelectionKind === 'selected_unreachable'
-        ? 'incompatible'
-        : input.executionMachineId ? 'ready' : 'missing',
+      executionMachine: projectVoiceExecutionMachineReadiness(input.executionMachineSelectionKind, input.executionMachineId),
       endpoint: projectVoiceSpeechEndpointReadiness({
         registry: input.registry,
         role: 'dictation_stt',

@@ -98,6 +98,13 @@ describe('projectVoiceProviderPassiveSetupFacts', () => {
     // the owner-local distinction the execution-machine selector already made.
     expect(projectVoiceProviderPassiveSetupFacts({
       execution: AGENT_REALTIME_EXECUTION,
+      executionMachineId: 'machine-unobserved',
+      executionMachineSelectionKind: 'selected_unknown',
+      executionMachineOnline: false,
+      runtimeCapabilityResult: null,
+    })).toEqual({ executionMachine: 'unknown', runtime: 'unknown' });
+    expect(projectVoiceProviderPassiveSetupFacts({
+      execution: AGENT_REALTIME_EXECUTION,
       executionMachineId: 'machine-offline',
       executionMachineSelectionKind: 'selected_unreachable',
       executionMachineOnline: false,

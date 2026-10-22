@@ -5,12 +5,13 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
   isCapturedVoiceExecutionMachineCurrent,
   resolveVoiceExecutionMachineIdFromState,
   resolveVoiceExecutionMachineSelectionFromState,
+  projectVoiceExecutionMachineReadiness,
 } from './executionMachine';
 
 function machine(id: string, active: boolean, extra: Record<string, unknown> = {}) {
@@ -24,6 +25,19 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
     clearMachineRequestReachabilityForTest();
     storage.setState({ profileScope: fixtureScope });
+  });
+  it('preserves a selected unobserved target without admitting it or declaring it offline', () => {
+    const state = { profileScope: fixtureScope, machines: { selected: machine('selected', true, { activeAt: Date.now() }) },
+      settings: { voice: { executionMachine: { mode: 'fixed', machineId: 'selected' } } } };
+    withdrawMachinePresenceForScope(fixtureScope);
+    const selection = resolveVoiceExecutionMachineSelectionFromState(state);
+    expect(selection).toEqual({ kind: 'selected_unknown', machineId: 'selected' });
+    expect(resolveVoiceExecutionMachineIdFromState(state)).toBeNull();
+    expect(projectVoiceExecutionMachineReadiness(selection.kind, null)).toBe('unknown');
+    captureMachinePresenceObservation(fixtureScope)(['selected']);
+    expect(resolveVoiceExecutionMachineIdFromState(state)).toBe('selected');
+    const offline = { ...state, machines: { selected: machine('selected', false, { activeAt: Date.now() - 97_000 }) } };
+    expect(resolveVoiceExecutionMachineSelectionFromState(offline)).toEqual({ kind: 'selected_unreachable', machineId: 'selected' });
   });
   it('keeps a selected failed machine unreachable in its exact Account despite a fresh heartbeat', () => {
     const scope = { serverId: getAppliedActiveServerSnapshot().serverId, accountId: 'voice-account' };

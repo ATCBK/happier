@@ -8,6 +8,8 @@ import {
     clearMachineRequestReachabilityForTest,
     recordMachineRequestFailed,
     recordMachineRequestSucceeded,
+    withdrawMachinePresenceForScope,
+    captureMachinePresenceObservation,
 } from '@/sync/domains/machines/reachability/machineReachability';
 const home = createHomeGovernanceHarness();
 const serverId = 'srv_presence';
@@ -30,6 +32,37 @@ afterEach(async () => {
 });
 
 describe('reactive Machine presence', () => {
+    it('shares withdrawn unknown presence and fresh offline recovery with membership without losing identity', async () => {
+        const scope = { serverId, accountId: 'account-a' };
+        const now = Date.now();
+        const machine = createMachineFixture({ id: 'reconnecting-machine', active: true, activeAt: now });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        const hook = await renderHook(() => ({
+            summary: useMachinePresenceSummary(serverId, machine.id),
+            membership: useMachinePresenceMembership(serverId),
+        }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().summary.reachability).toBe('reachable'));
+        const name = hook.getCurrent().summary.name;
+        try {
+            await act(async () => { withdrawMachinePresenceForScope(scope); });
+            expect(hook.getCurrent().summary).toMatchObject({ name, reachability: 'unknown', lastSeenAt: null });
+            expect(hook.getCurrent().membership.onlineMachineIds).toEqual([]);
+            expect(hook.getCurrent().membership.selectableMachineIds).toEqual([]);
+            vi.useFakeTimers({ toFake: ['Date'] });
+            vi.setSystemTime(now + 97_000);
+            await act(async () => {
+                storage.getState().applyMachines([{ ...machine, active: false, activeAt: now + 1 }], false, { sourceServerId: serverId });
+                captureMachinePresenceObservation(scope)([machine.id]);
+            });
+            expect(hook.getCurrent().summary).toMatchObject({ name, reachability: 'unreachable', lastSeenAt: now + 1 });
+            expect(hook.getCurrent().membership.onlineMachineIds).toEqual([]);
+            await act(async () => {
+                storage.getState().applyMachines([{ ...machine, activeAt: Date.now() }], false, { sourceServerId: serverId });
+            });
+            expect(hook.getCurrent().summary.reachability).toBe('reachable');
+            expect(hook.getCurrent().membership.onlineMachineIds).toEqual([machine.id]);
+        } finally { await hook.unmount(); }
+    });
     it('does not reacquire the profile resolver per Machine in presence snapshots', async () => {
         const rows = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `perf-b3-${index}`, activeAt: Date.now() }));
         storage.getState().applyMachines(rows, true, { sourceServerId: serverId });

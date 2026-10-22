@@ -24,6 +24,7 @@ const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settin
 const { requireOneShotAccountSettingsMutationApplied } = await import('@/sync/engine/settings/syncSettings');
 const { sync } = await import('@/sync/sync');
 const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+const { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { persistVoiceAutoTargetMachineId } = await import('@/voice/persistence/voiceAutoTargetMachineSettings');
 const { t } = await import('@/text');
 const { resolveMachineDisplayNames } = await import('@/utils/sessions/machineDisplayNames');
@@ -62,9 +63,22 @@ describe('useVoiceExecutionMachinePresentation', () => {
 
   afterEach(async () => {
     standardCleanup();
+    clearMachineRequestReachabilityForTest();
     await account?.dispose();
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
     webLocks?.restore();
+  });
+
+  it('updates on withdrawal and fresh presence without an Account write or a Machine identity change', async () => {
+    publishMachines(createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, displayName: 'Studio' } }));
+    await selectMachine('machine-a');
+    const hook = await renderHook(() => useVoiceExecutionMachinePresentation());
+    const settings = storage.getState().settings;
+    await act(async () => { withdrawMachinePresenceForScope(account.scope); });
+    expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-a', machineId: null, machineLabel: 'Studio', selectionKind: 'selected_unknown' });
+    await act(async () => { captureMachinePresenceObservation(account.scope)(['machine-a']); });
+    expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-a', machineId: 'machine-a', machineLabel: 'Studio', selectionKind: 'resolved' });
+    expect(storage.getState().settings).toBe(settings);
   });
 
   it('reacts to local auto-target memory without an Account settings write', async () => {

@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 
 import { createMachineFixture, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -20,9 +21,19 @@ beforeEach(async () => {
     const session = createSessionFixture({ id: 's1', serverId, active: true, metadata: { machineId: 'm1', path: '/repo', host: 'host-1' } });
     getStorage().setState({ sessions: { s1: session }, machines: { m1: machine }, machineListByServerId: { [serverId]: [machine] } });
 });
-afterEach(async () => { standardCleanup(); vi.useRealTimers(); getStorage().setState(initialStorage, true); await home.reset(); });
+afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); vi.useRealTimers(); getStorage().setState(initialStorage, true); await home.reset(); });
 
 describe('useSessionMachineReachability', () => {
+    it('does not admit retained unobserved presence through the invisible shared-Machine exception', async () => {
+        const hook = await renderHook(() => useSessionMachineReachability('s1', serverId));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().machineOnline).toBe(true));
+        const scope = { serverId, accountId: 'account' };
+        await act(async () => { withdrawMachinePresenceForScope(scope); });
+        expect(hook.getCurrent()).toMatchObject({ machineReachability: 'unknown', machineOnline: false,
+            machineReachable: false, machineRpcTargetAvailable: false, machineLastSeenAt: null });
+        await act(async () => { captureMachinePresenceObservation(scope)(['m1']); });
+        expect(hook.getCurrent()).toMatchObject({ machineReachability: 'reachable', machineReachable: true });
+    });
     it('normalizes session ids before resolving the reachable machine target', async () => {
         const hook = await renderHook(() => useSessionReachableMachineTarget('  s1  ', serverId));
         expect(hook.getCurrent()).toEqual({ machineId: 'm1', basePath: '/repo' });

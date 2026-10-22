@@ -195,7 +195,8 @@ function presentCurrentTarget(
             ?? readMachineAdministrationCandidateName(candidate)
             ?? (candidate.availability === 'locked' ? lockedMachineName() : unnamedMachineName()),
         subtitle: presentation?.subtitle ?? presentTargetHome(state.target, candidate),
-        detail: availability?.detail ?? targetStatusDetail(state.kind),
+        detail: availability?.detail ?? (state.kind === 'missing' && state.inventoryKnown === false
+            ? t('common.unknown') : targetStatusDetail(state.kind)),
         selected: true,
         gone: false,
     };

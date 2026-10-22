@@ -2,6 +2,7 @@ import { isMachineReachableV1, isMachineRequestReachabilityFailureV1 } from '@ha
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { createServerAccountScope, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import type { SessionMachineReachability } from './resolveSessionMachineReachability';
 
 export type MachineReachabilityScope = ServerAccountScope;
 
@@ -18,9 +19,44 @@ type MachineRequestObservationInput = MachineReachabilityScope & Readonly<{
 }>;
 
 const observations = new Map<string, MachineRequestReachabilityObservation>();
+// A transport withdrawal invalidates retained presence, not Machine identity.
+// Each fresh ingress/read re-observes only its own Machine in that exact scope.
+const withdrawnPresence = new Map<string, Set<string>>();
 const listeners = new Set<() => void>();
 const recoveryListeners = new Set<(scope: MachineReachabilityScope, machineId: string) => void>();
 let revision = 0;
+
+function presenceScopeKey(scope: MachineReachabilityScope | null | undefined, resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): string | null {
+    const normalized = createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
+    return normalized ? serverAccountScopedResourceKey(normalized) : null;
+}
+
+function publishReachabilityChange(): void {
+    revision += 1;
+    for (const listener of listeners) listener();
+}
+
+/** Called by the existing Account socket's transport-withdrawal edge. Reconnect alone is not a presence observation. */
+export function withdrawMachinePresenceForScope(scope: MachineReachabilityScope): void {
+    const key = presenceScopeKey(scope);
+    if (!key) return;
+    withdrawnPresence.set(key, new Set());
+    publishReachabilityChange();
+}
+
+/** Capture before an HTTP read so a pre-withdrawal response cannot restore old presence. */
+export function captureMachinePresenceObservation(scope: MachineReachabilityScope | null): (machineIds: readonly string[]) => void {
+    const key = presenceScopeKey(scope);
+    const captured = key ? withdrawnPresence.get(key) : undefined;
+    return machineIds => {
+        if (!key || !captured || withdrawnPresence.get(key) !== captured) return;
+        let changed = false;
+        for (const machineId of machineIds) {
+            if (!captured.has(machineId)) { captured.add(machineId); changed = true; }
+        }
+        if (changed) publishReachabilityChange();
+    };
+}
 
 function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route'], resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): string | null {
     const normalizedScope = createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
@@ -91,9 +127,25 @@ export function isMachineReachable(
     nowMs: number = Date.now(),
     resolveScopeId?: ProfileScopeResolver,
 ): boolean {
-    if (!createServerAccountScope(scope?.serverId, scope?.accountId)) return false;
-    return isMachineReachableV1({ machine, nowMs, graceMs: readMachineOnlineGraceMsFromEnv(),
-        requestOutcome: readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome });
+    return resolveMachineReachability(scope, machine, nowMs, resolveScopeId) === 'reachable';
+}
+
+/** Shared presence verdict; unknown never supplies execution admission. */
+export function resolveMachineReachability(
+    scope: MachineReachabilityScope | null | undefined,
+    machine: Parameters<typeof isMachineReachable>[1],
+    nowMs: number = Date.now(),
+    resolveScopeId?: ProfileScopeResolver,
+): SessionMachineReachability {
+    const key = presenceScopeKey(scope, resolveScopeId);
+    if (!key) return 'unknown';
+    const requestOutcome = readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome;
+    if ((typeof machine.revokedAt === 'number' && Number.isFinite(machine.revokedAt) && machine.revokedAt > 0)
+        || requestOutcome === 'failed') return 'unreachable';
+    const observedSinceWithdrawal = withdrawnPresence.get(key);
+    if (observedSinceWithdrawal && !observedSinceWithdrawal.has(machine.id)) return 'unknown';
+    return isMachineReachableV1({ machine, nowMs, graceMs: readMachineOnlineGraceMsFromEnv(), requestOutcome })
+        ? 'reachable' : 'unreachable';
 }
 
 /** The protocol-owned verdict; a failed request overrides pushed presence until a later reply or reconnect. */
@@ -126,8 +178,9 @@ export function clearMachineRequestReachabilityForScope(scope: MachineReachabili
 }
 
 export function clearMachineRequestReachabilityForTest(): void {
-    if (observations.size === 0) return;
+    if (observations.size === 0 && withdrawnPresence.size === 0) return;
     observations.clear();
+    withdrawnPresence.clear();
     revision += 1;
     for (const listener of listeners) listener();
 }

@@ -21,6 +21,7 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { buildVoiceSpawnUserAttemptId } from '@/voice/shared/voiceSpawnAttempt';
+import { captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -104,6 +105,9 @@ function publishCarrierFixture() {
   captureCarrierSessionRecords();
   storage.setState({ sessions: structuredClone(sessions), machines: structuredClone(machines), machineListByServerId: structuredClone(state.machineListByServerId),
     authoringMemory: structuredClone(state.authoringMemory), settings: settingsParse(state.settings) });
+  // Authored current Machine fixtures include their presence observation; they
+  // are not a cache retained from the previous Account transport's teardown.
+  captureMachinePresenceObservation({ serverId: account!.serverId, accountId: 'voice-account' })(Object.keys(machines));
 }
 async function respondToServerRequest(input: RequestInfo | URL, init?: RequestInit) {
   const path = new URL(String(input)).pathname;
@@ -1245,7 +1249,9 @@ describe('voiceConversationSession', () => {
     const { ensureVoiceConversationSessionForSessionRoot } = await import('@/voice/persistence/voiceConversationSession');
 
     readSession.mockImplementation(async (sessionId: string) => {
-      if (sessionId !== 's_remote') throw new Error(`unexpected session ${sessionId}`);
+      // Neighboring background hydration is a normal 404 at the HTTP boundary,
+      // not a transport exception that declares the entire Home unreachable.
+      if (sessionId !== 's_remote') return;
       state.sessions.s_remote = {
         id: 's_remote',
         updatedAt: 1,

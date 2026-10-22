@@ -4,7 +4,7 @@ import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { readVoiceAutoTargetMachineId } from '@/voice/persistence/voiceAutoTargetMachineSettings';
 import { readVoiceExecutionMachineSettings } from '@/sync/domains/settings/voiceSettings';
@@ -14,6 +14,7 @@ export type VoiceExecutionMachineOverride = Readonly<{ machineId: string }>;
 export type VoiceExecutionMachineSelection =
   | Readonly<{ kind: 'resolved'; machineId: string }>
   | Readonly<{ kind: 'selected_unreachable'; machineId: string }>
+  | Readonly<{ kind: 'selected_unknown'; machineId: string }>
   | Readonly<{ kind: 'none' }>;
 
 function resolveReplacementAwareSelection(state: any, requestedMachineId: unknown, serverId: string): VoiceExecutionMachineSelection {
@@ -29,9 +30,19 @@ function resolveReplacementAwareSelection(state: any, requestedMachineId: unknow
 
   const machine = resolveMachineForActiveServerFromState(state, target.machineId, { serverId });
   const scope = selectActiveServerAccountScopeForServer(state.profileScope, serverId);
-  return machine && isMachineReachable(scope, machine)
-    ? { kind: 'resolved', machineId: target.machineId }
-    : { kind: 'selected_unreachable', machineId: target.machineId };
+  const reachability = machine ? resolveMachineReachability(scope, machine) : 'unreachable';
+  return { kind: reachability === 'reachable' ? 'resolved'
+    : reachability === 'unknown' ? 'selected_unknown' : 'selected_unreachable', machineId: target.machineId };
+}
+
+/** Readiness and settings retain an unobserved selected target without declaring it offline or missing. */
+export function projectVoiceExecutionMachineReadiness(
+  kind: VoiceExecutionMachineSelection['kind'] | undefined,
+  machineId: string | null | undefined,
+): 'ready' | 'missing' | 'unknown' | 'incompatible' {
+  if (kind === 'selected_unknown') return 'unknown';
+  if (kind === 'selected_unreachable') return 'incompatible';
+  return machineId ? 'ready' : 'missing';
 }
 
 /**

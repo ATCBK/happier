@@ -10,6 +10,7 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { describeMachineAlertsRow } from './machineAlertsPresentation';
 
@@ -20,7 +21,7 @@ installDisconnectedServerSocketBoundary();
 const { MachineAlertsPage, MachineOfflineAlertRow } = await import('./MachineAlertsPage');
 
 const before = storage.getState();
-afterEach(async () => { standardCleanup(); await homes.reset(); storage.setState(before); });
+afterEach(async () => { standardCleanup(); await homes.reset(); clearMachineRequestReachabilityForTest(); storage.setState(before); });
 
 it('keeps the known offline-alert row while Account consent is unavailable and restores the real setting', async () => {
     const machine = createMachineFixture({ id: 'machine', isShared: false });
@@ -68,5 +69,10 @@ it('keeps the introduction and switches in agreement with the current enabled re
     expect(screen.findByTestId('machine-alerts-memory-switch')?.props.value).toBe(false);
     expect(intro()).toContain(describeMachineAlertsRow({ machineName: 'edge-1', alerts: disabled.alerts, readOnlyReason: null }));
     expect(intro()).not.toBe(enabledIntro);
+    await act(async () => { withdrawMachinePresenceForScope({ serverId, accountId: 'owner' }); });
+    expect(screen.findByTestId('machine-alerts-memory-switch')?.props.disabled).toBe(true);
+    expect(screen.findByTestId('machine-alerts-memory-switch')?.props.value).toBe(false);
+    await act(async () => { captureMachinePresenceObservation({ serverId, accountId: 'owner' })([machine.id]); });
+    expect(screen.findByTestId('machine-alerts-memory-switch')?.props.disabled).toBe(false);
     await screen.unmount();
 });

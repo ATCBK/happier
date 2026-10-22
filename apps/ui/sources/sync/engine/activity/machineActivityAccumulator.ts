@@ -3,12 +3,15 @@ export type MachineActivityUpdate = { id: string; active: boolean; activeAt: num
 type MachineActivityAccumulatorOptions = Readonly<{
     shouldContinue?: () => boolean;
     sourceServerId?: string | null;
+    /** Restores observation only after the owning presence publication commits. */
+    onApplied?: () => void;
 }>;
 
 type PendingMachineActivityUpdate = Readonly<{
     update: MachineActivityUpdate;
     shouldContinue: () => boolean;
     sourceServerId: string | null;
+    onApplied?: () => void;
 }>;
 
 export class MachineActivityAccumulator {
@@ -17,7 +20,7 @@ export class MachineActivityAccumulator {
     private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
-        private flushHandler: (updates: Map<string, MachineActivityUpdate>, options?: { sourceServerId?: string | null }) => void,
+        private flushHandler: (updates: Map<string, MachineActivityUpdate>, options?: { sourceServerId?: string | null; onApplied?: () => void }) => void,
         private debounceDelay: number = 300
     ) {}
 
@@ -36,6 +39,7 @@ export class MachineActivityAccumulator {
             update,
             shouldContinue: options?.shouldContinue ?? (() => true),
             sourceServerId,
+            onApplied: options?.onApplied,
         });
 
         if (isSignificantChange) {
@@ -65,7 +69,13 @@ export class MachineActivityAccumulator {
             }
             for (const [sourceKey, updatesToFlush] of updatesToFlushBySourceServerId) {
                 if (updatesToFlush.size > 0) {
-                    this.flushHandler(updatesToFlush, { sourceServerId: sourceKey || null });
+                    const onApplied = [...updatesToFlush].flatMap(([id, update]) => {
+                        const pending = this.pendingUpdates.get(id);
+                        return pending?.update === update && pending.onApplied ? [pending.onApplied] : [];
+                    });
+                    this.flushHandler(updatesToFlush, { sourceServerId: sourceKey || null,
+                        ...(onApplied.length ? { onApplied: () => { for (const observe of onApplied) observe(); } } : {}),
+                    });
                 }
                 for (const [id, update] of updatesToFlush) {
                     this.lastEmittedStates.set(id, { active: update.active, activeAt: update.activeAt });

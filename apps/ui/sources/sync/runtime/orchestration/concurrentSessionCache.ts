@@ -25,7 +25,7 @@ import { resolveUiClientEncryptionRequirementForScope } from '@/sync/domains/set
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { clearMachineRequestReachabilityForMachine } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForMachine, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 import {
     getEffectiveServerSelectionFromRawSettings,
     type RawServerSelectionSettings,
@@ -1569,12 +1569,14 @@ async function connectManagedServer(
                 }),
                 transport.onDisconnected((event: TransportDisconnectEvent) => {
                     if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                    if (ingressAccountId) withdrawMachinePresenceForScope({ serverId: entry.id, accountId: ingressAccountId });
                     accountEncryptionObservation?.disconnected();
                     if (event.intentional) return;
                     reportServerUnreachable(normalizedServerUrl, event.error ?? new Error(event.reason ?? 'socket disconnect'), credentials.token);
                 }),
                 transport.onError((error: unknown) => {
                     if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                    if (ingressAccountId) withdrawMachinePresenceForScope({ serverId: entry.id, accountId: ingressAccountId });
                     accountEncryptionObservation?.disconnected();
                     reportServerUnreachable(normalizedServerUrl, error, credentials.token);
                 }),

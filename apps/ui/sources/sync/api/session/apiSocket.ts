@@ -87,6 +87,7 @@ import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
 import {
     clearMachineRequestReachabilityForMachine,
     clearMachineRequestReachabilityForScope,
+    withdrawMachinePresenceForScope,
     type MachineReachabilityScope,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -1514,6 +1515,9 @@ class ApiSocket {
 
         this.detachSocketTransportListeners = [
             detachInboundRequests,
+            // Replacement/backgrounding retires observation of this captured
+            // scope even when the transport's disconnect listener is detached.
+            () => { if (machineRequestScope) withdrawMachinePresenceForScope(machineRequestScope); },
             ...(accountScoped ? [attachManagedSessionHumanPresenceSocket({
                 serverId: this.config.serverId ?? getActiveServerSnapshot().serverId,
                 token: this.config.token, socket, transport,
@@ -1541,6 +1545,7 @@ class ApiSocket {
             }),
             transport.onDisconnected((event: TransportDisconnectEvent) => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (machineRequestScope) withdrawMachinePresenceForScope(machineRequestScope);
                 if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
                 else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId, reason: 'transport-withdrawal' });
                 if (!event.intentional && event.reason === 'io server disconnect' && transportConfig?.request) {
@@ -1562,6 +1567,7 @@ class ApiSocket {
             }),
             transport.onError((error: unknown) => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (machineRequestScope) withdrawMachinePresenceForScope(machineRequestScope);
                 if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
                 else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId, reason: 'transport-withdrawal' });
                 this.setError(error instanceof Error ? error : new Error(String(error)));

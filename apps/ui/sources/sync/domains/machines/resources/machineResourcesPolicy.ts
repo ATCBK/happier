@@ -4,7 +4,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
-export type MachineResourcesPolicyReadOnlyReason = 'offline' | 'not_custodian' | 'older_happier' | null;
+export type MachineResourcesPolicyReadOnlyReason = 'offline' | 'unknown' | 'not_custodian' | 'older_happier' | null;
 
 /** Synced metadata is already opened by the Account-mode-aware sync owner. */
 export function readSyncedMachineResourcesPolicy(machine: Machine | null): MachineResourcesPolicyGetResultV1 {
@@ -14,7 +14,10 @@ export function readSyncedMachineResourcesPolicy(machine: Machine | null): Machi
 }
 
 export function readMachineResourcesPolicyReadOnlyReason(machine: Machine | null, scope: MachineReachabilityScope | null): MachineResourcesPolicyReadOnlyReason {
-    if (!machine || resolveMachinePickerPresence(machine, undefined, scope).status !== 'online') return 'offline';
+    if (!machine) return 'unknown';
+    const presence = resolveMachinePickerPresence(machine, undefined, scope);
+    if (presence.status === 'unknown') return 'unknown';
+    if (presence.status !== 'online') return 'offline';
     const state: unknown = machine.daemonState;
     const resources = typeof state === 'object' && state !== null && 'resources' in state ? state.resources : null;
     if (!MachinePublishedResourceSummaryV1Schema.safeParse(resources).success) return 'older_happier';

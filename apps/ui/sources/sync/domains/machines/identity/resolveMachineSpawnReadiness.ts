@@ -1,4 +1,4 @@
-import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, resolveMachineReachability, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { resolveMachineSpawnReadinessV1, type MachineSpawnReadinessV1 } from '@happier-dev/protocol/machines/machineSpawnReadinessV1';
 
@@ -27,9 +27,14 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
     machineReachable?: boolean;
     nowMs?: number;
 }>): MachineSpawnReadiness {
-    return resolveMachineSpawnReadinessV1({ ...params,
-        machineReachable: params.machineReachable !== false && Boolean(params.machine && isMachineReachable(params.scope, params.machine, params.nowMs)),
+    const reachability = params.machine ? resolveMachineReachability(params.scope, params.machine, params.nowMs) : 'unknown';
+    const readiness = resolveMachineSpawnReadinessV1({ ...params,
+        machineReachable: params.machineReachable !== false && reachability === 'reachable',
     });
+    // The protocol still owns missing/replaced/revoked/key/probe decisions.
+    // A caller veto can close admission, but cannot prove an unobserved Machine offline.
+    return readiness.status === 'offline' && reachability === 'unknown'
+        ? { status: 'unknown', machineId: readiness.machineId } : readiness;
 }
 
 export function canAttemptMachineSpawn(params: Readonly<{
@@ -40,6 +45,7 @@ export function canAttemptMachineSpawn(params: Readonly<{
     machineReachable?: boolean;
     nowMs?: number;
 }>): boolean {
+    if (!params.machine || !isMachineReachable(params.scope, params.machine, params.nowMs)) return false;
     const currentReadiness = resolveMachineSpawnReadiness({
         selectedMachineId: params.selectedMachineId,
         machine: params.machine,

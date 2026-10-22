@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { captureMachinePresenceObservation as observeLocalVoiceFixturePresence } from '@/sync/domains/machines/reachability/machineReachability';
 import type { Socket } from 'socket.io-client';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { projectClaudeJsonlLineToDirectMessages } from '../../../../../packages/plugins/claude/src/agent/transcripts/projection';
@@ -289,7 +290,14 @@ export async function getStorage() {
             }
             // This facade accepts legacy sparse test seeds; every domain record above comes from its canonical fixture.
             storage.setState(normalized as Partial<StorageState>);
-            if (normalized.machines) storage.getState().applyMachines(Object.values(storage.getState().machines), true, { sourceServerId: localVoiceHomeId });
+            if (normalized.machines) {
+                const rows = Object.values(storage.getState().machines);
+                storage.getState().applyMachines(rows, true, { sourceServerId: localVoiceHomeId });
+                // These authored Machine fixtures represent a current presence
+                // observation, not rows retained across the prior test's teardown.
+                const scope = storage.getState().profileScope;
+                if (scope) observeLocalVoiceFixturePresence(scope)(rows.map(row => row.id));
+            }
             if (normalized.sessions) storage.getState().applySessions(Object.values(storage.getState().sessions));
         },
         __notify: () => storage.setState({}),

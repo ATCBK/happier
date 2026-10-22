@@ -5,6 +5,7 @@ import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { t } from '@/text';
 
 export function getMachineDropdownMenuItems(params: Readonly<{
     machines: readonly Machine[];
@@ -36,10 +37,11 @@ export function getMachineDropdownMenuItems(params: Readonly<{
     const machines = params.machines.filter(isMachineVisibleForLaunchSelection);
     const names = resolveMachineDisplayNames(machines);
     for (const machine of machines) {
+        const presence = resolveMachinePickerPresence(machine, undefined, params.scope);
         items.push({
             id: machine.id,
             title: names.get(machine.id)!,
-            subtitle: resolveMachinePickerPresence(machine, undefined, params.scope).status === 'online'
+            subtitle: presence.status === 'unknown' ? t('common.unknown') : presence.status === 'online'
                 ? params.onlineLabel ?? 'Online' : params.offlineLabel ?? 'Offline',
             icon: renderDropdownItemIcon({
                 name: 'desktop',

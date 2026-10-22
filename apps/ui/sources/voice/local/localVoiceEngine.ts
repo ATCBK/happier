@@ -49,7 +49,7 @@ import {
   type VoiceCaptureAdmissionLease,
 } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 import { resolveVoiceSttCapturePlan } from '@/voice/runtime/input/resolveVoiceSttCapturePlan';
-import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
+import { resolveVoiceExecutionMachineIdFromState, resolveVoiceExecutionMachineSelectionFromState } from '@/voice/settings/executionMachine';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
 import type { TurnEndpointSignal } from '@/voice/runtime/input/TurnEndpointController';
 import { createExpoAudioRecordingMicSession } from '@/voice/runtime/mic/NativeMicSession';
@@ -543,7 +543,8 @@ async function ensureLocalConversationBindingForSession(
         && resolveLocalNeuralExecutionPolicy({ requestedExecution: tts.localNeural.execution }).preferredExecution === 'daemon');
     if (needsDaemonSpeech && !resolveVoiceExecutionMachineIdFromState(storage.getState())) {
       throw Object.assign(new Error('voice_execution_machine_unavailable'), {
-        code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
+        code: resolveVoiceExecutionMachineSelectionFromState(storage.getState()).kind === 'selected_unknown'
+          ? 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED' : 'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
       });
     }
     await voiceSessionBindingManager.ensureBound({

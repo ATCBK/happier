@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { t } from '@/text';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -11,6 +13,13 @@ const machine = (id: string, metadata: Partial<NonNullable<Machine['metadata']>>
 });
 
 describe('getMachineDropdownMenuItems', () => {
+  afterEach(() => clearMachineRequestReachabilityForTest());
+  it('keeps the selected machine identity and uses the existing unknown status after transport withdrawal', () => {
+    const scope = { serverId: 'picker-home', accountId: 'account-a' };
+    withdrawMachinePresenceForScope(scope);
+    const items = getMachineDropdownMenuItems({ machines: [machine('selected', { displayName: 'Studio' })], scope, iconColor: '#000' });
+    expect(items[0]).toMatchObject({ id: 'selected', title: 'Studio', subtitle: t('common.unknown') });
+  });
   it('names a machine by its display name or host, and never by its raw id while its details are still loading', () => {
     const items = getMachineDropdownMenuItems({
       machines: [
@@ -31,7 +40,7 @@ describe('getMachineDropdownMenuItems', () => {
       createMachineFixture({ id: 'replaced-4444', replacedByMachineId: 'aaaa-1111', replacedAt: 10 }),
       createMachineFixture({ id: 'temporary-5555', kind: 'ephemeral_session_runner' }),
     ];
-    const items = getMachineDropdownMenuItems({ machines, iconColor: '#000' });
+    const items = getMachineDropdownMenuItems({ machines, scope: { serverId: 'picker-home', accountId: 'account-a' }, iconColor: '#000' });
     const names = resolveMachineDisplayNames(machines.slice(0, 2));
     expect(items.map(item => item.id)).toEqual(['aaaa-1111', 'bbbb-2222']);
     expect(items.map(item => item.title)).toEqual([...names.values()]);

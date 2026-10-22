@@ -5,7 +5,7 @@ import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/ses
 import { storage } from '@/sync/domains/state/storage';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
 import { resolveMachineForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
@@ -90,10 +90,11 @@ export async function assertActiveDaemonTargetSession(target: SessionAddress | s
         );
     }
     const machine = machineId ? resolveMachineForActiveServerFromState(storage.getState(), machineId) : null;
-    if (machine && isMachineReachable(selectActiveServerAccountScopeForServer(state.profileScope, address?.serverId ?? null), machine) !== true) {
+    const reachability = machine ? resolveMachineReachability(selectActiveServerAccountScopeForServer(state.profileScope, address?.serverId ?? null), machine) : null;
+    if (reachability && reachability !== 'reachable') {
         throw Object.assign(
-            new Error('Target machine daemon is offline. Start or reconnect the daemon before starting local voice.'),
-            { code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' },
+            new Error('Target machine is not currently reachable.'),
+            { code: reachability === 'unknown' ? 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED' : 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' },
         );
     }
 }

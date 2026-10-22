@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { VoiceExecutionMachineSelection } from '@/voice/settings/executionMachine';
 import { Platform, Pressable, View } from 'react-native';
 
 import {
@@ -89,7 +90,7 @@ export function useVoiceDictationReadinessModel(props: Readonly<{
   setVoice: (next: VoiceSettings) => void;
   popoverBoundaryRef?: React.RefObject<any> | null;
   executionMachineId: string | null;
-  executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+  executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
   localAvailability: VoiceProviderLocalAvailability;
   daemonRouteDiagnosticReason?: VoiceDaemonRouteDiagnosticReason | null;
   onRecoveryAction?: (action: VoiceRoleReadiness['recoveryAction']) => void;

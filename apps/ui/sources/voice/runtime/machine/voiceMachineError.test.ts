@@ -66,6 +66,10 @@ describe('createVoiceMachineError', () => {
     });
 
     it('projects temporary service unavailability as a retryable preflight failure', () => {
+        expect(classifyVoiceMachineError(Object.assign(new Error('voice_execution_machine_unavailable'), {
+            code: 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED',
+        }))).toMatchObject({ kind: 'service_temporarily_unavailable', phase: 'preflight',
+            recoveryAction: 'retry', presentation: 'error', recoverable: false });
         expect(createVoiceMachineError({
             kind: 'service_temporarily_unavailable',
             reason: 'connected_service_credential_refresh_unavailable',

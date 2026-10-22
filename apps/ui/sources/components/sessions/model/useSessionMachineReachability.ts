@@ -3,7 +3,6 @@ import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { useMachinePresenceSummary } from './useMachinePresenceSummary';
 import {
     resolveSessionMachineReachability,
-    resolveSessionMachineReachabilityState,
     type SessionMachineReachability,
 } from '@/components/sessions/model/resolveSessionMachineReachability';
 import { useSessionMachineDisplayIdentity, useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
@@ -26,17 +25,14 @@ export function useSessionMachineReachability(sessionId: string, serverId?: stri
     const resolvedMachineId = machineTarget?.machineId ?? (displayIdentity.machineId || null);
 
     const presence = useMachinePresenceSummary(serverId, resolvedMachineId);
-    const machineKnown = presence.reachability !== 'unknown';
+    const machineKnown = presence.machineIsKnown ?? presence.reachability !== 'unknown';
     const machineOnline = presence.reachability === 'reachable';
 
     const machineReachable = resolveSessionMachineReachability({
         machineIsKnown: machineKnown,
         machineIsOnline: machineOnline,
     });
-    const machineReachability = resolveSessionMachineReachabilityState({
-        machineIsKnown: machineKnown,
-        machineIsOnline: machineOnline,
-    });
+    const machineReachability = presence.reachability;
 
     const machineRpcTargetAvailable = Boolean(machineTarget?.basePath) && machineReachable;
 

@@ -28,6 +28,26 @@ function machineUpdate() { h.socket().trigger('update', { body: { t: 'update-mac
 function offline() { h.pool.reportServerUnreachable(h.homeB.serverUrl, new Error('Home unreachable'), h.homeB.token); }
 
 describe('concurrent session cache supervised sockets', () => {
+    it('withdraws secondary-Home presence until fresh ingress for that exact Account and Machine', async () => {
+        await h.start(); await h.ready();
+        const reachability = await import('@/sync/domains/machines/reachability/machineReachability');
+        disposers.push(() => reachability.clearMachineRequestReachabilityForTest());
+        const scope = { serverId: h.homeB.id, accountId: 'account-b' };
+        const machine = { id: 'presence-machine', active: true, activeAt: Date.now() };
+        expect(reachability.resolveMachineReachability(scope, machine)).toBe('reachable');
+        const socket = h.socket();
+        socket.trigger('disconnect', 'transport close');
+        expect(reachability.resolveMachineReachability(scope, machine)).toBe('unknown');
+        expect(reachability.isMachineReachable(scope, machine)).toBe(false);
+        socket.trigger('ephemeral', { type: 'machine-activity', id: 'another-machine', active: true, activeAt: Date.now() });
+        expect(reachability.resolveMachineReachability(scope, machine)).toBe('unknown');
+        const offline = { ...h.machine(h.homeB, machine.id), active: false, activeAt: 1 };
+        h.setMachines(h.homeB, [offline]);
+        socket.trigger('connect');
+        await h.refresh();
+        expect(reachability.resolveMachineReachability(scope, { ...machine, active: false, activeAt: 1 })).toBe('unreachable');
+        expect(reachability.resolveMachineReachability({ ...scope, accountId: 'another-account' }, machine)).toBe('reachable');
+    });
     it('recovers a retired Service watch when a daemon reconnects without reconnecting its Home', async () => {
         await h.start(); await h.ready();
         const inventory = await import('@/sync/domains/local/services/inventory/sharedStore');

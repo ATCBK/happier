@@ -10,6 +10,7 @@ import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/co
 
 import type { VoiceReadinessFact } from '@/voice/registry/readiness';
 import type { ExternalVoiceProviderSettingsDescriptor } from '@/voice/settings/externalProviderSettings';
+import { projectVoiceExecutionMachineReadiness, type VoiceExecutionMachineSelection } from './executionMachine';
 
 type CanonicalVoiceAgentRealtimeExecution = NonNullable<Extract<
   VoiceProviderContribution,
@@ -40,7 +41,7 @@ export function projectVoiceProviderPassiveSetupFacts(
   input: Readonly<{
     execution: VoiceAgentRealtimeExecution | null;
     executionMachineId: string | null;
-    executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+    executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
     executionMachineOnline: boolean;
     runtimeCapabilityResult: unknown;
     passiveRealtimeSetupResult?: unknown;
@@ -51,9 +52,9 @@ export function projectVoiceProviderPassiveSetupFacts(
   // The execution-machine owner distinguishes no saved target from a target
   // that remains persisted but is currently unreachable. Do not erase that
   // fact merely because no live daemon request can be made against it.
-  if (input.executionMachineSelectionKind === 'selected_unreachable') {
+  if (input.executionMachineSelectionKind === 'selected_unreachable' || input.executionMachineSelectionKind === 'selected_unknown') {
     return Object.freeze({
-      executionMachine: 'incompatible',
+      executionMachine: projectVoiceExecutionMachineReadiness(input.executionMachineSelectionKind, input.executionMachineId),
       runtime: 'unknown',
     });
   }

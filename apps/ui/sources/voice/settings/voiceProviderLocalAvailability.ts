@@ -42,6 +42,7 @@ import type {
     VoiceProviderUnavailableReason,
 } from './resolveVoiceProviderAvailability';
 import { getDefaultBrowserWebSpeechCapability, useBrowserWebSpeechCapability } from './browserWebSpeechCapability';
+import type { VoiceExecutionMachineSelection } from './executionMachine';
 
 export type VoiceProviderLocalAvailability = NonNullable<ResolveVoiceProviderAvailabilityInput['local']>;
 export type VoiceDaemonRouteDiagnosticReason = Extract<
@@ -76,7 +77,7 @@ export function resolveVoiceDaemonHeavyAudioReadiness(input: Readonly<{
     providerId: string;
     daemon: VoiceProviderLocalAvailability['daemon'] | null | undefined;
     executionMachineId: string | null | undefined;
-    executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+    executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
 }>): VoiceRoleReadiness | null {
     if (!input.daemon) return null;
     if (input.daemon.featureEnabled !== true) {
@@ -100,6 +101,7 @@ export function resolveVoiceDaemonHeavyAudioReadiness(input: Readonly<{
             recoveryAction: 'select_execution_machine',
         });
     }
+    if (input.executionMachineSelectionKind === 'selected_unknown') return null;
     if (!input.executionMachineId) {
         return Object.freeze({
             role: input.role,

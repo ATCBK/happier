@@ -475,7 +475,7 @@ import {
     type ExternalSessionTranscriptAuthority,
 } from '@/sync/runtime/external/externalSessionTranscriptAuthority';
 import { filterExternalSessionTranscriptAuthorityMessages } from '@/sync/runtime/external/filterExternalSessionTranscriptAuthorityMessages';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { isSessionSubmitMachineReachable } from '@/sync/domains/session/input/syncBackedSubmitPort';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { readStoredSessionRawRecord } from '@/sync/runtime/readStoredSessionContent';
@@ -12638,7 +12638,7 @@ class Sync {
         });
     }
 
-    private flushMachineActivityUpdates = (updates: Map<string, MachineActivityUpdate>, options?: { sourceServerId?: string | null }) => {
+    private flushMachineActivityUpdates = (updates: Map<string, MachineActivityUpdate>, options?: { sourceServerId?: string | null; onApplied?: () => void }) => {
         const scope = this.getAppliedTransportAccountScope();
         const reachabilityBefore = new Map<string, boolean>();
         for (const machineId of updates.keys()) {
@@ -12650,6 +12650,7 @@ class Sync {
             ...options,
             applyMachines: (machines, applyOptions) => storage.getState().applyMachines(machines, false, applyOptions),
         });
+        options?.onApplied?.();
         const changedMachineIds = new Set<string>();
         for (const [machineId, wasReachable] of reachabilityBefore) {
             const machine = storage.getState().machines[machineId] ?? null;
@@ -12719,7 +12720,11 @@ class Sync {
                 this.activityAccumulator.addUpdate(ephemeralUpdate, { shouldContinue, sourceServerId });
             },
             addMachineActivityUpdate: (machineUpdate) => {
-                this.machineActivityAccumulator.addUpdate(machineUpdate, { shouldContinue, sourceServerId });
+                const observe = captureMachinePresenceObservation(accountScope
+                    && areServerProfileIdentifiersEquivalent(accountScope.serverId, sourceServerId) ? accountScope : null);
+                this.machineActivityAccumulator.addUpdate(machineUpdate, { shouldContinue, sourceServerId,
+                    onApplied: () => { if (shouldContinue()) observe([machineUpdate.id]); },
+                });
             },
             getSessionEncryption,
             getSession: (sessionId) => storage.getState().sessions[sessionId],

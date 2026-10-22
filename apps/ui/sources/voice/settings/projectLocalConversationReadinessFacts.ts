@@ -18,6 +18,7 @@ import type { SavedSecretReferenceResolution } from '@/sync/store/settings/saved
 import { projectVoiceSpeechCredentialReadiness } from '@/voice/registry/speechCredentialReadiness';
 import { projectVoiceSpeechEndpointReadiness } from '@/voice/registry/speechEndpointReadiness';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
+import { projectVoiceExecutionMachineReadiness, type VoiceExecutionMachineSelection } from './executionMachine';
 
 import {
   resolveVoiceDeviceSpeechRolePath,
@@ -80,7 +81,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
   local: VoiceLocalProviderModeAvailability;
   localInput: ResolveVoiceProviderAvailabilityInput['local'];
   executionMachineId: string | null | undefined;
-  executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+  executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
   voiceAgentEnabled: boolean;
   /** Existing configured-Agent/catalog availability; never a speech runtime fact. */
   voiceAgentRuntime?: VoiceReadinessFact;
@@ -196,8 +197,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
     facts: {
       settings: thinkSettings,
       serverFeature,
-      executionMachine: input.executionMachineSelectionKind === 'selected_unreachable'
-        ? 'incompatible' : input.executionMachineId ? 'ready' : 'missing',
+      executionMachine: projectVoiceExecutionMachineReadiness(input.executionMachineSelectionKind, input.executionMachineId),
       runtime: agentRuntime,
     },
   });
@@ -224,9 +224,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
       settingsRequirements: settings?.requirements,
       facts: {
         settings: settingsStatus,
-        executionMachine: input.executionMachineSelectionKind === 'selected_unreachable'
-          ? 'incompatible'
-          : input.executionMachineId ? 'ready' : 'missing',
+        executionMachine: projectVoiceExecutionMachineReadiness(input.executionMachineSelectionKind, input.executionMachineId),
         endpoint: roleEndpoint,
         credential: roleCredential,
         // The available neural model/runtime check combines selected packs.
@@ -273,7 +271,8 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
       platformOs: input.platform,
     }).preferredExecution === 'daemon'
   ));
-  const executionMachine: VoiceReadinessFact = needsAgent && input.executionMachineSelectionKind === 'selected_unreachable'
+  const executionMachine: VoiceReadinessFact = input.executionMachineSelectionKind === 'selected_unknown' ? 'unknown'
+    : needsAgent && input.executionMachineSelectionKind === 'selected_unreachable'
     ? 'incompatible' : requiresDaemon
     ? input.executionMachineSelectionKind === 'selected_unreachable'
       ? 'incompatible'

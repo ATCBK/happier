@@ -3,18 +3,19 @@ import { shallow } from 'zustand/vanilla/shallow';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
-import { resolveVoiceExecutionMachineIdFromState, resolveVoiceExecutionMachineSelectionFromState } from '@/voice/settings/executionMachine';
+import { resolveVoiceExecutionMachineIdFromState, resolveVoiceExecutionMachineSelectionFromState, type VoiceExecutionMachineSelection } from '@/voice/settings/executionMachine';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 export type VoiceExecutionMachinePresentation = Readonly<{
   selectedMachineId: string | null;
   machineId: string | null;
   machineLabel: string | null;
-  selectionKind: 'resolved' | 'selected_unreachable' | 'none';
+  selectionKind: VoiceExecutionMachineSelection['kind'];
 }>;
 
 function machineLabelFromState(state: ReturnType<typeof storage.getState>, selectedMachineId: string | null): string | null {
@@ -42,6 +43,7 @@ export function resolveVoiceExecutionMachinePresentationFromState(state: ReturnT
  * Credential settings use this for both display and request invalidation.
  */
 function useVoiceExecutionMachineState<Value>(select: (state: ReturnType<typeof storage.getState>) => Value): Value {
+  useMachineReachabilityRevision();
   const scope = useAccountSettingsScope();
   useVoiceTargetStore((state) => scope
     ? state.autoTargetMachineByScope[accountSettingsScopeKeySuffix(scope)]

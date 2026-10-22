@@ -49,6 +49,7 @@ export function buildMachineAdministrationTargetRouteParams(
 export type MachineAdministrationCandidateAvailabilityV1 =
     | 'online'
     | 'offline'
+    | 'unknown'
     | 'locked'
     | 'missing'
     | 'replaced'
@@ -229,6 +230,8 @@ function projectCandidateState(
             return Object.freeze({ kind: 'online', target, machine: candidate });
         case 'offline':
             return Object.freeze({ kind: 'offline', target, snapshot: candidate });
+        case 'unknown':
+            return Object.freeze({ kind: 'missing', target, snapshot: candidate, inventoryKnown: false });
         case 'locked':
             return Object.freeze({ kind: 'locked', target, snapshot: candidate });
         case 'missing':

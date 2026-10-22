@@ -10,6 +10,7 @@ import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/f
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
     isMachineReachable,
+    resolveMachineReachability,
     readMachineRequestReachabilityRevision,
     subscribeMachineRequestReachability,
 } from '@/sync/domains/machines/reachability/machineReachability';
@@ -17,10 +18,7 @@ import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtM
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 
-import {
-    resolveSessionMachineReachabilityState,
-    type SessionMachineReachability,
-} from '@/sync/domains/machines/reachability/resolveSessionMachineReachability';
+import type { SessionMachineReachability } from '@/sync/domains/machines/reachability/resolveSessionMachineReachability';
 
 /**
  * What a pane header says about the machine a tab runs on ("~/happier on MacBook Pro", "MacBook Pro is
@@ -36,6 +34,8 @@ export type MachinePresenceSummary = Readonly<{
     sentenceName?: string | null;
     homeDir: string | null;
     reachability: SessionMachineReachability;
+    /** Distinguishes a retained unobserved row from a shared Session's invisible Machine. */
+    machineIsKnown?: boolean;
     /** The machine's last heartbeat while it is unreachable ("last seen 09:12"); null otherwise, so heartbeats re-render nothing. */
     lastSeenAt?: number | null;
 }>;
@@ -81,17 +81,14 @@ export function useMachinePresenceSummaries(
             const name = machine ? getMachineDisplayName(machine).trim() || null : null;
             const sentenceName = machine ? getMachineSentenceName(machine, name ?? undefined) : null;
             const homeDir = machine?.metadata?.homeDir?.trim() || null;
-            const reachability = resolveSessionMachineReachabilityState({
-                // Missing credential identity is unknown, not a transport-offline verdict.
-                machineIsKnown: Boolean(machine && scope),
-                machineIsOnline: machine ? isMachineReachable(scope, machine, nowMs, resolveScopeId) : false,
-            });
+            const reachability = machine ? resolveMachineReachability(scope, machine, nowMs, resolveScopeId) : 'unknown';
+            const machineIsKnown = Boolean(machine);
             const lastSeenAt = reachability === 'unreachable' && typeof machine?.activeAt === 'number' && machine.activeAt > 0
                 ? machine.activeAt : null;
             const previous = cached.current[index];
             return previous && previous.name === name && previous.sentenceName === sentenceName && previous.homeDir === homeDir
-                && previous.reachability === reachability && previous.lastSeenAt === lastSeenAt
-                ? previous : { name, sentenceName, homeDir, reachability, lastSeenAt };
+                && previous.reachability === reachability && previous.lastSeenAt === lastSeenAt && previous.machineIsKnown === machineIsKnown
+                ? previous : { name, sentenceName, homeDir, reachability, lastSeenAt, machineIsKnown };
         });
         if (next.length !== cached.current.length || next.some((value, index) => value !== cached.current[index])) cached.current = next;
         return cached.current;

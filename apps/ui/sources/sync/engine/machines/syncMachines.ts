@@ -22,6 +22,8 @@ import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { hasCurrentMachineContent } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { readMachineCensus } from '@/sync/api/machines/machineRowsApi';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
+import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 type MachineEncryption = {
     decryptMetadata: (version: number, value: string) => Promise<any>;
@@ -513,6 +515,9 @@ export async function fetchAndApplyMachines(params: {
     throwOnError?: boolean;
 }): Promise<void> {
     const { credentials, encryption, machineDataKeys, applyMachines } = params;
+    let viewerAccountId: string | null = null;
+    try { viewerAccountId = parseToken(credentials.token); } catch { /* Historical token-only Plain reads need no content key. */ }
+    const observePresence = captureMachinePresenceObservation(createServerAccountScope(params.sourceServerId, viewerAccountId));
     const concurrencyLimit = Math.max(1, Math.trunc(params.machineDisplayHydrationConcurrencyLimit ?? 4));
     const shouldContinue = params.shouldContinue ?? (() => true);
     const throwOnError = params.throwOnError === true;
@@ -562,8 +567,6 @@ export async function fetchAndApplyMachines(params: {
         if (!accepted) hasOlderRows = true;
         return accepted;
     });
-    let viewerAccountId: string | null = null;
-    try { viewerAccountId = parseToken(credentials.token); } catch { /* Historical token-only Plain reads need no content key. */ }
     machines = machines.map((machine) => {
         if (machine.access === undefined) return machine;
         const access = AccessibleMachineAccessStoredReadV1Schema.safeParse(machine.access);
@@ -638,6 +641,7 @@ export async function fetchAndApplyMachines(params: {
                 const row = capturedRows.get(machine.id);
                 return row ? [row] : [];
             }));
+        observePresence(current.map(machine => machine.id));
         // Warm publication is this read's own synchronous write. Carry its exact
         // resulting row forward so later hydration does not reject itself, but do
         // not adopt a reentrant access/context change made by another producer.

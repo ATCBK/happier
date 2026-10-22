@@ -1,4 +1,4 @@
-import { isMachineReachable, readMachineRequestReachabilityObservation, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability, readMachineRequestReachabilityObservation, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { isMachineReplaced } from './machineIdentityTypes';
 import type { ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
@@ -10,6 +10,7 @@ import type { ProfileScopeResolver } from '@/sync/domains/server/serverProfiles'
  */
 export type MachinePickerPresence =
     | { status: 'online'; selectable: true }
+    | { status: 'unknown'; selectable: false }
     | { status: 'offline'; selectable: false; reason: 'offline' | 'home_unreachable' }
     | { status: 'revoked' | 'replaced'; selectable: false };
 
@@ -35,8 +36,9 @@ export function resolveMachinePickerPresence(
         return { status: 'replaced', selectable: false };
     }
 
-    const online = isMachineReachable(scope, machine, nowMs, resolveScopeId);
-    if (!online) {
+    const reachability = resolveMachineReachability(scope, machine, nowMs, resolveScopeId);
+    if (reachability === 'unknown') return { status: 'unknown', selectable: false };
+    if (reachability === 'unreachable') {
         return { status: 'offline', selectable: false,
             reason: !scope || readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome === 'failed'
                 ? 'home_unreachable' : 'offline' };

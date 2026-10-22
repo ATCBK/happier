@@ -622,7 +622,12 @@ function assertTargetMachineStructurallyReadyForSpawn(machineId: string, account
     const machine = resolveTargetMachineForSpawn(state, machineId);
     const target = { selectedMachineId: machineId, machine, scope: accountLifetime?.isCurrent() ? accountLifetime.scope : null };
     if (canAttemptMachineSpawn(target)) return;
-    if (resolveMachineSpawnReadiness(target).status === 'keyUnavailable') {
+    const readiness = resolveMachineSpawnReadiness(target);
+    if (readiness.status === 'unknown') {
+        throw Object.assign(new Error('Target machine presence has not been observed since reconnect.'),
+            { code: 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED' });
+    }
+    if (readiness.status === 'keyUnavailable') {
         throw Object.assign(
             new Error('Target machine is locked because secure access is unavailable.'),
             { code: 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE' },

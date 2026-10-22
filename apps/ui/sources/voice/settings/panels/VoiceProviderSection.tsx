@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { VoiceExecutionMachineSelection } from '@/voice/settings/executionMachine';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { Platform } from 'react-native';
@@ -282,7 +283,7 @@ export function useVoiceConversationsReadinessModel(props: {
   executionMachineId?: string | null;
   /** Retained selected identity; never used for a daemon request while offline. */
   executionMachineSelectedId?: string | null;
-  executionMachineSelectionKind?: 'resolved' | 'selected_unreachable' | 'none';
+  executionMachineSelectionKind?: VoiceExecutionMachineSelection['kind'];
   popoverBoundaryRef?: React.RefObject<any> | null;
   onRecoveryAction?: (action: VoiceRoleReadiness['recoveryAction']) => void;
 }): {
@@ -536,7 +537,7 @@ export function useVoiceConversationsReadinessModel(props: {
       serverFeature: row.providerId === 'local_conversation'
         ? localConversationReadinessFacts.serverFeature
         : props.happierVoiceSupported ? 'ready' : 'missing',
-      executionMachine:
+      executionMachine: props.executionMachineSelectionKind === 'selected_unknown' ? 'unknown' :
         row.providerId === 'local_conversation'
           ? props.executionMachineSelectionKind === 'selected_unreachable'
             ? 'incompatible'

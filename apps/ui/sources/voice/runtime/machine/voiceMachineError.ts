@@ -67,6 +67,7 @@ export function isVoiceMachineErrorKind(value: unknown): value is VoiceMachineEr
 export function resolveVoiceMachineErrorKind(reason: string, preferredKind?: VoiceMachineErrorKind): VoiceMachineErrorKind {
     if (reason === 'agent_signed_out') return 'authentication_required';
     if (reason === 'provider_setup_required') return 'provider_setup_required';
+    if (reason === 'VOICE_AGENT_TARGET_MACHINE_UNOBSERVED') return 'service_temporarily_unavailable';
     if (reason === 'VOICE_AGENT_TARGET_MACHINE_OFFLINE'
         || reason === 'VOICE_AGENT_TARGET_MACHINE_KEY_UNAVAILABLE'
         || reason === 'daemon_streaming_stt_machine_unreachable') return 'execution_machine_unavailable';
