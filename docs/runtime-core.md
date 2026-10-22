@@ -1256,6 +1256,13 @@ In 0.3 development source, semantic withdrawal uses the existing [Pending mutati
 
 Aggregate idle begins only after all applicable owners prove settlement. Real owner invalidations reset that interval, and an asynchronous snapshot invalidated during its read cannot confirm idle. The authenticated guest bridge rechecks the exact retained row, revision and controller around a fresh closed-admission read. Its unused-stop cause can reopen independently of temporary drain, plugin handoff and irreversible shutdown. Only the safe activity decision is published through existing Machine daemon-state updates; references, attribution and content stay private. A committed idle bridge reply can additionally carry the current guest installation's signed evidence, binding that exact row and guest-measured interval. These are development-source contracts, not loaded-runtime certification.
 
+Activity reads own short guest-local probes: the guest releases the probe before
+replying with signed idle evidence, including when delivery or the controller's
+operation later fails. The selected unused interval and approval wait retain no
+probe drain and do not depend on a second resume RPC. The native-effect guard
+confirms idle again and retains admission closure immediately before Stop/Delete;
+once native IO may have started, an uncertain result does not reopen admission.
+
 An external after-idle Stop/Delete uses the original accepted Action root and
 controller installation signature through the existing Machine transport. Home
 derives the private activity/drain destination from that same current control
