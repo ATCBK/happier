@@ -32,10 +32,10 @@ describe('trimConversationHitLead', () => {
 });
 
 describe('resolveConversationHitSnippet', () => {
-  it('retains pre-extraction ordered-list and literal-role preview semantics', () => {
+  it('uses the conversation search projection even without an active query', () => {
     expect(resolveConversationHitSnippet({ title: 'Other conversation',
       snippet: '1. First\n2. **Second**\nUser: keep this role label\nAssistant: keep this one too', query: undefined }))
-      .toBe('First Second User: keep this role label Assistant: keep this one too');
+      .toBe('1. First 2. Second keep this role label keep this one too');
   });
 
   it('keeps numbered search matches while flattening role-labelled message Markdown', () => {
