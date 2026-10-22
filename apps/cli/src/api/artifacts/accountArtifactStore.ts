@@ -426,7 +426,8 @@ export function createAccountArtifactStore(params: Readonly<{
   };
   const assertOwnerAccountMode = async (stored: Pick<StoredArtifact, 'access' | 'encryptionMode'>,
     timing?: { accountModeMs: number; codecMs: number },
-    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal; usage?: AccountEncryptionModeReadOptions['usage'] }>) => {
+    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal; usage?: AccountEncryptionModeReadOptions['usage'] }>,
+    admittedMode?: Promise<ConnectedServiceAccountEncryptionMode>) => {
     // Personal Artifact reads/writes follow the persisted Account mode. Shared
     // recipients instead open the owner's content mode, which may differ from theirs.
     if (stored.access === 'owner') {
@@ -435,7 +436,7 @@ export function createAccountArtifactStore(params: Readonly<{
         ? (await fetchAccountEncryptionCurrentness({ token: params.credentials.token,
             authorizationHeaders: await options.authorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }),
             allowCredentialRecovery: false, ...(options.signal ? { signal: options.signal } : {}) })).mode
-        : await params.getAccountEncryptionMode(options);
+        : await (admittedMode ?? params.getAccountEncryptionMode(options));
       if (timing) timing.accountModeMs += performance.now() - startedAt;
       if (accountMode === 'unknown') throw Object.assign(new Error('account_encryption_mode_unavailable'), { code: 'account_encryption_mode_unavailable' });
       if (accountMode !== stored.encryptionMode) throw Object.assign(new Error('artifact_account_mode_mismatch'), { code: 'artifact_account_mode_mismatch' });
@@ -443,8 +444,9 @@ export function createAccountArtifactStore(params: Readonly<{
   };
   const openStored = async (stored: Pick<StoredArtifact, 'access' | 'encryptionMode' | 'dataEncryptionKey'>,
     timing?: { accountModeMs: number; codecMs: number },
-    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal }>) => {
-    await assertOwnerAccountMode(stored, timing, options);
+    options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders; signal?: AbortSignal }>,
+    admittedMode?: Promise<ConnectedServiceAccountEncryptionMode>) => {
+    await assertOwnerAccountMode(stored, timing, options, admittedMode);
     const startedAt = performance.now();
     try { return await openCodec(params.credentials, stored.dataEncryptionKey, stored.encryptionMode); }
     finally { if (timing) timing.codecMs += performance.now() - startedAt; }
@@ -646,10 +648,12 @@ export function createAccountArtifactStore(params: Readonly<{
     };
   };
   // Header discovery and selected details share the same mode/envelope projection.
-  const projectHeaderRows = async (rows: readonly unknown[], options: Readonly<{ includeBody?: boolean }>,
-    timing: { accountModeMs: number; codecMs: number }): Promise<AccountArtifactHeader[]> => {
+  const projectHeaderRows = async (rows: readonly unknown[], options: Readonly<{ includeBody?: boolean; signal?: AbortSignal }>,
+    timing: { accountModeMs: number; codecMs: number },
+    readAccountMode?: () => Promise<ConnectedServiceAccountEncryptionMode>): Promise<AccountArtifactHeader[]> => {
     const items: AccountArtifactHeader[] = [];
     for (const raw of rows) {
+      options.signal?.throwIfAborted();
       if (!raw || typeof raw !== 'object') continue;
       const value = raw as Record<string, unknown>;
       if (typeof value.id !== 'string' || typeof value.header !== 'string' || typeof value.dataEncryptionKey !== 'string') continue;
@@ -662,7 +666,8 @@ export function createAccountArtifactStore(params: Readonly<{
       let codec: Codec;
       let header: unknown;
       try {
-        codec = await openStored({ ...access, dataEncryptionKey: value.dataEncryptionKey }, timing);
+        codec = await openStored({ ...access, dataEncryptionKey: value.dataEncryptionKey }, timing, { signal: options.signal },
+          access.access === 'owner' ? readAccountMode?.() : undefined);
       } catch (error) {
         // openStored checks the persisted Account mode first. Missing Account
         // material stays request-wide; a failed per-record envelope does not.
@@ -893,12 +898,13 @@ export function createAccountArtifactStore(params: Readonly<{
       }
       return parsed.data;
     },
-    list: async (options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; includeBody?: boolean; signal?: AbortSignal }>): Promise<Readonly<{ items: readonly AccountArtifactHeader[]; nextCursor?: string; hasUnclassified?: boolean; coverage: 'complete' | 'partial' }>> => {
+    list: async (options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; includeBody?: boolean; signal?: AbortSignal }>,
+      readAccountMode?: () => Promise<ConnectedServiceAccountEncryptionMode>): Promise<Readonly<{ items: readonly AccountArtifactHeader[]; nextCursor?: string; hasUnclassified?: boolean; coverage: 'complete' | 'partial' }>> => {
       const startedAt = performance.now();
       const { rows, nextCursor, hasUnclassified } = await fetchHeaderPage(options);
       const httpMs = performance.now() - startedAt;
       const timing = { accountModeMs: 0, codecMs: 0 };
-      const items = await projectHeaderRows(rows, options ?? {}, timing);
+      const items = await projectHeaderRows(rows, options ?? {}, timing, readAccountMode);
       logger.infoFile('[Artifacts] List page timing', { rows: rows.length, items: items.length,
         includeBody: options?.includeBody === true, httpMs: Math.round(httpMs),
         accountModeMs: Math.round(timing.accountModeMs), codecMs: Math.round(timing.codecMs),
@@ -1063,7 +1069,8 @@ export function createAccountArtifactStore(params: Readonly<{
         : { ok: false, errorCode: 'delete_failed', error: 'artifact_delete_failed' } as const;
     },
   };
-  const readListBodies = async (items: readonly AccountArtifactHeader[], signal?: AbortSignal): Promise<readonly AccountArtifactHeader[]> => {
+  const readListBodies = async (items: readonly AccountArtifactHeader[], signal?: AbortSignal,
+    readAccountMode?: () => Promise<ConnectedServiceAccountEncryptionMode>): Promise<readonly AccountArtifactHeader[]> => {
     signal?.throwIfAborted();
     if (items.length === 0) return items;
     const startedAt = performance.now();
@@ -1080,7 +1087,7 @@ export function createAccountArtifactStore(params: Readonly<{
       throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
     }
     const timing = { accountModeMs: 0, codecMs: 0 };
-    const opened = await projectHeaderRows(parsed.data.items.flatMap(item => item.ok ? [item.artifact] : []), { includeBody: true }, timing);
+    const opened = await projectHeaderRows(parsed.data.items.flatMap(item => item.ok ? [item.artifact] : []), { includeBody: true, signal }, timing, readAccountMode);
     signal?.throwIfAborted();
     const byId = new Map(opened.map(item => [item.artifactId, item]));
     logger.infoFile('[Artifacts] Selected body batch timing', { rows: items.length, items: opened.length,
@@ -1177,9 +1184,26 @@ export function createAccountArtifactStore(params: Readonly<{
         throw Object.assign(new Error(updated.error), { code: updated.errorCode });
       }
     },
-    list: (options?: ArtifactListSelectionOptionsV1) => listArtifactHeadersV1({ options,
-      readPage: store.list, encodeCursor: encodeAccountArtifactListCursor,
-      ...(options?.kind && options.includeBody ? { readBodies: (items: readonly AccountArtifactHeader[]) => readListBodies(items, options.signal) } : {}) }),
+    list: async (options?: ArtifactListSelectionOptionsV1) => {
+      // A finite inventory shares descriptive admission across transport pages
+      // and selected bodies. Nothing survives this public operation.
+      let accountMode: Promise<ConnectedServiceAccountEncryptionMode> | undefined;
+      const readAccountMode = () => accountMode ??= params.getAccountEncryptionMode({ usage: 'identity', signal: options?.signal });
+      const result = await listArtifactHeadersV1({ options,
+        readPage: page => store.list(page, readAccountMode), encodeCursor: encodeAccountArtifactListCursor,
+        ...(options?.kind && options.includeBody ? { readBodies: (items: readonly AccountArtifactHeader[]) => readListBodies(items, options.signal, readAccountMode) } : {}) });
+      options?.signal?.throwIfAborted();
+      if (accountMode && result.items.some(item => item.access === 'owner' && Object.hasOwn(item, 'body'))) {
+        const mode = await accountMode;
+        if (mode === 'unknown') throw Object.assign(new Error('account_encryption_mode_unavailable'), { code: 'account_encryption_mode_unavailable' });
+        // Private content leaves only after a separate fresh authority read;
+        // this must never borrow the inventory's initial admission promise.
+        await assertOwnerAccountMode({ access: 'owner', encryptionMode: mode }, undefined,
+          { usage: 'fresh-authority', signal: options?.signal });
+      }
+      options?.signal?.throwIfAborted();
+      return result;
+    },
   };
 }
 
