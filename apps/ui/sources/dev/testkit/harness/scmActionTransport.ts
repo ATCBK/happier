@@ -30,11 +30,11 @@ export function createScmDiffSummaryResultOperationsWithTransport(
 /** Generator/capture network replies remain below real Action schema and policy admission. */
 export function createScmDiffSummaryOperationsWithTransport(
     params: Parameters<typeof createScmDiffSummaryOperations>[0] & Readonly<{
-        generateSummary?: ScmDiffSummaryGenerateRpc; captureComparison?: ScmComparisonCaptureRpc;
+        generateSummary?: ScmDiffSummaryGenerateRpc; draftPullRequest?: ScmDiffSummaryGenerateRpc; captureComparison?: ScmComparisonCaptureRpc;
     }> = {},
 ) {
-    const { generateSummary, captureComparison, ...captured } = params;
-    const actionExecutor = captured.actionExecutor ?? ((generateSummary || captureComparison) ? createActionExecutor(createActionExecutorBoundaryFixture({
+    const { generateSummary, draftPullRequest, captureComparison, ...captured } = params;
+    const actionExecutor = captured.actionExecutor ?? ((generateSummary || draftPullRequest || captureComparison) ? createActionExecutor(createActionExecutorBoundaryFixture({
         isActionApprovalRequired: () => false,
         scmActionExecute: ({ actionId, input, context }) => {
             const accountId = context.runtimeAccountId ?? context.expectedAccountId;
@@ -45,6 +45,8 @@ export function createScmDiffSummaryOperationsWithTransport(
                 ? context.externalActionTarget.sessionId : context.defaultSessionId ?? '';
             if (actionId === 'scm.diffSummary.generate' && generateSummary)
                 return generateSummary(sessionId, ScmDiffSummaryGenerateInputSchema.parse(input), options);
+            if (actionId === 'scm.diffSummary.draftPullRequest' && draftPullRequest)
+                return draftPullRequest(sessionId, ScmDiffSummaryGenerateInputSchema.parse(input), options);
             if (actionId === 'scm.diffSummary.capture' && captureComparison)
                 return captureComparison(sessionId, ScmComparisonCaptureInputSchema.parse(input), options);
             throw new Error(`Unexpected SCM transport for ${actionId}`);

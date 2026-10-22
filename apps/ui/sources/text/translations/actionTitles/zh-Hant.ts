@@ -1151,6 +1151,7 @@ export const zhHant = {
     scm_hostingRepository_publish: "將儲存庫發布至託管供應商",
     scm_diffSummary_capture: "擷取版本控制比較結果",
     scm_diffSummary_generate: "產生版本控制差異摘要",
+    scm_diffSummary_draftPullRequest: "撰寫拉取請求描述",
     scm_diffSummary_result_list: "列出已儲存的變更說明",
     scm_diffSummary_result_clear: "清除所選已儲存的變更說明",
     scm_diffSummary_commitPlan_accept: "接受並套用提交提案",

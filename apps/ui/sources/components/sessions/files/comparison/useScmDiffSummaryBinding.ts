@@ -19,6 +19,8 @@ import { t } from '@/text';
 import { SCM_DIFF_SUMMARY_DISABLED_FAILURE } from '@/sync/domains/scm/diffSummary/state';
 import { scmComparisonKey } from './filesComparison';
 import { useScmDiffSummaryModelChoices } from '@/components/settings/sourceControl/useScmDiffSummaryModelChoices';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * A comparison view's binding to its admitted host's saved diff-summary result: the one store's projection for the
@@ -79,22 +81,33 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         serverId: scope.serverId, accountId: scope.accountId, shouldContinue: isCurrent, onRunAdmitted }) : null,
         [isCurrent, onRunAdmitted, sessionId, host.machineId, scope?.serverId, scope?.accountId]);
 
-    const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output]) => {
-        if (!isCurrent() || !scope || !cwd || !comparison || (!viewModel && restoreState !== 'ready') || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return;
+    /** `pullRequestDraft` asks the host to write the summary's pull request description from the repository template and recorded Session outcomes. */
+    const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output], options: Readonly<{ pullRequestDraft?: Readonly<{ providerId?: string }> }> = {}): Promise<boolean> => {
+        if (!isCurrent() || !scope || !cwd || !comparison || (!viewModel && restoreState !== 'ready') || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return false;
         setStarting(true); setError(null);
+        let draftAccount: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
         try {
-            if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return;
+            if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return false;
+            if (options.pullRequestDraft) {
+                // A form can move while its request is pending. Publication belongs to its captured Account, not that placement.
+                draftAccount = await captureLazyActionAccountContext(scope.serverId);
+                if (!areServerAccountScopesEqual(draftAccount.accountOnlyLifetime.scope, scope)) throw new Error(t('walkthroughStart.unavailable'));
+            }
             const source = scmComparisonSourceOf(comparison, sessionId ?? '');
             await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
-                shouldContinue: isCurrent, ...(model.trim() && selected.success ? { backendTarget: selected.backendTarget } : {}),
+                shouldContinue: draftAccount?.accountOnlyLifetime.isCurrent ?? isCurrent,
+                ...(model.trim() && selected.success ? { backendTarget: selected.backendTarget } : {}),
                 input: { cwd, source, ...(comparison.comparisonId ? { comparisonId: comparison.comparisonId } : {}),
-                    outputs: [...outputs], ...(model.trim() && selected.success ? { modelSelector: selected.modelSelector } : {}) },
+                    outputs: [...outputs], ...(options.pullRequestDraft ? { pullRequestDraft: options.pullRequestDraft } : {}),
+                    ...(model.trim() && selected.success ? { modelSelector: selected.modelSelector } : {}) },
                 settings: { ...getStorage().getState().settings, [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: model },
                 intent: viewModel ? 'regenerate' : 'generate' });
             // A refused generation is retained by the diff-summary store; its typed presentation is `generationFailure`.
+            return true;
         } catch (failure) {
             if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
-        } finally { if (isCurrent()) setStarting(false); }
+            return false;
+        } finally { draftAccount?.dispose(); if (isCurrent()) setStarting(false); }
     }, [binding, isCurrent, scope?.serverId, scope?.accountId, cwd, comparison, sessionId, host.machineId, output, selected, modelAvailable, canSend, launch.canLaunchExecutionRuns, starting, model, Boolean(viewModel), restoreState]);
 
     const key = viewModel?.requestKey;

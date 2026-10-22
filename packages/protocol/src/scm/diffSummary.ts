@@ -248,7 +248,7 @@ export type ScmDiffSummaryModelOutput = z.infer<typeof ScmDiffSummaryModelOutput
 
 function progress<T extends z.ZodMiniType>(value: T) {
   return z.strictObject({ state: ScmDiffSummaryOutputStateSchema, value: z.optional(value),
-    reason: z.optional(z.string().check(z.minLength(1))), reasonCode: z.optional(z.enum(['generation_cancelled', 'RPC_CLIENT_NOT_AVAILABLE'])),
+    reason: z.optional(z.string().check(z.minLength(1))), reasonCode: z.optional(z.enum(['generation_cancelled', 'RPC_CLIENT_NOT_AVAILABLE', 'DIFF_UNAVAILABLE', 'MODEL_UNAVAILABLE', 'SUMMARY_FAILED'])),
   }).check(z.refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value'));
 }
 export const ScmDiffSummaryOutputsSchema = lazyZodSchema(() => z.strictObject({

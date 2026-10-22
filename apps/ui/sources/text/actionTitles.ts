@@ -1266,6 +1266,7 @@ const ACTION_TITLE_KEYS = {
     'scm.hostingRepository.publish': 'actionPresentation.titles.scm_hostingRepository_publish',
     'scm.diffSummary.capture': 'actionPresentation.titles.scm_diffSummary_capture',
     'scm.diffSummary.generate': 'actionPresentation.titles.scm_diffSummary_generate',
+    'scm.diffSummary.draftPullRequest': 'actionPresentation.titles.scm_diffSummary_draftPullRequest',
     'scm.diffSummary.result.list': 'actionPresentation.titles.scm_diffSummary_result_list',
     'scm.diffSummary.result.clear': 'actionPresentation.titles.scm_diffSummary_result_clear',
     'scm.diffSummary.commitPlan.accept': 'actionPresentation.titles.scm_diffSummary_commitPlan_accept',

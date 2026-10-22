@@ -1151,6 +1151,7 @@ export const ca = {
     scm_hostingRepository_publish: "Publica el repositori al proveïdor d'allotjament",
     scm_diffSummary_capture: "Captura una comparació de control de versions",
     scm_diffSummary_generate: "Genera un resum dels canvis de control de versions",
+    scm_diffSummary_draftPullRequest: "Redacta la descripció d'una pull request",
     scm_diffSummary_result_list: "Llista les explicacions de canvis desades",
     scm_diffSummary_result_clear: "Esborra les explicacions de canvis desades seleccionades",
     scm_diffSummary_commitPlan_accept: "Accepta i aplica les propostes de commit",

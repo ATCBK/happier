@@ -53,6 +53,21 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         ...(params.readPullRequestComparisonPage ? { readPullRequestComparisonPage: params.readPullRequestComparisonPage } : {}),
     });
     const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = params.request.pullRequestDraft ? ['summary'] : params.request.outputs ?? ['summary'];
+    const envelope = (state: 'pending' | 'failed', reason?: string,
+        reasonCode?: NonNullable<ScmDiffSummaryOutputs['summary']>['reasonCode']): ScmDiffSummaryGenerateOutput => {
+        const outputs: ScmDiffSummaryOutputs = {};
+        for (const kind of requestedOutputs) outputs[kind] = { state, ...(reason ? { reason } : {}), ...(reasonCode ? { reasonCode } : {}) };
+        return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: captured.metadata.sourceKey,
+            metadata: captured.metadata, comparison: captured.comparison, requestedOutputs, outputs,
+            analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs:
+                captured.comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id)) },
+            ...(captured.metadata.checkpointReceiptId ? { checkpointReceiptId: captured.metadata.checkpointReceiptId } : {}),
+        });
+    };
+    const failure = (reason: string, errorCode: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED' = 'SUMMARY_FAILED',
+        reasonCode: NonNullable<ScmDiffSummaryOutputs['summary']>['reasonCode'] = errorCode): ScmDiffSummaryGenerateOutput =>
+        ScmDiffSummaryGenerateOutputSchema.parse({ ...envelope('failed', reason, reasonCode), success: false, errorCode,
+            error: reason, ...(errorCode === 'MODEL_UNAVAILABLE' ? { nextAction: 'chooseModel' } : {}) });
     const outputLanguage = params.request.outputLanguage ?? resolvedSettings.outputLanguage;
     const investigateSurroundingFiles = params.request.investigateSurroundingFiles ?? resolvedSettings.investigateSurroundingFiles;
     let selector = params.request.modelSelector;
@@ -67,14 +82,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             catalogProfiles: profiles ?? [] });
         const defaultAvailable = selection.success && catalog?.isCurrent(getActiveAccountSettingsSnapshot()?.settings ?? settings);
         if (!defaultAvailable && (!sessionId || !backendTarget)) {
-            const outputs: ScmDiffSummaryOutputs = {};
-            for (const kind of requestedOutputs) outputs[kind] = { state: 'failed', reason: 'Diff-summary model is unavailable' };
-            return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'MODEL_UNAVAILABLE',
-                nextAction: 'chooseModel',
-                error: 'Diff-summary model is unavailable', sourceKey: captured.metadata.sourceKey,
-                metadata: captured.metadata, comparison: captured.comparison, requestedOutputs, outputs,
-                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs:
-                    captured.comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id)) } });
+            return failure('Diff-summary model is unavailable', 'MODEL_UNAVAILABLE');
         }
         if (defaultAvailable && selection.success) {
             backendTarget = selection.backendTarget;
@@ -90,21 +98,6 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     });
     return scmDiffSummaryResultStore.admitGeneration({ cwd: params.request.cwd, ...(sessionId ? { sessionId } : {}), key, outputs: requestedOutputs,
         bypass: Boolean(params.request.pullRequestDraft) || params.request.cachePolicy?.mode === 'bypass', ...(params.signal ? { signal: params.signal } : {}) }, async () => {
-        const remainingChangeRefs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id));
-        const envelope = (state: 'pending' | 'failed', reason?: string, reasonCode?: 'RPC_CLIENT_NOT_AVAILABLE'): ScmDiffSummaryGenerateOutput => {
-            const outputs: ScmDiffSummaryOutputs = {};
-            for (const kind of requestedOutputs) outputs[kind] = { state, ...(reason ? { reason } : {}), ...(reasonCode ? { reasonCode } : {}) };
-            return ScmDiffSummaryGenerateOutputSchema.parse({
-                success: true,
-                sourceKey: captured.metadata.sourceKey,
-                metadata: captured.metadata,
-                comparison: captured.comparison,
-                requestedOutputs,
-                outputs,
-                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs },
-                ...(captured.metadata.checkpointReceiptId ? { checkpointReceiptId: captured.metadata.checkpointReceiptId } : {}),
-            });
-        };
         let pullRequestDraftEvidence: string | undefined;
         if (params.request.pullRequestDraft) {
             try {
@@ -114,9 +107,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                     executeCanonicalAction: params.executeCanonicalAction });
             } catch (error) {
                 params.signal?.throwIfAborted();
-                return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'DIFF_UNAVAILABLE',
-                    error: error instanceof Error ? error.message : 'Pull request draft evidence is unavailable',
-                    comparison: captured.comparison, metadata: captured.metadata, sourceKey: captured.metadata.sourceKey });
+                return failure(error instanceof Error ? error.message : 'Pull request draft evidence is unavailable', 'DIFF_UNAVAILABLE');
             }
         }
         const saved = await scmDiffSummaryResultStore.create({ cwd: params.request.cwd,
@@ -138,13 +129,11 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE',
             reasonCode?: 'RPC_CLIENT_NOT_AVAILABLE'): Promise<ScmDiffSummaryGenerateOutput> => {
             // A concurrent manual edit or started/terminal publication owns the newer revision.
-            const failure = envelope('failed', reason, reasonCode);
-            const output = errorCode ? ScmDiffSummaryGenerateOutputSchema.parse({ ...failure,
-                success: false, errorCode, error: reason, ...(errorCode === 'MODEL_UNAVAILABLE' ? { nextAction: 'chooseModel' } : {}) }) : failure;
+            const output = failure(reason, errorCode, reasonCode);
             await scmDiffSummaryResultStore.publishProgress({ ...scope, expectedRevision: saved.revision, output });
             return latestOutput();
         };
-        if (!backendTarget) return failed('Diff-summary model target is unavailable');
+        if (!backendTarget) return failed('Diff-summary model target is unavailable', 'MODEL_UNAVAILABLE');
         if (!sessionId && !params.machineId) return failed('Diff-summary generation requires an admitted execution target');
         const inputId = randomUUID();
         const startInput = {

@@ -1151,6 +1151,7 @@ export const pt = {
     scm_hostingRepository_publish: "Publicar repositório no provedor de hospedagem",
     scm_diffSummary_capture: "Capturar comparação do controle de versão",
     scm_diffSummary_generate: "Gerar resumo das diferenças do controle de versão",
+    scm_diffSummary_draftPullRequest: "Redigir a descrição de um pull request",
     scm_diffSummary_result_list: "Listar explicações salvas de alterações",
     scm_diffSummary_result_clear: "Limpar explicações salvas de alterações selecionadas",
     scm_diffSummary_commitPlan_accept: "Aceitar e aplicar propostas de commit",

@@ -1151,6 +1151,7 @@ export const zhHans = {
     scm_hostingRepository_publish: "将仓库发布到托管服务商",
     scm_diffSummary_capture: "捕获版本控制比较结果",
     scm_diffSummary_generate: "生成版本控制差异摘要",
+    scm_diffSummary_draftPullRequest: "撰写拉取请求描述",
     scm_diffSummary_result_list: "列出已保存的更改说明",
     scm_diffSummary_result_clear: "清除所选已保存的更改说明",
     scm_diffSummary_commitPlan_accept: "接受并应用提交建议",

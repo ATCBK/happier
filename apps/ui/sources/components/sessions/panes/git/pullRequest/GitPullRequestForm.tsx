@@ -3,11 +3,14 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ScmBranchListEntry } from '@happier-dev/protocol';
 
+import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
+import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -23,6 +26,7 @@ import { t } from '@/text';
 import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 import { createSessionGitPullRequest } from './createSessionGitPullRequest';
+import { useGitPullRequestBodyDraft } from './useGitPullRequestBodyDraft';
 import { GitPullRequestProviderMark, resolveGitPullRequestProvider } from './GitPullRequestProviderMark';
 import {
     resolveGitPullRequestFormAfterCreate,
@@ -74,7 +78,7 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
     latestDraftRef.current = draft;
     const update = React.useCallback((patch: Partial<SessionScmPullRequestDraftV1>) => {
         setResult(null);
-        scmDraft.setPullRequest({ ...latestDraftRef.current, ...patch });
+        scmDraft.setPullRequest(current => ({ ...EMPTY_DRAFT, ...current, ...patch }));
     }, [scmDraft]);
 
     const branches = useLocalBranchNames(props.sessionId, props.serverId);
@@ -85,6 +89,11 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
         for (const name of branches) if (name !== head) names.add(name);
         return Array.from(names, (name) => ({ id: name, title: name }));
     }, [base, branches, head, model.baseBranch]);
+
+    const bodyDraft = useGitPullRequestBodyDraft({
+        sessionId: props.sessionId, serverId: props.serverId, head, base, body: draft.body,
+        setBody: (body) => update({ body }),
+    });
 
     const create = React.useCallback(() => {
         if (busy || !head || !base) return;
@@ -207,6 +216,60 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
                 multiline
                 minLines={props.placement === 'details' ? 10 : 4}
             />
+            <View style={styles.bodyDraftRow}>
+                <ToolbarButton
+                    testID="git-pull-request-form-draft-body"
+                    label={bodyDraft.drafting ? t('sessionGitPullRequest.form.writingBody') : t('sessionGitPullRequest.form.writeBody')}
+                    icon={<Icon name="sparkle" size={14} color={theme.colors.text.secondary} />}
+                    size="sm"
+                    busy={bodyDraft.drafting}
+                    disabled={!bodyDraft.canDraft}
+                    onPress={() => { setResult(null); void bodyDraft.draft(); }}
+                />
+                {bodyDraft.prerequisite ? (
+                    <Text testID="git-pull-request-form-draft-body-unavailable" style={styles.bodyDraftNote} numberOfLines={2}>{bodyDraft.prerequisite}</Text>
+                ) : null}
+            </View>
+            {bodyDraft.candidate !== null ? (
+                <AttentionBanner
+                    presentation="strip"
+                    tone="neutral"
+                    testID="git-pull-request-form-draft-body-ready"
+                    title={t('sessionGitPullRequest.form.bodyReady')}
+                    action={{ testID: 'git-pull-request-form-draft-body-use', label: t('sessionGitPullRequest.form.useBody'), onPress: bodyDraft.useCandidate }}
+                    secondaryAction={{ testID: 'git-pull-request-form-draft-body-keep', label: t('sessionGitPullRequest.form.keepMine'), onPress: bodyDraft.keepMine }}
+                />
+            ) : null}
+            {bodyDraft.failure ? (
+                <ScmDiffSummaryFailureNotice
+                    failure={bodyDraft.failure}
+                    testID="git-pull-request-form-draft-body"
+                    onChooseModel={bodyDraft.modelChoice.choose}
+                    onEnableExplain={bodyDraft.openExplainSetting}
+                    onRetry={bodyDraft.canDraft ? () => { void bodyDraft.draft(); } : undefined}
+                />
+            ) : bodyDraft.restoreFailed && !bodyDraft.prerequisite ? (
+                <AttentionBanner
+                    presentation="strip"
+                    tone="warning"
+                    testID="git-pull-request-form-draft-body-restore"
+                    title={t('common.requestFailed')}
+                    action={{ testID: 'git-pull-request-form-draft-body-restore-retry', label: t('common.retry'), onPress: bodyDraft.retryRestore }}
+                />
+            ) : bodyDraft.message ? (
+                <AttentionBanner presentation="strip" tone="warning" testID="git-pull-request-form-draft-body-notice" title={bodyDraft.message} />
+            ) : null}
+            {bodyDraft.modelChoice.choosing ? (
+                <ScmDiffSummaryModelPicker
+                    presentation="inline"
+                    value={bodyDraft.model}
+                    onChange={bodyDraft.setModel}
+                    modelChoices={bodyDraft.modelChoices}
+                    machineId={bodyDraft.machineId}
+                    serverId={bodyDraft.serverId}
+                    testID="git-pull-request-form-draft-body-model"
+                />
+            ) : null}
             {failureText ? (
                 <View testID="git-pull-request-form-failure" accessibilityRole="alert" style={styles.failure}>
                     <Icon name="warning-circle" size={14} color={theme.colors.state.danger.foreground} />
@@ -308,6 +371,8 @@ const styles = StyleSheet.create((theme) => ({
         maxWidth: 180,
     },
     branchText: { fontSize: 12, color: theme.colors.text.primary, ...Typography.mono() },
+    bodyDraftRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    bodyDraftNote: { flex: 1, minWidth: 0, ...Typography.variant('meta'), color: theme.colors.text.secondary },
     failure: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
     failureText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
     failureTitle: { ...Typography.variant('body', 'semiBold'), color: theme.colors.text.primary,  },

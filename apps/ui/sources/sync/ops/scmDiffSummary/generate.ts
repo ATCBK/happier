@@ -378,7 +378,7 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID, input: params.input,
             runId: null, requestedAtMs, intent,
         }));
-        const generated = await invokeUiScmAction({ actionId: 'scm.diffSummary.generate', input: buildGenerateRequest(params),
+        const generated = await invokeUiScmAction({ actionId: params.input.pullRequestDraft ? 'scm.diffSummary.draftPullRequest' : 'scm.diffSummary.generate', input: buildGenerateRequest(params),
             schema: ScmDiffSummaryGenerateOutputSchema, context: actionContext(params), executor: deps.actionExecutor,
             shouldContinue: current });
         const parsed = ScmDiffSummaryGenerateOutputSchema.safeParse(generated);

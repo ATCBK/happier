@@ -1151,6 +1151,7 @@ export const ru = {
     scm_hostingRepository_publish: "Опубликовать репозиторий у провайдера хостинга",
     scm_diffSummary_capture: "Зафиксировать сравнение в системе контроля версий",
     scm_diffSummary_generate: "Составить сводку различий в системе контроля версий",
+    scm_diffSummary_draftPullRequest: "Составить описание pull request",
     scm_diffSummary_result_list: "Показать сохранённые объяснения изменений",
     scm_diffSummary_result_clear: "Очистить выбранные сохранённые объяснения изменений",
     scm_diffSummary_commitPlan_accept: "Принять и применить предложения коммитов",

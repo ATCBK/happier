@@ -1151,6 +1151,7 @@ export const ja = {
     scm_hostingRepository_publish: "ホスティングプロバイダーにリポジトリを公開",
     scm_diffSummary_capture: "ソース管理の比較結果を取得",
     scm_diffSummary_generate: "ソース管理の差分概要を生成",
+    scm_diffSummary_draftPullRequest: "プルリクエストの説明を下書き",
     scm_diffSummary_result_list: "保存済みの変更説明一覧を表示",
     scm_diffSummary_result_clear: "選択した保存済みの変更説明を消去",
     scm_diffSummary_commitPlan_accept: "コミット提案を承諾して適用",

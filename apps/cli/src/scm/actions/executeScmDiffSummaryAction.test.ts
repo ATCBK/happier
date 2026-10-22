@@ -242,6 +242,32 @@ describe('executeScmDiffSummaryAction', () => {
         expect(actions).toEqual(['scm.pullRequest.openCompose', 'execution.run.start']);
     });
 
+    it('returns a typed captured failure through strict draft Action validation when template evidence cannot be read', async () => {
+        const fixture = await changedRepository();
+        const sessionId = 'draft-failure-session';
+        const executor: ReturnType<typeof createActionExecutor> = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
+            scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input,
+                workingDirectory: fixture.rootPath, sessionId, authorizeSession: async id => id === sessionId,
+                executeDiffSummary: async ({ request }) => executeScmDiffSummaryAction({
+                    request: request as ScmDiffSummaryGenerateInput, sessionId, backendTarget: BACKEND_TARGET,
+                    executeCanonicalAction: (action, input) => executor.execute(action, input,
+                        { surface: 'cli', defaultSessionId: sessionId }),
+                }),
+            }),
+        });
+        const response = await executor.execute('scm.diffSummary.draftPullRequest', {
+            cwd: fixture.rootPath, source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' },
+        }, { surface: 'cli', defaultSessionId: sessionId });
+        expect(response).toMatchObject({ ok: true, result: { success: false, errorCode: 'DIFF_UNAVAILABLE',
+            requestedOutputs: ['summary'], outputs: { summary: { state: 'failed', reasonCode: 'DIFF_UNAVAILABLE' } },
+            analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: expect.any(Array) },
+        } });
+        if (!response.ok) throw new Error(response.error);
+        const failure = ScmDiffSummaryGenerateOutputSchema.parse(response.result);
+        expect(failure.analysis?.remainingChangeRefs).toEqual(failure.comparison?.inventory.files.flatMap(file => file.occurrences.map(ref => ref.id)));
+        expect(failure.analysis?.remainingChangeRefs.length).toBeGreaterThan(0);
+    });
+
     it('keeps missing command results and unavailable transcript pages honest, excluding prose test claims and other Sessions', async () => {
         const fixture = await changedRepository();
         const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
@@ -362,7 +388,9 @@ describe('executeScmDiffSummaryAction', () => {
             executeCanonicalAction: async () => ({ ok: false, errorCode: 'execution_run_profile_preparation_failed',
                 error: 'Account settings could not be read', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } }),
         });
-        const reason = output.success ? output.outputs?.summary?.reason : undefined;
+        expect(output).toMatchObject({ success: false, errorCode: 'SUMMARY_FAILED',
+            outputs: { summary: { state: 'failed', reasonCode: 'SUMMARY_FAILED' } } });
+        const reason = output.outputs?.summary?.reason;
         expect(reason).toContain('execution_run_profile_preparation_failed');
         expect(reason).toContain('Account settings could not be read');
     });
@@ -600,7 +628,7 @@ describe('executeScmDiffSummaryAction', () => {
             request: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' } },
             sessionId: 'session-1', backendTarget: null, executeCanonicalAction,
         })).resolves.toMatchObject({
-            success: true,
+            success: false, errorCode: 'MODEL_UNAVAILABLE', nextAction: 'chooseModel',
             comparison: { inventory: { state: 'complete', files: [expect.objectContaining({ path: fixture.trackedPath })] } },
             outputs: { summary: { state: 'failed', reason: expect.any(String) } },
         });

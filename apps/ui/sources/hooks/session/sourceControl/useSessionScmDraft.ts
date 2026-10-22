@@ -21,7 +21,7 @@ export function useSessionScmDraft(input: Readonly<{ sessionId: string; serverId
     available: boolean;
     draft: SessionScmDraft;
     setCommitMessage: (value: string) => void;
-    setPullRequest: (value: SessionScmPullRequestDraftV1 | null) => void;
+    setPullRequest: (value: SessionScmPullRequestDraftV1 | null | ((current: SessionScmPullRequestDraftV1 | null) => SessionScmPullRequestDraftV1 | null)) => void;
 }> {
     const binding = useServerCredentialAccountScopeBinding(input.serverId).binding;
     const scope = binding?.isCurrent() ? binding.scope : null;
@@ -50,10 +50,13 @@ export function useSessionScmDraft(input: Readonly<{ sessionId: string; serverId
         if (!scope) return;
         writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { scmCommitMessageV1: value } });
     }, [address.sessionId, scope]);
-    const setPullRequest = React.useCallback((value: SessionScmPullRequestDraftV1 | null) => {
+    const setPullRequest = React.useCallback((value: SessionScmPullRequestDraftV1 | null | ((current: SessionScmPullRequestDraftV1 | null) => SessionScmPullRequestDraftV1 | null)) => {
         if (!scope) return;
-        writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { scmPullRequestV1: value } });
-    }, [address.sessionId, scope]);
+        const current = readSessionScmDraftFromDraft(getSessionDraftSnapshot(scope, address)?.document).pullRequest;
+        const next = typeof value === 'function' ? value(current) : value;
+        if (current === next) return;
+        writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { scmPullRequestV1: next } });
+    }, [address, scope]);
 
     return React.useMemo(
         () => ({ available: scope !== null, draft, setCommitMessage, setPullRequest }),
@@ -64,5 +67,10 @@ export function useSessionScmDraft(input: Readonly<{ sessionId: string; serverId
 function samePullRequest(left: SessionScmPullRequestDraftV1 | null, right: SessionScmPullRequestDraftV1 | null): boolean {
     if (left === right) return true;
     if (!left || !right) return false;
-    return left.title === right.title && left.body === right.body && left.draft === right.draft && left.base === right.base;
+    const leftAttempt = left.bodyDraft?.attempt;
+    const rightAttempt = right.bodyDraft?.attempt;
+    return left.title === right.title && left.body === right.body && left.draft === right.draft && left.base === right.base
+        && left.bodyDraft?.key === right.bodyDraft?.key && left.bodyDraft?.candidate === right.bodyDraft?.candidate
+        && leftAttempt?.bodyAtRequest === rightAttempt?.bodyAtRequest && leftAttempt?.baselineResultId === rightAttempt?.baselineResultId
+        && leftAttempt?.baselineRevision === rightAttempt?.baselineRevision && leftAttempt?.started === rightAttempt?.started;
 }

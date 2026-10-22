@@ -53,6 +53,7 @@ export const en = {
     unmarkReviewedA11y: 'Reviewed. Press to clear your mark',
     askAboutThis: 'Ask about this',
     askAboutStopA11y: 'Ask about this stop',
+    askQuestionA11y: ({ question }: { question: string }) => `Ask: ${question}`,
     openConversation: 'Open the walkthrough conversation',
     andIn: ({ file }: { file: string }) => `and in ${file}`,
     newFile: 'New file',

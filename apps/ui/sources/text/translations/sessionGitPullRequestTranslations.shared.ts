@@ -24,6 +24,11 @@ export const en = {
         pointer: 'The new pull request is open in Details',
         pointerShow: 'Show',
         openedProviderPage: ({ provider }: ProviderArgs) => `${provider} is open to finish it; your text is kept here.`,
+        writeBody: 'Write description',
+        writingBody: 'Writing…',
+        bodyReady: 'A description is ready; your text is kept until you use it',
+        useBody: 'Use description',
+        keepMine: 'Keep mine',
     },
     failure: {
         authFailed: ({ provider }: ProviderArgs) => `${provider} didn’t accept the sign-in from this machine`,

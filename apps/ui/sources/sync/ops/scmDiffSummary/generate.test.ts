@@ -164,6 +164,19 @@ describe('SCM diff summary operations', () => {
             settings: { 'scm.diffSummary.investigateSurroundingFiles': true } });
         expect(requests.map(request => request.investigateSurroundingFiles)).toEqual([false, true, false]);
     });
+    it('drafts a pull request description through its own Action, never the ordinary generate Action', async () => {
+        const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
+        const draft = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
+        const ops = createScmDiffSummaryOperations({ generateSummary: generate, draftPullRequest: draft });
+        const branch = { cwd: '/repo', source: { kind: 'branch', head: 'feature', base: 'main' }, outputs: ['summary'] } satisfies ScmDiffSummaryGenerateInput;
+        await ops.generateFromUserAction({ sessionId: 'session_1', input: { ...branch, pullRequestDraft: {} } });
+        expect(draft).toHaveBeenCalledTimes(1);
+        expect(draft.mock.calls[0]?.[1]).toMatchObject({ source: branch.source, pullRequestDraft: {} });
+        expect(generate).not.toHaveBeenCalled();
+        await ops.generateFromUserAction({ sessionId: 'session_1', input: branch });
+        expect(generate).toHaveBeenCalledTimes(1);
+        expect(draft).toHaveBeenCalledTimes(1);
+    });
     it('sends the resolved prose language through real Action admission and separates its request', async () => {
         const requests: ScmDiffSummaryGenerateInput[] = [];
         const ops = createScmDiffSummaryOperations({ generateSummary: async (_sessionId, request) => { requests.push(request); return pending; } });

@@ -1159,6 +1159,7 @@ const en = {
         scm_hostingRepository_publish: "Publish repository to hosting provider",
         scm_diffSummary_capture: "Capture source-control comparison",
         scm_diffSummary_generate: "Generate source-control diff summary",
+        scm_diffSummary_draftPullRequest: "Draft pull request description",
         scm_diffSummary_result_list: "List saved change explanations",
         scm_diffSummary_result_clear: "Clear selected saved change explanations",
         scm_diffSummary_commitPlan_accept: "Accept and apply commit proposals",
