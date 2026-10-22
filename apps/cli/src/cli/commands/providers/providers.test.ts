@@ -195,6 +195,7 @@ describe('happier providers command domain', () => {
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
         account: accountActionHost(remote.persistence),
         // Machine RPC is the boundary; the remote connection owner stays real.
         rpc: async ({ method, request }) => {
@@ -226,6 +227,7 @@ describe('happier providers command domain', () => {
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
         account: accountActionHost(account.persistence),
         // Offline machine transport must not prevent Account-only authoring.
         rpc: async () => { throw new Error('Local daemon is offline'); },
@@ -293,6 +295,7 @@ describe('happier providers command domain', () => {
           && origin.accountId === 'account' && origin.requestId === 'request-1',
         ...(decision === 'missing' ? {} : approvals),
         providerActionExecute: createProviderActionExecuteV1({ assertCurrent() {},
+          readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
           async rpc({ request, machineId, method }) {
             expect(machineId).toBe('machine-a');
             if (method === 'daemon.providers.connections.describe') {
@@ -358,6 +361,7 @@ describe('happier providers command domain', () => {
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
         rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
           .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
         account: accountActionHost({
@@ -389,6 +393,7 @@ describe('happier providers command domain', () => {
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
         rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
           .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
         account: accountActionHost(h.persistence),

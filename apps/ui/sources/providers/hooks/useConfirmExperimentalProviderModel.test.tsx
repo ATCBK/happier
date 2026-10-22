@@ -80,6 +80,13 @@ function installRow(reply?: Parameters<typeof installProviderConnectionsCatalogH
     row = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog, reply });
     return row;
 }
+function installTeamConsent() {
+    row = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId,
+        catalog: ProviderConnectionsCatalogV1Schema.parse({ ...catalog, experimentalBindingConfirmations: [{
+            v: 1, ...teamModel.confirmationSource, agentTargetKey: confirmation.agentTargetKey,
+            modelId: 'gpt-5.5', compatibilityFingerprint: 'compatibility:v1:worker', confirmedAt: 1,
+        }] }) });
+}
 
 // Warm the real Sync module after the transport leaves are installed, not inside a test hook's budget.
 await loadSyncSingletonForTests();
@@ -95,10 +102,9 @@ describe('useConfirmExperimentalProviderModel', () => {
         if (compatibility.result.status === 'experimental' && scope === 'connection') {
             compatibility.result.confirmationScope = { kind: 'connection' };
         }
-        rpc.enqueueResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, projection);
-        const confirmedProjection = teamProjection();
-        confirmedProjection.groups[0]!.rows[0]!.compatibility = { ...compatibility, confirmed: true };
-        rpc.enqueueResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, confirmedProjection);
+        // The worker belongs to C and never sees B's private catalog. Both
+        // replies stay unconfirmed; the real Account read must compose B's write.
+        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, projection);
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: 'machine-a',
             serverId, agentTargetKey: confirmation.agentTargetKey, refresh: async () => {} }));
@@ -119,9 +125,9 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(commitSelectionSpy).toHaveBeenCalledOnce();
     });
 
-    it('uses the worker recipient confirmation without persisting a second consent', async () => {
+    it('uses the requester catalog confirmation even when the custodian has none', async () => {
+        installTeamConsent();
         const projection = teamProjection();
-        projection.groups[0]!.rows[0]!.compatibility.confirmed = true;
         rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, projection);
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: 'machine-a',
@@ -132,6 +138,26 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(commitSelectionSpy).toHaveBeenCalledOnce();
         expect(row.writes).toBe(0);
     });
+
+    it.each(['custodian-only', 'wrong-source', 'wrong-fingerprint'] as const)(
+        'never treats %s consent as requester consent', async scenario => {
+            row = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId,
+                catalog: ProviderConnectionsCatalogV1Schema.parse({ ...catalog, experimentalBindingConfirmations:
+                    scenario === 'custodian-only' ? [] : [{ v: 1, ...teamModel.confirmationSource,
+                        catalogSourceKey: scenario === 'wrong-source' ? 'x'.repeat(43) : teamModel.confirmationSource!.catalogSourceKey,
+                        agentTargetKey: confirmation.agentTargetKey, modelId: 'gpt-5.5', confirmedAt: 1,
+                        compatibilityFingerprint: scenario === 'wrong-fingerprint' ? 'compatibility:v1:source-only' : 'compatibility:v1:worker',
+                    }] }) });
+            const projection = teamProjection();
+            projection.groups[0]!.rows[0]!.compatibility.confirmed = true;
+            rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, projection);
+            const { describeProviderModels } = await import('@/providers/actions/client');
+            const result = await describeProviderModels({ serverId, machineId: 'machine-a',
+                agentTargetKey: confirmation.agentTargetKey, teamCredentialModel: teamModel });
+            expect(result).toMatchObject({ status: 'success', groups: [{ rows: [{ compatibility: { confirmed: false } }] }] });
+            expect(row.writes).toBe(0);
+        },
+    );
 
     it('refuses a worker source withdrawn while recipient consent is saved', async () => {
         const emptyCatalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
@@ -150,9 +176,7 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(hook.getCurrent().error?.code).toBe('provider_catalog_unavailable');
         expect(row.writes).toBe(1);
         expect(commitSelectionSpy).not.toHaveBeenCalled();
-        const confirmed = teamProjection();
-        confirmed.groups[0]!.rows[0]!.compatibility.confirmed = true;
-        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, confirmed);
+        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, teamProjection());
         await act(async () => { result = await hook.getCurrent().retry?.() ?? false; });
         expect(result).toBe(true);
         expect(row.writes).toBe(1);
@@ -160,9 +184,8 @@ describe('useConfirmExperimentalProviderModel', () => {
     });
 
     it('keeps a Team selection pending until its retained commit completes', async () => {
-        const confirmed = teamProjection();
-        confirmed.groups[0]!.rows[0]!.compatibility.confirmed = true;
-        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, confirmed);
+        installTeamConsent();
+        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, teamProjection());
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: 'machine-a',
             serverId, agentTargetKey: confirmation.agentTargetKey, refresh: async () => {} }));

@@ -148,6 +148,27 @@ export function getProviderExperimentalConfirmationCatalogSourceKeyV1(source: Pi
   ]);
 }
 
+/** Exact consent match shared by Account projection and worker launch admission. */
+export function hasProviderExperimentalConfirmation(input: Readonly<{
+  providerSettings: Pick<ProviderSettingsV1, 'experimentalBindingConfirmations'>;
+  connectionId: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectionId'];
+  connectedAccountTarget?: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectedAccountTarget'];
+  catalogSourceKey?: string;
+  agentTargetKey: string;
+  modelId: string;
+  compatibilityFingerprint: string;
+  confirmationScope: Readonly<{ kind: 'connection' } | { kind: 'model'; modelId: string }>;
+}>): boolean {
+  const expectedModelId = input.confirmationScope.kind === 'model' ? input.modelId : null;
+  const sourceKey = getProviderExperimentalConfirmationSourceKeyV1(input);
+  return input.providerSettings.experimentalBindingConfirmations.some((confirmation) =>
+    confirmation.connectionId === input.connectionId
+    && getProviderExperimentalConfirmationSourceKeyV1(confirmation) === sourceKey
+    && confirmation.agentTargetKey === input.agentTargetKey
+    && confirmation.modelId === expectedModelId
+    && confirmation.compatibilityFingerprint === input.compatibilityFingerprint);
+}
+
 export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is string {
   return typeof value === 'string'
     && value.length >= 1

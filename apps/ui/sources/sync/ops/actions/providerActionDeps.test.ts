@@ -1,11 +1,12 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema,
     DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
     sealProviderConnectionsContentV1, openProviderConnectionsContentV1,
 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createConfirmedTeamModelProjectionFixture, createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { TeamCredentialProviderModelCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -19,7 +20,8 @@ const providerHarness = createProviderSettingsHarness({ machines: [] });
 installProviderSettingsRpcBoundary(providerHarness);
 
 const account = createProviderSettingsAccountHarness();
-beforeAll(loadSyncSingletonForTests);
+// Warm the real Sync graph after transport installation, outside a test hook's budget.
+await loadSyncSingletonForTests();
 afterEach(async () => {
     standardCleanup();
     await account.reset();
@@ -48,6 +50,38 @@ async function executeSourceVisibility(serverId: string, accountId: string, show
 }
 
 describe('Provider Account source visibility Action', () => {
+    it.each(['providers.models.projection', 'providers.models.refresh'] as const)(
+        'composes requester consent through the shared executor for %s', async actionId => {
+            const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+            const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine],
+                waivedActions: ['providers.models.refresh'] });
+            const agentTargetKey = 'agent:happier.agent.codex/codex';
+            const projection = createConfirmedTeamModelProjectionFixture({ agentTargetKey, modelId: 'model-a' });
+            const teamCredentialModel = TeamCredentialProviderModelCatalogEntryV1Schema.parse({
+                selection: { kind: 'team_credential_provider_model', resourceId: 'resource-a', teamId: 'team-a',
+                    expectedResourceRevision: 1, deliveryMode: 'brokered', agentTargetKey, modelId: 'model-a' },
+                descriptor: { id: 'model-a', name: 'Model A' },
+                application: { agentTargetKey, implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
+                    endpointTemplateId: 'responses', protocol: 'openai-responses' },
+                confirmationSource: projection.groups[0]!.rows[0]!.confirmationSource,
+                sourceRevision: 'source-a', availability: 'available',
+            });
+            providerHarness.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, projection);
+            const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+            const executor = createDefaultActionExecutor();
+            const read = () => executor.execute(actionId, { machineId: machine.id, agentTargetKey, teamCredentialModel,
+                ...(actionId === 'providers.models.refresh' ? { forceRefresh: true } : {}) },
+                { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId });
+            expect(await read()).toMatchObject({ ok: true, result: {
+                status: 'success', groups: [{ rows: [{ compatibility: { confirmed: false } }] }],
+            } });
+            account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { body: { status: 'absent' } });
+            expect(await read()).toMatchObject({ ok: true, result: {
+                status: 'error', error: { code: 'provider_settings_invalid' },
+            } });
+        },
+    );
+
     it('projects a Machine transport timeout as a retryable Machine check, without claiming a Provider outage', async () => {
         const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
         const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });

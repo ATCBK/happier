@@ -16,6 +16,27 @@ import { readOwnRecordValue } from '../ownRecordValue.js';
 import { canonicalizeProviderContributionKeyV1 } from '../contributionIdentityV1.js';
 import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { DaemonProviderModelProjectionGroupV1Schema } from '../../rpc/providers.js';
+import { hasProviderExperimentalConfirmation } from '../settings/v1.js';
+
+/** Worker facts stay authoritative; experimental consent belongs to the reading Account. */
+export function projectAccountProviderModelConfirmationsV1(input: Readonly<{
+  projection: DaemonProviderModelProjectionResponseV1;
+  catalog: ProviderConnectionsCatalogV1;
+}>): DaemonProviderModelProjectionResponseV1 {
+  const projection = input.projection;
+  if (projection.status !== 'success') return projection;
+  return { ...projection, groups: projection.groups.map(group => ({ ...group, rows: group.rows.map(row => ({
+    ...row,
+    compatibility: { ...row.compatibility, confirmed: row.compatibility.result.status === 'experimental'
+      ? Boolean(row.confirmationSource && hasProviderExperimentalConfirmation({
+          providerSettings: input.catalog, ...row.confirmationSource,
+          agentTargetKey: row.ref.agentTargetKey, modelId: row.ref.modelId,
+          compatibilityFingerprint: row.compatibility.compatibilityFingerprint,
+          confirmationScope: row.compatibility.result.confirmationScope,
+        }))
+      : row.compatibility.result.status === 'verified' },
+  })) })) };
+}
 
 export type AccountProviderDeclarationV1 = Readonly<{
   contributionKey: string; definition: ProviderContributionV1; provenance: 'first_party' | 'external';

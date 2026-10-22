@@ -7,6 +7,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { setDefaultProviderModelSelection } from '@/providers/connections/service/settings';
 import { createCliAccountProviderActionExecuteV1 } from '@/providers/connections/accountActions';
+import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
 
 /** Provider Actions share admitted Account custody; only machine effects use exact-Machine RPC. */
 export function createCliProviderActionExecuteV1(params: Readonly<{
@@ -36,6 +37,13 @@ export function createCliProviderActionExecuteV1(params: Readonly<{
       ...(operationTimeoutMs === null ? { timeoutMs: null } : {}),
     }),
     setDefault: (input, context) => setDefaultProviderModelSelection({ credentials: params.credentials, ...input, signal: context.signal }),
+    readAccountCatalog: context => {
+      const store = params.operationContext
+        ? createCliProviderConnectionsStoreForOperation({ operationContext: params.operationContext, signal: context.signal })
+        : createCliProviderConnectionsStore({ credentials: params.credentials, signal: context.signal,
+          isCredentialCurrent: params.isCredentialCurrent });
+      return store.readCatalogForMutation();
+    },
     account: createCliAccountProviderActionExecuteV1(params),
   });
   return (request, context) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => execute(request, context));

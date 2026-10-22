@@ -16,12 +16,15 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
 ): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   return createProviderActionExecuteV1({
     assertCurrent: context => { context.signal?.throwIfAborted(); account.assertCurrent(); },
-    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope<unknown, typeof request.input>({
-      machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
-      signal,
-      ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
-      onDispatched: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
-    })),
+    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => withActionAccountRequestSignal(account, context.signal, signal =>
+      machineRpcWithServerScope<unknown, typeof request.input>({
+        machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
+        signal,
+        ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
+        onDispatched: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
+      })),
+    readAccountCatalog: context => withActionAccountRequestSignal(account, context.signal,
+      signal => readProviderCatalogForMutationInContext(account, signal)),
     setDefault: (input, context) => account.mutateRawSettings(raw => applyProviderDefaultModelSelectionV1(raw, input),
       { signal: context.signal, observeOutcome: true }),
     account: (request, context) => {
