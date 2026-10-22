@@ -58,6 +58,7 @@ import { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadat
 import type { ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
 import type { ArtifactAccessRecipientCensusResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import { createHydrationApplyQueue } from '../hydrationApplyQueue';
 
 function prepareArtifactBody(input: ArtifactBodyInput): ArtifactBodyV1 | null {
     if (input !== null && typeof input === 'object' && 'bytes' in input) return ArtifactBlobReferenceV1Schema.parse({
@@ -865,6 +866,46 @@ function restoreInventoryHeader(row: ArtifactInventoryWarmCache['artifacts'][num
         sessions: header.sessions, draft: header.draft };
 }
 
+type ApplyHydratedArtifacts = (artifacts: DecryptedArtifact[]) => void;
+type ArtifactHydrationPublication = Readonly<{
+    artifacts: DecryptedArtifact[];
+    isCurrent: () => boolean;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+}>;
+const artifactHydrationPublications = new WeakMap<ApplyHydratedArtifacts,
+    ReturnType<typeof createHydrationApplyQueue<ArtifactHydrationPublication>>>();
+
+function publishHydratedArtifacts(applyArtifacts: ApplyHydratedArtifacts,
+    artifacts: DecryptedArtifact[], isCurrent: () => boolean): Promise<void> {
+    let queue = artifactHydrationPublications.get(applyArtifacts);
+    if (!queue) {
+        queue = createHydrationApplyQueue<ArtifactHydrationPublication>({
+            // Exact body readers share the incumbent hydration publication window,
+            // not the lifetime of unrelated reads or an Artifact-specific delay.
+            flushDelayMs: loadSyncTuning().sessionListBackgroundHydrationApplyFlushDelayMs,
+            apply: batch => {
+                const admitted: ArtifactHydrationPublication[] = [];
+                for (const entry of batch) {
+                    try {
+                        if (entry.isCurrent()) admitted.push(entry);
+                        else entry.resolve();
+                    } catch (error) { entry.reject(error); }
+                }
+                try {
+                    if (admitted.length > 0) applyArtifacts(admitted.flatMap(entry => entry.artifacts));
+                    for (const entry of admitted) entry.resolve();
+                } catch (error) {
+                    for (const entry of admitted) entry.reject(error);
+                }
+            },
+        });
+        artifactHydrationPublications.set(applyArtifacts, queue);
+    }
+    const publicationQueue = queue;
+    return new Promise((resolve, reject) => publicationQueue.enqueue({ artifacts, isCurrent, resolve, reject }));
+}
+
 /** The shared batched body read for background indexes and demanded content. */
 export async function fetchAndApplyArtifactBodies(params: Readonly<{
     credentials: AuthCredentials;
@@ -886,7 +927,8 @@ export async function fetchAndApplyArtifactBodies(params: Readonly<{
         if (detail.status === 'rejected') throw detail.reason;
         if (detail.value) hydrated.push(detail.value);
     }
-    if (hydrated.length > 0) params.applyArtifacts(hydrated);
+    if (hydrated.length > 0) await publishHydratedArtifacts(params.applyArtifacts, hydrated,
+        () => !params.signal?.aborted && shouldContinue());
 }
 
 /** Exact reads share transport; each borrower opens with its own keys and keeps per-id refusals. */

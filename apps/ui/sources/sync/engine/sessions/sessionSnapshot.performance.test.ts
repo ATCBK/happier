@@ -72,8 +72,26 @@ it('settles demanded Session hydration without sweeping older rows on refresh an
     expect([...sessionDataKeys.keys()].sort()).toEqual(['demand-1', 'demand-2']);
     expect(open).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(Object.keys(storage.getState().sessions).filter(id => id.startsWith('demand-')).sort()).toEqual(['demand-1', 'demand-2']));
-    await refresh();
-    await vi.runAllTimersAsync();
+    const retainedRows = readRows();
+    const rowPublications: Array<Readonly<{ changedIds: string[]; fields: string[] }>> = [];
+    const unsubscribe = storage.subscribe((next, previous) => {
+        const previousRows = previous.sessionListRowsByServerId[serverId] ?? {};
+        const nextRows = next.sessionListRowsByServerId[serverId] ?? {};
+        if (previousRows === nextRows) return;
+        const changedIds = Object.keys(nextRows).filter(id => previousRows[id] !== nextRows[id]);
+        rowPublications.push({ changedIds, fields: [...new Set(changedIds.flatMap(id =>
+            [...new Set([...Reflect.ownKeys(previousRows[id] ?? {}), ...Reflect.ownKeys(nextRows[id]!)])]
+                .filter(field => typeof field === 'symbol'
+                    ? Reflect.get(previousRows[id] ?? {}, field) !== Reflect.get(nextRows[id]!, field)
+                    : JSON.stringify(Reflect.get(previousRows[id] ?? {}, field)) !== JSON.stringify(Reflect.get(nextRows[id]!, field)))
+                .map(String)))] });
+    });
+    try {
+        await refresh();
+        await vi.runAllTimersAsync();
+        expect(rowPublications).toEqual([]);
+        expect(readRows()).toBe(retainedRows);
+    } finally { unsubscribe(); }
     expect(open).toHaveBeenCalledTimes(2);
     expect(storage.getState().sessions['demand-4']).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);

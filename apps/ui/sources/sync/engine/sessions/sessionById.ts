@@ -67,7 +67,7 @@ import {
 import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildRenderableFromRowAndCache } from './sessionSnapshot';
-import { createSessionHydrationApplyQueue } from './sessionHydrationApplyQueue';
+import { createHydrationApplyQueue } from '../hydrationApplyQueue';
 import { readSessionByIdHttp } from './sessionByIdHttp';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 
@@ -102,7 +102,7 @@ type PendingSessionPublication = {
   resolve: (applied: boolean) => void;
   reject: (error: unknown) => void;
 };
-const hydrationPublications = new WeakMap<ApplySessions, ReturnType<typeof createSessionHydrationApplyQueue<PendingSessionPublication>>>();
+const hydrationPublications = new WeakMap<ApplySessions, ReturnType<typeof createHydrationApplyQueue<PendingSessionPublication>>>();
 
 function publishHydratedSession(params: {
   session: SessionPublication;
@@ -114,7 +114,7 @@ function publishHydratedSession(params: {
   const applySessions = params.applySessions;
   let queue = hydrationPublications.get(applySessions);
   if (!queue) {
-    const ready = createSessionHydrationApplyQueue<PendingSessionPublication>({
+    const ready = createHydrationApplyQueue<PendingSessionPublication>({
       apply: batch => {
         const admitted: PendingSessionPublication[] = [];
         const staged = new Map<string, PendingSessionPublication>();
@@ -139,7 +139,7 @@ function publishHydratedSession(params: {
         }
       },
     });
-    queue = createSessionHydrationApplyQueue<PendingSessionPublication>({
+    queue = createHydrationApplyQueue<PendingSessionPublication>({
       // Reuse the list hydration owner's configured publication window. Completed
       // rows wait only for this window, never for unrelated unfinished reads.
       flushDelayMs: loadSyncTuning().sessionListBackgroundHydrationApplyFlushDelayMs,

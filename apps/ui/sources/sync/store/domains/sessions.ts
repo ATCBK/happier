@@ -288,6 +288,16 @@ function areStringArraysEqual(left: readonly string[], right: readonly string[])
     );
 }
 
+function reuseSessionListRows(
+    previous: Readonly<Record<string, SessionListRenderableSession>>,
+    next: Record<string, SessionListRenderableSession>,
+): Readonly<Record<string, SessionListRenderableSession>> {
+    const ids = Object.keys(next);
+    return ids.length === Object.keys(previous).length && ids.every(id => next[id] === previous[id])
+        ? previous
+        : next;
+}
+
 /**
  * Reuses the store-maintained transcript aggregate for a renderable rebuild
  * when it is still valid for the session's current `completedRequests`.
@@ -1863,7 +1873,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             let staleMetadataPreservedCount = 0;
             let stalePendingFlagsPreservedCount = 0;
             for (const incoming of sessions) {
-                const previous = previousRows[incoming.id];
+                const previous = nextRows[incoming.id];
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
                 let next = preserveSessionListRenderableTransientState(previous, withStaleFields);
                 if (didPreserveRenderableMetadata(previous, incoming, next)) staleMetadataPreservedCount += 1;
@@ -2300,7 +2310,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             }
             const incomingMembership = sessions.map((session) => session.id);
             const incomingMembershipSet = new Set(incomingMembership);
-            const nextMembership = [
+            const candidateMembership = [
                 ...incomingMembership,
                 ...previousMembership.filter((sessionId) => (
                     !incomingMembershipSet.has(sessionId)
@@ -2308,6 +2318,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     && nextRows[sessionId] != null
                 )),
             ];
+            const nextMembership = areStringArraysEqual(previousMembership, candidateMembership)
+                ? previousMembership : candidateMembership;
             const ordinaryRows = Object.fromEntries(
                 nextMembership.flatMap((sessionId) => {
                     const row = nextRows[sessionId];
@@ -2327,7 +2339,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
-            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, nextRows);
+            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, reuseSessionListRows(previousRows, nextRows));
             const nextMembershipSet = new Set(nextMembership);
             const changedSessionIds = nextMembership.filter((sessionId) => (
                 !previousOrdinaryMembership.has(sessionId)
@@ -2343,6 +2355,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     serverId, archivedKey ? state.archivedSessionListMembershipByServerId[archivedKey] : undefined),
                 sessionListIndexByServerId: publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, nextIndex),
             };
+            if (nextStateBase.sessionListRowsByServerId === state.sessionListRowsByServerId
+                && nextStateBase.ordinarySessionListMembershipByServerId === state.ordinarySessionListMembershipByServerId
+                && nextStateBase.archivedSessionListMembershipByServerId === state.archivedSessionListMembershipByServerId
+                && nextStateBase.sessionListIndexByServerId === state.sessionListIndexByServerId) return state;
             return finalizeSessionListRenderablePublication(
                 state,
                 nextStateBase,
@@ -2369,7 +2385,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const archivedKey = resolveSessionListHomeKey(state.archivedSessionListMembershipByServerId, serverId);
             const nextRows = { ...previousRows };
             for (const incoming of sessions) {
-                const previous = previousRows[incoming.id];
+                const previous = nextRows[incoming.id];
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
                 const next = preserveSessionListRenderableTransientState(previous, withStaleFields);
                 nextRows[incoming.id] = previous && areSessionListRenderablesEqual(previous, next)
@@ -2378,10 +2394,12 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             }
             const previousMembership = previousMembershipKey ? state.ordinarySessionListMembershipByServerId[previousMembershipKey] ?? [] : [];
             const previousMembershipSet = new Set(previousMembership);
-            const nextMembership = [...new Set([
+            const candidateMembership = [...new Set([
                 ...previousMembership,
                 ...sessions.map((session) => session.id),
             ])];
+            const nextMembership = areStringArraysEqual(previousMembership, candidateMembership)
+                ? previousMembership : candidateMembership;
             const ordinaryRows = Object.fromEntries(
                 nextMembership.flatMap((sessionId) => {
                     const row = nextRows[sessionId];
@@ -2401,7 +2419,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
-            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, nextRows);
+            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, reuseSessionListRows(previousRows, nextRows));
             const changedSessionIds = sessions.flatMap((session) => (
                 !previousMembershipSet.has(session.id)
                 || !areSessionListRenderablesEqual(previousRows[session.id], nextRows[session.id])
@@ -2417,6 +2435,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     serverId, archivedKey ? state.archivedSessionListMembershipByServerId[archivedKey] : undefined),
                 sessionListIndexByServerId: publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, nextIndex),
             };
+            if (nextStateBase.sessionListRowsByServerId === state.sessionListRowsByServerId
+                && nextStateBase.ordinarySessionListMembershipByServerId === state.ordinarySessionListMembershipByServerId
+                && nextStateBase.archivedSessionListMembershipByServerId === state.archivedSessionListMembershipByServerId
+                && nextStateBase.sessionListIndexByServerId === state.sessionListIndexByServerId) return state;
             return finalizeSessionListRenderablePublication(
                 state,
                 nextStateBase,

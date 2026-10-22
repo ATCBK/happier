@@ -312,6 +312,8 @@ function currentAccountStoredContentCompatibilityFeaturesResponse(): Response {
 async function prepareAccountChangeWakeSchedulingHarness(): Promise<SyncAccountChangeWakeSchedulingHarness> {
     await restoreTestAccount();
     const { sync } = await import('./syncEngine');
+    const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+    await waitForHomeGovernance(() => expect(getActiveServerAccountScope()).not.toBeNull());
     return sync as unknown as SyncAccountChangeWakeSchedulingHarness;
 }
 
@@ -371,6 +373,103 @@ describe('sync AccountChange catch-up projection', () => {
         webLocks = null;
         vi.clearAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it('publishes concurrent exact Session list projections as one store update before their reads settle', async () => {
+        const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
+            refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
+        };
+        const { storage } = await import('./domains/state/storage');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const ids = Array.from({ length: 6 }, (_, index) => `publication-projection-${index}`);
+        const responses = createDeferred<void>();
+        let requested = 0;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const id = new URL(url).pathname.split('/').at(-1)!;
+            if (!ids.includes(id)) return Response.json({}, { status: 404 });
+            requested++;
+            await responses.promise;
+            return jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) });
+        });
+        let publications = 0;
+        const unsubscribe = storage.subscribe((next, previous) => {
+            if (next.sessionListRowsByServerId[scope.serverId] !== previous.sessionListRowsByServerId[scope.serverId]) publications++;
+        });
+        const reads = ids.map(async id => {
+            await runtime.refreshSessionListRowProjection(scope.serverId, id);
+            expect(storage.getState().sessionListRowsByServerId[scope.serverId]?.[id]).toBeDefined();
+        });
+        try {
+            await waitForHomeGovernance(() => expect(requested).toBe(ids.length));
+            responses.resolve();
+            await Promise.all(reads);
+            expect(publications).toBe(1);
+            for (const id of ids) expect(storage.getState().sessions[id]).toBeUndefined();
+        } finally { responses.resolve(); await Promise.allSettled(reads); unsubscribe(); }
+    });
+
+    it.each(['scope', 'account', 'same-home-retirement', 'other-home-retirement'] as const)(
+        'rechecks exact Session list projection publication after %s', async change => {
+        const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
+            refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
+            sessionListRowProjectionPublications: { getPendingCount(): number; flush(): void };
+        };
+        const { storage } = await import('./domains/state/storage');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const id = `projection-publication-${change}`;
+        domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === `/v2/sessions/${id}`
+            ? jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) })
+            : Response.json({}, { status: 404 }));
+        vi.useFakeTimers();
+        const read = runtime.refreshSessionListRowProjection(scope.serverId, id).then(() => 'applied', () => 'refused');
+        try {
+            // The publication phase, rather than a guessed elapsed interval, is
+            // the point at which a retirement must still withdraw a completed read.
+            await vi.waitFor(() => expect(runtime.sessionListRowProjectionPublications.getPendingCount()).toBe(1), { interval: 1 });
+            if (change === 'scope') runtime.disconnectServer();
+            else if (change === 'account') {
+                const { invalidateAccountEncryptionModeCache } = await import('./api/account/apiAccountEncryptionMode');
+                invalidateAccountEncryptionModeCache({ serverId: scope.serverId, reason: 'scope-reset' });
+            }
+            else storage.getState().deleteSession(id, change === 'same-home-retirement' ? scope.serverId : 'another-home');
+            runtime.sessionListRowProjectionPublications.flush();
+            expect(await read).toBe(change === 'other-home-retirement' ? 'applied' : 'refused');
+            expect(Boolean(storage.getState().sessionListRowsByServerId[scope.serverId]?.[id]))
+                .toBe(change === 'other-home-retirement');
+        } finally { runtime.sessionListRowProjectionPublications.flush(); await read; vi.useRealTimers(); }
+    });
+
+    it('publishes a ready exact Session list projection while another read remains pending', async () => {
+        const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
+            refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
+        };
+        const { storage } = await import('./domains/state/storage');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const releaseSlow = createDeferred<void>();
+        let slowStarted = false;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const id = new URL(url).pathname.split('/').at(-1)!;
+            if (id === 'projection-slow') { slowStarted = true; await releaseSlow.promise; }
+            if (id === 'projection-slow' || id === 'projection-ready') return jsonResponse({
+                session: createPlainSessionCurrentProjectionRecordFixture({ id }),
+            });
+            return Response.json({}, { status: 404 });
+        });
+        let slowSettled = false;
+        const slow = runtime.refreshSessionListRowProjection(scope.serverId, 'projection-slow').then(() => { slowSettled = true; });
+        try {
+            await waitForHomeGovernance(() => expect(slowStarted).toBe(true));
+            await runtime.refreshSessionListRowProjection(scope.serverId, 'projection-ready');
+            expect(storage.getState().sessionListRowsByServerId[scope.serverId]?.['projection-ready']).toBeDefined();
+            expect(slowSettled).toBe(false);
+            expect(storage.getState().sessionListRowsByServerId[scope.serverId]?.['projection-slow']).toBeUndefined();
+        } finally { releaseSlow.resolve(); await slow; }
     });
 
     it('refreshes observed Session records from a Home wake before detailed catch-up can publish', async () => {

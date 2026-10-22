@@ -63,7 +63,7 @@ import {
     type SessionListPageSource,
 } from './sessionHttpCompat';
 import { orderRowsForSessionListHydration } from './sessionListHydrationPriority';
-import { createSessionHydrationApplyQueue, type HydrationApplyFlushReason } from './sessionHydrationApplyQueue';
+import { createHydrationApplyQueue, type HydrationApplyFlushReason } from '../hydrationApplyQueue';
 import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
 import {
@@ -1295,7 +1295,7 @@ function createHydratedSessionApplyBatcher(params: {
         staleSkippedRows += batch.length - appliedSessions.length;
     };
 
-    const queue = createSessionHydrationApplyQueue({
+    const queue = createHydrationApplyQueue({
         apply, batchSize, flushDelayMs,
         flushRequiredRowsImmediately: () => pendingRequiredRows > 0 && params.coalesceRequiredRows !== true,
         coalesceRequiredRows: () => pendingRequiredRows > 0 && params.coalesceRequiredRows === true,

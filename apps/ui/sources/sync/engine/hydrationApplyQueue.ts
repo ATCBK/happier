@@ -1,10 +1,10 @@
 export type HydrationApplyFlushReason = 'size' | 'timer' | 'required' | 'final' | 'manual';
 
 /** One publication scheduler for list hydration and concurrently completed exact reads. */
-export function createSessionHydrationApplyQueue<T>(params: {
+export function createHydrationApplyQueue<T>(params: {
     apply: (batch: T[], reason: HydrationApplyFlushReason) => void;
     batchSize?: number;
-    /** Omitted for exact reads, which settle in the next microtask without an I/O wait. */
+    /** Omitted when already-admitted rows can coalesce in the next microtask. */
     flushDelayMs?: number;
     flushRequiredRowsImmediately?: () => boolean;
     coalesceRequiredRows?: () => boolean;

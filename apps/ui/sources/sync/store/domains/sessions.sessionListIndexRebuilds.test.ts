@@ -125,6 +125,23 @@ function readSessionListIndexSessionIds(
 }
 
 describe('sessions domain: unchanged writes', () => {
+    it.each(['apply', 'merge'] as const)('keeps the newest tuple when one %s publication contains out-of-order observations of the same row', writer => {
+        const { domain, get } = createHarness();
+        const serverId = getActiveServerSnapshot().serverId;
+        const row = buildSessionListRenderableFromSession(currentSession({ id: 'same-batch-row',
+            metadataVersion: 1, metadata: { path: '/first', host: 'home' } }));
+        domain.applyServerScopedSessionListRows(serverId, [row], { source: 'rowOnly', mode: 'append' });
+        const rows = [
+            { ...row, metadataVersion: 3, metadata: { ...row.metadata!, path: '/newest' } },
+            { ...row, metadataVersion: 2, metadata: { ...row.metadata!, path: '/older' } },
+        ];
+        if (writer === 'apply') domain.applyServerScopedSessionListRows(serverId, rows, { source: 'rowOnly', mode: 'append' });
+        else domain.mergeSessionListRowsForServerScope(serverId, rows);
+        expect(get().sessionListRowsByServerId[serverId]?.[row.id]).toMatchObject({
+            metadataVersion: 3, metadata: { path: '/newest' },
+        });
+    });
+
     it('reuses equal nested Session data when another field really changes', () => {
         const { domain, get, getSetCalls } = createHarness();
         const input = currentSession({ id: 's1', metadata: { machineId: 'm1', path: '/repo', host: 'pub.test' } });
@@ -155,6 +172,12 @@ describe('sessions domain: unchanged writes', () => {
         else domain.applyServerScopedSessionListRows(serverId, [next], { source: 'ordinary', mode: 'replace' });
         expect(get().sessionListRowsByServerId[serverId].s1.seq).toBe(next.seq);
         expect(get().sessionListRowsByServerId[serverId].s1.metadata).toBe(previous.metadata);
+        const retainedState = get();
+        const replay = structuredClone(next);
+        if (mode === 'merge') domain.mergeSessionListRowsForServerScope(serverId, [replay]);
+        else if (mode === 'reconcile') domain.reconcileSessionListRowsForServerScope(serverId, [replay], retainedState.sessionListRowsByServerId[serverId]);
+        else domain.applyServerScopedSessionListRows(serverId, [replay], { source: 'ordinary', mode: 'replace' });
+        expect(get()).toBe(retainedState);
     });
 
     it('retains equal persisted local slices across repeated scope activation and clearing', () => {
