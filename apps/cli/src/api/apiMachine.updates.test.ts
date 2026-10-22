@@ -17,6 +17,7 @@ import { createManagedActivityInventory, createLiveWorkProducerGroup } from '@/d
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { MachineUpdateMetadataRequestSchema, MachineUpdateStateRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import { StoredMachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import type { MachineAgentInventoryObservation } from '@/capabilities/snapshots/machineAgentInventory';
 
 const ioMock = vi.hoisted(() => vi.fn());
@@ -141,7 +142,7 @@ describe('ApiMachineClient updates', () => {
     } finally { await client.shutdown(); }
   });
 
-  it('publishes real finite busy-to-idle edges through Machine state without private inventory references', async () => {
+  it.each([false, true])('publishes current finite busy-to-idle facts without restoring superseded work after a CAS retry (held busy=%s)', async holdBusy => {
     vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({
       features: {}, capabilities: { serverIdentity: { serverIdentityId: 'fixture-home' } },
@@ -151,12 +152,23 @@ describe('ApiMachineClient updates', () => {
     const key = new Uint8Array(32).fill(23);
     const published: unknown[] = [];
     let version = 0;
-    const socket = createApiSessionSocketStub({ emitWithAck: (event, payload) => {
+    let daemonState: string | null = null;
+    let busyDeferred = false;
+    let releaseBusy!: () => void;
+    const heldBusy = new Promise<void>(resolve => { releaseBusy = resolve; });
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
       if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) return { result: 'success', revision: 1 };
       if (event !== 'machine-update-state') return { result: 'success', version: 1 };
-      const write = payload as { daemonState: string };
-      published.push(decrypt(key, 'legacy', decodeBase64(write.daemonState)));
-      return { result: 'success', version: ++version, daemonState: write.daemonState };
+      const write = MachineUpdateStateRequestSchema.parse(payload);
+      const decoded = StoredMachinePublishedDaemonStateV1Schema.parse(decrypt(key, 'legacy', decodeBase64(write.daemonState)));
+      if (holdBusy && !busyDeferred && decoded.managedActivity?.kind === 'busy') {
+        busyDeferred = true;
+        await heldBusy;
+      }
+      if (write.expectedVersion !== version) return { result: 'version-mismatch', version, daemonState };
+      daemonState = write.daemonState;
+      published.push(decoded);
+      return { result: 'success', version: ++version, daemonState };
     } });
     bindApiSessionSocketMock(ioMock, socket);
     const { ApiMachineClient } = await import('./apiMachine');
@@ -167,6 +179,8 @@ describe('ApiMachineClient updates', () => {
     client = new ApiMachineClient('token', { id: 'machine-1', encryptionKey: key, encryptionVariant: 'legacy',
       metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined,
     { managedActivity: { activity, admissionDrain: createDaemonAdmissionDrain() } });
+    // Observe completion without replacing any internal publication or activity logic.
+    const updates = vi.spyOn(client, 'updateDaemonState');
     client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'Not used by this fixture' }),
       stopSession: async () => false, requestShutdown: () => {} });
     let release!: () => void;
@@ -182,15 +196,21 @@ describe('ApiMachineClient updates', () => {
       observed = client.observeActionExecution({ actionId: 'projects.compute.exec', input: { private: 'not-published' },
         actionRequestId: 'private-operation-reference', execute: async () => { await task; return { ok: true, result: {} }; } });
       await vi.waitFor(async () => expect(await activity.readDecision()).toEqual({ kind: 'busy', reasons: ['finite'] }));
-      await vi.waitFor(() => expect(hasDecision({ kind: 'busy', reasons: ['finite'] })).toBe(true));
+      if (holdBusy) await vi.waitFor(() => expect(busyDeferred).toBe(true));
+      else await vi.waitFor(() => expect(hasDecision({ kind: 'busy', reasons: ['finite'] })).toBe(true));
       now = 200;
       release();
       await observed;
       expect(await activity.readDecision()).toEqual({ kind: 'idle', since: 200 });
       await vi.waitFor(() => expect(hasDecision({ kind: 'idle', since: 200 })).toBe(true));
+      releaseBusy();
+      await Promise.all(updates.mock.results.flatMap(result => result.type === 'return' ? [result.value] : []));
+      expect(StoredMachinePublishedDaemonStateV1Schema.parse(decrypt(key, 'legacy', decodeBase64(daemonState!))).managedActivity)
+        .toEqual({ kind: 'idle', since: 200 });
       expect(JSON.stringify(published)).not.toContain('private-operation-reference');
       expect(JSON.stringify(published)).not.toContain('not-published');
     } finally {
+      releaseBusy();
       release();
       await observed;
       activity.dispose(); source.dispose();

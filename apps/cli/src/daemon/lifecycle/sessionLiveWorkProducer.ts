@@ -1,6 +1,6 @@
 import type { SessionInputLiveWork } from '@/agent/runtime/session/input/_types';
 import type { TrackedSession } from '../types';
-import type { LiveWorkItemV1, LiveWorkProducerV1 } from './managedActivity';
+import type { LiveWorkItemV1, LiveWorkListenerV1, LiveWorkProducerV1 } from './managedActivity';
 import type { createSpawnRequestCoalescer } from '../spawn/spawnRequestCoalescer';
 import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
 
@@ -10,8 +10,8 @@ export function createSessionLiveWorkProducer(params: Readonly<{
   /** The daemon composition owns exact current requester-safe Session transport. */
   readActivity: (tracked: TrackedSession) => Promise<SessionInputLiveWork>;
   startup?: Pick<ReturnType<typeof createSpawnRequestCoalescer>, 'readInFlightRequests' | 'subscribeChanges'>;
-}>): LiveWorkProducerV1 & Readonly<{ notifyChanged(): void }> {
-  const listeners = new Set<() => void>();
+}>): LiveWorkProducerV1 & Readonly<{ notifyChanged: LiveWorkListenerV1 }> {
+  const listeners = new Set<LiveWorkListenerV1>();
   return {
     async read() {
       const sessions = params.readSessions();
@@ -60,6 +60,6 @@ export function createSessionLiveWorkProducer(params: Readonly<{
       const unsubscribeStartup = params.startup?.subscribeChanges(listener);
       return () => { listeners.delete(listener); unsubscribeStartup?.(); };
     },
-    notifyChanged() { for (const listener of listeners) listener(); },
+    notifyChanged(change) { for (const listener of listeners) listener(change); },
   };
 }

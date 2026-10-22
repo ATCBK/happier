@@ -23,6 +23,31 @@ function producer() {
 }
 
 describe('managed activity inventory', () => {
+    it('retains idle across healthy Session observations but publishes discovered work and material invalidations', async () => {
+        let now = 100;
+        let working = false;
+        const tracked = { pid: 1, startedBy: 'daemon' as const, happySessionId: 'session' };
+        const source = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: async () => ({
+            session: working ? 'active' : 'settled', input: 'settled', agents: 'settled', attention: 'settled',
+        }) });
+        const inventory = createManagedActivityInventory({ producers: [source], now: () => now });
+        try {
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
+            now = 200;
+            source.notifyChanged('observation');
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
+            working = true;
+            source.notifyChanged('observation');
+            expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['session'] });
+            now = 300;
+            working = false;
+            source.notifyChanged('observation');
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 300 });
+            now = 400;
+            source.notifyChanged();
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 400 });
+        } finally { inventory.dispose(); }
+    });
     it('publishes fresh Session facts while a retired runner transport remains pending, without accepting its late idle proof', async () => {
         const retiredRequest = createDeferred();
         const currentRequest = createDeferred();
