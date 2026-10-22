@@ -332,7 +332,11 @@ run_installer_step() {
   fi
 
   if [[ "${status}" -eq 0 ]]; then
-    replay_installer_step_warnings "${tmp_output}"
+    if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_output}" ]]; then
+      cat "${tmp_output}"
+    else
+      replay_installer_step_warnings "${tmp_output}"
+    fi
     rm -f "${tmp_output}" >/dev/null 2>&1 || true
     return 0
   fi
