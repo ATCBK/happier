@@ -21,7 +21,7 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
-import { SelectionList, resolvePopoverSelectionListHeightBehavior, type SelectionListStep } from '@/components/ui/selectionList';
+import { SELECTION_LIST_MODAL_CARD_SCROLL, SelectionList, resolveSelectionListModalHeightBehavior, type SelectionListStep } from '@/components/ui/selectionList';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
@@ -73,7 +73,7 @@ function MachinePoolSelectionListModalContent(props: Readonly<{
         selectedOptionId={null}
         listAccessibilityLabel={props.listAccessibilityLabel}
         maxHeight={MEMBER_PICKER_MAX_HEIGHT}
-        heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+        heightBehavior={resolveSelectionListModalHeightBehavior()}
         keyboardHintsEnabled
         onRequestClose={props.onClose}
         onSelect={(optionId) => {
@@ -313,8 +313,7 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
                 kind: 'card',
                 title: t('machinePools.addMachines'),
                 testID: 'settings.machinePools.editor.memberPicker.modal',
-                scrollHost: 'body',
-                bodyScroll: 'none',
+                ...SELECTION_LIST_MODAL_CARD_SCROLL,
             },
             closeOnBackdrop: true,
         });
@@ -412,8 +411,7 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
                 kind: 'card',
                 title: machineLabel,
                 testID: 'settings.machinePools.editor.memberActions.modal',
-                scrollHost: 'body',
-                bodyScroll: 'none',
+                ...SELECTION_LIST_MODAL_CARD_SCROLL,
             },
             closeOnBackdrop: true,
         });

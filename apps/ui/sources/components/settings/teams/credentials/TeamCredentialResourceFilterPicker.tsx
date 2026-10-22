@@ -3,8 +3,9 @@ import type { TeamCredentialResourceListFilterV1 } from '@happier-dev/protocol/t
 
 import { Item } from '@/components/ui/lists/Item';
 import {
+    SELECTION_LIST_MODAL_CARD_SCROLL,
     SelectionList,
-    resolvePopoverSelectionListHeightBehavior,
+    resolveSelectionListModalHeightBehavior,
     type SelectionListStep,
 } from '@/components/ui/selectionList';
 import { Modal } from '@/modal';
@@ -46,7 +47,7 @@ function FilterPickerContent(props: Readonly<{
             selectedOptionId={props.selected}
             listAccessibilityLabel={t('teams.credentials.title')}
             maxHeight={520}
-            heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+            heightBehavior={resolveSelectionListModalHeightBehavior()}
             keyboardHintsEnabled
             onRequestClose={props.onClose}
             onSelect={(optionId) => {
@@ -104,8 +105,7 @@ export const TeamCredentialResourceFilterPicker = React.memo(function TeamCreden
                 kind: 'card',
                 title: t('teams.credentials.title'),
                 testID: 'team-credentials-filter:modal',
-                scrollHost: 'body',
-                bodyScroll: 'none',
+                ...SELECTION_LIST_MODAL_CARD_SCROLL,
             },
             closeOnBackdrop: true,
         });

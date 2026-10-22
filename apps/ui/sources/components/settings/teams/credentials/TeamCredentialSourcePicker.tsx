@@ -2,8 +2,9 @@ import * as React from 'react';
 import { Item } from '@/components/ui/lists/Item';
 import type { TeamCredentialSourceCandidatePresentationV1 } from '@/hooks/teams/composeTeamCredentialProviderSourceOffer';
 import {
+    SELECTION_LIST_MODAL_CARD_SCROLL,
     SelectionList,
-    resolvePopoverSelectionListHeightBehavior,
+    resolveSelectionListModalHeightBehavior,
     type SelectionListSectionDescriptor,
     type SelectionListStep,
 } from '@/components/ui/selectionList';
@@ -41,7 +42,7 @@ function PickerContent(props: Readonly<{
             selectedOptionId={props.selectedOptionId}
             listAccessibilityLabel={props.accessibilityLabel}
             maxHeight={PICKER_MAX_HEIGHT}
-            heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+            heightBehavior={resolveSelectionListModalHeightBehavior()}
             keyboardHintsEnabled
             onRequestClose={props.onClose}
             onSelect={(optionId) => {
@@ -147,8 +148,7 @@ export const TeamCredentialSourcePicker = React.memo(function TeamCredentialSour
                 kind: 'card',
                 title: t('teams.credentials.detail.sourceLabel'),
                 testID: 'team-credential-source-picker:modal',
-                scrollHost: 'body',
-                bodyScroll: 'none',
+                ...SELECTION_LIST_MODAL_CARD_SCROLL,
             },
             closeOnBackdrop: true,
         });

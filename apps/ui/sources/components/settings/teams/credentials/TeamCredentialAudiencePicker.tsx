@@ -3,7 +3,7 @@ import * as React from 'react';
 import type { SessionAccessCandidateRowModel, SessionAccessDirectoryKind, SessionAccessGrantOperationModel } from '@/components/sessions/access/sessionAccessEditorTypes';
 import { useSessionAccessDirectory } from '@/components/sessions/access/useSessionAccessDirectory';
 import { Item } from '@/components/ui/lists/Item';
-import { SelectionList, resolvePopoverSelectionListHeightBehavior, type SelectionListOption, type SelectionListSectionDescriptor, type SelectionListStep } from '@/components/ui/selectionList';
+import { SELECTION_LIST_MODAL_CARD_SCROLL, SelectionList, resolveSelectionListModalHeightBehavior, type SelectionListOption, type SelectionListSectionDescriptor, type SelectionListStep } from '@/components/ui/selectionList';
 import { Modal } from '@/modal';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
@@ -106,7 +106,7 @@ function PickerContent(props: Readonly<{
         onChangeInputValue={setQuery}
         listAccessibilityLabel={props.label ?? t('teams.credentials.audience.add')}
         maxHeight={PICKER_MAX_HEIGHT}
-        heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+        heightBehavior={resolveSelectionListModalHeightBehavior()}
         keyboardHintsEnabled
         onRequestClose={props.onClose}
         onSelect={() => {}}
@@ -150,7 +150,7 @@ export const TeamCredentialAudiencePicker = React.memo(function TeamCredentialAu
         modalIdRef.current = Modal.show({
             component: PickerContent,
             props: { ...props, allowedKinds: props.allowedKinds ?? ['member', 'group'] },
-            chrome: { kind: 'card', title: label, testID: 'team-credential-audience-picker:modal', scrollHost: 'body', bodyScroll: 'none' },
+            chrome: { kind: 'card', title: label, testID: 'team-credential-audience-picker:modal', ...SELECTION_LIST_MODAL_CARD_SCROLL },
             closeOnBackdrop: true,
         });
     }, [close, locale, props]);

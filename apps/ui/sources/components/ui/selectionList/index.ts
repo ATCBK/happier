@@ -48,6 +48,10 @@ export { filterSelectionListSections } from './filterSelectionListSections';
 export { renderSelectionListAccessory } from './renderSelectionListAccessory';
 export { resolvePopoverSelectionListHeightBehavior } from './resolvePopoverSelectionListHeightBehavior';
 export {
+    SELECTION_LIST_MODAL_CARD_SCROLL,
+    resolveSelectionListModalHeightBehavior,
+} from './selectionListModalPresentation';
+export {
     resolveSelectionListListboxDomId,
     resolveSelectionListOptionDomId,
 } from './resolveSelectionListOptionDomId';

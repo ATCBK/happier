@@ -11,8 +11,9 @@ import type {
 } from '@happier-dev/protocol';
 
 import {
+  SELECTION_LIST_MODAL_CARD_SCROLL,
   SelectionList,
-  resolvePopoverSelectionListHeightBehavior,
+  resolveSelectionListModalHeightBehavior,
   type SelectionListStep,
 } from '@/components/ui/selectionList';
 import { Item } from '@/components/ui/lists/Item';
@@ -82,7 +83,7 @@ function ConnectedAccountPurposeTargetPickerModalContent(
         selectedOptionId={props.selectedOptionId}
         listAccessibilityLabel={props.accessibilityLabel}
         maxHeight={PURPOSE_TARGET_PICKER_MAX_HEIGHT}
-        heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+        heightBehavior={resolveSelectionListModalHeightBehavior()}
         keyboardHintsEnabled
         onRequestClose={props.onClose}
         onSelect={(optionId) => {
@@ -362,8 +363,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
         kind: 'card',
         title: purposeTitle,
         testID: `${props.testID}:modal`,
-        scrollHost: 'body',
-        bodyScroll: 'none',
+        ...SELECTION_LIST_MODAL_CARD_SCROLL,
       },
       closeOnBackdrop: true,
       onRequestClose: () => { pickerModalIdRef.current = null; },
