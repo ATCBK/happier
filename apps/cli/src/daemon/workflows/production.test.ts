@@ -232,7 +232,7 @@ async function commandOutputAdmissionFixture(mode: 'plain' | 'e2ee', fault?: 're
 }
 
 describe('production workflow coordinator', () => {
-  it('keeps renewing a claimed Workflow during slow native admission and an overlapping Account currentness read', async () => {
+  it.each(['healthy', 'slow_timeout', 'never_answers'] as const)('keeps renewing a claimed Workflow during slow native admission (%s)', async scenario => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(0);
     const leaseLog = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
@@ -274,11 +274,22 @@ describe('production workflow coordinator', () => {
       }) }),
       workspaceScm: { inspectLocation: async () => null, verifyRecordedWorkspace: async () => 'available' },
     });
-    const polling = resolveAutomationPollingConfig({});
+    const polling = resolveAutomationPollingConfig(scenario === 'healthy' ? {} : { HAPPIER_AUTOMATION_HEARTBEAT_MS: '5000' });
     let failHeartbeat = false;
+    const renewalStarts: number[] = [];
+    const renewalBudgets: number[] = [];
     const readinessPost = vi.mocked(axios.post).getMockImplementation()!;
     const heartbeatHttp = vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
       if (!url.endsWith('/heartbeat')) return await readinessPost(url, body, config);
+      renewalStarts.push(Date.now());
+      renewalBudgets.push(config?.timeout ?? 0);
+      if (scenario === 'never_answers' || (scenario === 'slow_timeout' && renewalStarts.length === 1)) {
+        // Axios/HTTP is the boundary: a silent server consumes the actual
+        // timeout supplied by the real ClaimClient, never a fixture deadline.
+        await new Promise((_resolve, reject) => setTimeout(() => reject(
+          Object.assign(new Error('HTTP response deadline'), { code: 'ECONNABORTED' }),
+        ), config?.timeout));
+      }
       if (failHeartbeat) throw { response: { status: 503, data: { token: 'private-response-token' } } };
       return { status: 200, data: { ok: true, leaseExpiresAt: Date.now() + polling.leaseDurationMs } };
     });
@@ -296,6 +307,31 @@ describe('production workflow coordinator', () => {
       // The actual coordinator reaches the machine input boundary before time advances.
       await new Promise<void>(resolve => setImmediate(resolve));
       expect(nativeEntered).toBe(true);
+      if (scenario !== 'healthy') {
+        await vi.advanceTimersByTimeAsync(polling.leaseDurationMs);
+        const observations = leaseLog.mock.calls.filter(([message]) => message === '[DAEMON AUTOMATION] Claim lease observation')
+          .map(([, observation]) => observation);
+        expect(renewalStarts[0]).toBe(5_000);
+        expect(renewalBudgets[0]).toBe(12_500);
+        expect(renewalStarts[1]).toBeGreaterThan(17_499);
+        expect(renewalStarts[1]).toBeLessThan(18_000);
+        // Only transient retries accelerate, within the existing 1s floor.
+        expect(renewalStarts.every((start, index) => index === 0 || start - renewalStarts[index - 1] >= 1_000)).toBe(true);
+        if (scenario === 'never_answers') {
+          expect(observations).toContainEqual(expect.objectContaining({ event: 'expired', observedAtMs: 30_000,
+            leaseExpiresAtMs: 30_000 }));
+          expect(renewalStarts.every(start => start < 30_000)).toBe(true);
+        } else {
+          expect(observations).not.toContainEqual(expect.objectContaining({ event: 'expired' }));
+          expect(currentnessEntered).toBe(true);
+        }
+        releaseCurrentness(); releaseNative();
+        await running;
+        // An expired claimant has no authority to publish a parent transition;
+        // the server's ordinary reclaim owns the still-running row.
+        expect(boundary.run().state).toBe(scenario === 'never_answers' ? 'running' : 'succeeded');
+        return;
+      }
       const elapsed = polling.leaseDurationMs * 6;
       await vi.advanceTimersByTimeAsync(elapsed);
       expect(currentnessEntered).toBe(true);

@@ -213,6 +213,8 @@ export function createAutomationClaimClient(params: {
       machineId: string;
       attempt: number;
       leaseDurationMs: number;
+      renewalDeadlineAtMs: number;
+      signal: AbortSignal;
       onProgress?: (progress: AutomationLeaseRenewalProgress) => void;
     }): Promise<number> {
       const path = `/${paramsHeartbeat.protocol}/automations/runs/${encodeURIComponent(paramsHeartbeat.runId)}/heartbeat`;
@@ -234,21 +236,44 @@ export function createAutomationClaimClient(params: {
       // can attribute a pending request without writing healthy ticks to disk.
       observeProgress();
       try {
-        const headers = await workerHeaders({ method: 'POST', path, body });
+        const remainingBudgetMs = () => {
+          paramsHeartbeat.signal.throwIfAborted();
+          const remainingMs = paramsHeartbeat.renewalDeadlineAtMs - Date.now();
+          if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+            throw Object.assign(new Error('automation_claim_renewal_deadline_exceeded'), { code: 'ETIMEDOUT' });
+          }
+          return remainingMs;
+        };
+        remainingBudgetMs();
+        // Publisher proof may involve filesystem work that cannot be cancelled.
+        // Retire this wait on the owner's signal; a late proof cannot issue HTTP.
+        const headers = await new Promise<Awaited<ReturnType<typeof workerHeaders>>>((resolve, reject) => {
+          const abort = () => { dispose(); reject(paramsHeartbeat.signal.reason); };
+          const dispose = () => paramsHeartbeat.signal.removeEventListener('abort', abort);
+          paramsHeartbeat.signal.addEventListener('abort', abort, { once: true });
+          if (paramsHeartbeat.signal.aborted) { abort(); return; }
+          void workerHeaders({ method: 'POST', path, body }).then(
+            headers => { dispose(); resolve(headers); },
+            error => { dispose(); reject(error); },
+          );
+        });
+        const timeout = Math.min(15_000, remainingBudgetMs());
         const httpStartedAtMs = Date.now();
         progress = { ...progress, stage: 'http', stageStartedAtMs: httpStartedAtMs,
           publisherProofDurationMs: httpStartedAtMs - renewalStartedAtMs };
         observeProgress();
-        const response = await axios.post(`${baseUrl}${path}`, body, { headers, timeout: 15_000 });
+        const response = await axios.post(`${baseUrl}${path}`, body, { headers, timeout, signal: paramsHeartbeat.signal });
         const decodeStartedAtMs = Date.now();
         progress = { ...progress, stage: 'response_decode', stageStartedAtMs: decodeStartedAtMs,
           httpDurationMs: decodeStartedAtMs - httpStartedAtMs };
         observeProgress();
         const { leaseExpiresAt } = AutomationV3WorkerHeartbeatResponseSchema.parse(response.data);
+        remainingBudgetMs();
         if (leaseExpiresAt === null) throw new Error('automation_claim_lease_unavailable');
         return leaseExpiresAt;
       } catch (error) {
-        const classification = classifyDaemonServerWorkError(error);
+        const failure = paramsHeartbeat.signal.aborted && axios.isCancel(error) ? paramsHeartbeat.signal.reason : error;
+        const classification = classifyDaemonServerWorkError(failure);
         try {
           logger.warnLocalFile('[DAEMON AUTOMATION] Lease renewal transport', {
             runId: paramsHeartbeat.runId, machineId: paramsHeartbeat.machineId, attempt: paramsHeartbeat.attempt,
@@ -256,7 +281,7 @@ export function createAutomationClaimClient(params: {
             status: classification.statusCode, errorKind: classification.kind,
           });
         } catch { /* Local diagnostics cannot change renewal transport. */ }
-        throw error;
+        throw failure;
       }
     },
 

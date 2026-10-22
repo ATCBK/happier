@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE } from '@happier-dev/protocol';
+import axios from 'axios';
 
 const { axiosGet, axiosPost, axiosLifecycleGet } = vi.hoisted(() => ({
   axiosGet: vi.fn(),
@@ -88,6 +89,71 @@ describe('createAutomationClaimClient', () => {
     axiosLifecycleGet.mockReset().mockResolvedValue({ data: { sources: [] } });
   });
 
+  it('spends only the renewal owner budget remaining after publisher proof preparation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000);
+    let releaseProof!: (proof: null) => void;
+    const proof = new Promise<null>(resolve => { releaseProof = resolve; });
+    const client = createAutomationClaimClient({ token: 'token', createPublisherHeader: () => proof });
+    axiosPost.mockResolvedValue({ status: 200, data: { ok: true, leaseExpiresAt: 30_000 } });
+    const renewal = client.heartbeatRun({ protocol: 'v3', runId: 'budget-run', machineId: 'machine-1',
+      attempt: 1, leaseDurationMs: 30_000, renewalDeadlineAtMs: 5_500, signal: new AbortController().signal });
+    try {
+      vi.setSystemTime(1_750);
+      releaseProof(null);
+      await expect(renewal).resolves.toBe(30_000);
+      expect(axiosPost).toHaveBeenCalledWith(expect.any(String), expect.any(Object),
+        expect.objectContaining({ timeout: 3_750 }));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['deadline', 'stop'] as const)('cancels pending publisher proof at the owning %s boundary', async boundary => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseProof!: (proof: null) => void;
+    const proof = new Promise<null>(resolve => { releaseProof = resolve; });
+    const publisher = vi.fn().mockReturnValueOnce(proof).mockResolvedValue(null);
+    const client = createAutomationClaimClient({ token: 'token', createPublisherHeader: publisher });
+    axiosPost.mockResolvedValue({ status: 200, data: { ok: true, leaseExpiresAt: 20_000 } });
+    const onError = vi.fn();
+    const lease = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 10_000,
+      onHeartbeat: (onProgress, renewalDeadlineAtMs, signal) => client.heartbeatRun({ protocol: 'v3',
+        runId: 'proof-run', machineId: 'machine-1', attempt: 1, leaseDurationMs: 10_000,
+        renewalDeadlineAtMs, signal, onProgress }), onError });
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (boundary === 'stop') {
+        lease.stop();
+        await vi.advanceTimersByTimeAsync(500);
+        releaseProof(null);
+      }
+      await vi.advanceTimersByTimeAsync(4_501);
+      expect(publisher).toHaveBeenCalledTimes(boundary === 'stop' ? 1 : 2);
+      expect(axiosPost).toHaveBeenCalledTimes(boundary === 'stop' ? 0 : 1);
+      releaseProof(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(axiosPost).toHaveBeenCalledTimes(boundary === 'stop' ? 0 : 1);
+      expect(onError).not.toHaveBeenCalled();
+    } finally { releaseProof(null); lease.stop(); vi.useRealTimers(); }
+  });
+
+  it.each(['refusal', 'cancellation'] as const)('preserves the HTTP outcome racing with renewal cancellation (%s)', async outcome => {
+    let rejectHttp!: (error: unknown) => void;
+    let enterHttp!: () => void;
+    const entered = new Promise<void>(resolve => { enterHttp = resolve; });
+    axiosPost.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectHttp = reject; enterHttp(); }));
+    const client = createAutomationClaimClient({ token: 'token', createPublisherHeader: async () => null });
+    const controller = new AbortController();
+    const renewal = client.heartbeatRun({ protocol: 'v3', runId: 'refused-run', machineId: 'machine-1',
+      attempt: 1, leaseDurationMs: 30_000, renewalDeadlineAtMs: Date.now() + 15_000, signal: controller.signal });
+    await entered;
+    const timeout = Object.assign(new Error('renewal deadline'), { code: 'ETIMEDOUT' });
+    controller.abort(timeout);
+    const failure = outcome === 'refusal' ? { response: { status: 403 } } : new axios.CanceledError();
+    rejectHttp(failure);
+    await expect(renewal).rejects.toBe(outcome === 'refusal' ? failure : timeout);
+  });
+
   it.each(['renewed', 'http_failure', 'decode_failure'] as const)('keeps healthy transport quiet and attributes failures without private data (%s)', async outcome => {
     const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const progress = vi.fn();
@@ -98,7 +164,8 @@ describe('createAutomationClaimClient', () => {
     axiosPost.mockImplementationOnce(() => new Promise((resolve, reject) => { releaseHttp = resolve; rejectHttp = reject; }));
     const client = createAutomationClaimClient({ token: 'private-account-token', createPublisherHeader: () => proof });
     const heartbeat = client.heartbeatRun({ protocol: 'v3', runId: 'lease-run', machineId: 'machine-1',
-      attempt: 2, leaseDurationMs: 30_000, onProgress: progress });
+      attempt: 2, leaseDurationMs: 30_000, renewalDeadlineAtMs: Date.now() + 15_000,
+      signal: new AbortController().signal, onProgress: progress });
     try {
       expect(log).not.toHaveBeenCalled();
       expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'publisher_proof' }));
@@ -149,7 +216,7 @@ describe('createAutomationClaimClient', () => {
     axiosPost.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectHttp = reject; enterHttp(); }));
     const client = createAutomationClaimClient({ token: 'token', createPublisherHeader: () => proof });
     const heartbeat = client.heartbeatRun({ protocol: 'v3', runId: 'timed-run', machineId: 'machine-1',
-      attempt: 3, leaseDurationMs: 30_000 });
+      attempt: 3, leaseDurationMs: 30_000, renewalDeadlineAtMs: Date.now() + 15_000, signal: new AbortController().signal });
     try {
       vi.setSystemTime(1_750);
       releaseProof(null);
@@ -162,40 +229,6 @@ describe('createAutomationClaimClient', () => {
         expect.objectContaining({ stage: 'http', renewalStartedAtMs: 1_000, stageStartedAtMs: 1_750,
           publisherProofDurationMs: 750, durationMs: 1_250, errorKind: 'timeout' }));
     } finally { log.mockRestore(); vi.useRealTimers(); }
-  });
-
-  it('attributes expired proof preparation and late successful HTTP through the real lease owner', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
-    let releaseProof!: (proof: null) => void;
-    const proof = new Promise<null>(resolve => { releaseProof = resolve; });
-    let releaseHttp!: (response: { status: number; data: unknown }) => void;
-    axiosPost.mockImplementationOnce(() => new Promise(resolve => { releaseHttp = resolve; }));
-    const client = createAutomationClaimClient({ token: 'private-token', createPublisherHeader: () => proof });
-    const observations = vi.fn();
-    const onError = vi.fn();
-    const lease = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
-      onHeartbeat: onProgress => client.heartbeatRun({ protocol: 'v3', runId: 'late-run', machineId: 'machine-1',
-        attempt: 2, leaseDurationMs: 30_000, onProgress }), onError, onObservation: observations });
-    try {
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(observations).toHaveBeenCalledWith(expect.objectContaining({ event: 'expired',
-        renewalTransport: { stage: 'publisher_proof', renewalStartedAtMs: 1_000, stageStartedAtMs: 1_000 } }));
-      vi.setSystemTime(3_500);
-      releaseProof(null);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(axiosPost).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(500);
-      releaseHttp({ status: 200, data: { ok: true, leaseExpiresAt: 34_000 } });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(observations).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'late_response',
-        leaseExpiresAtMs: 3_000, observedAtMs: 4_000,
-        renewalTransport: { stage: 'response_decode', renewalStartedAtMs: 1_000, stageStartedAtMs: 4_000,
-          publisherProofDurationMs: 2_500, httpDurationMs: 500 } }));
-      expect(onError).toHaveBeenCalledOnce();
-      expect(log).not.toHaveBeenCalled();
-    } finally { lease.stop(); log.mockRestore(); vi.useRealTimers(); }
   });
 
   it.each(['proof_failure', 'http_failure', 'renewed'] as const)('isolates throwing phase/log observers from %s', async outcome => {
@@ -212,7 +245,8 @@ describe('createAutomationClaimClient', () => {
     });
     try {
       const heartbeat = client.heartbeatRun({ protocol: 'v3', runId: 'isolated-run', machineId: 'machine-1',
-        attempt: 1, leaseDurationMs: 30_000, onProgress: progress });
+        attempt: 1, leaseDurationMs: 30_000, renewalDeadlineAtMs: Date.now() + 15_000,
+        signal: new AbortController().signal, onProgress: progress });
       if (outcome === 'renewed') await expect(heartbeat).resolves.toBe(123_456);
       else {
         await expect(heartbeat).rejects.toBe(failure);
@@ -622,7 +656,8 @@ describe('createAutomationClaimClient', () => {
       attempt: 2,
       accountCurrentness: CLAIM_CURRENTNESS,
     })).resolves.toEqual(START_CURRENTNESS);
-    await expect(client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000 }))
+    await expect(client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000,
+      renewalDeadlineAtMs: Date.now() + 6_000, signal: new AbortController().signal }))
       .resolves.toBe(123_456);
     await client.succeedRun({
       protocol: 'v3',

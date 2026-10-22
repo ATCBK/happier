@@ -9,7 +9,7 @@ import {
 import { getRandomBytes } from '@/api/encryption';
 import { logger } from '@/ui/logger';
 import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
-import type { AutomationLeaseRenewalProgress } from './automationClaimClient';
+import type { AutomationClaimClient, AutomationLeaseRenewalProgress } from './automationClaimClient';
 import { logAutomationWarn } from './automationTelemetry';
 import type { AutomationClaimedRunPayload, AutomationV3ClaimedAutomation } from './automationTypes';
 import type { createProductionWorkflowRunCoordinator } from '@/daemon/workflows/production';
@@ -51,14 +51,7 @@ type AutomationV3RunFailureSettlement = Readonly<{
 }>;
 
 type AutomationRunClaimClient = Readonly<{
-  heartbeatRun: (params: {
-    protocol: 'v3';
-    runId: string;
-    machineId: string;
-    attempt: number;
-    leaseDurationMs: number;
-    onProgress?: (progress: AutomationLeaseRenewalProgress) => void;
-  }) => Promise<number>;
+  heartbeatRun: AutomationClaimClient['heartbeatRun'];
   failRun: (params: AutomationV3RunFailureSettlement) => Promise<void>;
 }>;
 
@@ -212,12 +205,14 @@ export async function executeClaimedRun(params: {
 
   try {
     if (!isCurrent()) return;
-    const renewLease = async (onProgress: (progress: AutomationLeaseRenewalProgress) => void) => await claimClient.heartbeatRun({
+    const renewLease = async (onProgress: (progress: AutomationLeaseRenewalProgress) => void, renewalDeadlineAtMs: number, signal: AbortSignal) => await claimClient.heartbeatRun({
       protocol: claimed.protocol,
       runId: claimed.run.id,
       machineId,
       attempt,
       leaseDurationMs,
+      renewalDeadlineAtMs,
+      signal,
       onProgress,
     });
     const checkCurrentness = async () => {

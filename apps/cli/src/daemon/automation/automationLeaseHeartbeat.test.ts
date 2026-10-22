@@ -4,6 +4,74 @@ import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
 afterEach(() => vi.useRealTimers());
 
 describe('Automation claim lease observation', () => {
+  it('derives renewal windows from the confirmed lease left after slow claim delivery', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const starts: number[] = [];
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 10_000, leaseExpiresAtMs: 6_000,
+      onHeartbeat: async () => {
+        starts.push(Date.now());
+        if (starts.length === 1) {
+          await new Promise(resolve => setTimeout(resolve, 2_000));
+          throw Object.assign(new Error('slow renewal'), { code: 'ECONNABORTED' });
+        }
+        return 30_000;
+      }, onError });
+    try {
+      await vi.advanceTimersByTimeAsync(5_999);
+      expect(starts).toHaveLength(2);
+      expect(starts[0]).toBe(0);
+      expect(starts[1]).toBeLessThan(6_000);
+      expect(onError).not.toHaveBeenCalled();
+    } finally { heartbeat.stop(); }
+  });
+
+  it('uses the remaining two seconds when a delayed timer finally starts renewal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const starts: number[] = [];
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 10_000, leaseExpiresAtMs: 30_000,
+      onHeartbeat: async (_progress, _deadline, signal) => {
+        starts.push(Date.now());
+        if (starts.length === 1) {
+          await new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+        }
+        return 60_000;
+      }, onError });
+    try {
+      vi.setSystemTime(18_000);
+      await vi.advanceTimersByTimeAsync(11_001);
+      expect(starts).toEqual([28_000, 29_001]);
+      expect(onError).not.toHaveBeenCalled();
+    } finally { heartbeat.stop(); }
+  });
+
+  it('retries serially before expiry when a renewal takes longer than one cadence', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const starts: number[] = [];
+    const deadlines: number[] = [];
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 10_000,
+      onHeartbeat: async (_progress, deadlineAtMs) => {
+        starts.push(Date.now());
+        deadlines.push(deadlineAtMs);
+        if (starts.length === 1) {
+          await new Promise(resolve => setTimeout(resolve, 2_500));
+          throw Object.assign(new Error('slow renewal'), { code: 'ECONNABORTED' });
+        }
+        return 20_000;
+      }, onError });
+    try {
+      await vi.advanceTimersByTimeAsync(3_501);
+      expect(starts).toEqual([1_000, 3_501]);
+      expect(deadlines).toEqual([5_500, 6_750]);
+      expect(onError).not.toHaveBeenCalled();
+    } finally { heartbeat.stop(); }
+  });
+
   it.each(['publisher_proof', 'http'] as const)('retains the pending %s phase only for expiry and late-response attribution', async stage => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
