@@ -1,12 +1,13 @@
 import * as React from 'react';
+import { resolveHappierCapabilityBlockingNotice } from '@happier-dev/plugin-ui/presentation';
 
-import { presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { capabilityStatusLabels, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 
 /**
  * The one notice a blocked capability page leads with: what stopped working, what that means for the
- * person's sessions, and the one fix. Only for a status that blocks (needs you: amber; failed: rose);
- * quiet and neutral statuses stay in the header and rows. Drawn by the shared tinted page notice.
+ * person's sessions, and the one fix. Whether it shows, its tone and its action come from the shared
+ * capability status owner; drawn by the shared tinted page notice.
  */
 export function CapabilityBlockingBanner(props: Readonly<{
     status: CapabilityStatus;
@@ -14,16 +15,15 @@ export function CapabilityBlockingBanner(props: Readonly<{
     body: string;
     testID?: string;
 }>): React.ReactElement | null {
-    const presentation = presentCapabilityStatus(props.status, 'header');
-    if (presentation.tone !== 'needs_you' && presentation.tone !== 'failed') return null;
-    const fix = props.status.fix;
+    const notice = resolveHappierCapabilityBlockingNotice(props.status, capabilityStatusLabels);
+    if (notice === null) return null;
     return (
         <AttentionBanner
             testID={props.testID ?? 'capability.banner'}
-            tone={presentation.tone === 'failed' ? 'danger' : 'warning'}
+            tone={notice.tone}
             title={props.title}
             description={props.body}
-            action={fix && presentation.fixLabel ? { label: presentation.fixLabel, onPress: fix.onPress, ...(presentation.tone === 'failed' ? { display: 'secondary' as const } : {}) } : null}
+            action={notice.action}
         />
     );
 }

@@ -1,8 +1,9 @@
 import * as React from 'react';
+import { doesHappierCapabilityStatusSpeak } from '@happier-dev/plugin-ui/presentation';
 
 import { buildCapabilityHeaderMeta, type CapabilityFactsProps } from '@/components/capabilities/facts/CapabilityFacts';
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
-import { presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { PageHeader, type PageHeaderPrimaryAction } from '@/components/ui/layout/PageHeader';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
@@ -33,7 +34,7 @@ export function CapabilityDetailHeader(props: Readonly<{
         const facts = buildCapabilityHeaderMeta(props.facts);
         return props.mono ? [...facts, { key: 'mono', text: props.mono, mono: true }] : facts;
     }, [props.facts, props.mono]);
-    const speaks = props.status ? presentCapabilityStatus(props.status, 'header').pill !== null : false;
+    const speaks = props.status ? doesHappierCapabilityStatusSpeak(props.status, 'header') : false;
     return (
         <PageHeader
             testID={props.testID}

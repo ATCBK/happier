@@ -1264,3 +1264,44 @@ export {
   type HappierLinkDeliveryProps,
 } from './sharing/LinkDelivery.js';
 export * from './usage/charts/index.js';
+export {
+  doesHappierCapabilityStatusSpeak,
+  pickMostBlockingHappierCapabilityStatus,
+  presentHappierCapabilityStatus,
+  resolveHappierCapabilityBlockingNotice,
+  type HappierCapabilityFixKind,
+  type HappierCapabilityStatus,
+  type HappierCapabilityStatusKind,
+  type HappierCapabilityStatusLabels,
+  type HappierCapabilityStatusPlacement,
+  type HappierCapabilityStatusPresentation,
+  type HappierCapabilityStatusTone,
+  type HappierCapabilityStatusVariant,
+} from './capabilities/capabilityStatus.js';
+export {
+  HappierCapabilityStatusChip,
+  type HappierCapabilityStatusChipProps,
+  type HappierCapabilityStatusFixProps,
+  type HappierCapabilityStatusPillProps,
+} from './capabilities/CapabilityStatusChip.js';
+export {
+  HappierCapabilityFacts,
+  buildHappierCapabilityFacts,
+  buildHappierCapabilityHeaderFacts,
+  formatHappierCapabilityCount,
+  type HappierCapabilityCost,
+  type HappierCapabilityFact,
+  type HappierCapabilityFactGlyph,
+  type HappierCapabilityFactsInput,
+  type HappierCapabilityFactsLabels,
+  type HappierCapabilityFactsProps,
+  type HappierCapabilityFactsTextProps,
+  type HappierCapabilitySource,
+  type HappierCapabilityTrust,
+} from './capabilities/capabilityFacts.js';
+export {
+  buildHappierCapabilityCollectionAnatomy,
+  type HappierCapabilityCollectionAnatomy,
+  type HappierCapabilityCollectionAnatomyInput,
+  type HappierCapabilityCollectionAnatomyParts,
+} from './capabilities/capabilityCollectionAnatomy.js';

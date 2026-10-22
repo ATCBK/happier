@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
+import { formatHappierCapabilityCount as formatCapabilityCount } from '@happier-dev/plugin-ui/presentation';
 import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {

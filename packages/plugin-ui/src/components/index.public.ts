@@ -1531,3 +1531,25 @@ export {
   type HappierRoleRunsAsKind,
   type HappierWorkKind,
 } from '../presentation/work/workVocabulary.js';
+export {
+  CapabilityBlockingBanner,
+  CapabilityDetailHeader,
+  CapabilityFacts,
+  CapabilityStatusChip,
+  capabilityCollectionAnatomy,
+  type CapabilityBlockingBannerProps,
+  type CapabilityCollectionAnatomyInput,
+  type CapabilityCost,
+  type CapabilityDetailHeaderProps,
+  type CapabilityFactsInput,
+  type CapabilityFactsProps,
+  type CapabilityFixKind,
+  type CapabilitySource,
+  type CapabilityStatus,
+  type CapabilityStatusChipProps,
+  type CapabilityStatusKind,
+  type CapabilityStatusPlacement,
+  type CapabilityTrust,
+} from './Capabilities.js';
+/** The most blocking capability status that speaks at a placement; null when none does (healthy is quiet). */
+export { pickMostBlockingHappierCapabilityStatus as pickMostBlockingCapabilityStatus } from '../presentation/capabilities/capabilityStatus.js';

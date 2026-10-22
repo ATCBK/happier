@@ -1,17 +1,14 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { isHappierPageRowNarrow } from '@happier-dev/plugin-ui/presentation';
+import { doesHappierCapabilityStatusSpeak, isHappierPageRowNarrow } from '@happier-dev/plugin-ui/presentation';
 
 import {
   CapabilityFacts,
   type CapabilityFactsProps,
 } from '@/components/capabilities/facts/CapabilityFacts';
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
-import {
-  presentCapabilityStatus,
-  type CapabilityStatus,
-} from '@/components/capabilities/status/capabilityStatusPresentation';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { Item } from '@/components/ui/lists/Item';
 import { SelectionCheckGlyph } from '@/components/ui/selection/SelectionCheckGlyph';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
@@ -73,7 +70,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
   }, []);
   const status =
     props.status != null &&
-    presentCapabilityStatus(props.status, 'row').pill !== null
+    doesHappierCapabilityStatusSpeak(props.status, 'row')
       ? props.status
       : null;
   const summary =

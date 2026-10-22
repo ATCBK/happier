@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
+import { formatHappierCapabilityCount as formatCapabilityCount } from '@happier-dev/plugin-ui/presentation';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
