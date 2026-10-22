@@ -30,6 +30,7 @@ type PartialAuthSwitchServiceStatusLabelKey =
     | 'connectedServices.authSwitch.status.partialApplicationServiceNotApplied';
 
 type ConnectedServicesBindingMap = Readonly<Record<string, ConnectedServicesServiceBinding | undefined>>;
+const EMPTY_STATUS_BADGES: readonly AgentInputStatusBadge[] = Object.freeze([]);
 
 /**
  * Reconcile context captured at the moment a partial hot-apply failed. The
@@ -146,7 +147,7 @@ export function buildPartialAuthSwitchApplicationStatusBadges(
     onReconcile?: () => void,
     resolveServiceTitle?: (serviceId: string) => string,
 ): ReadonlyArray<AgentInputStatusBadge> {
-    if (!notice) return [];
+    if (!notice) return EMPTY_STATUS_BADGES;
     // The badge is the actionable reconcile surface (session-scope mirror of the
     // pool divergence Retry/Revert) — pressing it offers Retry/Revert.
     const reconcileProps = onReconcile ? { onPress: onReconcile } : {};

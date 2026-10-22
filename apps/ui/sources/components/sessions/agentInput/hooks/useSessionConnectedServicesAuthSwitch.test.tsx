@@ -423,6 +423,25 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         );
     });
 
+    it('retains absent status badges when only fresh-session configuration changes', async () => {
+        const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
+        const base = createSessionFixture({ id: 'status-producer' });
+        const session = { ...base, metadata: { ...base.metadata!, flavor: 'codex', path: '/first' } };
+        const hook = await renderHook(({ path }: { path: string }) => useSessionConnectedServicesAuthSwitch({
+            applyBinding: setSessionConnectedServiceAuthBindingMock,
+            sessionId: session.id, agentId: 'codex', machineId: 'machine-1',
+            sessionConfiguration: { ...session, metadata: { ...session.metadata!, path } },
+            sessionMetadata: session.metadata, connectedAccounts: CODEX_CONNECTED_ACCOUNTS,
+            settings: { connectedServicesDefaultProfileByServiceId: {} }, switchingDisabledReason: null,
+        }), { initialProps: { path: '/first' } });
+        try {
+            const before = hook.getCurrent().statusBadges;
+            expect(before).toEqual([]);
+            await hook.rerender({ path: '/second' });
+            expect(hook.getCurrent().statusBadges).toBe(before);
+        } finally { await hook.unmount(); }
+    });
+
     it('opens a fresh editable session under the selected account without retrying the unavailable resume', async () => {
         const connection = await restoreServerAccountForTest({ serverUrl: 'http://auth-switch-fresh.example.test', accountId: 'account-a' });
         seedCodexProfile();
