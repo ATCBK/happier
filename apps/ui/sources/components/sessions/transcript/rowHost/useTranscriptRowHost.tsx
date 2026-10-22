@@ -738,7 +738,8 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                         <ChatListMessageRow
                             sessionId={sessionId}
                             messageId={item.messageId}
-                            messageOverride={item.originSessionId ? (messagesById[item.messageId] ?? null) : undefined}
+                            messageOverride={item.originSessionId && (item.originSessionId !== sessionId || item.isReadOnlyContext === true)
+                                ? (messagesById[item.messageId] ?? null) : undefined}
                             originSessionId={item.originSessionId}
                             isReadOnlyContext={item.isReadOnlyContext}
                             getMessageRevisionById={getMessageRevisionById}

@@ -49,12 +49,16 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     });
 });
 
-import { createMachineFixture, createSessionFixture, renderHook } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { getForkedTranscriptSnapshotCached } from '@/sync/domains/sessionFork/forkedTranscriptSnapshot';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { createTranscriptMeasurementReconciler } from '@/components/sessions/transcript/measurement/transcriptMeasurementReconciler';
 import { buildTranscriptRowShellSignature } from '@/components/sessions/transcript/measurement/transcriptRowShellSignature';
 import { createReducer } from '@happier-dev/session-core/reducer';
+import type { NormalizedMessage } from '@happier-dev/session-core/raw';
+import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 
 import { TranscriptRowShell } from '@/components/sessions/transcript/ChatListRows';
 import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
@@ -323,6 +327,92 @@ describe('useTranscriptItemRenderer identity stability', () => {
             { sessionId: 'origin-a', messageId: 'tool-a' },
             { sessionId: 'origin-b', messageId: 'tool-b' },
         ]);
+    });
+
+    it('keeps a linear fork child body current while preserving retained ancestor context', async () => {
+        const home = await serveSessionActionHome();
+        const store = getStorage();
+        const previous = store.getState();
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        const parent = createSessionFixture({ id: 'linear-parent' });
+        const child = createSessionFixture({ id: 'linear-child', metadata: {
+            ...createSessionFixture().metadata!,
+            forkV1: { v: 1, parentSessionId: parent.id, parentCutoffSeqInclusive: 1, createdAtMs: 2, strategy: 'replay' },
+        } });
+        const chunk = (text: string, tick: number): NormalizedMessage => ({
+            id: 'linear-stream', seq: 2, localId: 'linear-stream', createdAt: 2,
+            role: 'agent', isSidechain: false,
+            content: [{ type: 'text', text, uuid: 'linear-stream', parentUUID: null }],
+            meta: { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant', segmentLocalId: 'linear-stream',
+                segmentState: 'streaming', startedAtMs: 2, updatedAtMs: tick } },
+        });
+        try {
+            store.getState().applySessions([parent, child]);
+            store.getState().applyMessages(parent.id, [{ id: 'ancestor', seq: 1, localId: null, createdAt: 1,
+                role: 'agent', isSidechain: false,
+                content: [{ type: 'text', text: 'Retained ancestor reply', uuid: 'ancestor', parentUUID: null }],
+            }]);
+            store.getState().applyMessages(child.id, [chunk('Initial child reply', 2)]);
+            store.getState().applyMessagesLoaded(parent.id);
+            store.getState().applyMessagesLoaded(child.id);
+            store.setState(state => ({ sessionMessagesHistoryStartLoaded: {
+                ...state.sessionMessagesHistoryStartLoaded, [parent.id]: true, [child.id]: true,
+            } }));
+            const fork = getForkedTranscriptSnapshotCached(store.getState(), child.id, { textUpdates: false });
+            if (!fork) throw new Error('Expected the real fork transcript');
+            const items = fork.combinedMessageIdsOldestFirst.map((messageId) => ({
+                kind: 'message' as const, id: `msg:${messageId}`, messageId,
+                originSessionId: fork.messageOriginById[messageId]!.sessionId,
+                isReadOnlyContext: fork.messageOriginById[messageId]!.isReadOnlyContext,
+                createdAt: fork.combinedMessagesById[messageId]!.createdAt,
+                seq: fork.combinedMessagesById[messageId]!.seq ?? null,
+            }));
+            const childId = items.find(item => item.originSessionId === child.id)!.messageId;
+            const props = createRendererProps({
+                sessionId: child.id, messagesById: fork.combinedMessagesById,
+                forkedTranscriptEnabled: true,
+                messageDisplayCommon: { ...settingsDefaults, workspacePath: null, debugInformationEnabled: false,
+                    transcriptStreamingSmoothingEnabled: false, transcriptStreamingPartialOutputEnabled: true,
+                    transcriptStreamingMarkdownRenderingEnabled: true },
+            });
+            const deps = { ...createRendererDeps(props), listData: items, itemsRef: createRef(items),
+                getMessageById: (id: string) => fork.combinedMessagesById[id] ?? null,
+                getMessageRevisionById: (id: string) => {
+                    const origin = fork.messageOriginById[id]?.sessionId;
+                    return origin ? store.getState().sessionMessages[origin]?.messageRevisionsById?.[id] ?? null : null;
+                },
+            };
+            function Rows() {
+                const renderer = useTranscriptItemRenderer(deps);
+                return <>{items.map((item, index) => <React.Fragment key={item.id}>
+                    {renderer.renderItem({ item, index })}
+                </React.Fragment>)}</>;
+            }
+            screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId={child.id}><Rows /></AppSessionTranscriptSourceProvider>);
+            const rendered = screen;
+            const bodies = () => rendered.getTextContent();
+            expect(bodies()).toContain('Initial child reply');
+            expect(bodies()).toContain('Retained ancestor reply');
+            await act(async () => {
+                store.getState().applyMessages(child.id, [chunk('Updated child reply', 3)]);
+                await flushHookEffects({ cycles: 2, turns: 2 });
+            });
+            expect(fork.combinedMessagesById[childId]).toMatchObject({ text: 'Initial child reply' });
+            expect(bodies()).toContain('Updated child reply');
+            await act(async () => {
+                store.setState(state => {
+                    const sessionMessages = { ...state.sessionMessages };
+                    delete sessionMessages[parent.id];
+                    return { sessionMessages };
+                });
+                await flushHookEffects({ cycles: 2, turns: 2 });
+            });
+            expect(bodies()).toContain('Retained ancestor reply');
+        } finally {
+            await screen?.unmount();
+            store.setState(previous);
+            await home.dispose();
+        }
     });
 
     it('keeps pushed progress authoritative while a successful action waits for metadata publication', async () => {
