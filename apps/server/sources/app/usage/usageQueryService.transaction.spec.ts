@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UsageAnalyticsQueryRequestSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from '@/app/api/testkit/dbMocks';
 import { restoreEnv, snapshotEnv } from '@/testkit/env';
 import type { ScopedUsageEventDbRow } from './query/scopedUsageEventRow';
@@ -63,12 +63,18 @@ describe('Usage snapshot transaction lifetime', () => {
         expect(projectionBeforeCommit).not.toContain(true);
     });
 
-    it('refuses the public population when the real supporting capability is unavailable', async () => {
+    it.each([true, false])('admits the public population only when its real capability is enabled (%s)', async enabled => {
+        process.env.HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED = enabled ? '1' : '0';
         await withAuthenticatedTestApp(app => registerAccountUsageRoutes(app), async app => {
             const response = await app.inject({ method: 'POST', url: '/v2/usage/query',
                 headers: { 'x-test-user-id': 'account' }, payload: { population: 'public_eligible_personal' } });
-            expect(response.statusCode).toBe(404);
-            expect(response.json()).toEqual({ error: 'not_found' });
+            expect(response.statusCode).toBe(enabled ? 200 : 404);
+            if (enabled) {
+                expect(UsageAnalyticsQueryResponseSchema.safeParse(response.json()).success).toBe(true);
+                expect(committed).toBe(true);
+            } else {
+                expect(response.json()).toEqual({ error: 'not_found' });
+            }
         });
     });
 

@@ -13,6 +13,7 @@ import { BUILTIN_WIDGET_DESCRIPTORS_V1, widgetCandidateDefinitionV1 } from '@hap
 import { WidgetConnectedAccountPurposeBindingV1Schema } from '@happier-dev/protocol/widgets/widgetConnectedAccountPurposeBindingV1';
 import { WidgetSizeDeclarationV1Schema } from '@happier-dev/protocol/widgets/widgetPresentationV1';
 import type { WidgetCatalogSourceEntryV1 } from '@happier-dev/protocol/widgets';
+import { WidgetPublicSnapshotPresentationV1Schema } from '@happier-dev/protocol/widgets/widgetPublicSnapshotV1';
 
 const display = z.looseObject({ title: z.optional(z.string().check(z.trim(), z.minLength(1))), developerFallback: z.optional(z.string().check(z.trim(), z.minLength(1))) });
 
@@ -33,6 +34,7 @@ export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2)
             ? entry.connectedAccountPurposeBindings.map(value => WidgetConnectedAccountPurposeBindingV1Schema.safeParse(value)) : [];
         const resources = defineProtocolArray(PluginContributionIdentityV1Schema).safeParse(entry.resources ?? []);
         const sizeDeclaration = WidgetSizeDeclarationV1Schema.safeParse(entry.sizeDeclaration);
+        const publicPresentation = WidgetPublicSnapshotPresentationV1Schema.safeParse(entry.publicPresentation);
         if (!sizeDeclaration.success) return [];
         if (!title.success || entry.inputs !== undefined && !inputs.success || entry.inputSchema !== undefined && !inputSchema.success) return [];
         if (entry.connectedAccountPurposeBindings !== undefined && !Array.isArray(entry.connectedAccountPurposeBindings)
@@ -42,6 +44,7 @@ export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2)
             && Reflect.get(technical, 'state') === 'available' && Reflect.get(technical, 'when') === undefined && Reflect.get(technical, 'disabledWhen') === undefined;
         return [{ surface: entry.binding.surface, key: buildQualifiedPluginContributionKey(entry.binding.surface),
             sizeDeclaration: sizeDeclaration.data,
+            ...(publicPresentation.success ? { publicPresentation: publicPresentation.data } : {}),
             title: title.data.title ?? title.data.developerFallback ?? entry.binding.surface.localId,
             fields: inputs.success ? inputs.data.fields : [],
             ...(inputs.success ? { inputs: inputs.data } : {}),
@@ -63,5 +66,6 @@ export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2)
 export function cliWidgetCatalogEntryV1(candidate: ReturnType<typeof readCliWidgetCatalogProjectionV1>[number], instanceCount: number): WidgetCatalogSourceEntryV1 {
     return { definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
         sizeDeclaration: candidate.sizeDeclaration, fields: [...candidate.fields],
+        ...('publicPresentation' in candidate && candidate.publicPresentation ? { publicPresentation: candidate.publicPresentation } : {}),
         ...(candidate.inputSchema ? { inputSchema: candidate.inputSchema } : {}), availability: candidate.availability, instanceCount };
 }

@@ -23,6 +23,39 @@ function published(tokens = true) {
 }
 
 describe('cold public-profile document', () => {
+    it.each([
+        ['usage_daily', {}], ['usage_period_summary', {}], ['usage_footprint', {}], ['usage_source_coverage', {}],
+        ['usage_rhythm', { style: 'heatmap' }], ['usage_rhythm', { style: 'weekdayHour' }],
+        ['usage_breakdowns', { style: 'breakdowns' }], ['usage_outcomes', { style: 'outcomes' }],
+        ['usage_recap', { style: 'recap' }],
+    ])('cold-renders admitted original %s %j through a shared body', (widgetId, inputs) => {
+        const result = published();
+        const view = PublicProfileViewV1Schema.parse({ ...result.view,
+            snapshot: { ...result.view.snapshot,
+                period: { startMs: Date.UTC(2026, 0, 1), endMs: Date.UTC(2026, 0, 4), timeZoneOffsetMinutes: 0 },
+                facts: { tokens: 321, activeDays: 2, mergedPrs: 0, currentStreakDays: 1, bestStreakDays: 2,
+                    agentTimeMs: 60000, peakParallel: 2,
+                    calendar: [{ date: '2026-01-01', level: 4 }, { date: '2026-01-02', level: null }, { date: '2026-01-03', level: 0 }],
+                    punch: [{ weekday: 1, hour: 10, level: 3 }],
+                    agentMix: [{ agentId: 'codex', share: 1, coverage: { status: 'partial', method: 'runtime' } }],
+                    sourceSplit: [{ execution: 'happier', share: 1 }],
+                    footprint: { status: 'insufficient_basis', reason: 'no_applicable_versioned_method' },
+                    highlights: [{ kind: 'active_days', count: 2 }],
+                } },
+            layout: { v: 1, items: [{ kind: 'widget', id: 'original', title: 'Shared original', size: 'wide', frameStyle: 'plain',
+                presentation: { kind: 'usage', widgetId, inputs } }] },
+        });
+        const html = renderPublicProfileHtml({ kind: 'published', view });
+        expect(html).toContain('Shared original');
+        expect(html).toContain('data-testid="public-profile-usage-original');
+        expect(html).not.toContain('data-testid="public-profile-usage-original-unavailable"');
+        expect(html).not.toContain('<script');
+        if (widgetId === 'usage_daily' || widgetId === 'usage_rhythm') {
+            expect(html).toContain('Activity level');
+        }
+        if (widgetId === 'usage_footprint') expect(html).toContain('No estimate');
+        if (widgetId === 'usage_outcomes') expect(html).toContain('0');
+    });
     it('contains the actual placed shared body and CSS before client layout or hydration, using prefixed server-owned font and metadata URLs', () => {
         const html = renderPublicProfileHtml(published());
         expect(html).toContain('Shared work');

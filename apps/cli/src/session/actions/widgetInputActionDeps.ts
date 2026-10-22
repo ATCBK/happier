@@ -18,6 +18,7 @@ import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets/widgetActionScopeV1';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { isPublicProfileWidgetSurfaceV1 } from '@happier-dev/protocol/widgets/widgetPublicProfileAdmissionV1';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Descriptor = WidgetInputDescriptorV1 & Readonly<{ resources?: readonly PluginContributionIdentityV1[]; resourceDeclarations?: readonly PluginProjectedResourceV2[];
@@ -122,6 +123,14 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const authored = reference.kind === 'artifact' ? await input.getDeps().widgetDefinitionArtifacts?.get(reference.artifactId, request.signal)
                 : reference.kind === 'inline' ? reference.definition : null;
             if ((reference.kind === 'artifact' || reference.kind === 'inline') && !authored) return null;
+            if (isPublicProfileWidgetSurfaceV1(request.ref.surface)) {
+                const definition = authored?.body.kind === 'installed' ? authored.body : reference;
+                const candidate = definition.kind === 'installed' ? (await input.readCandidates(request.signal, undefined, definition.surface.pluginId))
+                    .find(candidate => candidate.availability === 'available' && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition)) : null;
+                const descriptor = authored ? { ...candidate, ...authored, authoredDefinition: authored } : candidate;
+                if (descriptor) descriptors.set(request, descriptor);
+                return descriptor;
+            }
             if (authored?.body.kind === 'builtin') {
                 const native = readBuiltinWidgetDescriptorV1(authored.body);
                 if (!native) return null;

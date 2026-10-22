@@ -4022,6 +4022,7 @@ export function createCliActionDeps(params: Readonly<{
         const reference = { kind: 'artifact' as const, artifactId: summary.artifactId };
         entries.push({ definition: reference, title: summary.name, fields: [...summary.inputs.fields], inputSchema: summary.inputSchema,
           sizeDeclaration: summary.sizeDeclaration,
+          ...(summary.publicPresentation ? { publicPresentation: summary.publicPresentation } : {}),
           availability: summary.bodyKind === 'declarative' || summary.bodyKind === 'html' || summary.bodyKind === 'builtin' || summary.sourceDefinition && candidates.some(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), summary.sourceDefinition!)) ? 'available' : 'unavailable',
           instanceCount: countWidgetInstancesV1(instances, reference) });

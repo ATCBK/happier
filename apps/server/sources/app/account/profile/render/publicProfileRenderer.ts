@@ -2,9 +2,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StyleSheet } from 'react-native-web';
 import { HappierUiEnvironmentProvider, HappierUiTypographyProvider } from '@happier-dev/plugin-ui/environment';
-import { HappierPublicProfile } from '@happier-dev/plugin-ui/presentation';
+import { HappierPublicProfile, usagePlanetMeridianWeight } from '@happier-dev/plugin-ui/presentation';
 import type { HappierPublicProfileHeroGeometry, UsagePlanetSpec } from '@happier-dev/plugin-ui/presentation';
-import { createPlanetScene } from '@happier-dev/brand/planet';
+import { createPlanetDots, createPlanetScene, planetLightForProgress } from '@happier-dev/brand/planet';
 import { readBundledAgentPresentation, getNeutralAgentIdentityColor } from '@happier-dev/agents/presentation';
 import type { PublicProfileReadResultV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 import { createPublicProfileTheme, PUBLIC_PROFILE_TYPOGRAPHY, PUBLIC_PROFILE_PALETTES } from './publicProfileEnvironment';
@@ -58,10 +58,20 @@ export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup
 
 /** Physical SVG binding of the same Brand scene and body-derived inputs as the app's canvas slot. */
 function renderUsagePlanet(spec: UsagePlanetSpec, scheme: 'light' | 'dark') {
-    const scene = createPlanetScene({ theme: scheme, R: spec.radius, cx: spec.size / 2, cy: spec.size / 2,
-        view: { w: spec.size, h: spec.size }, rotate: spec.rotate, mirror: false, fullness: 0,
-        halo: spec.halo, tail: spec.tail, rise: spec.rise, style: spec.style, field: { around: 0, over: 0 } });
+    const light = spec.light === undefined ? undefined : planetLightForProgress(spec.light);
+    // A small phase mark uses the Brand mark lattice; a painted planet weights its own dots by the shared meridian rule.
+    const dots = spec.mark
+        ? createPlanetDots({ size: spec.size, theme: scheme, halo: spec.halo, ...(light ? { light } : {}) })
+            .map(dot => ({ x: dot.x, y: dot.y, r: dot.radius, rgb: dot.rgb, opacity: dot.opacity }))
+        : (() => {
+            const scene = createPlanetScene({ theme: scheme, R: spec.radius, cx: spec.size / 2, cy: spec.size / 2,
+                view: { w: spec.size, h: spec.size }, rotate: spec.rotate, mirror: false, fullness: spec.meridians ? 1 : 0,
+                halo: spec.meridians ? 0 : spec.halo, tail: spec.meridians ? 0 : spec.tail, rise: spec.rise, style: spec.style,
+                field: { around: 0, over: 0 }, ...(light ? { light } : {}) });
+            return spec.meridians ? scene.body.map(dot => ({ ...dot, opacity: dot.opacity * usagePlanetMeridianWeight(spec, dot.x) }))
+                : [...scene.body, ...scene.haze];
+        })();
     return createElement('svg', { width: spec.size, height: spec.size, viewBox: `0 0 ${spec.size} ${spec.size}`, 'aria-hidden': true },
-        [...scene.body, ...scene.haze].map((dot, index) => createElement('circle', { key: index,
+        dots.map((dot, index) => createElement('circle', { key: index,
             cx: dot.x, cy: dot.y, r: dot.r, fill: spec.ink ?? `rgb(${dot.rgb.map(value => value | 0).join(',')})`, opacity: dot.opacity })));
 }
