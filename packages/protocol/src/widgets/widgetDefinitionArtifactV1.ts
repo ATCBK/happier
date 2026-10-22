@@ -18,7 +18,7 @@ export type WidgetDefinitionArtifactTransportV1 = Pick<WorkBoardArtifactTranspor
     }>>;
 }>;
 export const WidgetDefinitionSummaryV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(WidgetDefinitionDraftV1Schema, { name: true, description: true, inputs: true,
-    inputSchema: true, sessionInputPath: true, connectedAccountPurposeBindings: true, sizeDeclaration: true, networkOverride: true }), {
+    inputSchema: true, sessionInputPath: true, connectedAccountPurposeBindings: true, sizeDeclaration: true, networkOverride: true, publicPresentation: true }), {
     artifactId: z.string().check(z.trim(), z.minLength(1)), bodyKind: z.enum(['installed', 'declarative', 'html', 'builtin']),
     /** Provenance people read in the Add surface ("made by your agent on Oct 3"), from the definition itself. */
     author: z.optional(WidgetDefinitionAuthorV1Schema), createdAt: z.optional(z.number().check(z.int(), z.nonnegative())),
@@ -44,6 +44,7 @@ export function buildWidgetDefinitionArtifactHeaderV1(definition: WidgetDefiniti
     return { kind: WIDGET_DEFINITION_ARTIFACT_KIND_V1, v: 1, title: definition.name,
         summary: { artifactId: definition.id, name: definition.name, inputs: definition.inputs, inputSchema: definition.inputSchema,
             sizeDeclaration: definition.sizeDeclaration,
+            ...(definition.publicPresentation ? { publicPresentation: definition.publicPresentation } : {}),
             bodyKind: definition.body.kind, resources: readWidgetDefinitionResourcesV1(definition),
             ...(definition.body.kind === 'installed' ? { sourceDefinition: definition.body } : {}),
             ...(definition.networkOverride ? { networkOverride: definition.networkOverride } : {}),

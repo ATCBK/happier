@@ -1,6 +1,8 @@
 import type { WidgetSizeV1 } from './widgetPresentationV1.js';
 import type { PublicProfileLayoutV1 } from './widgetPublicSnapshotV1.js';
 import type { BuiltinUsagePublicPresentationV1 } from './builtinWidgetDescriptorV1.js';
+import type { WidgetAreaPresetV1 } from './widgetSurfaceArtifactV1.js';
+import type { WidgetInputBindingsV1 } from './widgetInstanceV1.js';
 
 /**
  * Starting compositions for the public page (PP-3): plain data mixed with at most three planet-art
@@ -22,6 +24,22 @@ const PRESETS: Readonly<Record<PublicProfileLayoutPresetIdV1, readonly Placement
   dataRich: [['days', 'full', sky], ['crew', 'medium', crew], ['shipped', 'medium', shipped], ['orbit', 'wide', orbit]],
   story: [['planet', 'medium', planet], ['shipped', 'medium', shipped], ['days', 'full', sky], ['orbit', 'medium', orbit], ['crew', 'medium', crew]],
 };
+
+/** The existing Account-area owner edits these same compositions; there is no profile draft store. */
+export function createPublicProfileWidgetAreaPresetsV1(host?: Readonly<{
+  names?: Readonly<Record<PublicProfileLayoutPresetIdV1, string>>;
+  title?: (presentation: BuiltinUsagePublicPresentationV1) => string | undefined;
+}>): readonly WidgetAreaPresetV1[] {
+  const names = host?.names ?? { minimal: 'Minimal', dataRich: 'Data-rich', story: 'Story' };
+  return PUBLIC_PROFILE_LAYOUT_PRESET_IDS_V1.map(id => ({ id, name: names[id], items: PRESETS[id].map(([itemId, size, presentation]) => {
+    const title = host?.title?.(presentation);
+    const bindings: WidgetInputBindingsV1 = Object.fromEntries(Object.entries(presentation.inputs)
+      .map(([key, value]) => [key, { kind: 'value' as const, value }]));
+    return { kind: 'widget' as const, size, frameStyle: 'plain' as const,
+      instance: { v: 1 as const, id: itemId, definition: { kind: 'builtin' as const, id: presentation.widgetId }, bindings,
+        ...(title ? { displayName: title } : {}) } };
+  }) }));
+}
 
 /** Titles are reviewed static text; the host supplies them in the person's language. */
 export function createPublicProfilePresetLayoutV1(id: PublicProfileLayoutPresetIdV1,

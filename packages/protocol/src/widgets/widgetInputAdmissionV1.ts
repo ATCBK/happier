@@ -2,6 +2,8 @@ import type { InputHints } from '../inputs/inputFields.js';
 import type { PluginJsonSchemaV2 } from '../plugins/contributions/publicTypes.js';
 import type { WidgetConnectedAccountPurposeBindingV1 } from './widgetConnectedAccountPurposeBindingV1.js';
 import type { WidgetSizeDeclarationV1 } from './widgetPresentationV1.js';
+import type { WidgetPublicSnapshotPresentationV1 } from './widgetPublicSnapshotV1.js';
+import type { WidgetDefinitionV1 } from './widgetDefinitionV1.js';
 export { WidgetConnectedAccountPurposeBindingV1Schema, type WidgetConnectedAccountPurposeBindingV1 } from './widgetConnectedAccountPurposeBindingV1.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, type PluginJsonSchemaValidator } from '../plugins/actions/jsonSchemaValidation.js';
 import { resolveWidgetBindingsV1, type WidgetInputBindingsV1, type WidgetBindingResolutionInputV1, type WidgetBindingResolutionV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
@@ -10,6 +12,8 @@ import { WorkspaceRefV1Schema, type WorkspaceRefV1 } from '../workspaces/workspa
 import { resolveWorkspaceRefV1, workspaceAddressFromRefV1, type WorkspaceRefResolutionContextV1 } from '../workspaces/workspaceRefResolutionV1.js';
 
 export type WidgetInputDescriptorV1 = Readonly<{
+    publicPresentation?: WidgetPublicSnapshotPresentationV1;
+    authoredDefinition?: WidgetDefinitionV1;
     sizeDeclaration?: WidgetSizeDeclarationV1;
     inputs?: InputHints;
     inputSchema?: PluginJsonSchemaV2;

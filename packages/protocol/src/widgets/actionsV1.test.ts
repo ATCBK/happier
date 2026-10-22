@@ -4,6 +4,39 @@ import { createHomeHubArtifactPortV1 } from '../home/homeHubArtifactV1.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { flattenWidgetLayoutWidgetsV1 } from './widgetLayoutItemV1.js';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from './widgetSurfaceArtifactV1.js';
+import { createWidgetActionInputResolverV1 } from './widgetActionInputResolverV1.js';
+import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
+import { WidgetSurfaceReadV1Schema } from './actionsV1.js';
+
+it('persists selected planet Styles through the existing public-profile input Action and rejects private scope', async () => {
+  const boundary = createWorkBoardArtifactBoundary();
+  const scope = { serverId: 'home', accountId: 'owner' };
+  const surface = { ...scope, owner: { kind: 'corePage', pageId: 'public-profile', area: 'main', layoutId: 'minimal' } } as const;
+  const owner = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(boundary.forAccount('owner'), {
+    surface: target, presets: [{ id: 'minimal', name: 'Minimal', items: [] }], isCurrent: () => true,
+  }));
+  const executor = createActionExecutor({ widgetAccountScope: () => scope, widgetSurfaceActions: { corePage: owner },
+    widgetInputs: createWidgetActionInputResolverV1({
+      readDescriptor: async request => readBuiltinWidgetDescriptorV1(request.instance.definition),
+      readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+      // These declarations have no external target/options: the real resolver admits the closed public schema.
+      validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+    }),
+  });
+  for (const [id, style] of [['usage_rhythm', 'streakThread'], ['usage_orbit', 'moons'], ['usage_run_length', 'galaxy']] as const) {
+    expect(await executor.execute('widgets.item.add', { surface, instance: { v: 1, id,
+      definition: { kind: 'builtin', id }, bindings: {} } }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
+    const ref = { surface, instanceId: id };
+    expect(await executor.execute('widgets.item.inputs.set', { ref, paths: ['style'],
+      bindings: { style: { kind: 'value', value: style } } }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
+    const stored = WidgetSurfaceReadV1Schema.parse(await owner.read(surface, {}));
+    expect(flattenWidgetLayoutWidgetsV1(stored.items).find(item => item.instance.id === id)?.instance.bindings)
+      .toEqual({ style: { kind: 'value', value: style } });
+    expect(await executor.execute('widgets.item.inputs.set', { ref, paths: ['metric'],
+      bindings: { metric: { kind: 'value', value: 'cost' } } }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: false });
+    expect(await owner.read(surface, {})).toEqual(stored);
+  }
+});
 
 it('keeps surface-read failure and cancellation separate from a real Account scope change, then admits retry', async () => {
   const boundary = createWorkBoardArtifactBoundary();

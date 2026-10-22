@@ -700,6 +700,9 @@ function projectGeneratedUiViews(
                 && 'sizeDeclaration' in view.definition
                 ? { sizeDeclaration: view.definition.sizeDeclaration } : {}),
             ...(selectedBinding.kind === 'inline' && selectedBinding.role === 'widget'
+                && 'publicPresentation' in view.definition && view.definition.publicPresentation !== undefined
+                ? { publicPresentation: view.definition.publicPresentation } : {}),
+            ...(selectedBinding.kind === 'inline' && selectedBinding.role === 'widget'
                 && 'resources' in view.definition && view.definition.resources !== undefined
                 ? { resources: view.definition.resources } : {}),
             ...(selectedBinding.kind === 'inline'

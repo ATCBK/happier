@@ -4,6 +4,7 @@ import { z } from 'zod/mini';
 import { InputHintsSchema, InputPathSchema } from '../inputs/inputFields.js';
 import { WidgetConnectedAccountPurposeBindingV1Schema } from '../widgets/widgetConnectedAccountPurposeBindingV1.js';
 import { WidgetSizeDeclarationV1Schema } from '../widgets/widgetPresentationV1.js';
+import { WidgetPublicSnapshotPresentationV1Schema } from '../widgets/widgetPublicSnapshotV1.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { PluginHostedHtmlSourceV1Schema } from '../plugins/contributions/ui/hostedHtmlSourceV1.js';
 import { PluginUiHostedHtmlRequestedCapabilitiesV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
@@ -2053,6 +2054,7 @@ const PluginProjectedUiGenericEntryShapeV2Schema = lazyZodSchema(() => (<T exten
   'badge',
   'home',
   'sizeDeclaration',
+  'publicPresentation',
   'inputs',
   'inputSchema',
   'sessionInputPath',
@@ -2086,6 +2088,7 @@ const PluginProjectedUiGenericEntryShapeV2Schema = lazyZodSchema(() => (<T exten
   connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
   resources: z.optional(z.array(PluginContributionIdentityV1Schema)),
   sizeDeclaration: zMini.optional(WidgetSizeDeclarationV1Schema),
+  publicPresentation: z.optional(WidgetPublicSnapshotPresentationV1Schema),
   container: zMini.optional(PluginUiContainerV1Schema),
   identity: zMini.optional(PluginContributionIdentityV1Schema),
   viewer: zMini.optional(OpenableContentViewerSelectorV1Schema),
@@ -2110,6 +2113,9 @@ function refineProjectedUiEntry(
     context.addIssue({ code: 'custom', path: ['widgetAreas'], message: 'Widget areas require an app-page destination placement.' });
   }
   const isWidget = value.contributionKind === 'surfacePlacement' && value.binding?.kind === 'inline' && value.binding.role === 'widget';
+  if (value.publicPresentation !== undefined && !isWidget) {
+    context.addIssue({ code: 'custom', path: ['publicPresentation'], message: 'Public snapshot presentations require a widget View.' });
+  }
   if (isWidget !== (value.sizeDeclaration !== undefined)) {
     context.addIssue({ code: "custom", path: ['sizeDeclaration'], message: 'Only widget Views require a useful size declaration.' });
   }

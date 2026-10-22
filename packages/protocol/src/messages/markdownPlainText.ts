@@ -1,5 +1,10 @@
 /** Canonical Markdown-to-plain preview, shared by transcript previews and Run summaries. */
-export function stripMarkdown(text: string): string {
+export function stripMarkdown(text: string, options?: Readonly<{
+  /** Indexed conversation snippets prefix original message bodies with these roles. */
+  omitRolePrefixes?: boolean;
+  /** Search can match the number itself; previews must retain that searchable text. */
+  preserveOrderedListNumbers?: boolean;
+}>): string {
   const literals: string[] = [];
   const protectLiteral = (literal: string) => {
     literals.push(literal);
@@ -15,7 +20,10 @@ export function stripMarkdown(text: string): string {
       if (code === undefined) return protectLiteral('\u0000');
       return `${prefix === '\u0000' ? protectLiteral(prefix) : prefix}${protectLiteral(code)}`;
     });
-  return protectedText
+  const previewText = options?.omitRolePrefixes
+    ? protectedText.replace(/^(?:User|Assistant):[ \t]+/gm, '')
+    : protectedText;
+  return previewText
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*\|?[\s:|-]+\|[\s:|-]*$/gm, '')
     .replace(/\|/g, ' ')
@@ -27,7 +35,7 @@ export function stripMarkdown(text: string): string {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/^---+$/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, (marker) => options?.preserveOrderedListNumbers ? marker : '')
     .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => literals[Number(index)]!)
     .replace(/\s+/g, ' ')
     .trim();

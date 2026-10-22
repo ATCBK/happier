@@ -1,7 +1,7 @@
 import { AgentIdV1Schema } from '../agents/agentIdV1.js';
 import { getUsageQueryKey } from '../inputs/usageQuery.js';
 import { resolveUsageCalendarInstant, resolveUsageBucketBounds } from '../usage/usageCalendar.js';
-import { resolveUsageDayStreaks } from '../usage/usageActivitySummary.js';
+import { resolveUsageDayStreaks, projectUsageOrdinalLevels as levels } from '../usage/usageActivitySummary.js';
 import { summarizeUsageExecutionSources } from '../usage/usageSourceSummary.js';
 import { projectUsageAgentCalendar, type UsageAgentCalendar } from '../usage/usageAgentCalendar.js';
 import { projectUsageFootprint } from '../usage/usageFootprint.js';
@@ -17,19 +17,6 @@ export type PublicProfileSnapshotBuildResult = Readonly<{ kind: 'ready'; snapsho
   | Readonly<{ kind: 'unavailable'; reason: 'usage_unavailable' | 'query_mismatch' | 'period_unavailable' | 'source_time_unavailable' | 'invalid_snapshot' }>;
 type Accounting = NonNullable<UsageQueryResultSlice['accounting']>;
 type Period = PublicProfileSnapshotV1['period'];
-
-/** Equal positive observations share the approved empirical rank, not disclosed thresholds. */
-function levels(values: readonly (number | null)[]): Array<0 | 1 | 2 | 3 | 4 | null> {
-  const positive = values.filter((value): value is number => value !== null && value > 0).sort((a, b) => a - b);
-  const ranks = new Map<number, 1 | 2 | 3 | 4>();
-  for (let index = 0; index < positive.length; index++) {
-    const value = positive[index]!;
-    if (positive[index + 1] === value) continue;
-    const rank = Math.ceil(4 * (index + 1) / positive.length);
-    ranks.set(value, rank <= 1 ? 1 : rank <= 2 ? 2 : rank <= 3 ? 3 : 4);
-  }
-  return values.map(value => value === null ? null : value === 0 ? 0 : ranks.get(value) ?? null);
-}
 
 function method(rows: readonly UsageAnalyticsContribution[], accounting: Accounting): PublicCoverage['method'] {
   const methods = new Set(rows.map(row => {

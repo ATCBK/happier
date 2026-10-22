@@ -48,6 +48,35 @@ function createUnconnectedViewerWidgetResolver() {
 }
 
 describe('current Widget field options admission', () => {
+    it('admits only snapshot presentation inputs on a public-profile area without private Usage reads', async () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_rhythm' })!;
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => descriptor,
+            readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+            validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: {
+            kind: 'corePage' as const, pageId: 'public-profile', area: 'main', layoutId: 'minimal' } }, instanceId: 'rhythm' },
+            instance: { v: 1 as const, id: 'rhythm', definition: { kind: 'builtin' as const, id: 'usage_rhythm' },
+                bindings: { style: { kind: 'value' as const, value: 'sky' }, colourBy: { kind: 'value' as const, value: 'intensity' } } }, context: {} };
+        expect(await resolver.resolve(request)).toEqual({ status: 'ready', input: { style: 'sky', colourBy: 'intensity' } });
+        expect(await resolver.resolve({ ...request, instance: { ...request.instance, bindings: {
+            ...request.instance.bindings, metric: { kind: 'value', value: 'cost' },
+        } } })).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_public_profile_input_forbidden' }] });
+        expect(await resolver.resolve({ ...request, groupBindings: { agents: { kind: 'value', value: ['private-agent'] } } }))
+            .toMatchObject({ status: 'denied' });
+    });
+    it('refuses a private-only widget on the public area even when all private inputs resolve', async () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_cost_facts' })!;
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => descriptor, readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+            validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+        });
+        const result = await resolver.resolve({ ref: { surface: { serverId: 'home', accountId: 'viewer', owner: {
+            kind: 'corePage', pageId: 'public-profile', area: 'main' } }, instanceId: 'private' },
+            instance: { v: 1, id: 'private', definition: { kind: 'builtin', id: 'usage_cost_facts' }, bindings: {} }, context: {} });
+        expect(result).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_public_profile_presentation_unavailable' }] });
+    });
     it('admits a scoped own-input patch without a mount, retaining runtime and changed-scope refusals', async () => {
         const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
         const query = normalizeUsageQuery({ metric: 'cost' });

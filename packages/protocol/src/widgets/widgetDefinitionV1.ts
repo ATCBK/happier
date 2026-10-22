@@ -11,6 +11,7 @@ import { WidgetConnectedAccountPurposeBindingV1Schema } from './widgetConnectedA
 import { BuiltinWidgetIdV1Schema, type BuiltinWidgetIdV1 } from './builtinWidgetDescriptorV1.js';
 import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import { WidgetSizeDeclarationV1Schema } from './widgetPresentationV1.js';
+import { WidgetPublicSnapshotPresentationV1Schema } from './widgetPublicSnapshotV1.js';
 import { PluginHostedHtmlSourceV1Schema, type PluginHostedHtmlSourceV1 } from '../plugins/contributions/ui/hostedHtmlSourceV1.js';
 import { UiSurfaceCapabilityRequestV1Schema, UiSurfaceNetworkRequestV1Schema,
     normalizeUiSurfaceCapabilityRequestV1, type UiSurfaceNetworkRequestV1, type UiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
@@ -41,10 +42,10 @@ export const WidgetDefinitionProvenanceV1Schema = lazyZodSchema(() => z.strictOb
 }));
 export type WidgetDefinitionProvenanceV1 = z.infer<typeof WidgetDefinitionProvenanceV1Schema>;
 
-const document = z.pipe(z.unknown().check(z.superRefine((value, context) => {
+const document = lazyZodSchema(() => z.pipe(z.unknown().check(z.superRefine((value, context) => {
     const result = preflightPluginDeclarativeDocumentV1(value);
     if (!result.ok) context.addIssue({ code: 'custom', message: result.message });
-})), PluginDeclarativeDocumentV1Schema);
+})), PluginDeclarativeDocumentV1Schema));
 export const WidgetInstalledDefinitionBodyV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('installed'), surface: asProtocolZod(PluginContributionIdentityV1Schema) }));
 export type WidgetDefinitionBodyV1 = Readonly<
     | { kind: 'declarative'; document: PluginDeclarativeDocumentV1 }
@@ -63,6 +64,7 @@ export const WidgetDefinitionBodyV1Schema: z.ZodMiniType<WidgetDefinitionBodyV1,
 const shape = {
     sizeDeclaration: z.lazy(() => WidgetSizeDeclarationV1Schema),
     name: id, description: z.optional(z.string()), body: WidgetDefinitionBodyV1Schema,
+    publicPresentation: z.optional(z.lazy(() => WidgetPublicSnapshotPresentationV1Schema)),
     inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema,
     sessionInputPath: z.optional(InputPathSchema),
     connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
@@ -75,6 +77,7 @@ export const WidgetDefinitionPatchV1Schema = lazyZodSchema(() => (<T extends z.Z
     description: z.optional(z.nullable(z.string())), sessionInputPath: z.optional(z.nullable(InputPathSchema)),
     connectedAccountPurposeBindings: z.optional(z.nullable(z.array(WidgetConnectedAccountPurposeBindingV1Schema))),
     networkOverride: z.optional(z.nullable(UiSurfaceNetworkRequestV1Schema)),
+    publicPresentation: z.optional(z.nullable(WidgetPublicSnapshotPresentationV1Schema)),
 }))));
 export type WidgetDefinitionPatchV1 = z.infer<typeof WidgetDefinitionPatchV1Schema>;
 export const WidgetDefinitionV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1), id, ...shape,
@@ -132,7 +135,7 @@ export function readWidgetDefinitionNetworkOverrideV1(definition: Pick<WidgetDef
 export function applyWidgetDefinitionPatchV1(current: WidgetDefinitionV1, raw: WidgetDefinitionPatchV1): WidgetDefinitionV1 {
     const patch = WidgetDefinitionPatchV1Schema.parse(raw);
     const next = { ...current, ...patch };
-    for (const key of ['description', 'sessionInputPath', 'connectedAccountPurposeBindings', 'networkOverride'] as const) {
+    for (const key of ['description', 'sessionInputPath', 'connectedAccountPurposeBindings', 'networkOverride', 'publicPresentation'] as const) {
         if (next[key] === null) delete next[key];
     }
     return WidgetDefinitionV1Schema.parse(next);

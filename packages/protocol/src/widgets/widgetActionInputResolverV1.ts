@@ -14,6 +14,7 @@ import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { readWidgetConnectedAccountPurposeV1 } from './widgetViewerPurposeV1.js';
 import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import type { PluginProjectedResourceV2 } from '../daemon/contributionRegistryProjection.js';
+import { isPublicProfileWidgetSurfaceV1, resolveWidgetPublicProfileInputsV1 } from './widgetPublicProfileAdmissionV1.js';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Validation = ReturnType<WidgetBindingResolutionInputV1['validateValue']>;
@@ -118,6 +119,7 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
         const descriptor = await ports.readDescriptor(request);
         request.signal?.throwIfAborted();
         if (!descriptor) return { status: 'unavailable', fields: [{ path: 'input', status: 'unavailable', reasonCode: 'widget_type_unavailable' }] };
+        if (isPublicProfileWidgetSurfaceV1(request.ref.surface)) return resolveWidgetPublicProfileInputsV1(request.instance, descriptor, groupBindings);
         if (!isWidgetTargetHostableV1(descriptor, request.ref.surface.owner.kind)) {
             return { status: 'denied', fields: [{ path: 'input', status: 'denied', reasonCode: 'widget_target_surface_unsupported' }] };
         }

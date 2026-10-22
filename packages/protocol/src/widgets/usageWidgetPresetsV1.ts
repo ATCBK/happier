@@ -22,7 +22,7 @@ const scopeSchema = () => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaOb
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
 })), { target: 'draft-7' }));
 
-type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: UsageQuery['metric']; style?: string;
+type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: UsageQuery['metric']; style?: string; colourBy?: 'intensity' | 'leadingAgent';
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;
 type Arrangement = Readonly<{ width: 'half' | 'full'; widgets: readonly PresetWidget[] }>;
 const w = (id: string, size: WidgetSizeV1, extra?: Omit<PresetWidget, 'id' | 'size'>): PresetWidget => ({ id, size, ...extra });
@@ -56,7 +56,7 @@ const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>
     coach: [{ width: 'full', widgets: [w('usage_coach', 'large')] }],
     // Lab u3how: Sky of days leads, Steering by Agent takes its own band (its figures column needs the width), then A day in
     // agents beside Your planet, Run length beside Personal records, and the typical week beside the typical day.
-    'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full', { style: 'sky', metric: 'busy' }),
+    'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full', { style: 'sky', metric: 'busy', colourBy: 'leadingAgent' }),
         w('usage_human_loop', 'full', { style: 'tide' }), w('usage_parallel', 'medium', { style: 'lanes' }), w('usage_planet', 'medium'),
         w('usage_run_length', 'medium'), w('usage_recap', 'medium', { style: 'personalRecords' }),
         w('usage_rhythm', 'medium', { style: 'weekTide', metric: 'busy' }), w('usage_rhythm', 'medium', { style: 'daylight', metric: 'busy' })] }],
@@ -86,7 +86,7 @@ export function createUsageWidgetPresetFragments(names: Readonly<Record<UsageWid
                     // not replace the independent defaults of other named views.
                     ...Object.fromEntries(descriptor.inputs!.fields.filter(field => field.contextMode === 'own').flatMap(field => {
                         const override = field.path === 'metric' ? metric : field.path === 'breakdown' && widget.breakdown ? [...widget.breakdown]
-                            : field.path === 'style' ? widget.style : undefined;
+                            : field.path === 'style' ? widget.style : field.path === 'colourBy' ? widget.colourBy : undefined;
                         const binding = override === undefined ? defaults[field.path] : { kind: 'value' as const, value: override };
                         return binding ? [[field.path, binding]] : [];
                     })),

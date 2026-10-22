@@ -16,6 +16,7 @@ import { WidgetExpectedPresentationV1Schema, type WidgetActionSurfacePortV1, typ
 import { WidgetGridSizeV1Schema, WidgetProjectAreaV1Schema, normalizeWidgetSizeForSurfaceV1 } from './widgetPresentationV1.js';
 import { projectOverviewDefaultPlacementsV1 } from './builtinWidgetDescriptorV1.js';
 import { createUsageWidgetPresets, type UsageWidgetPresetId } from './usageWidgetPresetsV1.js';
+import { createPublicProfileWidgetAreaPresetsV1 } from './publicProfileWidgetPresetsV1.js';
 import { WidgetLayoutItemV1Schema, type WidgetLayoutItemV1, WidgetLayoutItemsV1Schema, WidgetLayoutItemIntentV1Schema, applyWidgetLayoutItemIntentV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, flattenWidgetLayoutWidgetsV1, getWidgetLayoutItemIdV1 } from './widgetLayoutItemV1.js';
 
 export const WIDGET_SURFACE_ARTIFACT_KIND_V1 = 'widget-area-layout.v1';
@@ -80,6 +81,7 @@ export function projectOverviewPresetV1(): WidgetAreaPresetV1 {
 export function resolveHostWidgetAreaPresetsV1(surface: WidgetSurfaceRefV1, usageNames?: Readonly<Record<UsageWidgetPresetId, string>>): readonly WidgetAreaPresetV1[] | undefined {
     if (surface.owner.kind === 'project') return [projectOverviewPresetV1()];
     if (surface.owner.kind === 'corePage' && surface.owner.pageId === 'usage' && surface.owner.area === 'main') return createUsageWidgetPresets(usageNames);
+    if (surface.owner.kind === 'corePage' && surface.owner.pageId === 'public-profile' && surface.owner.area === 'main') return createPublicProfileWidgetAreaPresetsV1();
     return undefined;
 }
 /** Page metadata is host-owned; this lookup never accepts a caller-supplied preset. */

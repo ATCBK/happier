@@ -89,6 +89,7 @@ export function createSessionWidgetDefinitionSourceReaderV1(input: Readonly<{
         if (!descriptor?.inputSchema || !descriptor.sizeDeclaration) return fail('widget_definition_source_unavailable');
         return { definition: WidgetDefinitionDraftV1Schema.parse({ name: item.title || request.itemId,
             sizeDeclaration: descriptor.sizeDeclaration,
+            ...(descriptor.publicPresentation ? { publicPresentation: descriptor.publicPresentation } : {}),
             body: item.source.instance.definition, inputs: descriptor.inputs ?? { fields: [] }, inputSchema: descriptor.inputSchema,
             ...(descriptor.sessionInputPath ? { sessionInputPath: descriptor.sessionInputPath } : {}),
             ...(item.source.instance.networkOverride ? { networkOverride: item.source.instance.networkOverride } : {}),

@@ -14,6 +14,12 @@ describe('stripMarkdown', () => {
       .toBe('First Name State Grant Ready');
   });
 
+  it('formats conversation search text without erasing numbered matches or literal code', () => {
+    const text = 'User: # Question\n554. **Keep** issue #42 and C# literal\nAssistant: ## Answer\n`User: # literal` and `554. literal`';
+    expect(stripMarkdown(text, { omitRolePrefixes: true, preserveOrderedListNumbers: true }))
+      .toBe('Question 554. Keep issue #42 and C# literal Answer User: # literal and 554. literal');
+  });
+
   it('preserves literal inline code while flattening a real table', () => {
     const markdown = [
       'Changing `&&` to `||` keeps `left|right` and `__scope__` literal.',

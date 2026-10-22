@@ -9,6 +9,24 @@ import { createUsageWidgetPresets } from './usageWidgetPresetsV1.js';
 import { resolveEffectiveInputFields } from '../inputs/inputFieldRuntime.js';
 
 describe('native widget target contracts', () => {
+    it('admits selected planet encodings through the existing own-input binder and public copy schema', () => {
+        const variants = [
+            ...['ninetyPlanets', 'streakThread', 'weeksSkyline', 'daysOnSurface', 'ringedStreaks', 'aroundPeriod'].map(style => ({ widgetId: 'usage_rhythm', style })),
+            { widgetId: 'usage_orbit', style: 'moons' }, { widgetId: 'usage_run_length', style: 'galaxy' },
+        ];
+        for (const { widgetId, style } of variants) {
+            const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widgetId })!;
+            expect(descriptor.inputs?.fields.find(field => field.path === 'style')?.options?.map(option => option.value)).toContain(style);
+            expect(resolveConfiguredWidgetInputs({ descriptor, instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: widgetId },
+                bindings: { ...proposeWidgetInputDefaultBindingsV1(descriptor), style: { kind: 'value', value: style } } },
+                providedContext: {}, viewerValues: {} })).toMatchObject({ status: 'ready', input: { style } });
+            expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId, inputs: { style } }).success).toBe(true);
+        }
+        for (const id of ['usage_machines', 'usage_projects', 'usage_atmosphere']) {
+            expect(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id })).not.toBeNull();
+            expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId: id, inputs: {} }).success).toBe(true);
+        }
+    });
     it('declares copied public Usage identities and closed own inputs without private query authority', () => {
         for (const widgetId of ['usage_daily', 'usage_period_summary', 'usage_breakdowns', 'usage_outcomes', 'usage_recap',
             'usage_footprint', 'usage_source_coverage', 'usage_orbit', 'usage_planet', 'usage_run_length']) {
@@ -60,6 +78,11 @@ describe('native widget target contracts', () => {
         expect(crew.instance.bindings).toMatchObject({ style: { kind: 'value', value: 'crew' },
             period: { kind: 'context', slot: 'period' }, agents: { kind: 'context', slot: 'agents' } });
         expect(crew.instance.bindings.style?.kind === 'value' && crew.instance.bindings.style.value).not.toEqual([]);
+        // How you work opens its Sky coloured by the Agent that led each day (owner direction), on busy time.
+        const how = presets.find(preset => preset.id === 'how-you-work')!.items.flatMap(item => item.kind === 'group' ? item.children : []);
+        const sky = how.find(child => child.instance.definition.kind === 'builtin' && child.instance.definition.id === 'usage_rhythm')!;
+        expect(sky.instance.bindings).toMatchObject({ style: { kind: 'value', value: 'sky' }, metric: { kind: 'value', value: 'busy' },
+            colourBy: { kind: 'value', value: 'leadingAgent' } });
     });
     it.each(['usage_source_coverage', 'usage_unpriced'])('admits %s with independently bound query scope and no presentation controls', id => {
         const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id });

@@ -20,7 +20,8 @@ export const PROJECT_BUILTIN_WIDGET_IDS_V1 = ['project_about', 'project_code', '
 export const USAGE_BUILTIN_WIDGET_IDS_V1 = ['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency', 'usage_breakdowns',
     'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value', 'usage_outcomes', 'usage_coach',
     'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_footprint', 'usage_sources', 'usage_source_coverage', 'usage_unpriced',
-    'usage_score', 'usage_orbit', 'usage_constellation', 'usage_planet', 'usage_run_length'] as const;
+    'usage_score', 'usage_orbit', 'usage_constellation', 'usage_planet', 'usage_run_length',
+    'usage_machines', 'usage_projects', 'usage_atmosphere'] as const;
 export type SessionBuiltinWidgetIdV1 = (typeof SESSION_COMPANION_BUILTIN_ITEM_IDS)[number];
 export type ProjectBuiltinWidgetIdV1 = (typeof PROJECT_BUILTIN_WIDGET_IDS_V1)[number];
 export type UsageBuiltinWidgetIdV1 = (typeof USAGE_BUILTIN_WIDGET_IDS_V1)[number];
@@ -40,7 +41,8 @@ function usagePublicPresentation(id: UsageBuiltinWidgetIdV1) {
     const empty = z.strictObject({});
     switch (id) {
         case 'usage_rhythm': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id), inputs: z.strictObject({
-            style: z._default(z.enum(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight']), 'sky'),
+            style: z._default(z.enum(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight',
+                'ninetyPlanets', 'streakThread', 'weeksSkyline', 'daysOnSurface', 'ringedStreaks', 'aroundPeriod']), 'sky'),
             colourBy: z.optional(z.literal('intensity')),
         }) });
         case 'usage_parallel': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
@@ -55,8 +57,12 @@ function usagePublicPresentation(id: UsageBuiltinWidgetIdV1) {
             inputs: z.strictObject({ style: z.optional(z.enum(['outcomes', 'shipped'])) }) });
         case 'usage_recap': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
             inputs: z.strictObject({ style: z.optional(z.enum(['recap', 'personalRecords'])) }) });
+        case 'usage_orbit': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.optional(z.enum(['orbit', 'moons'])) }) });
+        case 'usage_run_length': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.optional(z.enum(['runLength', 'galaxy'])) }) });
         case 'usage_daily': case 'usage_period_summary': case 'usage_footprint': case 'usage_source_coverage':
-        case 'usage_orbit': case 'usage_planet': case 'usage_run_length':
+        case 'usage_planet': case 'usage_machines': case 'usage_projects': case 'usage_atmosphere':
             return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id), inputs: empty });
         default: return null;
     }
@@ -121,6 +127,9 @@ const nativeMetadata = {
     usage_constellation: { title: 'Constellation', titleKey: 'usage.widgets.usage_constellation', icon: 'graph' },
     usage_planet: { title: 'Your planet', titleKey: 'usage.widgets.usage_planet', icon: 'planet' },
     usage_run_length: { title: 'Run length', titleKey: 'usage.widgets.usage_run_length', icon: 'timer' },
+    usage_machines: { title: 'Machines', titleKey: 'usage.widgets.usage_machines', icon: 'desktop' },
+    usage_projects: { title: 'Projects', titleKey: 'usage.widgets.usage_projects', icon: 'git-branch' },
+    usage_atmosphere: { title: 'Atmosphere', titleKey: 'usage.widgets.usage_atmosphere', icon: 'planet' },
     machine_vitals: { title: 'Vitals', titleKey: 'machines.widgets.machine_vitals', descriptionKey: 'machines.widgets.body.purpose.machine_vitals', icon: 'pulse' },
     machine_fleet: { title: 'Machines', titleKey: 'machines.widgets.machine_fleet', descriptionKey: 'machines.widgets.body.purpose.machine_fleet', icon: 'desktop' },
     machine_metric: { title: 'Metric', titleKey: 'machines.widgets.machine_metric', descriptionKey: 'machines.widgets.body.purpose.machine_metric', icon: 'chart-line' },
@@ -168,7 +177,10 @@ function usageInputs(id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 {
     const styles = id === 'usage_breakdowns' ? ['breakdowns', 'crew'] as const
         : id === 'usage_flow' ? ['flow', 'agentRiver'] as const
         : id === 'usage_outcomes' ? ['outcomes', 'shipped'] as const
-        : id === 'usage_rhythm' ? ['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight'] as const
+        : id === 'usage_rhythm' ? ['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight',
+            'ninetyPlanets', 'streakThread', 'weeksSkyline', 'daysOnSurface', 'ringedStreaks', 'aroundPeriod'] as const
+        : id === 'usage_orbit' ? ['orbit', 'moons'] as const
+        : id === 'usage_run_length' ? ['runLength', 'galaxy'] as const
         // The retained machine timeline is a distinct existing question, not a saved-copy rewrite.
         : id === 'usage_parallel' ? ['lanes', 'dial', 'timeline'] as const
         : id === 'usage_recap' ? ['recap', 'personalRecords'] as const
@@ -176,7 +188,10 @@ function usageInputs(id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 {
     const labels: Readonly<Record<string, string>> = { breakdowns: 'Breakdowns', crew: 'Crew', flow: 'Flow', agentRiver: 'Agent river',
         outcomes: 'Outcomes', shipped: 'Shipped', heatmap: 'Calendar', weekdayHour: 'Weekday / hour', sky: 'Sky of days',
         weekTide: 'Week tide', daylight: 'Daylight', lanes: 'Lanes', dial: 'Dial', timeline: 'Machine timeline', recap: 'Recap',
-        personalRecords: 'Personal records', humanLoop: 'Human loop', tide: 'Steering by Agent' };
+        personalRecords: 'Personal records', humanLoop: 'Human loop', tide: 'Steering by Agent',
+        ninetyPlanets: 'Planets of the period', streakThread: 'Streak thread', weeksSkyline: 'Weeks skyline',
+        daysOnSurface: 'Days on the surface', ringedStreaks: 'Ringed by streaks', aroundPeriod: 'Around the period',
+        orbit: 'Orbit', moons: 'Moons', runLength: 'Run length', galaxy: 'Galaxy of sessions' };
     const fields: InputFieldHint[] = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
         || usagePresentationInputs[id]?.some(path => path === field.path))
         .map(field => ({ ...(id === 'usage_breakdowns' && field.path === 'breakdown' ? USAGE_MULTI_BREAKDOWN_INPUT_FIELD : field),
@@ -274,7 +289,10 @@ export const BUILTIN_WIDGET_DESCRIPTORS_V1 = Object.freeze([...SESSION_COMPANION
     homeDefault: 'available' as const, availability: 'available' as const,
 })), ...USAGE_BUILTIN_WIDGET_IDS_V1.map((id): NativeDescriptor => Object.freeze({
     ...(id === 'usage_sources' ? sourceInventoryInputs : usageInputs(id)), ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },
-    sizeDeclaration: nativeSizeDeclaration, key: `builtin:${id}`, target: 'app',
+    sizeDeclaration: id === 'usage_projects' ? { sizes: ['wide', 'full'], defaultSize: 'wide' } satisfies WidgetSizeDeclarationV1
+        : id === 'usage_atmosphere' ? { sizes: ['medium', 'full'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1
+        : id === 'usage_machines' ? { sizes: ['small', 'medium', 'full'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1
+        : nativeSizeDeclaration, key: `builtin:${id}`, target: 'app',
     homeDefault: 'available', availability: 'available',
 })), ...MACHINE_BUILTIN_WIDGET_IDS_V1.map((id): NativeDescriptor => Object.freeze({
     ...machineWidgetContract(id), ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },

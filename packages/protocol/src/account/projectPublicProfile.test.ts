@@ -22,6 +22,56 @@ const snapshot: PublicProfileSnapshotV1 = PublicProfileSnapshotV1Schema.parse({ 
   lenses: [{ execution: 'outside', facts }],
 });
 describe('public-profile disclosure projection', () => {
+  it('enforces the selected builtin size declaration at direct public-layout admission', () => {
+    const widget = (widgetId: string, size: string) => ({ kind: 'widget', id: widgetId, size, frameStyle: 'plain',
+      presentation: { kind: 'usage', widgetId, inputs: {} } });
+    for (const [widgetId, size] of [['usage_projects', 'wide'], ['usage_atmosphere', 'full'], ['usage_machines', 'small']]) {
+      expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [widget(widgetId!, size!)] }).success).toBe(true);
+    }
+    for (const [widgetId, size] of [['usage_projects', 'small'], ['usage_atmosphere', 'wide'], ['usage_machines', 'tall']]) {
+      expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [widget(widgetId!, size!)] }).success).toBe(false);
+    }
+  });
+  it('prunes the selected planet concepts through the same leaf-policy owner, including weekly peak dependency', () => {
+    const presentations = [
+      ...['ninetyPlanets', 'streakThread', 'weeksSkyline', 'daysOnSurface', 'ringedStreaks', 'aroundPeriod']
+        .map(style => ({ kind: 'usage', widgetId: 'usage_rhythm', inputs: { style } })),
+      { kind: 'usage', widgetId: 'usage_orbit', inputs: { style: 'moons' } },
+      { kind: 'usage', widgetId: 'usage_run_length', inputs: { style: 'galaxy' } },
+      ...['usage_machines', 'usage_projects', 'usage_atmosphere'].map(widgetId => ({ kind: 'usage', widgetId, inputs: {} })),
+    ];
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: presentations.map((presentation, index) => ({
+      kind: 'widget', id: String(index), size: presentation.widgetId === 'usage_projects' ? 'wide' : 'medium', frameStyle: 'plain', presentation,
+    })) });
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields,
+      agentMix: false, agentActiveDays: true, sessionDurations: true, machineKinds: true, projects: true, weeklyPeakParallel: true } };
+    const input = { context: { handle: 'person', identity: {}, service: null, urls: null }, snapshot, metadata: {}, layout,
+      appearance: { theme: 'auto', atmosphere: { source: 'none' } } } as const;
+    const ids = (fields: typeof policy.fields) => projectPublicProfilePreview({ ...input, policy: { ...policy, fields } })?.layout.items.map(item => item.id);
+    expect(ids(policy.fields)).toHaveLength(11);
+    expect(ids({ ...policy.fields, calendar: false })).toEqual(['6', '7', '8', '9', '10']);
+    expect(ids({ ...policy.fields, agentActiveDays: false })).not.toContain('6');
+    expect(ids({ ...policy.fields, sessionDurations: false })).not.toContain('7');
+    expect(ids({ ...policy.fields, machineKinds: false })).not.toContain('8');
+    expect(ids({ ...policy.fields, projects: false })).not.toContain('9');
+    expect(ids({ ...policy.fields, peakParallel: false })).not.toContain('10');
+    expect(ids({ ...policy.fields, weeklyPeakParallel: false })).not.toContain('10');
+  });
+  it('requires Highlights and an admitted underlying leaf for Personal records, including durations', () => {
+    const input = { context: { handle: 'person', identity: {}, service: null, urls: null },
+      metadata: {}, snapshot, appearance: { theme: 'auto', atmosphere: { source: 'none' } } } as const;
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [{ kind: 'widget', id: 'records', size: 'wide', frameStyle: 'plain',
+      presentation: { kind: 'usage', widgetId: 'usage_recap', inputs: { style: 'personalRecords' } } }] });
+    const base = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: Object.fromEntries(Object.keys(DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields)
+      .map(field => [field, false])) as typeof DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields };
+    for (const field of ['activeDays', 'currentStreak', 'bestStreak', 'peakParallel', 'sessionDurations'] as const) {
+      const policy = { ...base, fields: { ...base.fields, [field]: true } };
+      expect(projectPublicProfilePreview({ ...input, layout, policy })?.layout.items).toEqual([]);
+      expect(projectPublicProfilePreview({ ...input, layout, policy: { ...policy, fields: { ...policy.fields, highlights: true } } })?.layout.items)
+        .toHaveLength(1);
+    }
+    expect(projectPublicProfilePreview({ ...input, layout, policy: { ...base, fields: { ...base.fields, highlights: true } } })?.layout.items).toEqual([]);
+  });
   it('retains reviewed block titles only with their admitted current-policy content', () => {
     const widget = { kind: 'widget', id: 'summary', title: 'Work in this period', size: 'medium', frameStyle: 'card',
       presentation: { kind: 'declarative', document: { version: 1, root: { kind: 'metric', label: 'Tokens',

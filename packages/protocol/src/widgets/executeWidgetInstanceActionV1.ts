@@ -18,6 +18,7 @@ import { isWidgetTargetHostableV1 } from './widgetInputAdmissionV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 import { buildWidgetSurfaceArtifactIdV1, WidgetAreaMutationErrorV1 } from './widgetSurfaceArtifactV1.js';
 import { findWidgetLayoutItemV1, WidgetLayoutMutationErrorV1 } from './widgetLayoutItemV1.js';
+import { isPublicProfileWidgetSurfaceV1, projectWidgetPublicProfileDescriptorV1 } from './widgetPublicProfileAdmissionV1.js';
 
 const failure = (errorCode: string): Extract<ActionExecuteResult, { ok: false }> => ({ ok: false, errorCode, error: errorCode });
 export const readWidgetActionSurfacePortV1 = (deps: Pick<ActionExecutorDeps, 'widgetSurfaceActions' | 'homeHubArtifacts' | 'workBoardArtifacts' | 'sessionBoardAction'>, surface: WidgetSurfaceRefV1): WidgetActionSurfacePortV1 | undefined => deps.widgetSurfaceActions?.[surface.owner.kind]
@@ -223,7 +224,11 @@ export async function executeWidgetInstanceActionV1(
     if (failed.success) return failed.data;
     if (!Array.isArray(source)) return failure('invalid_action_output');
     // Share declared-target admission with Gallery; bindings still require exact target authority.
-    const entries = source.filter(entry => isWidgetTargetHostableV1({ inputs: { fields: entry.fields } }, surface.owner.kind))
+    const admittedSource = isPublicProfileWidgetSurfaceV1(surface) ? source.flatMap(entry => {
+      const descriptor = projectWidgetPublicProfileDescriptorV1(entry.definition, { ...entry, inputs: { fields: entry.fields } });
+      return descriptor ? [{ ...entry, fields: [...descriptor.inputs?.fields ?? []], inputSchema: descriptor.inputSchema }] : [];
+    }) : source;
+    const entries = admittedSource.filter(entry => isWidgetTargetHostableV1({ inputs: { fields: entry.fields } }, surface.owner.kind))
       .map(entry => ({ ...entry, presentation: resolveWidgetSizeChoicesV1(surface.owner.kind, entry.sizeDeclaration) }));
     return { ok: true, result: { surface, entries, presentation: resolveWidgetSizeChoicesV1(surface.owner.kind) } };
   }
@@ -269,7 +274,11 @@ export async function executeWidgetInstanceActionV1(
         const { ref: _ref, ...options } = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
         groupIntent = { kind: 'group_set', instanceId: ref!.instanceId, ...options }; break;
       }
-      case 'widgets.group.inputs.set': groupIntent = { kind: 'group_inputs', instanceId: ref!.instanceId, bindings: WidgetInstanceActionInputSchemasV1[actionId].parse(args).bindings }; break;
+      case 'widgets.group.inputs.set': {
+        const { bindings } = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
+        if (isPublicProfileWidgetSurfaceV1(surface) && Object.keys(bindings).length) return failure('widget_public_profile_input_forbidden');
+        groupIntent = { kind: 'group_inputs', instanceId: ref!.instanceId, bindings }; break;
+      }
       case 'widgets.item.remove': groupIntent = { kind: 'remove', instanceId: ref!.instanceId }; break;
       case 'widgets.item.rename': groupIntent = { kind: 'rename', instanceId: ref!.instanceId, displayName: WidgetInstanceActionInputSchemasV1[actionId].parse(args).displayName }; break;
       case 'widgets.item.frame.set': groupIntent = { kind: 'frame', instanceId: ref!.instanceId, frameStyle: WidgetInstanceActionInputSchemasV1[actionId].parse(args).frameStyle }; break;
@@ -366,7 +375,9 @@ export async function executeWidgetInstanceActionV1(
       break;
     }
     case 'widgets.item.frame.set': intent = { kind: 'frame', instanceId: ref!.instanceId, frameStyle: WidgetInstanceActionInputSchemasV1[actionId].parse(args).frameStyle }; break;
-    case 'widgets.item.network.set': intent = { kind: 'network', instanceId: ref!.instanceId, network: WidgetInstanceActionInputSchemasV1[actionId].parse(args).network }; break;
+    case 'widgets.item.network.set':
+      if (isPublicProfileWidgetSurfaceV1(surface)) return failure('widget_public_profile_input_forbidden');
+      intent = { kind: 'network', instanceId: ref!.instanceId, network: WidgetInstanceActionInputSchemasV1[actionId].parse(args).network }; break;
     case 'widgets.item.inputs.reset': {
       const { paths } = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
       // The owner removes choices from its current winner; stale Action reads cannot overwrite siblings.

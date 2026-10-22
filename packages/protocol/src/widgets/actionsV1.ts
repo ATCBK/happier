@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { WidgetPublicSnapshotPresentationV1Schema } from './widgetPublicSnapshotV1.js';
 import { z } from 'zod/mini';
 import { InputFieldHintSchema, InputPathSchema } from '../inputs/inputFields.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
@@ -156,6 +157,7 @@ export const WidgetSurfaceReadV1Schema = lazyZodSchema(() => z.strictObject({
 })));
 export type WidgetSurfaceReadV1 = z.infer<typeof WidgetSurfaceReadV1Schema>;
 export const WidgetCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  publicPresentation: z.optional(WidgetPublicSnapshotPresentationV1Schema),
   sizeDeclaration: WidgetSizeDeclarationV1Schema, presentation: WidgetSurfacePresentationV1Schema,
   definition: WidgetDefinitionRefV1Schema, title: z.string().check(z.trim(), z.minLength(1)),
   fields: z.array(InputFieldHintSchema),

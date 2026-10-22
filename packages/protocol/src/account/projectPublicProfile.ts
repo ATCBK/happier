@@ -89,19 +89,23 @@ function permitted(path: readonly string[], policy: PublicProfilePolicyV1): bool
 function permittedUsage(presentation: BuiltinUsagePublicPresentationV1, policy: PublicProfilePolicyV1): boolean {
   const any = (...fields: PublicProfileField[]) => fields.some(field => enabled(policy, field));
   switch (presentation.widgetId) {
-    case 'usage_rhythm': return presentation.inputs.style === 'sky' || presentation.inputs.style === 'heatmap'
-      ? enabled(policy, 'calendar') : presentation.inputs.style === 'daylight'
-        ? any('punch', 'dayNightActivity') : enabled(policy, 'punch');
+    case 'usage_rhythm': return presentation.inputs.style === 'daylight' ? any('punch', 'dayNightActivity')
+      : presentation.inputs.style === 'weekdayHour' || presentation.inputs.style === 'weekTide' ? enabled(policy, 'punch')
+        : enabled(policy, 'calendar');
     case 'usage_daily': return enabled(policy, 'calendar');
     case 'usage_period_summary': return any('tokens', 'activeDays', 'agentTime', 'mergedPrs', 'currentStreak', 'bestStreak', 'peakParallel');
     case 'usage_breakdowns': return presentation.inputs.style === 'crew' ? any('agentMix', 'agentActiveDays') : any('agentMix', 'sourceSplit');
-    case 'usage_constellation': case 'usage_orbit': return enabled(policy, 'agentMix');
+    case 'usage_constellation': return enabled(policy, 'agentMix');
+    case 'usage_orbit': return presentation.inputs.style === 'moons' ? any('agentMix', 'agentActiveDays') : enabled(policy, 'agentMix');
+    case 'usage_machines': return enabled(policy, 'machineKinds');
+    case 'usage_projects': return enabled(policy, 'projects');
+    case 'usage_atmosphere': return enabled(policy, 'weeklyPeakParallel');
     case 'usage_flow': return enabled(policy, 'weeklyAgentMix');
     case 'usage_parallel': return enabled(policy, 'peakParallel');
     case 'usage_outcomes': return enabled(policy, 'mergedPrs');
-    case 'usage_recap': return presentation.inputs.style === 'personalRecords'
+    case 'usage_recap': return enabled(policy, 'highlights') && (presentation.inputs.style === 'personalRecords'
       ? any('activeDays', 'currentStreak', 'bestStreak', 'peakParallel', 'sessionDurations')
-      : enabled(policy, 'highlights') && any('activeDays', 'peakParallel', 'mergedPrs');
+      : any('activeDays', 'peakParallel', 'mergedPrs'));
     case 'usage_footprint': return enabled(policy, 'footprint');
     case 'usage_source_coverage': return any(...Object.values(factFields));
     case 'usage_run_length': return enabled(policy, 'sessionDurations');

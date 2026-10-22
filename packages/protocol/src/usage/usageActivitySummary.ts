@@ -3,6 +3,19 @@ import { resolveUsageBucketBounds, resolveUsageCalendarDateStart } from './usage
 
 const DAY_MS = 86_400_000;
 
+/** Equal positive observations share their empirical rank; missing evidence is never zero. */
+export function projectUsageOrdinalLevels(values: readonly (number | null)[]): Array<0 | 1 | 2 | 3 | 4 | null> {
+    const positive = values.filter((value): value is number => value !== null && value > 0).sort((a, b) => a - b);
+    const ranks = new Map<number, 1 | 2 | 3 | 4>();
+    for (let index = 0; index < positive.length; index++) {
+        const value = positive[index]!;
+        if (positive[index + 1] === value) continue;
+        const rank = Math.ceil(4 * (index + 1) / positive.length);
+        ranks.set(value, rank <= 1 ? 1 : rank <= 2 ? 2 : rank <= 3 ? 3 : 4);
+    }
+    return values.map(value => value === null ? null : value === 0 ? 0 : ranks.get(value) ?? null);
+}
+
 export interface UsageDayStreakInput {
     days?: readonly { date: string; eventCount: number | null }[];
     referenceMs: number;

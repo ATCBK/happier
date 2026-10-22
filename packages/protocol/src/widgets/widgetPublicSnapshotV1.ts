@@ -5,8 +5,7 @@ import { PluginDeclarativeDocumentStructureV1Schema } from '../plugins/contribut
 import { preflightPluginDeclarativeDocumentV1 } from '../plugins/contributions/ui/declarativeDocumentPreflightV1.js';
 import { WidgetGridSizeV1Schema, WidgetGroupWidthV1Schema, resolveWidgetGroupWidthFitV1 } from './widgetPresentationV1.js';
 import { validatePublicProfileDocumentBindings } from '../account/projectPublicProfile.js';
-import { BuiltinUsagePublicPresentationV1Schema } from './builtinWidgetDescriptorV1.js';
-import { WidgetInstanceV1Schema } from './widgetInstanceV1.js';
+import { BuiltinUsagePublicPresentationV1Schema, readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 
 const symbolicSource = z.strictObject({ kind: z.literal('value'), value: z.strictObject({ kind: z.literal('public_profile') }) });
 const inertKinds = new Set(['text', 'status', 'stack', 'group', 'list', 'section', 'item', 'metadata', 'state']);
@@ -59,13 +58,16 @@ export const WidgetPublicSnapshotDocumentV1Schema = lazyZodSchema(() => {
 export type WidgetPublicSnapshotDocumentV1 = z.infer<typeof WidgetPublicSnapshotDocumentV1Schema>;
 export const WidgetPublicSnapshotPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('declarative'), document: WidgetPublicSnapshotDocumentV1Schema,
-}));
+}).check(z.superRefine((presentation, ctx) => {
+  try { validatePublicProfileDocumentBindings(presentation.document); }
+  catch { ctx.addIssue({ code: 'custom', message: 'Public-profile field binding is invalid' }); }
+})));
 export type WidgetPublicSnapshotPresentationV1 = z.infer<typeof WidgetPublicSnapshotPresentationV1Schema>;
 const id = z.string().check(z.trim(), z.minLength(1));
 const frameStyle = z.enum(['card', 'plain']);
 export const PublicProfileLayoutWidgetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('widget'), id, size: WidgetGridSizeV1Schema, frameStyle,
-  title: WidgetInstanceV1Schema.shape.displayName,
+  title: z.optional(id),
   presentation: z.union([WidgetPublicSnapshotPresentationV1Schema, BuiltinUsagePublicPresentationV1Schema]),
 }));
 export const PublicProfileLayoutGroupV1Schema = lazyZodSchema(() => z.strictObject({
@@ -79,8 +81,12 @@ export const PublicProfileLayoutV1Schema = lazyZodSchema(() => z.strictObject({ 
   const ids = new Set<string>();
   for (const item of layout.items) {
     for (const widget of item.kind === 'widget' ? [item] : item.children) {
-      try { if (widget.presentation.kind === 'declarative') validatePublicProfileDocumentBindings(widget.presentation.document); }
-      catch { ctx.addIssue({ code: 'custom', message: 'Public-profile field binding is invalid' }); }
+      if (widget.presentation.kind === 'usage') {
+        const declaration = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widget.presentation.widgetId });
+        if (!declaration?.sizeDeclaration.sizes.includes(widget.size)) {
+          ctx.addIssue({ code: 'custom', message: 'Public-profile widget size is unsupported' });
+        }
+      }
     }
     for (const value of item.kind === 'group' ? [item.id, ...item.children.map(child => child.id)] : [item.id]) {
       if (ids.has(value)) ctx.addIssue({ code: 'custom', message: 'Duplicate public layout item identity' });

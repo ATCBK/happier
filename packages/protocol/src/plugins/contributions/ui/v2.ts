@@ -11,6 +11,7 @@ import { PluginInvocableActionIdSchema } from '../../../actions/pluginActionSurf
 import { hasValidPluginConnectedAccountPurposeBindingsV2 } from '../../actions/v2.js';
 import { WidgetConnectedAccountPurposeBindingV1Schema, type WidgetConnectedAccountPurposeBindingV1 } from '../../../widgets/widgetConnectedAccountPurposeBindingV1.js';
 import { WidgetSizeDeclarationV1Schema, type WidgetSizeDeclarationV1 } from '../../../widgets/widgetPresentationV1.js';
+import { WidgetPublicSnapshotPresentationV1Schema, type WidgetPublicSnapshotPresentationV1 } from '../../../widgets/widgetPublicSnapshotV1.js';
 import { asProtocolZod } from "../../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema, PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../../contributionIdentity.js';
@@ -506,7 +507,8 @@ function createPluginUiViewBindingSchemaV2() {
       container: z.literal(slot.role),
       target: PluginUiViewTargetSchemaByKindV1[targetKind as keyof typeof PluginUiViewTargetSchemaByKindV1],
       ...(slot.role === 'widget'
-        ? { home: z.optional(PluginUiWidgetHomeV1Schema), sizeDeclaration: WidgetSizeDeclarationV1Schema }
+        ? { home: z.optional(PluginUiWidgetHomeV1Schema), sizeDeclaration: WidgetSizeDeclarationV1Schema,
+            publicPresentation: z.optional(WidgetPublicSnapshotPresentationV1Schema) }
         : {}),
       ...(slot.role === 'widget'
         ? { connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
@@ -616,6 +618,7 @@ export type PluginUiViewInlineBindingInputV2 = {
       target: z.input<typeof PluginUiViewTargetSchemaByKindV1[TTarget]>;
       home?: TSlot['role'] extends 'widget' ? PluginUiWidgetHomeV1 : never;
       resources?: TSlot['role'] extends 'widget' ? PluginContributionIdentityV1[] : never;
+      publicPresentation?: TSlot['role'] extends 'widget' ? WidgetPublicSnapshotPresentationV1 : never;
     }> & (TSlot['role'] extends 'widget' ? Readonly<{ sizeDeclaration: WidgetSizeDeclarationV1 }> : Readonly<{ sizeDeclaration?: never }>) & (TSlot['role'] extends 'widget'
       ? TTarget extends 'session'
         ? Readonly<{ inputs: InputHints; inputSchema: PluginJsonSchemaV2; sessionInputPath: string; connectedAccountPurposeBindings?: WidgetConnectedAccountPurposeBindingV1[] }>
@@ -662,6 +665,7 @@ export type PluginUiViewInlineBindingV2 = {
       target: z.output<typeof PluginUiViewTargetSchemaByKindV1[TTarget]>;
       home?: TSlot['role'] extends 'widget' ? PluginUiWidgetHomeV1 : never;
       resources?: TSlot['role'] extends 'widget' ? PluginContributionIdentityV1[] : never;
+      publicPresentation?: TSlot['role'] extends 'widget' ? WidgetPublicSnapshotPresentationV1 : never;
     }> & (TSlot['role'] extends 'widget' ? Readonly<{ sizeDeclaration: WidgetSizeDeclarationV1 }> : Readonly<{ sizeDeclaration?: never }>) & (TSlot['role'] extends 'widget'
       ? TTarget extends 'session'
         ? Readonly<{ inputs: InputHints; inputSchema: PluginJsonSchemaV2; sessionInputPath: string; connectedAccountPurposeBindings?: WidgetConnectedAccountPurposeBindingV1[] }>
