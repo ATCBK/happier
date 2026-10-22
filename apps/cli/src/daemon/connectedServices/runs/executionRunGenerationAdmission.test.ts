@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { isExecutionRunConnectedServiceGenerationCurrent } from './executionRunGenerationAdmission';
+import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
+import { parseConnectedServiceProjectionSnapshot } from '../accountGroups/generation/connectedServiceProjectionSnapshot';
 
 const projection = {
   groups: [{ serviceId: 'openai-codex', groupId: 'default', activeProfileId: 'work', generation: 4 }],
@@ -37,5 +39,29 @@ describe('isExecutionRunConnectedServiceGenerationCurrent', () => {
       } as any,
       projection,
     })).toBe(false);
+  });
+
+  it('checks only locally materialized profiles for an admitted brokered Team route', () => {
+    const registry = new ConnectedServiceRuntimeRegistry();
+    const bindings = { v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+      source: 'team_resource', resourceId: 'resource', deliveryMode: 'brokered',
+    } } } as const;
+    const target = registry.registerRunTarget({ runKey: 'brokered-run', pid: process.pid, agentId: 'codex',
+      materializationKey: 'brokered-run', connectedServicesBindingsRaw: bindings, connectedServiceSelectionsEnv: {} });
+    const emptyProjection = parseConnectedServiceProjectionSnapshot({ connectedServicesV2: [], connectedServiceCredentialRevisionsV1: [] });
+    expect(isExecutionRunConnectedServiceGenerationCurrent({ runId: 'brokered-run', target, projection: emptyProjection })).toBe(true);
+    expect(isExecutionRunConnectedServiceGenerationCurrent({ runId: 'another-run', target, projection: emptyProjection })).toBe(false);
+    for (const raw of [null, { v: 2, bindingsByServiceId: {} }, { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'unmaterialized' },
+    } }]) {
+      const unproven = registry.registerRunTarget({ runKey: 'brokered-run', pid: process.pid,
+        materializationKey: 'brokered-run', connectedServicesBindingsRaw: raw, connectedServiceSelectionsEnv: {} });
+      expect(isExecutionRunConnectedServiceGenerationCurrent({ runId: 'brokered-run', target: unproven, projection: emptyProjection })).toBe(false);
+    }
+    const mixed = registry.registerRunTarget({ runKey: 'brokered-run', pid: process.pid, materializationKey: 'brokered-run',
+      connectedServicesBindingsRaw: { ...bindings, bindingsByServiceId: { ...bindings.bindingsByServiceId,
+        'happier.agent.claude/anthropic': { source: 'connected', selection: 'profile', profileId: 'local' },
+      } }, connectedServiceSelectionsEnv: {} });
+    expect(isExecutionRunConnectedServiceGenerationCurrent({ runId: 'brokered-run', target: mixed, projection: emptyProjection })).toBe(false);
   });
 });
