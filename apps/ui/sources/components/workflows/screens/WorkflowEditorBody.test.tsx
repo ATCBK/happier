@@ -8,7 +8,10 @@ import {
 } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { renderScreen as renderTestScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { serveAccountHomes, serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ModalProvider, useModal } from '@/modal/ModalProvider';
 import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
 import { useWorkflowEditorHistory } from '../editor/useWorkflowEditorHistory';
@@ -19,7 +22,7 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { AgentInput } from '@/components/sessions/agentInput';
-import { withPopoverWebGlobals } from '@/dev/testkit';
+import { createDeferred, withPopoverWebGlobals } from '@/dev/testkit';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { reportPopoverContentLayout } from '@/dev/testkit/harness/popoverHarness';
 import { KeyboardShortcutProvider, useKeyboardCommand, type KeyboardCommandId } from '@/keyboard';
@@ -295,6 +298,251 @@ async function renderBody(
     } as never);
     return renderScreen(element, renderOptions);
 }
+
+it.each(['chooser', 'drag'] as const)('acquires unopened Session options only on this editor\'s %s intent', async (intent) => {
+    const harness = await loadHarness();
+    const { useWorkflowAuthoringHost } = await import('./useWorkflowAuthoringHost');
+    const { WorkflowAccountLifetimeProvider } = await import('../workflowAccountScope');
+    const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+    const { useEntityDragDropRuntime } = await import('@/components/ui/treeDragDrop');
+    const metadata = { flavor: 'claude', claudeSessionId: 'resume', claudeTranscriptPath: '/tmp/session.jsonl',
+        machineId: 'machine-1', path: '/Users/me/project', host: 'host', name: 'Unopened continuation' };
+    const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'unopened', active: true, metadata });
+    const elsewhere = createPlainSessionCurrentProjectionRecordFixture({ id: 'elsewhere', active: true,
+        metadata: { ...metadata, machineId: 'machine-2', name: 'Other machine' } });
+    const batch = createSessionReadBatchHttpBoundary(request => {
+        const record = [session, elsewhere].find(row => request.path === `/v2/sessions/${row.id}`);
+        return record ? Response.json({ session: record }) : undefined;
+    });
+    const homes = await serveAccountHomes({ homes: [
+        { key: 'editor', serverUrl: 'https://workflow-intent.test', accountId: 'intent-account' },
+        { key: 'other', serverUrl: 'https://workflow-other-intent.test', accountId: 'other-account' },
+        { key: 'focused', serverUrl: 'https://workflow-focused-intent.test', accountId: 'focused-account' },
+    ], route: request => {
+        if (request.path === '/v2/sessions') return Response.json({ sessions: request.home === 'focused' ? [] : [session, elsewhere], nextCursor: null, hasNext: false });
+        if (request.path === '/v2/sessions/active' || request.path === '/v2/sessions/archived') {
+            return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+        }
+        return batch.handle(request);
+    } });
+    bindingBoundaries.push(() => homes.dispose());
+    getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
+    // Account restore legitimately bootstraps the focused Home before an editor mounts.
+    const beforeMount = homes.requests.length;
+    const editorRequests = () => homes.requests.slice(beforeMount);
+    const hosts = new Map<string, ReturnType<typeof useWorkflowAuthoringHost>>();
+    let runtime: ReturnType<typeof useEntityDragDropRuntime>;
+    function Editor({ serverId, prefix }: { serverId: string; prefix: string }) {
+        const host = useWorkflowAuthoringHost({ serverId, projectTarget: { machineId: 'machine-1', directory: '/Users/me/project' } });
+        hosts.set(prefix, host);
+        runtime = useEntityDragDropRuntime();
+        return <harness.WorkflowEditorBody {...host} draft={{ ...buildDraft(harness), draftId: prefix }} onChange={() => {}}
+            machineName="Mac Studio" projectTarget={{ machineId: 'machine-1', directory: '/Users/me/project' }}
+            selectedBlockId={null} onSelectBlock={() => {}} onCustomizeBlock={() => {}}
+            view="steps" onChangeView={() => {}} testIDPrefix={prefix} inspectorGroupDisclosure={OPEN_SETTINGS_GROUPS} />;
+    }
+    function AddressedEditor(props: { serverId: string; prefix: string }) {
+        const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+        return <WorkflowAccountLifetimeProvider value={binding ?? null}><Editor {...props} /></WorkflowAccountLifetimeProvider>;
+    }
+    const serverId = homes.homes.editor!.id;
+    const screen = await renderScreen(<><AddressedEditor serverId={serverId} prefix="demanded" />
+        <AddressedEditor serverId={homes.homes.other!.id} prefix="closed" /></>);
+    await waitForHomeGovernance(() => expect(hosts.get('demanded')?.sessionBindingScope?.serverId).toBe(serverId));
+    expect(editorRequests().filter(request => request.home !== 'focused' && request.path === '/v2/sessions')).toHaveLength(0);
+    expect(batch.componentRequests).toHaveLength(0);
+    const scope = hosts.get('demanded')!.sessionBindingScope!;
+    let retireSource: (() => void) | undefined;
+    try {
+        if (intent === 'chooser') {
+            const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'demanded-defaults-continuity-conversation-field')!;
+            await act(async () => { menu.props.onOpenChange(true); });
+        } else {
+            retireSource = runtime!.registerSource({ id: 'intent-source', scope, isCurrent: () => true,
+                getItem: () => ({ kind: 'session', scope, address: { serverId, sessionId: session.id } }) });
+            await act(async () => {
+                const target = runtime!.getDestinations('intent-source').find(destination => destination.label === 'workflows.editor.addStep')!;
+                runtime!.begin('intent-source', 'keyboard')!.choose(target.targetId);
+            });
+        }
+        await waitForHomeGovernance(() => expect(hosts.get('demanded')?.existingSessions.map(option => option.sessionId)).toEqual([session.id]));
+        expect(hosts.get('demanded')?.sessionDropCandidates.map(option => option.sessionId).sort()).toEqual([elsewhere.id, session.id]);
+        expect(editorRequests().some(request => request.home === 'other' && request.path === '/v2/sessions')).toBe(false);
+        expect(getStorage().getState().sessions[session.id]).toBeUndefined();
+        if (intent === 'chooser') {
+            const field = dropdownField(screen, 'demanded-defaults-continuity-conversation-field');
+            await act(async () => { field.props.onSelect('existing_session'); });
+            expect(screen.findHostByTestId('demanded-defaults-continuity-conversation-session-unopened')).not.toBeNull();
+        } else {
+            await flushHookEffects();
+            expect(runtime!.getSnapshot().admission?.status, JSON.stringify(runtime!.getSnapshot().admission)).toBe('allowed');
+        }
+    } finally {
+        await act(async () => { runtime!.cancel(); retireSource?.(); });
+        await screen.unmount();
+    }
+});
+
+/** Keep credential authority, inventory, snapshot acquisition and rendered inspectors real. */
+async function renderChooserLifetimeEditor() {
+    const harness = await loadHarness();
+    const { useWorkflowAuthoringHost } = await import('./useWorkflowAuthoringHost');
+    const { WorkflowAccountLifetimeProvider } = await import('../workflowAccountScope');
+    const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+    const { useEntityDragDropRuntime } = await import('@/components/ui/treeDragDrop');
+    const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
+    const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'continuation-c', active: true,
+        metadata: { flavor: 'claude', claudeSessionId: 'resume-c', claudeTranscriptPath: '/tmp/c.jsonl',
+            machineId: 'machine-1', path: '/Users/me/project', host: 'host', name: 'Continuation C' } });
+    let failSnapshot = false;
+    let snapshotGate: ReturnType<typeof createDeferred<void>> | undefined;
+    const batch = createSessionReadBatchHttpBoundary(async request => {
+        if (request.path !== `/v2/sessions/${session.id}`) return undefined;
+        await snapshotGate?.promise;
+        return failSnapshot ? Response.json({ error: 'unavailable' }, { status: 503 }) : Response.json({ session });
+    });
+    const homes = await serveAccountHomes({ homes: [
+        { key: 'editor', serverUrl: 'https://chooser-lifetime.test', accountId: 'chooser-account' },
+        { key: 'other', serverUrl: 'https://chooser-other.test', accountId: 'other-account' },
+        { key: 'focused', serverUrl: 'https://chooser-focused.test', accountId: 'focused-account' },
+    ], route: request => {
+        if (request.path === '/v2/sessions') return Response.json({ sessions: request.home === 'focused' ? [] : [session], nextCursor: null, hasNext: false });
+        if (request.path === '/v2/sessions/active' || request.path === '/v2/sessions/archived') {
+            return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+        }
+        return batch.handle(request);
+    } });
+    bindingBoundaries.push(() => homes.dispose());
+    getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
+    let host!: ReturnType<typeof useWorkflowAuthoringHost>;
+    let runtime!: ReturnType<typeof useEntityDragDropRuntime>;
+    function Editor({ serverId }: { serverId: string }) {
+        host = useWorkflowAuthoringHost({ serverId, projectTarget: { machineId: 'machine-1', directory: '/Users/me/project' } });
+        runtime = useEntityDragDropRuntime();
+        const [draft, setDraft] = React.useState(() => buildDraft(harness));
+        return <harness.WorkflowEditorBody {...host} draft={draft} onChange={setDraft}
+            machineName="Mac Studio" projectTarget={{ machineId: 'machine-1', directory: '/Users/me/project' }}
+            selectedBlockId="analyze" onSelectBlock={() => {}} onCustomizeBlock={() => {}}
+            view="steps" onChangeView={() => {}} inspectorGroupDisclosure={OPEN_SETTINGS_GROUPS} />;
+    }
+    function AddressedEditor({ serverId }: { serverId: string }) {
+        const { binding } = useServerCredentialAccountScopeBinding(serverId);
+        return <WorkflowAccountLifetimeProvider value={binding ?? null}><Editor serverId={serverId} /></WorkflowAccountLifetimeProvider>;
+    }
+    const serverId = homes.homes.editor!.id;
+    const screen = await renderScreen(<AddressedEditor serverId={serverId} />);
+    await waitForHomeGovernance(() => expect(host.sessionBindingScope?.serverId).toBe(serverId));
+    const defaults = 'workflow-editor-defaults-continuity';
+    const step = 'workflow-editor-inspector-continuity';
+    const menu = (prefix: string) => screen.findAllByType(DropdownMenu).find(node => node.props.testID === `${prefix}-conversation-field`)!;
+    const picker = (prefix: string) => screen.findAllByType(SelectionList).find(node => node.props.testID === `${prefix}-conversation-session-picker`);
+    const reads = () => batch.componentRequests.filter(request => request.path === `/v2/sessions/${session.id}`).length;
+    let version = 1;
+    const refresh = async (patch: Readonly<Record<string, unknown>> = {}) => {
+        await act(async () => { getStorage().getState().applyServerScopedSessionListRowPatches(serverId,
+            [{ sessionId: session.id, patch: { metadataVersion: ++version, ...patch } }]); });
+        await flushHookEffects();
+    };
+    const open = async (prefix = defaults) => {
+        await act(async () => { menu(prefix).props.onOpenChange(true); });
+        await waitForHomeGovernance(() => expect(host.existingSessions.map(option => option.sessionId)).toEqual([session.id]));
+        await act(async () => { menu(prefix).props.onSelect('existing_session'); menu(prefix).props.onOpenChange(false); });
+        expect(picker(prefix)).toBeDefined();
+    };
+    return { screen, homes, serverId, defaults, step, open, menu, picker, reads, refresh,
+        host: () => host, runtime: () => runtime,
+        fail: () => { failSnapshot = true; },
+        block: () => { snapshotGate = createDeferred<void>(); return snapshotGate; },
+        switchHome: () => screen.update(<AddressedEditor serverId={homes.homes.other!.id} />),
+    };
+}
+
+it.each(['archive', 'remove', 'failure', 'kind switch', 'dismiss', 'bind'] as const)(
+    'retires this chooser demand after %s without restarting detailed reads', async transition => {
+        const editor = await renderChooserLifetimeEditor();
+        await editor.open();
+        const originalRows = Object.values(getStorage().getState().sessionListRowsByServerId[editor.serverId] ?? {});
+        if (transition === 'archive') await editor.refresh({ archivedAt: 42 });
+        else if (transition === 'remove') await act(async () => { getStorage().getState().clearSessionListRowsForServerScope(editor.serverId); });
+        else if (transition === 'failure') {
+            editor.fail();
+            await editor.refresh();
+        } else if (transition === 'kind switch') {
+            await act(async () => { editor.menu(editor.defaults).props.onSelect('fresh'); });
+        } else if (transition === 'dismiss') {
+            await act(async () => { editor.picker(editor.defaults)!.props.onRequestClose(); });
+        } else {
+            await act(async () => { await editor.picker(editor.defaults)!.props.onSelect('continuation-c'); });
+        }
+        await waitForHomeGovernance(() => expect(editor.picker(editor.defaults)).toBeUndefined());
+        await flushHookEffects();
+        const settledReads = editor.reads();
+        // Reappearance/version updates cannot reopen a vanished chooser or acquire new details.
+        if (transition === 'remove') {
+            await act(async () => { getStorage().getState().applyServerScopedSessionListRows(editor.serverId,
+                originalRows, { source: 'ordinary', mode: 'replace' }); });
+        }
+        await editor.refresh({ archivedAt: null });
+        expect(editor.reads()).toBe(settledReads);
+        expect(editor.picker(editor.defaults)).toBeUndefined();
+        await editor.screen.unmount();
+    },
+);
+
+it('retains the second inspector demand until its chooser also closes', async () => {
+    const editor = await renderChooserLifetimeEditor();
+    await editor.open();
+    await editor.screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+    await editor.open(editor.step);
+    await act(async () => { editor.picker(editor.defaults)!.props.onRequestClose(); });
+    const before = editor.reads();
+    await editor.refresh();
+    await waitForHomeGovernance(() => expect(editor.reads()).toBeGreaterThan(before));
+    expect(editor.picker(editor.step)).toBeDefined();
+    await act(async () => { editor.picker(editor.step)!.props.onRequestClose(); });
+    await flushHookEffects();
+    const after = editor.reads();
+    await editor.refresh();
+    expect(editor.reads()).toBe(after);
+    await editor.screen.unmount();
+});
+
+it.each(['Home', 'Account'] as const)('retires chooser intent during %s acquisition', async retirement => {
+    const editor = await renderChooserLifetimeEditor();
+    await editor.open();
+    const gate = editor.block();
+    const before = editor.reads();
+    await editor.refresh();
+    await waitForHomeGovernance(() => expect(editor.reads()).toBeGreaterThan(before));
+    try {
+        if (retirement === 'Home') await editor.switchHome();
+        else await act(async () => { await editor.homes.switchAccount('editor', 'replacement-account'); });
+    } finally { await act(async () => { gate.resolve(); }); }
+    await waitForHomeGovernance(() => expect(editor.picker(editor.defaults)).toBeUndefined());
+    await flushHookEffects();
+    const after = editor.reads();
+    await editor.refresh();
+    expect(editor.reads()).toBe(after);
+    await editor.screen.unmount();
+});
+
+it('does not acquire this Home for another Home Session drag', async () => {
+    const editor = await renderChooserLifetimeEditor();
+    const scope = { serverId: editor.homes.homes.other!.id, accountId: 'other-account' };
+    const runtime = editor.runtime();
+    const unregister = runtime.registerSource({ id: 'wrong-home', scope, isCurrent: () => true,
+        getItem: () => ({ kind: 'session', scope, address: { serverId: scope.serverId, sessionId: 'continuation-c' } }) });
+    try {
+        await act(async () => { runtime.begin('wrong-home', 'keyboard'); });
+        await flushHookEffects();
+        expect(editor.reads()).toBe(0);
+        expect(editor.homes.requests.filter(request => request.home === 'editor' && request.path === '/v2/sessions')).toHaveLength(0);
+        expect(editor.host().existingSessions).toEqual([]);
+    } finally {
+        await act(async () => { runtime.cancel(); unregister(); });
+        await editor.screen.unmount();
+    }
+});
 
 it('expands a called workflow in editor Flow while selection reveals the parent call, not the read-only child', async () => {
     const harness = await loadHarness();

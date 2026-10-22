@@ -22,6 +22,19 @@ function createAccountLifetime() {
 }
 
 describe('captureSessionAutomationAuthority', () => {
+    it('retires authoring authority on archival without changing the stored trigger or continuation metadata', () => {
+        const { lifetime: accountLifetime } = createAccountLifetime();
+        const session = { id: 'session-1', serverId: 'server-1', metadata: eligibleMetadata, archivedAt: null as number | null };
+        const current = { session, routeSessionId: session.id, routeServerId: session.serverId,
+            activeServerId: session.serverId, automationsEnabled: true, accountSettings: {} };
+        const authority = captureSessionAutomationAuthority({ ...current, accountLifetime, readCurrent: () => current });
+        expect(authority?.isCurrent()).toBe(true);
+        current.session = { ...session, archivedAt: 42 };
+        expect(authority?.isCurrent()).toBe(false);
+        expect(captureSessionAutomationAuthority({ ...current, accountLifetime, readCurrent: () => current })).toBeNull();
+        current.session = session;
+        expect(captureSessionAutomationAuthority({ ...current, accountLifetime, readCurrent: () => current })?.isCurrent()).toBe(true);
+    });
     it('accepts only the hydrated Session owner on the active server and Account lifetime', () => {
         const { lifetime: accountLifetime } = createAccountLifetime();
         const current: {

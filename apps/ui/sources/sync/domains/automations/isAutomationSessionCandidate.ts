@@ -4,12 +4,18 @@ import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacing
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 export type AutomationSessionCandidate = Readonly<{
+    archivedAt?: number | null;
     metadata?: unknown;
     metadataLayoutVersion?: number;
     ownerMetadataView?: unknown;
     accessLevel?: unknown;
     metadataUnavailable?: boolean;
 }>;
+
+/** List-row facts can reject a candidate before its full continuation metadata is read. */
+export function isAutomationSessionCandidateVisible(session: AutomationSessionCandidate): boolean {
+    return session.archivedAt == null && isUserFacingSession(session);
+}
 
 /**
  * Canonical UI admission predicate for every Session offered to Automation.
@@ -20,7 +26,7 @@ export function isAutomationSessionCandidate(
     session: AutomationSessionCandidate,
     accountSettings?: Record<string, unknown> | null,
 ): boolean {
-    if (!isUserFacingSession(session)) return false;
+    if (!isAutomationSessionCandidateVisible(session)) return false;
     return evaluateExistingSessionAutomationEligibility({
         metadata: readSessionOwnerMetadataView({
             metadataLayoutVersion: session.metadataLayoutVersion,

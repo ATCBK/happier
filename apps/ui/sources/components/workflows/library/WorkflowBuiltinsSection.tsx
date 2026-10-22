@@ -48,7 +48,7 @@ export function WorkflowBuiltinSessionButton(props: Readonly<{ entry: BuiltinWor
     const accountLifetime = useWorkflowAccountLifetime();
     const scope = accountLifetime === undefined ? focusedScope : accountLifetime?.scope;
     const [open, setOpen] = React.useState(false);
-    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null });
+    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null, enabled: open });
     return <DropdownMenu open={open} onOpenChange={setOpen} search
         items={(scope === null ? [] : existingSessions).map((session) => ({ id: session.sessionId, title: session.label }))}
         trigger={({ toggle }) => <RoundButton testID={props.testID} size="small" display={props.primary ? 'default' : 'secondary'} title={t('workflows.examples.chooseSession')} onPress={toggle} />}

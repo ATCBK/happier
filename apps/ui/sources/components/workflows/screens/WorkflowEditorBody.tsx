@@ -440,6 +440,7 @@ export type WorkflowEditorBodyProps = Readonly<{
     /** Every continuable Session on any Machine (the authoring host's): enables the web Session drop onto a step. */
     sessionDropCandidates?: readonly WorkflowExistingSessionOption[];
     sessionBindingScope?: EntityDragScopeV1 | null;
+    onSessionOptionsDemandChange?: (demanded: boolean) => void;
     mountedDraftActions?: import('@/sync/ops/actions/workflowAuthoringAction').WorkflowMountedDraftActions;
     /**
      * Where every step prompt addresses reference/file search and portable
@@ -501,6 +502,9 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             return machine ? getMachineDisplayName(machine) : machineId;
         },
     });
+    // Demand can admit an unopened Session while the pointer/keyboard target is
+    // stationary. Refresh its existing admission when that projection arrives.
+    React.useEffect(() => { dragRuntime.refresh(); }, [dragRuntime, props.sessionDropCandidates, props.existingSessions]);
     /**
      * Whether this composition owns page commands at all.
      *
@@ -829,6 +833,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         ...(props.onChangeInspectorGroup === undefined ? {} : { onChangeGroupDisclosure: props.onChangeInspectorGroup }),
         ...(props.authoringFacts === undefined ? {} : { authoringFacts: props.authoringFacts }),
         ...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions }),
+        onSessionOptionsDemandChange: props.onSessionOptionsDemandChange,
         ...(sessionDrop === undefined ? {} : { bindExistingSession: sessionDrop.bind }),
         ...(props.projectTarget === undefined ? {} : { projectTarget: props.projectTarget }),
         machineName: props.machineName,
@@ -847,6 +852,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         onChange,
         props.authoringFacts,
         props.existingSessions,
+        props.onSessionOptionsDemandChange,
         sessionDrop,
         props.executionTarget,
         props.inspectorGroupDisclosure,

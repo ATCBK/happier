@@ -550,6 +550,7 @@ function StepMainPage(props: WorkflowInspectorProps & Readonly<{
                         workspace={step.execution?.workspace}
                         inherited={{ conversation: draft.defaults.conversation, workspace: draft.defaults.workspace }}
                         {...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions })}
+                        onSessionOptionsDemandChange={props.onSessionOptionsDemandChange}
                         onChangeConversation={(value) => onChange(setWorkflowStepExecutionField(draft, step.id, 'conversation', value))}
                         {...(props.bindExistingSession === undefined ? {} : {
                             onBindExistingSession: (sessionId: string) => props.bindExistingSession!(step.id, sessionId),

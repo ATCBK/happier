@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { resolveExistingSessionAutomationAvailability } from './existingSessionAutomationAvailability';
 
 describe('resolveExistingSessionAutomationAvailability', () => {
+    it('blocks an archived continuation and restores availability when it is unarchived', () => {
+        const session = { id: 'archived', encryptionMode: 'plain' as const, archivedAt: 42 as number | null,
+            metadata: { flavor: 'claude', claudeSessionId: 'resume', claudeTranscriptPath: '/tmp/resume.jsonl' } };
+        const input = { session, sessionHydrated: true, machineIdOverride: 'machine', sessionDekBase64: null, accountSettings: {} };
+        expect(resolveExistingSessionAutomationAvailability(input)).toEqual({ kind: 'blocked', reason: 'session_not_user_facing' });
+        const unarchived = { ...session, archivedAt: null };
+        expect(resolveExistingSessionAutomationAvailability({ ...input, session: unarchived }))
+            .toMatchObject({ kind: 'ready', machineId: 'machine' });
+    });
     it('returns hydrating while the target session is still being hydrated', () => {
         expect(resolveExistingSessionAutomationAvailability({
             sessionHydrated: false,

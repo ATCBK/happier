@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installRealActionExecutorModuleLoader, serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -12,6 +12,8 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const machineRpc = vi.fn<(request: SocketRpcRequestPayload) => unknown>();
 // Home and machine transports enter through static imports; hoist the genuine
@@ -394,6 +396,47 @@ describe('Run a workflow trigger inputs', () => {
 });
 
 describe('a workflow trigger in its popover (07 S4)', () => {
+    it.each(['runs-in', 'runs-in-session'] as const)('waits for %s intent before reading unopened prompt destinations', async (field) => {
+        const { createDefaultWhen } = await import('./sessionTriggerForm');
+        const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'unopened-prompt', active: true, metadata: {
+            flavor: 'claude', claudeSessionId: 'resume', claudeTranscriptPath: '/tmp/prompt.jsonl',
+            machineId: 'machine-1', path: '/repo', host: 'host', name: 'Unopened prompt destination',
+        } });
+        const batch = createSessionReadBatchHttpBoundary(request => request.path === `/v2/sessions/${session.id}`
+            ? Response.json({ session }) : undefined);
+        const served = await serveAccountHomes({ homes: [{ key: 'prompt', serverUrl: 'https://trigger-demand.test', accountId: 'prompt-account' }],
+            route: request => {
+                if (request.path === '/v2/sessions') return Response.json({ sessions: [session], nextCursor: null, hasNext: false });
+                if (request.path === '/v2/sessions/archived' || request.path === '/v2/sessions/active') {
+                    return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                }
+                return batch.handle(request);
+            } });
+        onTestFinished(() => served.dispose());
+        const promptServerId = served.homes.prompt!.id;
+        getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
+        const beforeMount = served.requests.length;
+        const screen = await renderScreen(<TriggerPopover testID="demand-prompt" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null} serverId={promptServerId} machineId="machine-1"
+            initial={{ when: createDefaultWhen('schedule'), enabled: true, then: { kind: 'sendPrompt',
+                prompt: 'Summarize the night', selection: {}, ...(field === 'runs-in-session'
+                    ? { runsIn: { kind: 'session', sessionId: 'retained', machineId: 'machine-1' } as const } : {}) } }}
+            workflowOptions={[]} onSubmit={vi.fn<ExistingTriggerSubmit>(async () => {})} />);
+        const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+        await act(async () => { expect((await resolveServerCredentialAccountScope(promptServerId)).kind).toBe('bound'); });
+        expect(served.requests.slice(beforeMount).filter(request => request.path === '/v2/sessions/read-batch'
+            || request.path === '/v2/sessions/archived')).toHaveLength(0);
+        const menu = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === `demand-prompt-${field}`)!;
+        await act(async () => { menu().props.onOpenChange(true); });
+        await waitForHomeGovernance(() => {
+            const items = menu().props.items as readonly { id: string; disabled?: boolean }[];
+            expect(field === 'runs-in' ? items.find(item => item.id === 'session')?.disabled
+                : items.some(item => item.id === session.id)).toBe(field === 'runs-in' ? undefined : true);
+        });
+        expect(served.requests.some(request => request.path === '/v2/sessions/read-batch')).toBe(true);
+        expect(getStorage().getState().sessions[session.id]).toBeUndefined();
+        await screen.unmount();
+    });
     it.each(['account', 'session'] as const)('does not submit a retired prompt destination from the %s editor, but keeps an unloaded destination', async (scope) => {
         const { buildTriggerTarget, createDefaultWhen, readTriggerThen } = await import('./sessionTriggerForm');
         const { TriggerTargetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/triggerTargetV1');

@@ -10,6 +10,8 @@ import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 import type { EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { WorkflowExistingSessionOption } from '@/sync/domains/workflows/workflowAuthoring';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
+import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
+import { entityDragScopesEqualV1 } from '@happier-dev/protocol/plugins/ui/entityDragDrop';
 
 export type WorkflowAuthoringHostContext = Readonly<{
     /** Option sources for the shared Session-authoring controls. */
@@ -26,6 +28,8 @@ export type WorkflowAuthoringHostContext = Readonly<{
     /** Every continuable Session on any Machine: what the Session drop target resolves against. */
     sessionDropCandidates: readonly WorkflowExistingSessionOption[];
     sessionBindingScope: EntityDragScopeV1 | null;
+    /** Balanced mount/cleanup notifications from this editor's open continuation controls. */
+    onSessionOptionsDemandChange: (demanded: boolean) => void;
 }>;
 
 /**
@@ -67,7 +71,21 @@ export function useWorkflowAuthoringHost(params: Readonly<{
 
     const authoringFacts = useSessionAuthoringControlFacts({ machineId, serverId, directory });
 
-    const { existingSessions, sessionDropCandidates } = useWorkflowExistingSessionOptions({ serverId, machineId });
+    const [sessionChooserCount, setSessionChooserCount] = React.useState(0);
+    const onSessionOptionsDemandChange = React.useCallback((demanded: boolean) => {
+        setSessionChooserCount(count => count + (demanded ? 1 : -1));
+    }, []);
+    const dragRuntime = useEntityDragDropRuntime();
+    // Subscribe only to the semantic intent bit, never pointer frames or the full drag snapshot.
+    const readSessionDragDemand = React.useCallback(() => {
+        const snapshot = dragRuntime.getSnapshot();
+        return snapshot.phase === 'carrying' && snapshot.item?.kind === 'session'
+            && sessionBindingScope !== null && entityDragScopesEqualV1(snapshot.item.scope, sessionBindingScope);
+    }, [dragRuntime, sessionBindingScope]);
+    const sessionDragDemand = React.useSyncExternalStore(dragRuntime.subscribe, readSessionDragDemand, readSessionDragDemand);
+    const { existingSessions, sessionDropCandidates } = useWorkflowExistingSessionOptions({
+        serverId, machineId, enabled: sessionChooserCount > 0 || sessionDragDemand,
+    });
 
     const capturedSessionId = capturedSession?.sessionId ?? null;
     const capturedServerId = capturedSession?.serverId ?? null;
@@ -78,7 +96,7 @@ export function useWorkflowAuthoringHost(params: Readonly<{
     ), [capturedServerId, capturedSessionId, directory, machineHomeDir, machineId, serverId]);
 
     return React.useMemo(
-        () => ({ authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionBindingScope }),
-        [authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionBindingScope],
+        () => ({ authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionBindingScope, onSessionOptionsDemandChange }),
+        [authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionBindingScope, onSessionOptionsDemandChange],
     );
 }

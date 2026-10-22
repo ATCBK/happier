@@ -254,8 +254,14 @@ function FieldSelect(props: Readonly<{
     items: readonly DropdownMenuItem[];
     selectedId: string | null;
     onSelect: (id: string) => void;
+    onOpenChange?: (open: boolean) => void;
 }>) {
     const [open, setOpen] = React.useState(false);
+    React.useEffect(() => {
+        if (!props.onOpenChange) return;
+        props.onOpenChange(open);
+        return () => props.onOpenChange?.(false);
+    }, [open, props.onOpenChange]);
     const accessoryLayout = useTriggerFieldLayout();
     return (
         <DropdownMenu
@@ -805,13 +811,17 @@ function RunsInRows(props: Readonly<{
     onChange: (next: TriggerRunsIn) => void;
 }>) {
     const activeServerId = useActiveServerAccountScope()?.serverId ?? null;
-    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: props.serverId ?? activeServerId, machineId: props.machineId });
+    const [runsInOpen, setRunsInOpen] = React.useState(false);
+    const [sessionOpen, setSessionOpen] = React.useState(false);
+    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: props.serverId ?? activeServerId,
+        machineId: props.machineId, enabled: runsInOpen || sessionOpen });
     const first = existingSessions[0];
     return (
         <>
             {/* Three long choices: a select, not a segmented bar that cannot fit a popover or a phone (DESIGN-18 T1). */}
             <FieldSelect
                 testID={`${props.testID}-runs-in`}
+                onOpenChange={setRunsInOpen}
                 title={t('workflows.triggers.then.runsIn')}
                 items={RUNS_IN_KINDS.map((kind) => ({
                     id: kind,
@@ -834,6 +844,7 @@ function RunsInRows(props: Readonly<{
             {props.runsIn.kind === 'session' ? (
                 <FieldSelect
                     testID={`${props.testID}-runs-in-session`}
+                    onOpenChange={setSessionOpen}
                     title={t('workflows.triggers.then.session')}
                     items={existingSessions.map((option) => ({ id: option.sessionId, title: option.label }))}
                     selectedId={props.runsIn.sessionId}

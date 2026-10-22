@@ -13,6 +13,10 @@ describe('isAutomationSessionCandidate', () => {
         expect(isAutomationSessionCandidate({ metadata: eligibleMetadata }, {})).toBe(true);
     });
 
+    it('rejects an archived Session even when it retains resumable Agent metadata', () => {
+        expect(isAutomationSessionCandidate({ metadata: eligibleMetadata, archivedAt: 42 }, {})).toBe(false);
+    });
+
     it('rejects a hidden system Session even when its Agent resume metadata is otherwise eligible', () => {
         expect(isAutomationSessionCandidate({
             metadata: {

@@ -144,6 +144,7 @@ function ContinuityField(props: Readonly<{
     items: ReadonlyArray<DropdownMenuItem>;
     selectedId: string;
     onSelect: (id: string) => void;
+    onOpenChange?: (open: boolean) => void;
     testIDPrefix: string;
 }>): React.ReactElement {
     const [open, setOpen] = React.useState(false);
@@ -151,7 +152,7 @@ function ContinuityField(props: Readonly<{
         <DropdownMenu
             testID={`${props.testIDPrefix}-field`}
             open={open}
-            onOpenChange={setOpen}
+            onOpenChange={(next) => { setOpen(next); props.onOpenChange?.(next); }}
             selectedId={props.selectedId}
             items={props.items}
             onSelect={props.onSelect}
@@ -173,6 +174,7 @@ export function WorkflowContinuityControls(props: Readonly<{
     }>;
     /** Existing Sessions the host offers for continuation; absent means none can be offered here. */
     existingSessions?: readonly WorkflowExistingSessionOption[];
+    onSessionOptionsDemandChange?: (demanded: boolean) => void;
     onChangeConversation: (value: WorkflowConversationSelection | undefined) => void;
     onBindExistingSession?: (sessionId: string) => Promise<EntityDropOutcomeV1>;
     onChangeWorkspace: (value: WorkflowWorkspaceSelection | undefined) => void;
@@ -217,6 +219,14 @@ export function WorkflowContinuityControls(props: Readonly<{
     // option opens the picker; the selection is authored when a row is chosen
     // and the picker closes.
     const [choosingSession, setChoosingSession] = React.useState(false);
+    const [conversationOpen, setConversationOpen] = React.useState(false);
+    const sessionOptionsDemanded = conversationOpen || choosingSession;
+    const onSessionOptionsDemandChange = props.onSessionOptionsDemandChange;
+    React.useEffect(() => {
+        if (!sessionOptionsDemanded || !onSessionOptionsDemandChange) return;
+        onSessionOptionsDemandChange(true);
+        return () => onSessionOptionsDemandChange(false);
+    }, [sessionOptionsDemanded, onSessionOptionsDemandChange]);
     const [bindingRefusal, setBindingRefusal] = React.useState<string | null>(null);
     const recordedSession = props.conversation?.kind === 'existing_session' ? props.conversation : null;
     const recordedSessionLabel = useWorkflowContinuedSessionLabel(props.conversation);
@@ -329,6 +339,7 @@ export function WorkflowContinuityControls(props: Readonly<{
         <View>
             <ContinuityField
                 title={t('workflows.conversation.title')}
+                onOpenChange={setConversationOpen}
                 items={conversationItems}
                 selectedId={conversationSelectedId}
                 onSelect={(id) => {

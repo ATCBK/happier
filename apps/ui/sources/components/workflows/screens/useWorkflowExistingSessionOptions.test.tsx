@@ -5,6 +5,22 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
 
 describe('Workflow existing Session options', () => {
+    it('keeps current hydrated options while detailed acquisition is disabled', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: 'closed-summary', serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: 'resume-id',
+            claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo', name: 'Original',
+        } });
+        storage.setState({ isDataReady: true, sessions: { [session.id]: session } });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled: false }));
+        try {
+            expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id, label: 'Original' }]);
+            await act(async () => { storage.setState({ sessions: { [session.id]: {
+                ...session, metadata: { ...session.metadata!, name: 'Current summary' },
+            } } }); });
+            expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id, label: 'Current summary' }]);
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
     it('does not recheck Session candidacy on unrelated store publications', async () => {
         const previous = storage.getState();
         let eligibilityReads = 0;
@@ -57,6 +73,9 @@ describe('Workflow existing Session options', () => {
                 ...session, metadata: { ...session.metadata!, name: 'Renamed' },
             } } }); });
             expect(hook.getCurrent().existingSessions[0]?.label).toBe('Renamed');
+            await act(async () => { storage.setState({ sessions: { [session.id]: { ...session, archivedAt: 42 } } }); });
+            expect(hook.getCurrent().existingSessions).toEqual([]);
+            expect(hook.getCurrent().sessionDropCandidates).toEqual([]);
             await act(async () => { storage.setState({ sessions: { [session.id]: {
                 ...session, metadata: { ...session.metadata!, machineId: 'machine-b' },
             } } }); });

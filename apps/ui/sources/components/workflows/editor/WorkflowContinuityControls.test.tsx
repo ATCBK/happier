@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
 import type { WorkflowConversationSelection } from '@happier-dev/protocol/workflows/workflowReferenceV1';
+import { createWorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
+import { formatWorkflowConversationLabel, WorkflowContinuityControls } from './WorkflowContinuityControls';
 
 /**
  * A from-step conversation continues the producer's conversation, so this
@@ -45,8 +47,6 @@ function stepBlock(id: string, prompt: string) {
 }
 
 it('keeps the named Workflow input visible in a conversation summary', async () => {
-    const { createWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowEditorDraft');
-    const { formatWorkflowConversationLabel } = await import('./WorkflowContinuityControls');
     const label = formatWorkflowConversationLabel({
         draft: createWorkflowEditorDraft({ draftId: 'continuity-input', name: 'Review', blocks: [] }),
         conversation: { kind: 'input', name: 'reviewSession' },
@@ -56,13 +56,11 @@ it('keeps the named Workflow input visible in a conversation summary', async () 
 });
 
 async function renderControls(conversation: WorkflowConversationSelection) {
-    const draftModule = await import('@/sync/domains/workflows/workflowEditorDraft');
-    const draft = draftModule.createWorkflowEditorDraft({
+    const draft = createWorkflowEditorDraft({
         draftId: 'draft-1',
         name: 'Review',
         blocks: [stepBlock('producer-a', 'Check the build'), stepBlock('consumer-b', 'Report the result')],
     });
-    const { WorkflowContinuityControls } = await import('./WorkflowContinuityControls');
     return renderScreen(
         <WorkflowContinuityControls
             draft={draft}
@@ -78,8 +76,6 @@ async function renderControls(conversation: WorkflowConversationSelection) {
 
 describe('WorkflowContinuityControls continuation disclosure', () => {
     it('does not offer Session binding without the mounted qualified binding owner', async () => {
-        const { createWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowEditorDraft');
-        const { WorkflowContinuityControls } = await import('./WorkflowContinuityControls');
         const changed = vi.fn();
         const screen = await renderScreen(<WorkflowContinuityControls
             draft={createWorkflowEditorDraft({ draftId: 'draft', name: 'Review', blocks: [stepBlock('step', 'Review')] })}

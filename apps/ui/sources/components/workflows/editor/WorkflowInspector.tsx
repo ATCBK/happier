@@ -89,6 +89,7 @@ export type WorkflowInspectorProps = Readonly<{
     onDone?: () => void;
     authoringFacts?: SessionAuthoringControlFacts;
     existingSessions?: readonly WorkflowExistingSessionOption[];
+    onSessionOptionsDemandChange?: (demanded: boolean) => void;
     bindExistingSession?: WorkflowSessionDrop['bind'];
     /** Where it runs: the host's placement, edited through the Where owner. */
     projectTarget?: WorkflowAuthoringTarget | null;
@@ -295,6 +296,7 @@ function WorkflowSettingsContent(props: WorkflowInspectorProps): React.ReactElem
                         conversation={draft.defaults.conversation}
                         workspace={draft.defaults.workspace}
                         {...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions })}
+                        onSessionOptionsDemandChange={props.onSessionOptionsDemandChange}
                         onChangeConversation={(value) => onChange(setWorkflowDefaultField(draft, 'conversation', value))}
                         {...(props.bindExistingSession === undefined ? {} : {
                             onBindExistingSession: (sessionId: string) => props.bindExistingSession!(null, sessionId),
