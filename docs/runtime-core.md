@@ -891,6 +891,14 @@ reader validates the notice independently of the message; malformed or future
 sidecars leave the fallback text readable. Explicit Saved Secret catalog failures
 retain their existing fail-closed error path.
 
+Selected-server MCP notices, Skill failure notices and optional prompt-library
+warnings await the existing transcript journal's local admission, not the Home
+delivery ACK. Successful admission persists the stable notice identity before
+preparation returns; the same journal retries delivery and Home deduplicates it.
+MCP journal-admission failure still throws to startup; Skill and prompt-library
+notice failures retain their existing logged best-effort handling. Required
+context, credential and post-admission currentness checks are unchanged.
+
 Pi's development MCP extension isolates each optional server's spawn,
 initialize and tool-list failure, closes that failed connection and keeps
 healthy tools callable. Its existing JSON stream carries the canonical notice
@@ -1974,6 +1982,17 @@ admission. Cancellation, a replaced issue, newer user input
 and disabled automatic resume take precedence; the original interrupted input is
 never replayed. This development-source integration still requires composed
 loaded-runtime validation.
+
+Protocol's `buildUsageLimitIssueFingerprint` owns issue identity across reporting,
+controls, and presentation. Runtime-auth classification captures the accepted
+failure's identity and projects it separately from `runtimeAuthRecoveryAttemptId`.
+Recovery timing, cancellation, and action targets apply to the current issue only
+when their fingerprints match. Older opaque attempt fingerprints remain readable
+but cannot establish that association. Live Check Now reads the public issue
+through the Session's existing authenticated Home transport when needed; an
+unavailable read returns an error, while a different issue uses its current local
+controls. Explicit new input still supersedes prior automatic waits independently
+of their issue identity.
 
 ### Goals without native controls (0.3 development source)
 

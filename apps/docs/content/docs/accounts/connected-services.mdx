@@ -159,6 +159,12 @@ remains pending until the Agent runs successfully. Cancelling the wait, stopping
 the session or sending newer work takes precedence over automatic continuation.
 This integration is unreleased and still being validated.
 
+Cancelling recovery for an earlier failure does not hide a new usage-limit issue.
+If an older saved wait cannot be associated with the current failure, the banner
+shows the current issue's actions without attaching the saved wait's timing or
+cancellation state. A live **Check limit now** reads the current issue from the
+session's relay; if that read is unavailable, retry after connectivity returns.
+
 ## Model-capacity retries
 
 In development builds, a terminal model-capacity failure such as Codex
@@ -227,6 +233,12 @@ evidence for the policy instead of silently falling back to all limits.
 This setting does not change which accounts belong to the pool, and it does not
 filter authentication, plan, or model-entitlement errors. Choose **All usage
 limits** to restore the predecessor behavior.
+
+The filter governs quota evidence used to select an account before a request.
+A supported account-scoped usage-limit error that actually fails the Agent's main
+operation still follows the pool's configured switching rules and limits. Use
+separate pools when sessions need different quota filters; provider-enforced usage
+and spending limits still apply.
 
 Pool member capacity, usage rows, and session usage badges use the pool's selected
 allowances. Account-wide facts such as the plan, subscription identity, and reset
