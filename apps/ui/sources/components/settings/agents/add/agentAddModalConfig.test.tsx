@@ -400,6 +400,7 @@ describe('the alternate Add-an-agent branches', () => {
 
   it('a built-in agent offers the registry’s version as a separate agent', async () => {
     const { AgentBuiltInDetail } = await import('./AgentRegistryDetail');
+    const { createMachineAdministrationTargetSelectionFixture } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
     const onAddSeparate = vi.fn();
     const screen = await renderScreen(
       <AgentBuiltInDetail
