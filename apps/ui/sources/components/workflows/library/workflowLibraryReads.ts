@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { Dimensions } from 'react-native';
 import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
+import { SESSION_LIST_ROW_HEIGHT_MINIMAL } from '@/components/sessions/shell/sessionListRowHeights';
 
 import { workflowDefinitionListCursorPhaseV1, type WorkflowDefinitionListResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows';
@@ -488,17 +490,24 @@ type RunWindowPage = Omit<WorkflowRunListPage, 'nextCursor'> & Readonly<{
     nextCursor: string | null;
 }>;
 
-async function readRunWindowPage(windowId: WorkflowRunListWindowId, cursor?: string, projection?: 'membership'): Promise<RunWindowPage> {
+/** One page at the window owner, shared by initial reads and demand-driven continuation. */
+export async function readRunWindowPage(windowId: WorkflowRunListWindowId, cursor?: string, projection?: 'membership'): Promise<RunWindowPage> {
     if (windowId === 'automationAttention') {
         const page = await listAutomationDefinitionRuns({ attention: 'required', cursor });
         return { runs: [], automationRuns: page.runs, metadataByRunId: {}, nextCursor: page.nextCursor };
     }
-    const page = await listWorkflowRuns({ filter: buildWorkflowRunListFilter(windowId), cursor, projection });
+    // Full rows open accepted snapshots. Request at most one window-height of
+    // the smallest list rows; this is a presentation preference, not a corpus
+    // or byte cap. The same owner follows opaque cursors on actual page demand.
+    // Membership-only badges keep their existing public projection/frontier.
+    const limit = projection === undefined
+        ? Math.max(1, Math.ceil(Dimensions.get('window').height / SESSION_LIST_ROW_HEIGHT_MINIMAL)) : undefined;
+    const page = await listWorkflowRuns({ filter: buildWorkflowRunListFilter(windowId), cursor, projection, limit });
     return { ...page, automationRuns: [], nextCursor: page.nextCursor ?? null };
 }
 
-/** Read a window's first page; a window this Account already traversed is restated, not replaced. */
-function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false): Promise<void> {
+/** Restate a window through its loaded ordering frontier, retaining rows until the read succeeds. */
+export function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false): Promise<void> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (lifetime === null) return Promise.resolve();
     const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
@@ -516,8 +525,7 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
     const promoting = previousWindow?.projection === 'membership' && projection === undefined;
     const previousTailId = previousWindow?.runIds.at(-1);
     const previousTail = previousTailId === undefined ? undefined : previousStore.workflowRunsById[workflowRunStoreKey(previousTailId)];
-    const attentionBoundary = windowId === 'attention' || windowId === 'automationAttention'
-        ? previousWindow?.frontier ?? (previousTail ? workflowRunListFrontier(previousTail) : undefined) : undefined;
+    const loadedBoundary = previousWindow?.frontier ?? (previousTail ? workflowRunListFrontier(previousTail) : undefined);
     if (!ownedBefore || promoting || previous.knownAt === null) setRunWindowStatus(windowId, { ...INITIAL_RUN_STATUS, scopeKey,
         knownAt: ownedBefore ? previous.knownAt : null });
     else if (previous.loadingMore || previous.loadMoreFailed) setRunWindowStatus(windowId, { ...previous, loadingMore: false, loadMoreFailed: false });
@@ -525,10 +533,10 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
         try {
             let page = await readRunWindowPage(windowId, undefined, projection);
             if (!lifetime.isCurrent()) return;
-            // Filtered attention must restate everything the person already paged to:
-            // page-one-only refresh would retain a cleared failure on an older page.
+            // Restate everything the person already paged to: a page-one-only
+            // refresh can skip a burst of new rows or retain an older filtered-out row.
             // Traverse to the existing immutable ordering frontier, not an invented cap.
-            if (attentionBoundary !== undefined) {
+            if (loadedBoundary !== undefined) {
                 const runs = [...page.runs];
                 const automationRuns = [...page.automationRuns];
                 const metadataByRunId = { ...page.metadataByRunId };
@@ -539,7 +547,7 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
                     const lastAutomation = page.automationRuns.at(-1);
                     const last = lastSummary ? workflowRunRowFromSummary(lastSummary)
                         : lastAutomation ? workflowRunRowFromAutomationRun(lastAutomation) : undefined;
-                    if (last && (last.id === attentionBoundary.id || isBeyondWorkflowRunListSpan(last, attentionBoundary))) break;
+                    if (last && (last.id === loadedBoundary.id || isBeyondWorkflowRunListSpan(last, loadedBoundary))) break;
                     page = await readRunWindowPage(windowId, page.nextCursor, projection);
                     if (!lifetime.isCurrent()) return;
                     runs.push(...page.runs);
@@ -561,8 +569,7 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
                 supportsAnotherRoundByRunId: page.supportsAnotherRoundByRunId,
                 callerAccessByRunId: page.callerAccessByRunId,
                 nextCursor: page.nextCursor ?? null,
-                mode: attentionBoundary !== undefined ? 'replace'
-                    : ownedBefore && store.workflowRunListWindows[windowId]?.loaded === true ? 'refresh' : 'replace',
+                mode: 'replace',
             });
             setRunWindowStatus(windowId, { scopeKey, status: 'loaded', failure: null, loadingMore: false, loadMoreFailed: false, knownAt: Date.now() });
         } catch (error) {
@@ -582,7 +589,7 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
     return promise;
 }
 
-async function loadMoreRunWindow(windowId: WorkflowRunListWindowId): Promise<void> {
+export async function loadMoreRunWindow(windowId: WorkflowRunListWindowId): Promise<void> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (lifetime === null) return;
     const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);

@@ -353,6 +353,18 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
         <SelectionList
             testID="board-add.list"
             rootStep={step}
+            pagination={runs.hasMore || runs.loadingMore || runs.loadMoreFailed ? {
+                hasMore: runs.hasMore,
+                loadingMore: runs.loadingMore,
+                requestKey: JSON.stringify([activeServerId, runs.knownAt, runs.runIds.at(-1)]),
+                error: runs.loadMoreFailed ? t('workflows.loadFailedBody') : null,
+                onEndReached: runs.loadMore,
+                onRetry: runs.loadMore,
+                loadingLabel: t('common.loading'),
+                moreLabel: t('common.more'),
+                retryLabel: t('common.retry'),
+                endReachedLabel: t('common.done'),
+            } : undefined}
             bodyHeader={openingGroups.length > 0 || library.status === 'failed' || runs.status === 'failed' ? (
                 <View style={styles.failures}>
                     {/* One line names every group still opening and narrows as each settles. */}

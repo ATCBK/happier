@@ -167,7 +167,7 @@ function useRunningRefs(enabled: boolean, activeServerId: string | null) {
     React.useEffect(() => {
         if (enabled && activeServerId && window.status === 'loaded' && window.hasMore
             && !window.loadingMore && !window.loadMoreFailed) window.loadMore();
-    }, [activeServerId, enabled, window.hasMore, window.loadMore, window.loadMoreFailed, window.loadingMore, window.status]);
+    }, [activeServerId, enabled, window.hasMore, window.knownAt, window.loadMore, window.loadMoreFailed, window.loadingMore, window.status]);
     const refs = React.useMemo(() => {
         if (!enabled || !activeServerId || window.status === 'loading') return null;
         return window.rows.map((row) => runRef(activeServerId, row.id));
@@ -205,6 +205,12 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
     const readsRuns = includesRuns && homes.activeServerId !== null
         && filter.homeServerIds.some((home) => areServerProfileIdentifiersEquivalent(home, homes.activeServerId));
     const window = useWorkflowRunWindow(filter?.underSessionId ? `under:${filter.underSessionId}` : 'all', { enabled: readsRuns });
+    // A Board filter (including a pinned summary) needs the whole relation, not
+    // just the visible Session list's first page. Keep failure and Retry at the window.
+    React.useEffect(() => {
+        if (readsRuns && window.status === 'loaded' && window.hasMore
+            && !window.loadingMore && !window.loadMoreFailed) window.loadMore();
+    }, [readsRuns, window.hasMore, window.knownAt, window.loadMore, window.loadMoreFailed, window.loadingMore, window.status]);
     const queryHomes = React.useMemo(() => {
         if (!filter || !includesSessions) return [];
         // An empty Home selection means every mounted Home, as in the Sessions list.

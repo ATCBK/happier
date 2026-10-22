@@ -342,7 +342,7 @@ describe('workflow run body store', () => {
         expect(harness.get().workflowRunsById[failed.id]?.automation).toEqual(failed);
         const settled = { ...failed, state: 'cancelled' as const, revision: failed.revision + 1 };
         harness.get().upsertWorkflowRuns([workflowRunRowFromAutomationRun(settled)]);
-        harness.get().applyWorkflowRunListPage({ windowId: 'automationAttention', runs: [], automationRuns: [], nextCursor: null, mode: 'refresh' });
+        harness.get().applyWorkflowRunListPage({ windowId: 'automationAttention', runs: [], automationRuns: [], nextCursor: null, mode: 'replace' });
         expect(harness.get().workflowRunListWindows.automationAttention?.runIds).toEqual([]);
         expect(harness.get().workflowRunsById[failed.id]?.automation).toBe(settled);
     });
@@ -719,72 +719,31 @@ describe('workflow run body store', () => {
             });
         }
 
-        it('merges a refreshed first page into a longer traversal without dropping later pages', () => {
+        it('publishes the authoritative refreshed span and its newly derived continuation together', () => {
             const harness = createHarness();
             seedTwoPages(harness);
 
-            // The background invalidation re-reads page one only. Everything the
-            // reader paged to is strictly older than that page's oldest row, so
-            // it survives — together with the continuation for the END of the
-            // traversal, which is the only cursor that can extend it.
+            // The reader has followed fresh cursors through its loaded frontier.
+            // The absent run-3 left the filter; neither its id nor the old end
+            // cursor may survive this authoritative publication.
             harness.get().applyWorkflowRunListPage({
                 windowId: 'all',
                 runs: [
                     createWorkflowRunSummaryFixture({ id: 'run-5', createdAt: '2026-09-08T10:00:05.000Z', revision: 9, state: 'succeeded' }),
                     createWorkflowRunSummaryFixture({ id: 'run-4', createdAt: '2026-09-08T10:00:04.000Z' }),
+                    createWorkflowRunSummaryFixture({ id: 'run-2', createdAt: '2026-09-08T10:00:02.000Z' }),
                 ],
-                nextCursor: 'page-2',
-                mode: 'refresh',
+                nextCursor: 'fresh-tail',
+                mode: 'replace',
             });
 
             expect(harness.get().workflowRunListWindows.all).toEqual({
-                runIds: ['run-5', 'run-4', 'run-3', 'run-2'],
-                nextCursor: 'page-3',
+                runIds: ['run-5', 'run-4', 'run-2'],
+                nextCursor: 'fresh-tail',
                 loaded: true,
+                frontier: { id: 'run-2', createdAt: Date.parse('2026-09-08T10:00:02.000Z') },
             });
             expect(harness.get().workflowRunsById['run-5']?.summary?.state).toBe('succeeded');
-        });
-
-        it('admits a newly created Run at the head while keeping every loaded row', () => {
-            const harness = createHarness();
-            seedTwoPages(harness);
-
-            harness.get().applyWorkflowRunListPage({
-                windowId: 'all',
-                runs: [
-                    createWorkflowRunSummaryFixture({ id: 'run-6', createdAt: '2026-09-08T10:00:06.000Z' }),
-                    createWorkflowRunSummaryFixture({ id: 'run-5', createdAt: '2026-09-08T10:00:05.000Z' }),
-                ],
-                nextCursor: 'page-2',
-                mode: 'refresh',
-            });
-
-            // `run-4` was only pushed off page one by the new Run; it is still
-            // in this filter and the reader can still see it.
-            expect(harness.get().workflowRunListWindows.all?.runIds)
-                .toEqual(['run-6', 'run-5', 'run-4', 'run-3', 'run-2']);
-            expect(harness.get().workflowRunListWindows.all?.nextCursor).toBe('page-3');
-        });
-
-        it('drops a loaded row the refreshed span proves has left this filter', () => {
-            const harness = createHarness();
-            seedTwoPages(harness);
-
-            // `Needs you` stops matching `run-5`. The refreshed page reaches
-            // further back than `run-5` and does not contain it, so the window
-            // must not keep offering a row that no longer needs anyone.
-            harness.get().applyWorkflowRunListPage({
-                windowId: 'all',
-                runs: [
-                    createWorkflowRunSummaryFixture({ id: 'run-6', createdAt: '2026-09-08T10:00:06.000Z' }),
-                    createWorkflowRunSummaryFixture({ id: 'run-4', createdAt: '2026-09-08T10:00:04.000Z' }),
-                ],
-                nextCursor: 'page-2',
-                mode: 'refresh',
-            });
-
-            expect(harness.get().workflowRunListWindows.all?.runIds)
-                .toEqual(['run-6', 'run-4', 'run-3', 'run-2']);
         });
 
         it('reseeds when the refreshed page exhausts the filter', () => {
@@ -795,11 +754,12 @@ describe('workflow run body store', () => {
                 windowId: 'all',
                 runs: [createWorkflowRunSummaryFixture({ id: 'run-5', createdAt: '2026-09-08T10:00:05.000Z' })],
                 nextCursor: null,
-                mode: 'refresh',
+                mode: 'replace',
             });
 
             expect(harness.get().workflowRunListWindows.all).toEqual({
                 runIds: ['run-5'], nextCursor: null, loaded: true,
+                frontier: { id: 'run-5', createdAt: Date.parse('2026-09-08T10:00:05.000Z') },
             });
         });
 

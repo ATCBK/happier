@@ -550,15 +550,29 @@ describe('Board shared Run filter membership', () => {
         expect(hook.getCurrent()).toBe(membership);
     });
 
-    it('preserves partial Run membership and refuses to certify a paged window as complete', async () => {
-        const first = createWorkflowRunSummaryFixture({ id: 'first', startedBy: 'user' });
-        runAnswer.mockReturnValue({ body: await boardRunStoragePage([first], 'page-two') });
+    it('finds later-page filter matches and completes only after continuation failure is retried', async () => {
+        const first = createWorkflowRunSummaryFixture({ id: 'first', startedBy: 'agent' });
+        const later = createWorkflowRunSummaryFixture({ id: 'later', startedBy: 'user' });
+        runAnswer.mockReturnValueOnce({ body: await boardRunStoragePage([first], 'page-two') });
+        runAnswer.mockReturnValueOnce({ dispatchThenFail: true });
         const board = runsBoard(['you']);
-        const hook = await renderHook(() => useBoardMembership(board, homes));
-        await waitForHomeGovernance(() => expect(hook.getCurrent().members.map((member) => member.ref.qualifiedId.id)).toEqual(['first']));
-        expect(hook.getCurrent().complete).toBe(false);
-        expect(harness.home.requestsFor(RUN_STORAGE_PATH).filter(request =>
-            request.input !== null && typeof request.input === 'object' && 'operation' in request.input && request.input.operation === 'list')).toHaveLength(1);
+        const hook = await renderHook(() => ({ membership: useBoardMembership(board, homes), window: useWorkflowRunWindow('all') }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().window.loadMoreFailed).toBe(true));
+        expect(hook.getCurrent().membership.members).toEqual([]);
+        expect(hook.getCurrent().membership.complete).toBe(false);
+        const retryPending = createDeferred<void>();
+        const pending = createDeferred<void>();
+        runAnswer.mockReturnValueOnce({ body: await boardRunStoragePage([first], 'page-two'), respondAfter: retryPending.promise });
+        runAnswer.mockReturnValueOnce({ body: await boardRunStoragePage([later]), respondAfter: pending.promise });
+        await act(async () => { hook.getCurrent().window.retry(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().window.loadMoreFailed).toBe(false));
+        expect(hook.getCurrent().membership.complete).toBe(false);
+        await act(async () => { retryPending.resolve(); await retryPending.promise; });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().window.loadingMore).toBe(true));
+        expect(hook.getCurrent().membership.complete).toBe(false);
+        await act(async () => { pending.resolve(); await pending.promise; });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().membership.members.map(member => member.ref.qualifiedId.id)).toEqual(['later']));
+        expect(hook.getCurrent().membership.complete).toBe(true);
     });
 
     it('preserves placed Runs from a mounted Home not served by the active Home window', async () => {

@@ -89,7 +89,8 @@ export type WorkflowRunsDomain = {
         supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
         callerAccessByRunId?: Readonly<Record<string, WorkflowRunGetResultV1['callerAccess']>>;
         nextCursor: string | null;
-        mode: WorkflowLoadedSpanMode;
+        /** Refresh readers collect their loaded span before replacing it atomically. */
+        mode: 'replace' | 'append';
         attentionRunIds?: readonly string[];
         lastSuccessfulReadAt?: number;
     }>) => void;
@@ -132,15 +133,13 @@ export type WorkflowRunsDomain = {
 /**
  * How a page lands in a window that may already hold a loaded traversal.
  *
- * - `replace` seeds a window from its first page: a new Account, a new filter
- *   or an explicit reload, where nothing earlier is worth keeping.
+ * - `replace` publishes a complete freshly read span: a first page or the
+ *   previously loaded ordering frontier collected by the reader on refresh.
  * - `append` extends the traversal with the continuation the window's cursor
  *   asked for.
- * - `refresh` restates the leading page of an existing traversal. It is what a
- *   background invalidation uses, and it is the one mode that must never shrink
- *   what the reader already paged to: replacing the window with page one
- *   discarded every later page, the off-page row the reader had selected and
- *   the position they were reading at.
+ * - Invocation-only `refresh` merges a leading page with retained invocation
+ *   history. Run-list windows instead restate their loaded frontier through
+ *   the list reader; retaining an old end cursor can skip newly inserted Runs.
  */
 export type WorkflowLoadedSpanMode = 'replace' | 'append' | 'refresh';
 
@@ -517,40 +516,6 @@ export function isBeyondWorkflowRunListSpan(candidate: WorkflowRunRow | Workflow
     return candidate.id < boundary.id;
 }
 
-/**
- * Restate the leading page of a loaded Run window without shrinking it.
- *
- * The refreshed page is authoritative for exactly the span it covers — every
- * Run at least as new as its oldest row — so a previously loaded id inside that
- * span that the page did not return has left this filter and is dropped.
- * Everything strictly older is the traversal the reader paid for page by page;
- * it is preserved, and so is the cursor for the END of that traversal, because
- * the page's own cursor would rewind them to page two.
- */
-function refreshWorkflowRunListWindow(params: Readonly<{
-    runsById: WorkflowRunsById;
-    previous: WorkflowRunListWindow | undefined;
-    pageRunIds: readonly string[];
-    nextCursor: string | null;
-    scope?: ServerAccountScope | null;
-}>): WorkflowRunListWindow {
-    const { runsById, previous, pageRunIds, nextCursor } = params;
-    // A page that exhausted the filter is the complete list, and a traversal no
-    // longer than the page just restated is exactly what reopening the screen
-    // would show. Both are fully superseded.
-    if (previous === undefined || nextCursor === null || previous.runIds.length <= pageRunIds.length) {
-        return { runIds: [...pageRunIds], nextCursor, loaded: true };
-    }
-    const boundaryId = pageRunIds[pageRunIds.length - 1];
-    const boundary = boundaryId === undefined ? undefined : runsById[workflowRunStoreKey(boundaryId, params.scope ?? null)];
-    if (boundary === undefined) return { runIds: [...pageRunIds], nextCursor, loaded: true };
-    const pageIds = new Set(pageRunIds);
-    const retained = previous.runIds.filter((runId) => (
-        !pageIds.has(runId) && isBeyondWorkflowRunListSpan(runsById[workflowRunStoreKey(runId, params.scope ?? null)], boundary)
-    ));
-    return { runIds: [...pageRunIds, ...retained], nextCursor: previous.nextCursor, loaded: true };
-}
-
 function appendUniqueIds(existing: readonly string[], incoming: readonly string[]): string[] {
     const seen = new Set(existing);
     const next = [...existing];
@@ -849,8 +814,6 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
         applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, projection, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
             set((state) => {
                 const previous = state.workflowRunListWindows[windowId];
-                // Bodies merge first so the refreshed span can be measured
-                // against the rows the page just restated.
                 // Membership proves ids/order only. Never publish unopened summaries
                 // into the full-body map: existing exact readers treat a missing body
                 // as demand, while already opened bodies remain last-known truth.
@@ -864,9 +827,7 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                 const pageRunIds = appendUniqueIds([], [...runs.map((run) => run.id), ...automationRuns.map((run) => run.id)]);
                 const membership: WorkflowRunListWindow = mode === 'append' && previous
                     ? { runIds: appendUniqueIds(previous.runIds, pageRunIds), nextCursor, loaded: true }
-                    : mode === 'refresh'
-                        ? refreshWorkflowRunListWindow({ runsById: workflowRunsById, previous, pageRunIds, nextCursor, scope })
-                        : { runIds: pageRunIds, nextCursor, loaded: true };
+                    : { runIds: pageRunIds, nextCursor, loaded: true };
                 const tailId = membership.runIds.at(-1);
                 const tailSummary = tailId === undefined ? undefined : runs.find(run => run.id === tailId);
                 const tailAutomation = tailId === undefined ? undefined : automationRuns.find(run => run.id === tailId);
@@ -876,7 +837,7 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     : tailBody ? workflowRunListFrontier(tailBody) : tailId === previous?.frontier?.id ? previous?.frontier : undefined;
                 const window: WorkflowRunListWindow = { ...membership,
                     ...(projection === undefined ? {} : { projection }),
-                    ...(frontier === undefined || (windowId !== 'attention' && windowId !== 'automationAttention') ? {} : { frontier }),
+                    ...(frontier === undefined ? {} : { frontier }),
                     ...((windowId.startsWith('session:') || windowId.startsWith('discussion:')) && scope ? { scope } : {}),
                     ...(attentionRunIds === undefined ? {} : { attentionRunIds }),
                     ...(lastSuccessfulReadAt === undefined ? {} : { lastSuccessfulReadAt }),

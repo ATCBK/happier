@@ -497,8 +497,8 @@ describe('Workflow Run windows through real Account storage', () => {
         const full = await renderHook(() => useWorkflowRunWindow('attention')); await waitLoaded(full);
         expect(full.getCurrent().runIds).toEqual(ordered.map(row => row.id));
         expect(home.requestsFor(route).slice(1).map(request => request.input)).toEqual([
-            expect.objectContaining({ request: { attention: 'required' } }),
-            expect.objectContaining({ request: { attention: 'required', cursor: 'full-second' } }),
+            expect.objectContaining({ request: expect.objectContaining({ attention: 'required', limit: expect.any(Number) }) }),
+            expect.objectContaining({ request: expect.objectContaining({ attention: 'required', cursor: 'full-second', limit: expect.any(Number) }) }),
         ]);
         expect(storage.getState().workflowRunListWindows.attention?.nextCursor).toBe('full-tail');
     });

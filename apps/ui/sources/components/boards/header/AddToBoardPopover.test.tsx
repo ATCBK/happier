@@ -75,6 +75,24 @@ afterEach(async () => {
 });
 
 describe('AddToBoardPopover library recovery', () => {
+    it('keeps later Run rows reachable through the existing list pagination control', async () => {
+        const later = createWorkflowRunSummaryFixture({ id: 'later-run', ownerAccountId: 'account-a' });
+        const first = await boardRunStoragePage([run]);
+        const second = await boardRunStoragePage([later]);
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { select: input => {
+            const more = input !== null && typeof input === 'object' && 'request' in input
+                && input.request !== null && typeof input.request === 'object' && 'cursor' in input.request;
+            return { body: more ? second : { ...first, nextCursor: 'later-page' } };
+        } });
+        const screen = await renderScreen(picker());
+        await waitForHomeGovernance(() => expect(options(screen).some(option => option.id.includes(run.id))).toBe(true));
+        expect(options(screen).some(option => option.id.includes(later.id))).toBe(false);
+        await act(async () => { screen.findByType(SelectionList).props.pagination?.onEndReached(); });
+        await waitForHomeGovernance(() => expect(options(screen).some(option => option.id.includes(later.id))).toBe(true));
+        expect(options(screen).some(option => option.id.includes(run.id))).toBe(true);
+    });
+
     it('shows delayed and refused saved-widget inventory in Gallery and recovers on Retry without closed reads', async () => {
         const definitionPath = '/v1/artifacts?limit=500&kind=widget_definition';
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
