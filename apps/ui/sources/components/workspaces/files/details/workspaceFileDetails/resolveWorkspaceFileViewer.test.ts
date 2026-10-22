@@ -517,7 +517,7 @@ describe('resolveWorkspaceFileViewer', () => {
             ...phoneRuntime,
             formFactor: 'tablet' as const,
         };
-        expect(resolveWorkspaceFileViewerCandidates(phoneRuntime)).toEqual([]);
+        expect(resolveWorkspaceFileViewerCandidates(phoneRuntime)).toEqual([current, viewerRoleBinding]);
         expect(resolveWorkspaceFileViewerCandidates(tabletRuntime)).toEqual([current, viewerRoleBinding]);
     });
 });

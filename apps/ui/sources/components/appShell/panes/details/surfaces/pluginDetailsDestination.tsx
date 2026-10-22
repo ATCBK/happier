@@ -60,6 +60,8 @@ import {
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 
 import { DetailsSurfaceFallback } from './DetailsSurfaceFallback';
 import type {
@@ -1257,13 +1259,25 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
         tabKey,
     });
     const launch = staged ?? (deliveredIsCurrent ? delivered : null);
+    const deviceType = useDeviceType();
+    // Resolve current authority and the exact private handoff before granting
+    // the File host's phone placement. A durable tab/input is not that custody.
+    const resolution: PluginDetailsDestinationPlacementResolution = props.resolution.kind === 'available'
+        && !isPluginUiDestinationBindingAdmittedAtRuntimeV1({
+            binding: props.resolution.placement.binding,
+            platform: props.mount.platform ?? 'web',
+            formFactor: props.mount.formFactor ?? resolvePluginUiRuntimeFormFactor({ deviceType }),
+            hostPurpose: launch?.binding?.openableContent ? 'openableContentViewer' : undefined,
+        })
+        ? { kind: 'unavailable', resource, reason: 'details_destination_platform_unavailable' }
+        : props.resolution;
     const retainedDelivered = isRetainableDetailsDestinationLaunch({
         launch: delivered,
         targetKind: props.targetKind,
         resource,
         tabKey,
     }) ? delivered : null;
-    const fallback = props.resolution.kind === 'available'
+    const fallback = resolution.kind === 'available'
         ? retainedDelivered && !deliveredIsCurrent
             ? {
                 kind: 'unavailable' as const,
@@ -1273,9 +1287,9 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
             }
             : null
         : {
-            kind: props.resolution.kind,
+            kind: resolution.kind,
             resource,
-            ...(props.resolution.kind === 'unavailable' ? { reason: props.resolution.reason } : {}),
+            ...(resolution.kind === 'unavailable' ? { reason: resolution.reason } : {}),
             details: props.details,
         };
     const fallbackLaunch = fallback && retainedDelivered ? retainedDelivered : null;
@@ -1321,13 +1335,13 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
     }
     // Resolution is now narrowed to the exact available binding; only that
     // branch may receive private launch state or mount a plugin renderer.
-    if (props.resolution.kind !== 'available') {
+    if (resolution.kind !== 'available') {
         return <DetailsSurfaceFallback status="missing" />;
     }
     const context: PluginDetailsDestinationRenderContext = {
         resource,
         tabKey,
-        placement: props.resolution.placement,
+        placement: resolution.placement,
         details: props.details,
     };
     let viewerChoice: PluginDetailsViewerChoiceModel | null = null;
@@ -1346,7 +1360,7 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
         <PluginSurfaceFocusEligibilityProvider active>
             <PluginSurfacePlacementHost
                 {...props.mount}
-                placement={props.resolution.placement}
+                placement={resolution.placement}
                 pluginUiProjection={props.projection}
                 projectionInteractionEnabled={props.mount.projectionPhase === 'current'
                     && props.mount.projectionInteractionEnabled === true}
@@ -1400,16 +1414,6 @@ export function createPluginDetailsDestinationSurfaceRenderer(input: Readonly<{
                 projection: input.projection,
                 projectionPhase: input.mount.projectionPhase,
                 policyContext: input.mount.policyContext,
-                ...(
-                    input.mount.platform === undefined || input.mount.formFactor === undefined
-                        ? {}
-                        : {
-                            runtimeAdmission: {
-                                platform: input.mount.platform,
-                                formFactor: input.mount.formFactor,
-                            },
-                        }
-                ),
             });
             return (
                 <PluginDetailsDestinationSurfaceMount

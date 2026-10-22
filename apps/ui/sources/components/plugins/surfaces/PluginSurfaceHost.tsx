@@ -2842,6 +2842,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             binding: selectedSurfaceBinding,
             platform: surfacePlatform,
             formFactor: runtimeFormFactor,
+            hostPurpose: props.binding?.openableContent ? 'openableContentViewer' : undefined,
         })
         : false;
     // Resource admission is a fact of the exact selected surface member. Do not

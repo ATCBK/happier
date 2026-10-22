@@ -539,12 +539,21 @@ export function isPluginUiSurfaceBindingPotentiallySupportedOnPlatformV1(
  * native phones reject desktop/tablet-only rows; web and native tablets use
  * the incumbent multi-pane host path. Explicit native rows remain valid on
  * both phone and tablet form factors.
+ * The incumbent File host may lend its private openable-content viewer purpose
+ * to a singleton details tab; ordinary pane destinations keep the slot policy.
  */
 export function isPluginUiDestinationBindingAdmittedAtRuntimeV1(input: Readonly<{
-  binding: Pick<PluginUiDestinationBindingV1, 'container' | 'targetKind' | 'platforms'>;
+  binding: Pick<PluginUiDestinationBindingV1, 'container' | 'targetKind' | 'platforms'>
+    & Partial<Pick<PluginUiDestinationBindingV1, 'instancePolicy'>>;
   platform: PluginUiPlatformV1;
   formFactor: PluginUiDestinationRuntimeFormFactorV1;
+  /** Host-owned File viewer custody, never authored or serialized in a binding. */
+  hostPurpose?: 'openableContentViewer';
 }>): boolean {
+  const openableContentViewer = input.hostPurpose === 'openableContentViewer'
+    && input.binding.container === 'detailsTab'
+    && (input.binding.targetKind === 'session' || input.binding.targetKind === 'project')
+    && input.binding.instancePolicy === 'singleton';
   // `platforms` on a serialized predecessor binding may be conservative. The
   // registry slot is the canonical authority for whether this is a
   // desktop/tablet-only destination, while the binding still controls the
@@ -553,12 +562,13 @@ export function isPluginUiDestinationBindingAdmittedAtRuntimeV1(input: Readonly<
     input.platform === 'web'
     && input.formFactor === 'phone'
     && isDesktopTabletOnlyDestinationBindingSlotV1(input.binding)
+    && !openableContentViewer
   ) {
     return false;
   }
 
   return input.binding.platforms.includes(input.platform)
-    || (input.formFactor === 'tablet'
+    || ((input.formFactor === 'tablet' || openableContentViewer)
       && isNativePluginUiPlatformV1(input.platform)
       && hasDesktopTabletDestinationPlatformV1(input.binding.platforms));
 }
@@ -572,6 +582,7 @@ export function isPluginUiSurfaceBindingAdmittedAtRuntimeV1(input: Readonly<{
   binding: PluginUiSurfaceBindingV1;
   platform: PluginUiPlatformV1;
   formFactor: PluginUiDestinationRuntimeFormFactorV1;
+  hostPurpose?: 'openableContentViewer';
 }>): boolean {
   const binding = input.binding;
   if (binding.kind !== 'destination') {
@@ -581,6 +592,7 @@ export function isPluginUiSurfaceBindingAdmittedAtRuntimeV1(input: Readonly<{
     binding,
     platform: input.platform,
     formFactor: input.formFactor,
+    hostPurpose: input.hostPurpose,
   });
 }
 

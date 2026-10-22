@@ -23,13 +23,15 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 
 const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn(async (_text: string) => true) }));
+const viewerViewport = vi.hoisted(() => ({ width: 1280 }));
 vi.mock('expo-clipboard', () => clipboard);
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
     // The host renderer has no measured RN list viewport; real File code rows still render.
-    return createReactNativeWebMock(createCapturingFlatListMock({ renderItems: true }).module);
+    return createReactNativeWebMock({ ...createCapturingFlatListMock({ renderItems: true }).module,
+        useWindowDimensions: () => ({ width: viewerViewport.width, height: 900, scale: 1, fontScale: 1 }) });
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -53,7 +55,7 @@ const { ImageWell } = await import('@/components/ui/media/ImageWell');
 const { Modal, ModalProvider } = await import('@/modal');
 const { PluginDetailsDestinationLaunchScope, createPluginDetailsDestinationSurfaceRenderer } = await import('@/components/appShell/panes/details/surfaces/pluginDetailsDestination');
 
-function installedViewerProjection() {
+function installedViewerProjection(platform: 'web' | 'ios' = 'web') {
     const installedPackagesById: Record<string, unknown> = {};
     const entriesById: Record<string, unknown> = {};
     for (let index = 1; index <= 11; index += 1) {
@@ -84,10 +86,10 @@ function installedViewerProjection() {
     }
     // This is the daemon wire boundary; matching, choice and mount normalization remain real.
     return normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
-        installedPackagesById, actionsById: {}, familiesById: { pluginUi: { family: 'pluginUi', entriesById } } }), 'web');
+        installedPackagesById, actionsById: {}, familiesById: { pluginUi: { family: 'pluginUi', entriesById } } }), platform);
 }
 
-function InstalledViewerFileHost(props: Readonly<{ projection: PluginUiProjectionModel }>) {
+function InstalledViewerFileHost(props: Readonly<{ projection: PluginUiProjectionModel; platform: 'web' | 'ios'; formFactor: 'phone' | 'tablet' }>) {
     const [tab, setTab] = React.useState<DetailsTabState>({ key: 'file:notes.txt', kind: 'workspace-file',
         title: 'notes.txt', resource: { filePath: 'notes.txt' }, isPinned: true, isPreview: false });
     const scope = { ...fixture.scope, kind: 'project' as const, workspaceRefId: 'project:installed-viewers' };
@@ -95,17 +97,18 @@ function InstalledViewerFileHost(props: Readonly<{ projection: PluginUiProjectio
         descriptor: { surfaceId: tab.kind, resourceKey: tab.key, scope, region: 'details', status: 'available' },
         callbacks: { replaceTab: (_key, next) => setTab({ ...next, isPinned: true, isPreview: false }) } };
     const renderer = createPluginDetailsDestinationSurfaceRenderer({ targetKind: 'project', projection: props.projection,
-        mount: { ...fixture.scope, projectId: scope.workspaceRefId, platform: 'web', formFactor: 'tablet',
+        mount: { ...fixture.scope, projectId: scope.workspaceRefId, platform: props.platform, formFactor: props.formFactor,
             projectionPhase: 'current', projectionInteractionEnabled: true } });
     return <PluginDetailsDestinationLaunchScope>{renderer.canRender(details) ? renderer.render(details) : (
         <WorkspaceFileDetailsView targetKind="project" workspaceRefId={scope.workspaceRefId}
             scopeId="project:installed-viewers" scope={fixture.scope} filePath="notes.txt" sessionIdForAugmentation={null}
-            openableContentViewer={{ targetKind: 'project', projection: props.projection, platform: 'web',
+            openableContentViewer={{ targetKind: 'project', projection: props.projection, platform: props.platform,
                 scopedLaunchFacts: { ...fixture.scope, interactionEnabled: true }, details }} />
     )}</PluginDetailsDestinationLaunchScope>;
 }
 beforeEach(async () => {
     standardCleanup();
+    viewerViewport.width = 1280;
     clipboard.setStringAsync.mockClear();
     // jsdom supplies the web modal DOM; Node supplies real, fetchable Blob URLs.
     vi.stubGlobal('Blob', getVitestNodeBuiltin<typeof import('node:buffer')>('node:buffer').Blob);
@@ -150,7 +153,12 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); portalBoundary?.restore(); vi.unstubAllGlobals(); });
 
 describe('SVG File page preview dispatch', () => {
-    it('offers the eleventh installed external viewer and selects it through Settings into the real destination mount', async () => {
+    it.each([
+        { platform: 'web', formFactor: 'tablet' },
+        { platform: 'web', formFactor: 'phone' },
+        { platform: 'ios', formFactor: 'phone' },
+    ] as const)('offers the installed external viewer through its private File holder into the real $platform/$formFactor destination mount', async ({ platform, formFactor }) => {
+        viewerViewport.width = formFactor === 'phone' ? 390 : 1280;
         const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const accountScope = getActiveServerAccountScope();
@@ -163,7 +171,7 @@ describe('SVG File page preview dispatch', () => {
         transfer.setPayload(viewerStatBytes, 'notes.txt');
         applyProjectAccountRowsFixture(fixture.storage, { workspaceRefs: [{ ...fixture.scope,
             id: 'project:installed-viewers', label: null, createdAtMs: 1, lastOpenedAtMs: null }] });
-        const screen = await fixture.render(<ModalProvider><InstalledViewerFileHost projection={installedViewerProjection()} /></ModalProvider>);
+        const screen = await fixture.render(<ModalProvider><InstalledViewerFileHost projection={installedViewerProjection(platform)} platform={platform} formFactor={formFactor} /></ModalProvider>);
         const lastChoice = 'plugin-details-viewer-choice:openableContentViewer:com.external.viewer-11:text';
         try {
             await vi.waitFor(() => expect(screen.findByTestId('plugin-details-viewer-choice:openableContentViewer:com.external.viewer-01:text'), screen.getTextContent()).not.toBeNull());

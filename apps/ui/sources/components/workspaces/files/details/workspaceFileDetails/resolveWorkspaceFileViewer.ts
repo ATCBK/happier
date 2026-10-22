@@ -108,6 +108,7 @@ export function resolveWorkspaceFileViewerCandidates(input: Readonly<{
                     binding: placement.binding,
                     platform: input.platform,
                     formFactor: input.formFactor,
+                    hostPurpose: 'openableContentViewer',
                 })
                 // Manifest admission rejects multiple-instance viewer
                 // destinations. Retain this projection-boundary defense so a

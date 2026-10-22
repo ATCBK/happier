@@ -496,6 +496,26 @@ describe('plugin UI destination binding normalization', () => {
     })).toBe(false);
   });
 
+  it('admits a phone File viewer without widening ordinary destination slots or platform masks', () => {
+    const binding = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.viewer', destinationId: 'file', rendererId: 'body',
+      container: 'detailsTab', target: { kind: 'project' }, instancePolicy: 'singleton' });
+    const pane = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.viewer', destinationId: 'panel', rendererId: 'body',
+      container: 'detailsPane', target: { kind: 'project' } });
+    if (!binding || !pane) throw new Error('Destination fixture must normalize');
+    const runtime = { platform: 'web' as const, formFactor: 'phone' as const };
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding, ...runtime })).toBe(false);
+    expect(surfaceRegistry.isPluginUiSurfaceBindingAdmittedAtRuntimeV1({ binding, ...runtime, hostPurpose: 'openableContentViewer' })).toBe(true);
+    expect(surfaceRegistry.isPluginUiSurfaceBindingAdmittedAtRuntimeV1({ binding, ...runtime, platform: 'ios', hostPurpose: 'openableContentViewer' })).toBe(true);
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding: pane, ...runtime, hostPurpose: 'openableContentViewer' })).toBe(false);
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding: { ...binding, instancePolicy: 'multiple' },
+      ...runtime, hostPurpose: 'openableContentViewer' })).toBe(false);
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding: { ...binding, platforms: ['desktop'] },
+      ...runtime, hostPurpose: 'openableContentViewer' })).toBe(false);
+    const { instancePolicy: _instancePolicy, ...legacyInput } = binding;
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding: legacyInput, platform: 'web', formFactor: 'tablet' })).toBe(true);
+    expect(surfaceRegistry.isPluginUiDestinationBindingAdmittedAtRuntimeV1({ binding: legacyInput, ...runtime, hostPurpose: 'openableContentViewer' })).toBe(false);
+  });
+
   it('admits desktop/tablet pane bindings only at the observed tablet form factor', () => {
     const desktopPane = normalizePluginUiDestinationBindingV1({
       pluginId: 'acme.review',

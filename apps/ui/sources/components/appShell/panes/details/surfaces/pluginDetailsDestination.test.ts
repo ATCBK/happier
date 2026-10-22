@@ -13,6 +13,7 @@ import {
 import type { DetailsSurfaceRenderInputV1 } from '@/components/appShell/panes/details/surfaces';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { createMachineFixture, renderHook, renderScreen as renderPanelScreen } from '@/dev/testkit';
+import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
 import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
@@ -374,6 +375,54 @@ describe('pluginDetailsDestination', () => {
             resource,
             placement,
         });
+    });
+
+    it('admits a phone File viewer only through its exact current private holder', async () => {
+        const initial = createDetailsTabProjection().placement;
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: initial.pluginId, destinationId: initial.descriptorId,
+            rendererId: initial.renderer.contributionId, container: 'detailsTab', target: initial.binding.target, instancePolicy: 'singleton' });
+        if (!binding) throw new Error('File viewer needs a singleton destination');
+        const placement = { ...initial, binding, renderer: { kind: 'declarative' as const, contributionId: 'workspace-file-renderer',
+            model: createPluginDeclarativeModelFixture({ pluginId: initial.pluginId, localId: 'workspace-file-renderer', occurrenceId: initial.occurrenceId,
+                document: { version: 1, root: { kind: 'text', text: 'Private phone File body' } } }) } };
+        const details = { ...createDetailsRenderInput(), tab: { ...createPluginDetailsDestinationTab({
+            destination: binding.destination, title: 'Workspace file viewer' }), isPinned: true, isPreview: false } };
+        const privateBinding = createPrivateBinding();
+        const stagedReceipts: Array<ReturnType<ReturnType<typeof usePluginDetailsDestinationLaunchStaging>>> = [];
+        function Scene(props: Readonly<{ current: PluginUiSurfacePlacementProjection; staged?: PluginUiSurfacePlacementProjection; withHolder: boolean }>) {
+            const stage = usePluginDetailsDestinationLaunchStaging();
+            React.useEffect(() => {
+                if (props.staged) stagedReceipts.push(stage({ placement: props.staged, targetKind: 'session', input: { openableContent: 'viewer-ref-1' },
+                    ...(props.withHolder ? { binding: privateBinding } : {}) }));
+            }, [stage, props.staged, props.withHolder]);
+            const renderer = createPluginDetailsDestinationSurfaceRenderer({ targetKind: 'session',
+                projection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 4, surfacePlacementsById: { [props.current.id]: props.current } },
+                mount: { sessionId: 'session-1', machineId: 'machine-1', serverId: runtime.serverId, platform: 'web', formFactor: 'phone',
+                    projectionPhase: 'current', projectionInteractionEnabled: true } });
+            return renderer.render(details);
+        }
+        const view = (current: PluginUiSurfacePlacementProjection, staged: PluginUiSurfacePlacementProjection | undefined, withHolder: boolean) => (
+            React.createElement(PluginDetailsDestinationLaunchScope, null, React.createElement(Scene, { current, staged, withHolder }))
+        );
+        const screen = await renderScreen(view(placement, placement, false));
+        try {
+            expect(stagedReceipts.at(-1)).not.toBeNull();
+            expect(screen.getTextContent()).not.toContain('Private phone File body');
+            await screen.update(view(placement, placement, true));
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('Private phone File body'));
+            const renewed = { ...placement, occurrenceId: 'new-viewer-occurrence', renderer: { ...placement.renderer,
+                model: createPluginDeclarativeModelFixture({ pluginId: placement.pluginId, localId: placement.renderer.contributionId,
+                    occurrenceId: 'new-viewer-occurrence', document: { version: 1, root: { kind: 'text', text: 'Private phone File body' } } }) } };
+            await screen.update(view(renewed, undefined, true));
+            expect(screen.getTextContent()).not.toContain('Private phone File body');
+            const foreign = { ...placement, hostOrigin: { ...placement.hostOrigin, machineId: 'machine-other',
+                executionOrigin: PluginMachineExecutionOriginV1Schema.parse({ ...placement.hostOrigin.executionOrigin,
+                    materializationRef: { ...placement.hostOrigin.executionOrigin.materializationRef,
+                        machineId: 'machine-other', materializationId: 'other-viewer-install' } }) } };
+            await screen.update(view(placement, foreign, true));
+            expect(stagedReceipts.at(-1)).not.toBeNull();
+            expect(screen.getTextContent()).not.toContain('Private phone File body');
+        } finally { await screen.unmount(); }
     });
 
     it('refreshes direct Details openSurface admission when the mounted form factor changes', async () => {
