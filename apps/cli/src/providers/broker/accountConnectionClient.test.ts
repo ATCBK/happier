@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
-import { createProviderBrokerRouteGrantSigningInputV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { createProviderBrokerRouteGrantSigningInputV2, type ProviderBrokerAccountAdmissionResponseV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import { openAccountConnectionProviderBrokerAccess, readAccountConnectionProviderBrokerFailureDiagnostic } from './accountConnectionClient';
 import { logger } from '@/ui/logger';
@@ -80,7 +80,8 @@ describe('personal connection broker consumer', () => {
         openBroker: async () => reason === 'broker_open_refused' ? { ok: false, reasonCode: 'broker_unavailable' } : opened,
         admitConsumer: async () => {
           admissionReads++;
-          return reason !== 'admission_refused' || (variant === 'post_discovery' && admissionReads === 1);
+          return reason !== 'admission_refused' || (variant === 'post_discovery' && admissionReads === 1)
+            ? { ok: true } : { ok: false, reasonCode: 'session_not_active' };
         },
         openTunnel,
         fetchImpl: async (request, options) => {
@@ -98,6 +99,8 @@ describe('personal connection broker consumer', () => {
       if (reason !== 'tunnel_open_failed' && variant !== 'signature') expect(ProviderErrorV1Schema.parse(error).code).toBe('provider_endpoint_unavailable');
       const records = warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Account connection open refused');
       const diagnostic = {
+        ...(reason === 'admission_refused' ? { admissionReasonCode: 'session_not_active' } : {}),
+        ...(reason === 'broker_open_refused' ? { admissionReasonCode: 'broker_unavailable' } : {}),
         reason, ...(httpStatus === undefined ? {} : { httpStatus }),
         ...(reason === 'endpoint_discovery_failed' ? { discoveryCause: variant === 'socket' ? 'socket_closed'
           : variant === 'timeout' ? 'timeout' : variant === 'abort' ? 'aborted' : variant === 'unknown' ? 'transport_error'
@@ -180,7 +183,7 @@ describe('personal connection broker consumer', () => {
       resolveTrustRoots: () => [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }], nowMs: () => 150 });
     const access = await openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
       initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer, application, ...capturedFacts,
-      signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => true,
+      signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => ({ ok: true }),
       openTunnel });
     const binding = await access.readHttpBinding();
     let cleanup: Promise<void> | null = null;
@@ -227,14 +230,15 @@ describe('personal connection broker consumer', () => {
         endpoint: { endpointId: 'b'.repeat(64) } },
     };
     let admitted = true;
-    let pendingAdmission: Promise<boolean> | null = null;
+    let pendingAdmission: Promise<ProviderBrokerAccountAdmissionResponseV2> | null = null;
     let carrierClosed = false;
     let retirementAttempt = 0;
     try {
       const access = await openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer, application, ...capturedFacts,
         signal: new AbortController().signal, openBroker: async () => opened,
-        admitConsumer: async () => pendingAdmission ? await pendingAdmission : admitted,
+        admitConsumer: async () => pendingAdmission ? await pendingAdmission
+          : admitted ? { ok: true } : { ok: false, reasonCode: 'session_not_active' },
         openTunnel: async () => ({ localPort: address.port, localCapability: 'c'.repeat(64), observedPath: 'relay',
           retire: async () => { if (++retirementAttempt === 1) throw new Error('Home is unavailable during retirement'); },
           close: async () => { carrierClosed = true; } }) });
@@ -242,22 +246,27 @@ describe('personal connection broker consumer', () => {
       expect(await new Response(result.body).text()).toBe('data: admitted\n\n');
       expect(effects).toBe(1);
       admitted = false;
-      await expect(access.readHttpBinding()).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
+      const refusal = await access.readHttpBinding().catch((error: unknown) => error);
+      expect(refusal).toMatchObject({ code: 'provider_endpoint_unavailable' });
+      expect(readAccountConnectionProviderBrokerFailureDiagnostic(refusal)).toEqual({
+        reason: 'admission_refused', admissionReasonCode: 'session_not_active',
+      });
       expect(effects).toBe(1);
       admitted = true;
-      let finishAdmission!: (value: boolean) => void;
-      pendingAdmission = new Promise<boolean>(resolve => { finishAdmission = resolve; });
+      await expect(access.readHttpBinding()).resolves.toMatchObject({ endpointUrl: `http://127.0.0.1:${address.port}/` });
+      let finishAdmission!: (value: ProviderBrokerAccountAdmissionResponseV2) => void;
+      pendingAdmission = new Promise<ProviderBrokerAccountAdmissionResponseV2>(resolve => { finishAdmission = resolve; });
       const pendingBinding = access.readHttpBinding();
       await expect(access.cleanup()).rejects.toThrow('Home is unavailable during retirement');
       expect(carrierClosed).toBe(true);
-      finishAdmission(true);
+      finishAdmission({ ok: true });
       await expect(pendingBinding).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
       await expect(access.cleanup()).resolves.toBeUndefined();
       expect(effects).toBe(1);
       await expect(access.readHttpBinding()).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
       await expect(openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'different-hub', connectionId, consumer, application, ...capturedFacts,
-        signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => true,
+        signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => ({ ok: true }),
         openTunnel: async () => { throw new Error('unadmitted transport reached'); } })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
       const runConsumer = { kind: 'execution_run', executionRunId: 'run-1' } as const;
       const runOpened: Extract<ProviderBrokerAccountOpenResponseV2, { ok: true }> = { ...opened,
@@ -266,12 +275,12 @@ describe('personal connection broker consumer', () => {
       await expect(openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer: runConsumer, application, ...capturedFacts,
         executionRunOccurrenceId: 'captured-other-occurrence', signal: new AbortController().signal,
-        openBroker: async () => runOpened, admitConsumer: async () => true,
+        openBroker: async () => runOpened, admitConsumer: async () => ({ ok: true }),
         openTunnel: async () => { throw new Error('Different Run occurrence reached transport'); } })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
       const runAccess = await openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer: runConsumer, application, ...capturedFacts,
         executionRunOccurrenceId: 'current-occurrence', signal: new AbortController().signal,
-        openBroker: async () => runOpened, admitConsumer: async () => true,
+        openBroker: async () => runOpened, admitConsumer: async () => ({ ok: true }),
         openTunnel: async () => ({ localPort: address.port, localCapability: 'd'.repeat(64), observedPath: 'direct',
           retire: async () => {}, close: async () => {} }) });
       await expect(runAccess.readHttpBinding()).resolves.toMatchObject({ endpointUrl: `http://127.0.0.1:${address.port}/` });
@@ -281,7 +290,7 @@ describe('personal connection broker consumer', () => {
       let unpublishedClosed = false;
       await expect(openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer, application, ...capturedFacts,
-        signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => true,
+        signal: new AbortController().signal, openBroker: async () => opened, admitConsumer: async () => ({ ok: true }),
         openTunnel: async () => ({ localPort: address.port, localCapability: 'e'.repeat(64), observedPath: 'direct',
           retire: async () => { unpublishedRetired = true; }, close: async () => { unpublishedClosed = true; } }),
       })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });

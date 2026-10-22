@@ -2025,9 +2025,12 @@ export async function startDaemon(
               ...request,
               homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
               openBroker: async (request, signal) => await api.openAccountConnectionProviderBroker(request, { signal }),
-              admitConsumer: async (authority, signal) => await isCurrent(signal)
-                && (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok
-                && await isCurrent(signal),
+              admitConsumer: async (authority, signal) => {
+                if (!await isCurrent(signal)) return { ok: false, reasonCode: 'operation_not_current' };
+                const admitted = await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal });
+                if (!admitted.ok) return admitted;
+                return await isCurrent(signal) ? admitted : { ok: false, reasonCode: 'operation_not_current' };
+              },
               openTunnel: createProviderBrokerMachineCarrierTunnelOpen({
                 homeId: managedPolicyHomeId, accountId: externalActionAccountId, localMachineId: machineId,
                 runtime, resolveTrustRoots: resolvePeerMediationTrustRoots,
@@ -2220,7 +2223,7 @@ export async function startDaemon(
           return await openAccountConnectionProviderBrokerAccess({
             ...request, homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
             openBroker: async (openRequest, signal) => await api.openAccountConnectionProviderBroker(openRequest, { signal }),
-            admitConsumer: async (authority, signal) => (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok,
+            admitConsumer: async (authority, signal) => await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal }),
             openTunnel,
           });
         },

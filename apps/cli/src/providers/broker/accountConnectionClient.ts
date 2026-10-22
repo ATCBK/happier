@@ -1,6 +1,6 @@
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1, ProviderBrokerConsumerV1, ProviderConnectionId } from '@happier-dev/protocol';
-import { ProviderBrokerAccountOpenResponseV2Schema, type ProviderBrokerAccountOpenRequestV2, type ProviderBrokerAccountOpenResponseV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { ProviderBrokerAccountAdmissionResponseV2Schema, ProviderBrokerAccountOpenResponseV2Schema, type ProviderBrokerAccountAdmissionResponseV2, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerAccountOpenRequestV2, type ProviderBrokerAccountOpenResponseV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol/providers/safety/url';
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
@@ -15,9 +15,11 @@ type BrokerOpenFailureReason = 'broker_open_refused' | 'binding_invalid' | 'tunn
 
 type AccountConnectionProviderBrokerFailureDiagnostic = ProviderBrokerEndpointDiscoveryFailure & Readonly<{
   reason: BrokerOpenFailureReason | 'native_runtime_absent';
+  admissionReasonCode?: ProviderBrokerAdmissionFailureCodeV1;
 }>;
-// Same-process diagnostic custody only. Nothing is added to the public error,
-// serialized response, SDK, or native exception, and the original error is retained.
+// Same-process diagnostic custody. The outer Provider error is unchanged;
+// Home's closed reason can project into the existing runner failure cause.
+// No raw exception or signed authority crosses that boundary.
 const failureDiagnostics = new WeakMap<object, AccountConnectionProviderBrokerFailureDiagnostic>();
 
 export function reportAccountConnectionProviderBrokerOpenFailure(diagnostic: AccountConnectionProviderBrokerFailureDiagnostic): void {
@@ -67,7 +69,7 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
   accountId: string;
   initiatorMachineId: string;
   openBroker(request: ProviderBrokerAccountOpenRequestV2, signal: AbortSignal): Promise<ProviderBrokerAccountOpenResponseV2>;
-  admitConsumer(authority: SignedProviderBrokerRouteGrantV2, signal?: AbortSignal): Promise<boolean>;
+  admitConsumer(authority: SignedProviderBrokerRouteGrantV2, signal?: AbortSignal): Promise<ProviderBrokerAccountAdmissionResponseV2>;
   openTunnel(request: Readonly<{
     brokerOpen: Extract<ProviderBrokerAccountOpenResponseV2, { ok: true }>;
     refreshBrokerOpen(signal?: AbortSignal): Promise<ProviderBrokerAccountOpenResponseV2>;
@@ -77,9 +79,11 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
 }>): Promise<AccountConnectionProviderBrokerAccess> {
   const unavailable = () => createProviderErrorV1('provider_endpoint_unavailable', { connectionId: input.connectionId, machineId: input.targetMachineId });
   let failedReason: BrokerOpenFailureReason = 'consumer_binding_invalid';
+  let admissionReasonCode: ProviderBrokerAdmissionFailureCodeV1 | undefined;
   const discovery = createProviderBrokerEndpointDiscovery();
   const reportFailure = (reason: BrokerOpenFailureReason) => {
     reportAccountConnectionProviderBrokerOpenFailure({ reason,
+      ...(admissionReasonCode ? { admissionReasonCode } : {}),
       ...(reason === 'endpoint_discovery_failed' ? discovery.failureDiagnostic() : {}) });
   };
   try {
@@ -95,7 +99,10 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     };
     failedReason = 'broker_open_refused';
     const opened = ProviderBrokerAccountOpenResponseV2Schema.parse(await input.openBroker(request, input.signal));
-    if (!opened.ok) throw unavailable();
+    if (!opened.ok) {
+      admissionReasonCode = opened.reasonCode;
+      throw unavailable();
+    }
     failedReason = 'binding_invalid';
     const payload = opened.authority.payload;
     if (payload.homeId !== input.homeId || payload.accountId !== input.accountId
@@ -108,8 +115,16 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     let closed = false;
     const assertAdmitted = async (signal: AbortSignal = input.signal) => {
       failedReason = 'admission_refused';
+      admissionReasonCode = undefined;
       signal.throwIfAborted();
-      if (closed || !await input.admitConsumer(opened.authority, signal)) throw unavailable();
+      if (closed) throw unavailable();
+      const admitted = ProviderBrokerAccountAdmissionResponseV2Schema.parse(await input.admitConsumer(opened.authority, signal));
+      if (!admitted.ok) {
+        admissionReasonCode = admitted.reasonCode;
+        throw withAccountConnectionProviderBrokerFailureDiagnostic(unavailable(), {
+          reason: 'admission_refused', admissionReasonCode: admitted.reasonCode,
+        });
+      }
       signal.throwIfAborted();
       if (closed) throw unavailable();
     };
@@ -176,8 +191,9 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       try { await assertAdmitted(lifetime); }
       catch (error) {
         if (!lifetime.aborted) {
-          withAccountConnectionProviderBrokerFailureDiagnostic(error, { reason: 'admission_refused' });
-          reportFailure('admission_refused');
+          const diagnostic = readAccountConnectionProviderBrokerFailureDiagnostic(error) ?? { reason: 'admission_refused' as const };
+          withAccountConnectionProviderBrokerFailureDiagnostic(error, diagnostic);
+          reportAccountConnectionProviderBrokerOpenFailure(diagnostic);
         }
         throw error;
       }
@@ -208,7 +224,7 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
     if (!input.signal.aborted || failedReason === 'endpoint_discovery_failed') {
       const diagnostic = failedReason === 'endpoint_discovery_failed' ? discovery.failureDiagnostic() : {};
       withAccountConnectionProviderBrokerFailureDiagnostic(error, {
-        reason: failedReason, ...diagnostic,
+        reason: failedReason, ...(admissionReasonCode ? { admissionReasonCode } : {}), ...diagnostic,
       });
       reportFailure(failedReason);
     }

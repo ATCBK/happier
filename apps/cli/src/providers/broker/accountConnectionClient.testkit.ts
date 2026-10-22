@@ -37,6 +37,7 @@ export async function openRefusedAccountConnectionBroker(
     ...(reason === 'consumer_binding_invalid' ? { executionRunOccurrenceId: 'unexpected-session-occurrence' } : {}),
     targetMachineId: reason === 'binding_invalid' ? 'wrong-target' : request.targetMachineId,
     openBroker: async () => reason === 'broker_open_refused' ? { ok: false, reasonCode: 'broker_unavailable' } : opened,
-    admitConsumer: async () => reason !== 'admission_refused', openTunnel,
+    admitConsumer: async () => reason === 'admission_refused'
+      ? { ok: false, reasonCode: 'session_not_active' } : { ok: true }, openTunnel,
     fetchImpl: async () => new Response(null, { status: 403 }) });
 }

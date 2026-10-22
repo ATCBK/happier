@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 
 import type { ProviderCredentialTransportV1 } from '@happier-dev/protocol';
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import { openPinnedHttpStream } from '@/network/pinnedHttp';
 import { resolveUrlConnectionIdentity } from '@/network/urlConnectionIdentity';
@@ -96,7 +97,13 @@ export function createRunnerManagedProviderHttpBindingRequest(
                     cancel: cancelResponse,
                 }),
             } };
-        } catch {
+        } catch (error) {
+            const details = isPluginError(error) ? error.details : undefined;
+            const cause = details && typeof details === 'object' && !Array.isArray(details) ? details.cause : undefined;
+            const admission = ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(
+                cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined,
+            );
+            if (admission.success) return { ok: false, reasonCode: admission.data };
             return { ok: false, reasonCode: 'broker_unavailable' };
         }
     };

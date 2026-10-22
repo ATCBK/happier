@@ -305,15 +305,15 @@ describe('CLIProxyAPI composed public managed Provider start', () => {
         admit: async () => ({ ok: false, reasonCode: 'resource_unavailable' }) });
       const context = { kind: 'account_connection' as const, authority: opened.authority,
         authenticatedRemoteEndpointId: opened.authority.payload.initiator.endpointId,
-        access: { endpointUrl: (id: string) => id === endpoint.endpointTemplateId
-          ? `http://127.0.0.1:45123${endpoint.servicePath}` : null, request: upstream },
-        revalidate: async () => current, streamLifetime: { close: async () => {}, retire: async () => {} } };
+        acquireSource: async () => current ? { endpointUrl: (id: string) => id === endpoint.endpointTemplateId
+          ? `http://127.0.0.1:45123${endpoint.servicePath}` : null, request: upstream } : null,
+        streamLifetime: { close: async () => {}, retire: async () => {} } };
       const access = await openAccountConnectionProviderBrokerAccess({ homeId: 'home-1', accountId: 'account-1',
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer, application,
         expectedConnectionSecurityFingerprint: source.expectedConnectionSecurityFingerprint,
         expectedManagedRuntimeBindingFingerprint: source.expectedManagedRuntimeBindingFingerprint,
         signal: new AbortController().signal, openBroker: async () => opened,
-        admitConsumer: async () => current,
+        admitConsumer: async () => current ? { ok: true } : { ok: false, reasonCode: 'operation_not_current' },
         openTunnel: async () => ({ localPort: 45124, localCapability: 'c'.repeat(64), observedPath: 'relay',
           retire: async () => {}, close: async () => {} }),
         fetchImpl: async (url, init) => {

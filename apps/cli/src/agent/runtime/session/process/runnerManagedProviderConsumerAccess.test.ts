@@ -1,10 +1,44 @@
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http';
 
 import { describe, expect, it, vi } from 'vitest';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import { createRunnerManagedProviderConsumerAccess } from './runnerManagedProviderConsumerAccess';
 
 describe('runner shared Provider consumer access', () => {
+    it.each([
+        ['session_not_active', 'session_not_active'],
+        ['operation_not_current', 'operation_not_current'],
+        ['broker_unavailable', 'broker_unavailable'],
+        ['private-reason-do-not-log', 'broker_unavailable'],
+    ] as const)('returns the closed Home refusal %s after a fresh read without forwarding another request', async (causeCode, expectedCode) => {
+        let refused = false;
+        const consumer = await createRunnerManagedProviderConsumerAccess({
+            signal: new AbortController().signal,
+            credentialTransport: { id: 'bearer', protocols: ['anthropic'], uses: ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } },
+            // Authenticated daemon RPC boundary, including its existing typed cause.
+            readAccess: async () => {
+                if (refused) throw new PluginError({ code: 'provider_endpoint_unavailable',
+                    message: 'private-error-do-not-log', details: { cause: { code: causeCode, stage: 'dispatch' } } });
+                return { endpointUrl: 'http://127.0.0.1:1/v1', headers: { authorization: 'Bearer private-daemon-token' } };
+            },
+            materialize: async ({ endpointUrl, credentialPlaceholder }) => ({ v: 1, kind: 'spawnEnv', env: [
+                { name: 'URL', value: endpointUrl, source: 'provider' },
+                { name: 'TOKEN', value: credentialPlaceholder, source: 'provider' },
+            ] }),
+        });
+        try {
+            const environment = consumer.transformLaunchEnvironment(Object.fromEntries(
+                consumer.materialization.env.flatMap(entry => entry.value === null ? [] : [[entry.name, entry.value]])));
+            refused = true;
+            const response = await fetch(`${environment.URL}/messages`, { method: 'POST',
+                headers: { authorization: `Bearer ${environment.TOKEN}` }, body: '{}' });
+            expect(response.status).toBe(403);
+            const body = await response.json();
+            expect(body).toMatchObject({ error: { code: expectedCode } });
+            expect(JSON.stringify(body)).not.toContain('private-');
+        } finally { await consumer.cleanup(); }
+    });
     it('cancels one consumer stream without closing another consumer of the same gateway', async () => {
         const streams: ServerResponse[] = [];
         const requests: IncomingHttpHeaders[] = [];

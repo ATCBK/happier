@@ -93,7 +93,8 @@ export function projectRunnerDaemonPluginServicesFailure(
     const retainedCause = RunnerDaemonPluginServicesPreparationCauseV1Schema.safeParse(
         isPluginError(error) && isRecord(error.details) ? error.details.cause : undefined,
     );
-    const causeCode = RunnerDaemonPluginServicesPreparationCauseV1Schema.shape.code.safeParse(candidateCode);
+    const admissionReasonCode = readAccountConnectionProviderBrokerFailureDiagnostic(error)?.admissionReasonCode;
+    const causeCode = RunnerDaemonPluginServicesPreparationCauseV1Schema.shape.code.safeParse(admissionReasonCode ?? candidateCode);
     const exceptionName = !preparationStage
         ? error instanceof TypeError ? 'TypeError'
             : error instanceof RangeError ? 'RangeError'
