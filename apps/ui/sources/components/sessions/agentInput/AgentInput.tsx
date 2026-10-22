@@ -77,7 +77,9 @@ import {
 } from '@/components/autocomplete/findActiveWord';
 import {
     useActiveSuggestions,
+    resolveActiveSuggestionsHandler,
     type ActiveSuggestionsHandler,
+    type ActiveSuggestionsSource,
 } from '@/components/autocomplete/useActiveSuggestions';
 import { resolveComposerSuggestionKind } from '@/components/autocomplete/composerSuggestionKinds';
 import { resolveComposerSuggestionKindIdsForTrigger, type ComposerSuggestionKindId } from '@/components/autocomplete/composerSuggestionGrammar';
@@ -572,7 +574,7 @@ interface AgentInputProps {
     /** Eligible suggestion kinds for this composer host. Trigger characters follow from the kinds (INV-1). */
     autocompleteKinds: readonly ComposerSuggestionKindId[];
     /** Receives an abort signal for the query it is resolving; a superseded query is never applied (D-15). */
-    autocompleteSuggestions: ActiveSuggestionsHandler;
+    autocompleteSuggestions: ActiveSuggestionsSource;
     /** Session composer host opens controller-admitted external slash Actions through the canonical Action path. */
     onContributedActionSuggestionSelect?: (
         action: PluginContributedActionDescriptor,
@@ -2197,9 +2199,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const activeWord = activeWordState?.activeWord ?? null;
     const activeSuggestionQuery = isInputFocused && hasAutocompleteTextInteraction && !props.disabled ? activeWord : null;
+    const autocompleteSuggestions = resolveActiveSuggestionsHandler(props.autocompleteSuggestions, activeSuggestionQuery);
     // Selection follows candidate identity, not an index (INV-6) — the hook owns that.
     const resolveSuggestions = React.useCallback<ActiveSuggestionsHandler>(async (query, signal, publish) => {
-        if (query !== '@' || !composerDropScope || props.referenceRecents === 'none') return props.autocompleteSuggestions(query, signal, publish);
+        if (query !== '@' || !composerDropScope || props.referenceRecents === 'none') return autocompleteSuggestions(query, signal, publish);
         const rows = readRegisteredStorageState()?.sessionListRowsByServerId?.[composerDropScope.serverId];
         const sessions = props.autocompleteKinds.includes('session')
             ? readComposerSessionSuggestionItems({ serverId: composerDropScope.serverId, currentSessionId: props.sessionId ?? null })
@@ -2212,7 +2215,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             attachmentIds: props.attachmentRowItems?.flatMap(item => item.attachmentId && item.status !== 'error'
                 && item.availability !== 'unavailable' && item.availability !== 'invalid' ? [item.attachmentId] : []),
             skillSelectionEffect: reference => async () => {
-                const current = await props.autocompleteSuggestions(`$${reference.label}`, new AbortController().signal, () => {});
+                const query = `$${reference.label}`;
+                const current = await resolveActiveSuggestionsHandler(props.autocompleteSuggestions, query)(query, new AbortController().signal, () => {});
                 const candidate = current.find(item => {
                     const mention = createStructuredInputMentionFromSuggestion({ suggestion: item, start: 0 });
                     return mention && composerReferencesFromStructuredMentions({ text: item.text, mentions: [mention] })[0]?.ref === reference.ref;
@@ -2220,16 +2224,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 return applyRecentComposerSkillSelection(candidate, t('capabilities.control.changeFailed'));
             },
         });
-        if (recent.length === 0) return props.autocompleteSuggestions(query, signal, publish);
+        if (recent.length === 0) return autocompleteSuggestions(query, signal, publish);
         // Lab P1: Recent leads, and every kind keeps its own section below it (so a kind tab is never
         // empty on a bare trigger). A row already in Recent is not repeated.
         const recentIdentities = new Set(recent.map(getAutocompleteSuggestionIdentity));
         const withRecent = (rows: readonly AutocompleteSuggestion[]) => [...recent, ...rows.filter(row => !recentIdentities.has(getAutocompleteSuggestionIdentity(row)))];
         publish(recent);
-        return withRecent(await props.autocompleteSuggestions(query, signal, (rows, status) => publish(withRecent(rows), status)));
-    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems, props.referenceRecents]);
+        return withRecent(await autocompleteSuggestions(query, signal, (rows, status) => publish(withRecent(rows), status)));
+    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems, props.referenceRecents]);
     // Folder/attachment refreshes only affect bare-@ recents, not an in-flight native catalog query.
-    const activeSuggestionsHandler = activeSuggestionQuery === '@' ? resolveSuggestions : props.autocompleteSuggestions;
+    const activeSuggestionsHandler = activeSuggestionQuery === '@' ? resolveSuggestions : autocompleteSuggestions;
     const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty, selectionForKind] = useActiveSuggestions(activeSuggestionQuery, activeSuggestionsHandler, { wrapAround: true });
     // Lab P1–P3: a reference trigger (@, $) gets the reference picker — kind tabs, a held frame and its
     // own empty state. Commands keep the plain list.

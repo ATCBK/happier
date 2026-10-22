@@ -19,6 +19,7 @@ import {
     createComposerControlSurfaceListRootStep,
     createComposerControlSurfaceSplitOptions,
     createPluginContributedActionComposerChips,
+    EMPTY_PLUGIN_COMPOSER_ACTION_CHIPS,
     type ComposerControlSurfaceLayoutContent,
     type PluginComposerControlHost,
     type PluginComposerControlSurfacePresentation,
@@ -890,7 +891,7 @@ export function useComposerScopePluginPresentation(
         }), { tag: 'ComposerScopePluginPresentation.openContributedAction' });
     }, [actionController, params.onOpenContributedAction, scopeAbort, surfaceLifetime]);
     const extraActionChips = React.useMemo(() => {
-        if (!actionSnapshot) return [];
+        if (!actionSnapshot) return EMPTY_PLUGIN_COMPOSER_ACTION_CHIPS;
         return createPluginContributedActionComposerChips({
             controller: actionController,
             openAction: openContributedAction,

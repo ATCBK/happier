@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineReadHttpResponseFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -17,7 +17,8 @@ import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientC
 import { MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol';
+import { SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol/providers/selection/v1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -44,8 +45,13 @@ vi.mock('react-native', async () => {
 });
 vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('@/text', async () =>
-  (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/text', async () => {
+  const { getPreferredLanguage } = await import('@/text/preferredLanguage');
+  return (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => {
+    const locale = getPreferredLanguage();
+    return locale === 'en' ? key : `${locale}:${key}`;
+  } });
+});
 vi.mock('@/modal', async () =>
   (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('expo-router', async () =>
@@ -97,7 +103,7 @@ const composerProjection = DaemonContributionRegistryProjectionDescribeResponseS
   protocolVersion: 1,
   projection: { ...composerInventory.projection,
     agentsById: Object.fromEntries(Object.entries(composerInventory.projection.agentsById).map(([id, declaration]) => [id, {
-      ...declaration, identity: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.identity,
+      ...declaration, identity: id === 'codex' || id === 'claude' ? BUNDLED_CANONICAL_AGENT_DECLARATIONS[id]?.identity : undefined,
     }])),
   },
 });
@@ -121,6 +127,8 @@ const runtime = installSessionPaneRuntimeTestHarness({
     throw new RpcError('Daemon method unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
   },
   request: async (url, init) => {
+    const machineResponse = createPlainMachineReadHttpResponseFixture(new URL(String(url)).pathname, init, 'account-a');
+    if (machineResponse) return machineResponse;
     if (new URL(String(url)).pathname !== '/v2/sessions/s1/pending') return null;
     if ((init?.method ?? 'GET') === 'GET') return Response.json({ pending: submittedMessages.map(message => ({
       ...message, messageRole: 'user', status: 'queued', createdAt: 1, updatedAt: 1, position: 1,
@@ -140,6 +148,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
   },
 });
 const { storage } = await import('@/sync/domains/state/storage');
+const { commitPreferredLanguage } = await import('@/text/preferredLanguage');
 const sessionUtils = await import('@/utils/sessions/sessionUtils');
 const shellRenders = vi.spyOn(sessionUtils, 'useSessionStatus');
 const resolver = await import('@/sync/domains/input/slashCommands/resolveSessionComposerSend');
@@ -195,6 +204,7 @@ function publishSessionOwnerMetadata(
 
 describe('SessionView composer typing', () => {
   beforeEach(async () => {
+    commitPreferredLanguage('en');
     platformState.os = 'ios';
     submittedMessages.length = 0;
     composerInventoryEnabled = false;
@@ -286,7 +296,7 @@ describe('SessionView composer typing', () => {
       expect(readProducerProps().agentCatalogIdentity?.current).not.toBe(true);
       await renderer.act(async () => { firstProjection.resolve(composerProjection); });
       await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity).toMatchObject({
-        entry: { qualifiedId: 'happier.agent.codex/codex' }, machineId: firstMachineId, serverId: runtime.serverId, current: true,
+        entry: { identity: BUNDLED_CANONICAL_AGENT_DECLARATIONS.codex?.identity }, machineId: firstMachineId, serverId: runtime.serverId, current: true,
       }));
       expect(readModelDetail().props).toMatchObject({ agentId: 'codex', selectedModelId: 'producer-first-model' });
       const initial = readProducerProps();
@@ -338,7 +348,7 @@ describe('SessionView composer typing', () => {
       await renderer.act(async () => {
         publishSessionOwnerMetadata(({ modelSelectionIntentV1: _previousModel, ...metadata }) => ({ ...metadata, flavor: 'claude' }));
       });
-      await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity?.entry.qualifiedId).toBe('happier.agent.claude/claude'));
+      await vi.waitFor(() => expect(readProducerProps().agentCatalogIdentity?.entry.identity).toEqual(BUNDLED_CANONICAL_AGENT_DECLARATIONS.claude?.identity));
       expect(readModelDetail().props.agentId).toBe('claude');
     } finally {
       // Release transport fixtures even if an assertion fails while a request is pending.
@@ -367,13 +377,41 @@ describe('SessionView composer typing', () => {
       expect(shellRenders.mock.calls.length).toBeGreaterThan(rendersBefore);
       const refreshed = readProducerProps();
       for (const key of ['composerFileScope', 'sessionTypingPresence', 'statusBadges', 'extraActionChips', 'attachmentRowItems'] as const) {
-        expect(refreshed[key], key).toBe(initial[key]);
+        expect.soft(refreshed[key], key).toBe(initial[key]);
       }
       // The existing input callback still writes to the live draft after the
       // producer descriptors have survived a parent update.
-      await renderer.act(async () => { initial.onChangeText('retained callback draft'); });
+      await renderer.act(async () => { initial.onChangeText?.('retained callback draft'); });
       expect(findAgentInput(screen).props.value).toBe('retained callback draft');
       expect(storedDraftText()).toBe('retained callback draft');
+      await renderer.act(async () => {
+        initial.inputPersistence?.onSelectionChangePersist?.({ start: 1, end: 1 }, 'retained callback draft'.length);
+      });
+      await screen.update(surfaceElement(composer => host(composer)));
+      expect(readProducerProps().inputPersistence?.initialSelection).toEqual({ start: 1, end: 1 });
+      expect.soft(readProducerProps().inputExpansion, 'selection does not replace expansion controls').toBe(initial.inputExpansion);
+
+      // Opt-in Action placement is a real presentation input, not draft state.
+      const hasReviewShortcut = () => readProducerProps().extraActionChips?.some(chip => chip.key === 'session-action:review.start');
+      expect(hasReviewShortcut()).toBe(false);
+      await renderer.act(async () => {
+        const settings = storage.getState().settings;
+        storage.setState({ settings: { ...settings, featureToggles: { ...settings.featureToggles, 'execution.runs': true },
+          actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'review.start': { enabledPlacements: ['agent_input_chips'] } } }) } });
+      });
+      expect.soft(hasReviewShortcut(), 'Action placement activated').toBe(true);
+      await renderer.act(async () => {
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: settingsDefaults.actionsSettingsV1 } });
+      });
+      expect.soft(hasReviewShortcut(), 'Action placement withdrawn').toBe(false);
+
+      // Stable descriptors must still refresh copy when a ready locale is activated.
+      const linkedFileTitle = () => readProducerProps().extraActionChips
+        ?.find(chip => chip.controlId === 'linkedFiles')?.collapsedContentPopover?.title;
+      expect(linkedFileTitle()).toBe('common.linkFile');
+      await renderer.act(async () => { commitPreferredLanguage('fr'); });
+      expect.soft(linkedFileTitle(), 'ready locale activated').toBe('fr:common.linkFile');
+      await renderer.act(async () => { commitPreferredLanguage('en'); });
 
       await renderer.act(async () => {
         publishSessionOwnerMetadata(metadata => ({ ...metadata, path: '/tmp/other-workspace' }));

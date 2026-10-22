@@ -47,8 +47,7 @@ import { readRpcErrorCode } from "@happier-dev/protocol/rpcErrors";
 import { deriveSessionIntentionalRestartSignals, resolveSessionIntentionalRestartRecoveryEvidenceAtMs, type SessionIntentionalRestartSignal } from "@/components/sessions/agentInput/hooks/sessionIntentionalRestartSignal";
 import { useSessionIntentionalRestartSourceEvents } from "@/components/sessions/transcript/source/appSessionTranscriptSource";
 import { SESSION_COMPOSER_SUGGESTION_KINDS, type ComposerReferenceSearchHost } from "@/components/autocomplete/composerSuggestionKinds";
-import type { AutocompleteSuggestionUpdate } from "@/components/autocomplete/autocompleteTypes";
-import { resolveSessionComposerSuggestions } from "@/components/sessions/agentInput/sessionComposerSuggestions";
+import { useSessionComposerSuggestions } from "@/components/sessions/agentInput/useSessionComposerSuggestions";
 import { resolveReviewCommentDraftAnchorsForPrompt } from "@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt";
 import { CurrentSessionPresentationSurface } from "@/components/sessions/presentation/CurrentSessionPresentationSurface";
 import { useComposerScopePluginPresentation } from "@/components/sessions/presentation/useComposerScopePluginPresentation";
@@ -880,13 +879,17 @@ export function useSessionComposerController({
         ? computeSessionModePickerControl({ agentId, metadata: ownerMetadata })
         : null;
     const enabledAgentIds = useEnabledAgentIds();
-    const sessionActionDefaultBackend = resolveSessionActionDefaultBackend({
-        session: session as any,
+    const sessionActionDefaultBackend = React.useMemo(() => resolveSessionActionDefaultBackend({
+        session: {
+            metadata: session.metadata,
+            metadataLayoutVersion: session.metadataLayoutVersion,
+            ownerMetadataView: session.ownerMetadataView,
+        },
         enabledAgentIds,
         fallbackAgentId: liveComposerState.agentId && isBundledAgentId(liveComposerState.agentId)
             ? liveComposerState.agentId
             : null,
-    });
+    }), [session.metadata, session.metadataLayoutVersion, session.ownerMetadataView, enabledAgentIds, liveComposerState.agentId]);
     const agentInputAgentType = agentId ?? sessionActionDefaultBackend?.displayAgentType ?? null;
     const agentInputCore = agentInputAgentType ? getAgentCore(agentInputAgentType) : null;
     const isHiddenSystemSessionSession = isHiddenSystemSession({ metadata: ownerMetadata });
@@ -1361,8 +1364,8 @@ export function useSessionComposerController({
     }, [runWithSessionComposerAdmissionReservation]);
     const composerPluginPresentation = useComposerScopePluginPresentation({
         composer: activeComposerRef,
-        physicalTarget: { kind: 'session', sessionId },
-        resourceContext: { kind: 'session', sessionId },
+        physicalTarget: sessionComposerRef,
+        resourceContext: sessionComposerRef,
         machineId: machineId ?? null,
         serverId: sessionRouteServerId,
         projectionPhase: daemonMergedProjection.phase,
@@ -5079,9 +5082,22 @@ export function useSessionComposerController({
             disabled: isReadOnly,
         });
         const sessionWorkflowRunChips = React.useMemo(() => [sessionWorkflowRunChip], [sessionWorkflowRunChip]);
+        const pickComposerAttachmentFile = React.useCallback(() => {
+            openAttachmentFilePickerFiles(filePickerRef.current);
+        }, [filePickerRef]);
+        const pickComposerAttachmentImage = React.useCallback(() => {
+            openAttachmentFilePickerImages(filePickerRef.current);
+        }, [filePickerRef]);
+        const appendComposerLinkedPath = React.useCallback((path: string) => {
+            setVisibleComposerDraftValue((prev) => {
+                const base = prev ?? '';
+                const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
+                return `${base}${spacer}@${path} `;
+            });
+        }, [setVisibleComposerDraftValue]);
         const sessionExtraActionPresentation = useSessionAgentInputExtraActionChips({
             sessionId,
-            sessionAddress: sessionRouteServerId ? { serverId: sessionRouteServerId, sessionId } : null,
+            sessionAddress: companionAddress,
             accountScope: sessionAccountScope,
             accountScopeIsCurrent: sessionAccountLifetime?.isCurrent ?? null,
             // Collaboration is a primary-presentation entry; an embedded composer has none.
@@ -5090,20 +5106,10 @@ export function useSessionComposerController({
             attachmentsUploadsAvailable,
             isReadOnly,
             isUploadingAttachments,
-            onPickAttachmentFile: () => {
-                openAttachmentFilePickerFiles(filePickerRef.current);
-            },
-            onPickAttachmentImage: () => {
-                openAttachmentFilePickerImages(filePickerRef.current);
-            },
+            onPickAttachmentFile: pickComposerAttachmentFile,
+            onPickAttachmentImage: pickComposerAttachmentImage,
             onPasteAttachmentImage: pasteAttachmentImage,
-            onAppendLinkedPath: (path) => {
-                setVisibleComposerDraftValue((prev) => {
-                    const base = prev ?? '';
-                    const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
-                    return `${base}${spacer}@${path} `;
-                });
-            },
+            onAppendLinkedPath: appendComposerLinkedPath,
             reviewCommentsEnabled,
             reviewScope,
             reviewCommentDrafts,
@@ -5291,11 +5297,7 @@ export function useSessionComposerController({
             const { kind: _kind, ...ref } = requested;
             return { source: 'team_resource' as const, ...ref };
         }, [effectiveModelTransitionActionRequired?.requestedSelection]);
-        const sessionConnectedServicesAuthSwitch = useSessionConnectedServicesAuthSwitch({
-            sessionConfiguration: session,
-            routeSources: sessionRouteSources,
-            nativeAgentTargetKey: providerAgentTargetKey,
-            route: {
+        const sessionAuthRoute = React.useMemo<Parameters<typeof useSessionConnectedServicesAuthSwitch>[0]['route']>(() => ({
                 phase: session.active === true || (!modelSelectionDisposition?.proposedSelectionV2 && !modelSelectionDisposition?.contextSelection)
                     ? 'running' : 'draft',
                 selection: requestedRouteSelection ?? modelSelectionDisposition?.proposedSelectionV2?.ref ?? modelSelectionDisposition?.contextRouteSelection ?? null,
@@ -5309,7 +5311,13 @@ export function useSessionComposerController({
                 teamSources: teamCredentialCatalog.resources.map(resource => ({
                     teamId: resource.teamId, resourceId: resource.id, displayName: resource.displayName,
                 })),
-            },
+        }), [session.active, modelSelectionDisposition, requestedRouteSelection, providerLaunchBinding,
+            providerModelProjection.data?.groups, teamCredentialCatalog.resources]);
+        const sessionConnectedServicesAuthSwitch = useSessionConnectedServicesAuthSwitch({
+            sessionConfiguration: session,
+            routeSources: sessionRouteSources,
+            nativeAgentTargetKey: providerAgentTargetKey,
+            route: sessionAuthRoute,
             sessionId,
             agentId,
             machineId: controlMachineTarget?.machineId ?? null,
@@ -5739,6 +5747,41 @@ export function useSessionComposerController({
             </SessionModelNativeSourceLabelContext.Provider>
         ) : undefined, [existingSessionModelPicker, sessionNativeSourceLabel]);
         const sessionCapabilitiesApplyBadge = sessionCapabilities.applyBadge;
+        const managedWakeStatusBadge = React.useMemo<AgentInputStatusBadge | null>(() => {
+            if (!pendingActivationPresentation?.managedWakeProjection) return null;
+            return {
+                key: 'session-managedWake',
+                testID: `session.managedWake.${pendingActivationPresentation.managedWakeProjection.kind}.badge`,
+                label: describeManagedWakeLabel(pendingActivationPresentation.managedWakeProjection, managedWakeNames),
+                labelNumberOfLines: 0,
+                accessibilityLabel: describeManagedWakeLabel(pendingActivationPresentation.managedWakeProjection, managedWakeNames),
+                tone: ['agentStartFailed', 'resourceAbsent', 'storageLost', 'unavailable', 'deliveryUnknown'].includes(pendingActivationPresentation.managedWakeProjection.kind)
+                    ? 'warning' : 'neutral',
+                icon: (tint: string) => <Icon name="desktop" size={14} color={tint} />,
+                renderPopover: ({ open, anchorRef, onRequestClose }) => <ManagedWakePopover open={open} anchorRef={anchorRef}
+                    onRequestClose={onRequestClose} projection={pendingActivationPresentation.managedWakeProjection!}
+                    {...managedWakeNames} busy={pendingActivationActionBusy || pendingRecoveryApproval.approvalPending}
+                    controllerPresence={managedWakeController ? describeMachinePresenceLine(managedWakeController, undefined, undefined, sessionAccountScope).label : t('status.unknown')}
+                    onOpenMachine={() => { const target = managedWakeAuthorization?.managedWakeTargetV1;
+                        if (target && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
+                            machineId: target.enrolledMachineId })); }}
+                    onOpenController={() => { const controller = managedPendingMachine?.controller ?? managedWakeAuthorization?.managedWakeTargetV1?.controller;
+                        if (controller && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
+                            machineId: controller.machineId })); }}
+                    onCheckNow={() => fireAndForget(handleManagedWakeRecovery('inspect'), { tag: 'SessionView.managedWake.inspect' })}
+                    {...((pendingActivationPresentation.primaryAction === 'retry' || pendingActivationPresentation.primaryAction === 'process_when_online') && pendingActivationPresentation.row
+                        ? { onRetry: () => fireAndForget(handleManagedWakeRecovery('retry'), { tag: 'SessionView.managedWake.retry' }) } : {})}
+                    {...(pendingActivationPresentation.managedWakeProjection?.canResumeRuntime && pendingActivationPresentation.row
+                        ? { onResume: () => fireAndForget(handleManagedWakeRecovery('resume'), { tag: 'SessionView.managedWake.resume' }) } : {})}
+                    {...(pendingActivationPresentation.managedWakeProjection?.canWithdraw && pendingActivationPresentation.row
+                        && pendingActivationPresentation.row.pendingDecryption?.kind !== 'loading'
+                        ? { onWithdraw: () => fireAndForget(handleManagedWakeRecovery('withdraw'), { tag: 'SessionView.managedWake.withdraw' }) } : {})}
+                />,
+            };
+        }, [pendingActivationPresentation, managedWakeNames, pendingActivationActionBusy, pendingRecoveryApproval.approvalPending,
+            managedWakeController, sessionAccountScope, managedWakeAuthorization, managedPendingMachine,
+            router, handleManagedWakeRecovery, t]);
+        const hasConnectedServicesAuthChip = Boolean(sessionConnectedServicesAuthSwitch.connectedServicesAuthChip);
         const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
             ...sessionStatusBadges,
             ...(sessionCapabilitiesApplyBadge ? [sessionCapabilitiesApplyBadge] : []),
@@ -5748,7 +5791,7 @@ export function useSessionComposerController({
             // The "Runs through" chip already names this Provider; the badge names it only where the Agent
             // has no route chip. A binding problem is the status line's cause, never said again here.
             ...(providerLaunchBinding && providerBindingPresentation
-                && !sessionConnectedServicesAuthSwitch.connectedServicesAuthChip
+                && !hasConnectedServicesAuthChip
                 ? [{
                     key: 'provider-binding',
                     label: providerBindingLaunchLabel ?? providerBindingPresentation.launchLabel,
@@ -5776,38 +5819,7 @@ export function useSessionComposerController({
                     onPress: authRecoveryBanner.toggle,
                 } satisfies AgentInputStatusBadge]
                 : []),
-            ...(pendingActivationPresentation?.managedWakeProjection
-                ? [{
-                    key: 'session-managedWake',
-                    testID: `session.managedWake.${pendingActivationPresentation.managedWakeProjection.kind}.badge`,
-                    label: describeManagedWakeLabel(pendingActivationPresentation.managedWakeProjection, managedWakeNames),
-                    // A sentence ("Codex couldn’t start. Your message is still queued."): wrap, never cut.
-                    labelNumberOfLines: 0,
-                    accessibilityLabel: describeManagedWakeLabel(pendingActivationPresentation.managedWakeProjection, managedWakeNames),
-                    tone: ['agentStartFailed', 'resourceAbsent', 'storageLost', 'unavailable', 'deliveryUnknown'].includes(pendingActivationPresentation.managedWakeProjection.kind)
-                        ? 'warning' : 'neutral',
-                    icon: (tint: string) => <Icon name="desktop" size={14} color={tint} />,
-                    renderPopover: ({ open, anchorRef, onRequestClose }) => <ManagedWakePopover open={open} anchorRef={anchorRef}
-                        onRequestClose={onRequestClose} projection={pendingActivationPresentation.managedWakeProjection!}
-                        {...managedWakeNames} busy={pendingActivationActionBusy || pendingRecoveryApproval.approvalPending}
-                        controllerPresence={managedWakeController ? describeMachinePresenceLine(managedWakeController, undefined, undefined, sessionAccountScope).label : t('status.unknown')}
-                        onOpenMachine={() => { const target = managedWakeAuthorization?.managedWakeTargetV1;
-                            if (target && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
-                                machineId: target.enrolledMachineId })); }}
-                        onOpenController={() => { const controller = managedPendingMachine?.controller ?? managedWakeAuthorization?.managedWakeTargetV1?.controller;
-                            if (controller && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
-                                machineId: controller.machineId })); }}
-                        onCheckNow={() => fireAndForget(handleManagedWakeRecovery('inspect'), { tag: 'SessionView.managedWake.inspect' })}
-                        {...((pendingActivationPresentation.primaryAction === 'retry' || pendingActivationPresentation.primaryAction === 'process_when_online') && pendingActivationPresentation.row
-                            ? { onRetry: () => fireAndForget(handleManagedWakeRecovery('retry'), { tag: 'SessionView.managedWake.retry' }) } : {})}
-                        {...(pendingActivationPresentation.managedWakeProjection?.canResumeRuntime && pendingActivationPresentation.row
-                            ? { onResume: () => fireAndForget(handleManagedWakeRecovery('resume'), { tag: 'SessionView.managedWake.resume' }) } : {})}
-                        {...(pendingActivationPresentation.managedWakeProjection?.canWithdraw && pendingActivationPresentation.row
-                            && pendingActivationPresentation.row.pendingDecryption?.kind !== 'loading'
-                            ? { onWithdraw: () => fireAndForget(handleManagedWakeRecovery('withdraw'), { tag: 'SessionView.managedWake.withdraw' }) } : {})}
-                    />,
-                } satisfies AgentInputStatusBadge]
-                : []),
+            ...(managedWakeStatusBadge ? [managedWakeStatusBadge] : []),
             ...(armedContinuationNotice
                 ? [{
                     key: 'session-agentTransition-outcome',
@@ -5875,21 +5887,12 @@ export function useSessionComposerController({
             externalTranscriptSnapshotBanner.collapsed,
             externalTranscriptSnapshotBanner.toggle,
             pendingMessageEdit,
-            pendingActivationPresentation,
-            pendingActivationActionBusy,
-            pendingRecoveryApproval.approvalPending,
-            managedWakeNames,
-            managedWakeController,
-            managedWakeAuthorization,
-            managedPendingMachine,
-            sessionAccountScope,
-            handleManagedWakeRecovery,
-            router,
+            managedWakeStatusBadge,
             openSessionModelPicker,
             providerBindingPresentation,
             providerBindingLaunchLabel,
             providerLaunchBinding,
-            sessionConnectedServicesAuthSwitch.connectedServicesAuthChip,
+            hasConnectedServicesAuthChip,
             sessionConnectedServicesAuthSwitch.statusBadges,
             sessionStatusBadges,
             sessionCapabilitiesApplyBadge,
@@ -5977,17 +5980,13 @@ export function useSessionComposerController({
         serverId: sessionRouteServerId,
     });
 
-    const getAutocompleteSuggestions = React.useCallback(
-        (query: string, signal: AbortSignal, onUpdate: AutocompleteSuggestionUpdate) => resolveSessionComposerSuggestions(sessionId, query, {
-            kinds: SESSION_COMPOSER_SUGGESTION_KINDS,
-            signal,
-            composerReferenceHost,
-            contributedActions: composerPluginActionController.listSlashCommands(),
-            skillSource: sessionComposerSkillSource,
-            onUpdate,
-        }),
-        [composerPluginActionController, composerReferenceHost, sessionComposerSkillSource, sessionId],
-    );
+    const getAutocompleteSuggestions = useSessionComposerSuggestions({
+        sessionId,
+        kinds: SESSION_COMPOSER_SUGGESTION_KINDS,
+        composerReferenceHost,
+        actionController: composerPluginActionController,
+        skillSource: sessionComposerSkillSource,
+    });
 
     // Stable identities for the memoized AgentInput (R1 churn fix). SessionView
     // re-renders on every turn-state commit; inline callback props would defeat
@@ -6011,6 +6010,18 @@ export function useSessionComposerController({
         }
     });
 
+    const sessionTypingPresence = React.useMemo(() => ({
+        serverId: sessionRouteServerId,
+        canSubmitAgentInput: session.access?.capabilities.submitAgentInput === true,
+    }), [sessionRouteServerId, session.access?.capabilities.submitAgentInput]);
+    const agentCatalogMachineId = controlMachineTarget?.machineId ?? machineId ?? null;
+    const agentCatalogCurrent = daemonMergedProjection.phase === 'ready';
+    const agentCatalogIdentity = React.useMemo(() => currentSessionAgentCatalogEntry ? {
+        entry: currentSessionAgentCatalogEntry,
+        machineId: agentCatalogMachineId,
+        serverId: sessionRouteServerId,
+        current: agentCatalogCurrent,
+    } : undefined, [currentSessionAgentCatalogEntry, agentCatalogMachineId, sessionRouteServerId, agentCatalogCurrent]);
     const input = shouldShowInput ? (
         <PluginContextualResourceStoreProvider>
             <View>
@@ -6218,22 +6229,14 @@ export function useSessionComposerController({
                     && !recipientState.recipient && !recipientState.scmDiffSummaryDiscussion
                     && resolveVoiceSessionComposerRouting({ conversationSessionId: sessionId, sessionMetadata: ownerMetadata })?.kind !== 'adapter_text'}
                 surfacePresented={surfacePresented}
-                sessionTypingPresence={{
-                    serverId: sessionRouteServerId,
-                    canSubmitAgentInput: session.access?.capabilities.submitAgentInput === true,
-                }}
+                sessionTypingPresence={sessionTypingPresence}
                 contentPaddingHorizontal={COMPOSER_CONTENT_HORIZONTAL_INSET}
                 agentType={agentInputAgentType ?? undefined}
                 agentLabel={agentInputAgentType ? resolveSessionActionDefaultBackendTitle({
                     session,
                     sessionActionDefaultBackendEntryTitle: sessionActionDefaultBackendEntry?.title ?? null,
                 }) || undefined : undefined}
-                agentCatalogIdentity={currentSessionAgentCatalogEntry ? {
-                    entry: currentSessionAgentCatalogEntry,
-                    machineId: controlMachineTarget?.machineId ?? machineId ?? null,
-                    serverId: sessionRouteServerId,
-                    current: daemonMergedProjection.phase === 'ready',
-                } : undefined}
+                agentCatalogIdentity={agentCatalogIdentity}
                 armedContinuationTarget={armedContinuationTarget}
                 armedRouteContinuation={armedRouteContinuation}
                 onUnarmRoute={armedRouteContinuation && hasWriteAccess ? unarmRoute : null}

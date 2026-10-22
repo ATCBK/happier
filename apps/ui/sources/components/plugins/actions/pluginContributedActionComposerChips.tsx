@@ -49,6 +49,8 @@ import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n
 const COMPOSER_CONTROL_UNKNOWN_CHOICE_ID_SAMPLE_COUNT = 3;
 const COMPOSER_CONTROL_UNKNOWN_CHOICE_ID_SAMPLE_MAX_UTF8_BYTES = 96;
 
+export const EMPTY_PLUGIN_COMPOSER_ACTION_CHIPS: readonly AgentInputExtraActionChip[] = Object.freeze([]);
+
 function actionChipKey(action: PluginContributedActionDescriptor): string {
     return `plugin-contributed-action:${action.placement}:${action.qualifiedActionId}`;
 }
@@ -1218,9 +1220,10 @@ export function createPluginContributedActionComposerChips(params: Readonly<{
             });
             return chip === null ? [] : [chip];
         });
-    return [
+    const chips = [
         ...primary.map((action) => createComposerActionChip({ action, openAction: params.openAction })),
         ...more.map((action) => createComposerActionChip({ action, openAction: params.openAction })),
         ...composerControls,
     ];
+    return chips.length > 0 ? chips : EMPTY_PLUGIN_COMPOSER_ACTION_CHIPS;
 }

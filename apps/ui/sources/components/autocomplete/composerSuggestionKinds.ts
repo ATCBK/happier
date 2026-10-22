@@ -27,6 +27,7 @@ import {
 import { resolvePromptInvocationAutocompleteSelection } from '@/sync/domains/input/slashCommands/promptInvocationSuggestion';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { t, type TranslationKeyNoParams } from '@/text';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import type {
     PluginContributedActionDescriptor,
     PluginContributedActionOpenOutcome,
@@ -723,13 +724,27 @@ async function resolveSkillSuggestions(
             .filter((suggestion) => !keys.has(suggestion.key) && Boolean(keys.add(suggestion.key))).slice(0, context.limit);
     };
     const first = rows();
-    const publish = () => { if (!context.signal?.aborted) context.publish?.(rows()); };
+    // Each completion can carry the same facts (catalog reads normalize into fresh
+    // objects). Keep this query's projection until those facts actually change,
+    // including the apply timing read by library rows.
+    const inputsKey = () => stableJsonStringify([catalogs.skills ?? [], facts, source?.applyTiming() ?? null]);
+    let projectedInputs = inputsKey();
+    let currentRows = first;
+    const publish = () => {
+        if (context.signal?.aborted) return;
+        const inputs = inputsKey();
+        if (inputs === projectedInputs) return;
+        projectedInputs = inputs;
+        currentRows = rows();
+        context.publish?.(currentRows);
+    };
     if (source && !context.signal?.aborted) context.publish?.(first);
     await Promise.all([
         context.loadCatalogs?.().then(current => { catalogs = current; publish(); }),
         source?.read().then(current => { facts = current; publish(); }),
     ]);
-    return context.signal?.aborted ? first : rows();
+    publish();
+    return context.signal?.aborted ? first : currentRows;
 }
 
 /** A library pick turns the skill on for this Session (or draft) before its token is inserted. */

@@ -130,12 +130,13 @@ function describeSuggestionFailure(reason: unknown): string {
 }
 
 /**
- * Settles `work` under a deadline and an abort signal without leaking either the
- * timer or the abort listener when the normal path wins.
+ * Settles `work` under an optional deadline and an abort signal without leaking
+ * either the timer or the abort listener when the normal path wins. Producers
+ * own their completion while remaining cancellable by the containing query.
  */
 function withKindDeadline<T>(
     work: Promise<T>,
-    deadlineMs: number,
+    deadlineMs: number | null,
     signal: AbortSignal | undefined,
 ): Promise<T | typeof KIND_DEADLINE_EXPIRED> {
     return new Promise<T | typeof KIND_DEADLINE_EXPIRED>((resolve, reject) => {
@@ -154,11 +155,17 @@ function withKindDeadline<T>(
             finish(() => reject(new Error('superseded')));
         }
 
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
         signal?.addEventListener('abort', onAbort);
-        timer = setTimeout(
-            () => finish(() => resolve(KIND_DEADLINE_EXPIRED)),
-            deadlineMs,
-        );
+        if (deadlineMs !== null) {
+            timer = setTimeout(
+                () => finish(() => resolve(KIND_DEADLINE_EXPIRED)),
+                deadlineMs,
+            );
+        }
         work.then(
             (value) => finish(() => resolve(value)),
             (error: unknown) => finish(() => reject(error)),
@@ -446,7 +453,7 @@ export async function getSuggestions(
     }
     const settled = await Promise.allSettled(work.map((kindWork) => withKindDeadline(
         kindWork.work,
-        COMPOSER_SUGGESTION_KIND_DEADLINE_MS,
+        kindWork.definition.coldStartWait === 'producer' ? null : COMPOSER_SUGGESTION_KIND_DEADLINE_MS,
         signal,
     )));
     // A superseded query contributes nothing, and reports nothing: a rejection

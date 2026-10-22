@@ -19,6 +19,8 @@ import { t } from '@/text';
 import { resolveCurrentComposerAttachmentCatalogEntry } from './composerScopeAdapters';
 import { createComposerStagedMediaAttachmentPresentation } from './composerStagedMediaAttachmentPresentation';
 
+const EMPTY_ATTACHMENT_ROW_ITEMS: readonly AgentInputAttachmentsRowItem[] = Object.freeze([]);
+
 function projectPluginAttachmentIcon(iconToken: ComposerAttachmentViewV1['presentation']['icon']) {
     if (!iconToken) return undefined;
     const name = resolvePluginUiIconName(iconToken);
@@ -117,6 +119,7 @@ export function projectComposerAttachmentRowItems(input: Readonly<{
         catalog: ComposerAttachmentCatalogRowDescriptor;
     }>) => ComposerAttachmentRowInteractionPresentation | undefined;
 }>): readonly AgentInputAttachmentsRowItem[] {
+    if (input.attachments.length === 0) return EMPTY_ATTACHMENT_ROW_ITEMS;
     return input.attachments.map((attachment) => {
         const catalog = input.entriesById === undefined
             ? null

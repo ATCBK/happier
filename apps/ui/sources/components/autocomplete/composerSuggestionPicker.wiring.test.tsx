@@ -19,6 +19,8 @@ import {
 } from './composerSuggestionKinds';
 import type { ActiveSuggestionsHandler } from './useActiveSuggestions';
 import type { AutocompleteSuggestion } from './autocompleteTypes';
+import type { SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
+import type { ComposerSuggestionTrigger } from './composerSuggestionGrammar';
 
 /**
  * The composer suggestion picker, wired the way a host wires it.
@@ -95,7 +97,7 @@ function file(fullPath: string): FileItem {
     } as FileItem;
 }
 
-function composerReferenceHost(): ComposerReferenceSearchHost {
+function composerReferenceHost(triggers: ComposerSuggestionTrigger[] = ['@']): ComposerReferenceSearchHost {
     const projection: PluginProjectionV2 = {
         v: 2,
         generation: 7,
@@ -128,7 +130,7 @@ function composerReferenceHost(): ComposerReferenceSearchHost {
                     kind: 'composerReference',
                     title: 'Issues',
                     icon: 'search',
-                    triggers: ['@'],
+                    triggers,
                 },
                 consumer: 'composer-reference-host',
                 platforms: ['cli', 'web'],
@@ -282,6 +284,40 @@ describe('composer suggestion picker — host wiring', () => {
             },
         });
         seedAutocompleteSessionRows({});
+    });
+
+    it('keeps an unchanged skill query through unrelated host publications and refreshes changed sources', async () => {
+        const { useSessionComposerSuggestions } = await import('@/components/sessions/agentInput/useSessionComposerSuggestions');
+        const { useActiveSuggestions } = await import('./useActiveSuggestions');
+        const facts = { libraryItems: [], found: null } as const;
+        const read = vi.fn(async () => facts);
+        const skillSource: SkillComposerSource = {
+            agentId: 'codex', machineId: 'machine-a', machineName: 'Machine',
+            peek: () => facts, read, owner: { setItem: () => {} }, applyTiming: () => null,
+        };
+        const host = composerReferenceHost(); // This provider declares @ only.
+        const actions = { listSlashCommands: () => [] };
+        const hook = await renderHook((props: { host: ComposerReferenceSearchHost; actions: typeof actions; skills: SkillComposerSource }) => {
+            const source = useSessionComposerSuggestions({ sessionId: SESSION_ID, kinds: SESSION_COMPOSER_SUGGESTION_KINDS,
+                composerReferenceHost: props.host, actionController: props.actions, skillSource: props.skills });
+            return useActiveSuggestions('$project', source);
+        }, { initialProps: { host, actions, skills: skillSource } });
+        await flushHookEffects();
+        expect(read).toHaveBeenCalledTimes(1);
+        await hook.rerender({ host: { ...host }, actions: { ...actions }, skills: skillSource });
+        await flushHookEffects();
+        expect(read).toHaveBeenCalledTimes(1);
+        const dollarHost = composerReferenceHost(['$']);
+        await hook.rerender({ host: dollarHost, actions, skills: skillSource });
+        await flushHookEffects();
+        expect(read).toHaveBeenCalledTimes(2);
+        await hook.rerender({ host: { ...dollarHost }, actions, skills: skillSource });
+        await flushHookEffects();
+        expect(read).toHaveBeenCalledTimes(3);
+        const currentRead = vi.fn(async () => facts);
+        await hook.rerender({ host, actions, skills: { ...skillSource, read: currentRead } });
+        await flushHookEffects();
+        expect(currentRead).toHaveBeenCalledTimes(1);
     });
 
     it('opens the picker with the Files section for a warm session', async () => {

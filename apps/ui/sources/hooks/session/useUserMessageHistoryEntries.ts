@@ -432,11 +432,22 @@ export function useUserMessageHistoryEntries(opts: UserMessageHistoryEntriesOpti
     const serverFeatures = useServerFeaturesSnapshotForServerId(serverId, { enabled: enabled && sourceAvailable });
     const roleQuerySupported = sourceAvailable && serverFeatures.status === 'ready' && isSessionMessageRoleQuerySupported(serverFeatures.features);
     const turnProjection = serverFeatures.status === 'ready' && isSessionMessageTurnProjectionSupported(serverFeatures.features);
-    const source = getStorage()(useShallow((state) => enabled && sourceAvailable ? {
-        sessionMessages: state.sessionMessages,
-        sessions: state.sessions,
-        sessionListRowsByServerId: state.sessionListRowsByServerId,
-    } : EMPTY_HISTORY_SOURCE));
+    const perSession = opts.scope === 'perSession';
+    // Elect references before React: a per-Session history reader must not
+    // rebuild its entries when a sibling transcript or list row streams.
+    const selectedSource = getStorage()(useShallow((state) => ({
+        transcript: enabled && sourceAvailable && perSession && sessionId ? state.sessionMessages[sessionId] : undefined,
+        session: enabled && sourceAvailable && perSession && sessionId ? state.sessions[sessionId] : undefined,
+        sessionMessages: enabled && sourceAvailable && !perSession ? state.sessionMessages : EMPTY_HISTORY_SOURCE.sessionMessages,
+        sessions: enabled && sourceAvailable && !perSession ? state.sessions : EMPTY_HISTORY_SOURCE.sessions,
+        sessionListRowsByServerId: enabled && sourceAvailable && !perSession
+            ? state.sessionListRowsByServerId : EMPTY_HISTORY_SOURCE.sessionListRowsByServerId,
+    })));
+    const source = React.useMemo<HistorySource>(() => perSession ? {
+        sessionMessages: sessionId && selectedSource.transcript ? { [sessionId]: selectedSource.transcript } : EMPTY_HISTORY_SOURCE.sessionMessages,
+        sessions: sessionId && selectedSource.session ? { [sessionId]: selectedSource.session } : EMPTY_HISTORY_SOURCE.sessions,
+        sessionListRowsByServerId: EMPTY_HISTORY_SOURCE.sessionListRowsByServerId,
+    } : selectedSource, [perSession, selectedSource, sessionId]);
     const contextKey = JSON.stringify([serverId, activeScope?.accountId ?? null, opts.scope, sessionId]);
     const contextRef = React.useRef({ key: contextKey, enabled });
     contextRef.current = { key: contextKey, enabled };

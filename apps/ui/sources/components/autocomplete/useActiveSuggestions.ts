@@ -5,7 +5,7 @@ import {
     type AutocompleteSuggestion,
     type AutocompleteSuggestionUpdate,
 } from './autocompleteTypes';
-import type { ComposerSuggestionKindId } from './composerSuggestionGrammar';
+import { isComposerSuggestionTrigger, type ComposerSuggestionKindId, type ComposerSuggestionTrigger } from './composerSuggestionGrammar';
 
 /**
  * Resolves the suggestion list for the active composer token and owns which
@@ -31,6 +31,15 @@ export type ActiveSuggestionsHandler =
         signal: AbortSignal,
         publish: AutocompleteSuggestionUpdate,
     ) => Promise<AutocompleteSuggestion[]>;
+
+/** A host may invalidate only the sources consumed by the active trigger. */
+export type ActiveSuggestionsSource = ActiveSuggestionsHandler | Readonly<Record<ComposerSuggestionTrigger, ActiveSuggestionsHandler>>;
+
+export function resolveActiveSuggestionsHandler(source: ActiveSuggestionsSource, query: string | null): ActiveSuggestionsHandler {
+    if (typeof source === 'function') return source;
+    const trigger = query?.charAt(0) ?? '';
+    return source[isComposerSuggestionTrigger(trigger) ? trigger : '@'];
+}
 
 interface SuggestionOptions {
     autoSelectFirst?: boolean; // If true, automatically select first item when suggestions appear
@@ -161,9 +170,10 @@ function reconcileSuggestionSnapshot(params: Readonly<{
 
 export function useActiveSuggestions(
     query: string | null,
-    handler: ActiveSuggestionsHandler,
+    source: ActiveSuggestionsSource,
     options: SuggestionOptions = {}
 ) {
+    const handler = resolveActiveSuggestionsHandler(source, query);
     const {
         autoSelectFirst = true,
         wrapAround = true
