@@ -1,0 +1,32 @@
+{
+  "producer": "../0.2/packages/protocol/src/machines/machineStoredContent.ts:encodePlainMachineStoredContent (current development source)",
+  "metadata": {
+    "host": "source-02-plain",
+    "platform": "linux",
+    "happyCliVersion": "0.2-development",
+    "homeDir": "/tmp/qa",
+    "happyHomeDir": "/tmp/qa/.happier",
+    "displayName": "Predecessor plain edit",
+    "predecessorExtension": {
+      "keep": [
+        "whole",
+        "blob"
+      ]
+    }
+  },
+  "daemonState": {
+    "status": "running",
+    "pid": 42,
+    "predecessorExtension": {
+      "keep": true
+    }
+  },
+  "machine": {
+    "id": "plain-current-02",
+    "metadata": "eyJ0IjoicGxhaW4iLCJ2Ijp7Imhvc3QiOiJzb3VyY2UtMDItcGxhaW4iLCJwbGF0Zm9ybSI6ImxpbnV4IiwiaGFwcHlDbGlWZXJzaW9uIjoiMC4yLWRldmVsb3BtZW50IiwiaG9tZURpciI6Ii90bXAvcWEiLCJoYXBweUhvbWVEaXIiOiIvdG1wL3FhLy5oYXBwaWVyIiwiZGlzcGxheU5hbWUiOiJQcmVkZWNlc3NvciBwbGFpbiBlZGl0IiwicHJlZGVjZXNzb3JFeHRlbnNpb24iOnsia2VlcCI6WyJ3aG9sZSIsImJsb2IiXX19fQ==",
+    "metadataVersion": 4,
+    "daemonState": "eyJ0IjoicGxhaW4iLCJ2Ijp7InN0YXR1cyI6InJ1bm5pbmciLCJwaWQiOjQyLCJwcmVkZWNlc3NvckV4dGVuc2lvbiI6eyJrZWVwIjp0cnVlfX19",
+    "daemonStateVersion": 3,
+    "dataEncryptionKey": "eyJ0IjoicGxhaW4iLCJ2IjpudWxsfQ=="
+  }
+}
