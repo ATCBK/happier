@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 
 const daemonBoundary = vi.hoisted(() => ({
   readCatalog: vi.fn(),
@@ -38,6 +39,11 @@ describe('callBuiltInHappierTool plugin tools', () => {
     // Home HTTP is the boundary; retain real policy bootstrap's documented
     // unavailable-service cache/default behavior instead of mocking policy.
     vi.spyOn(axios, 'get').mockRejectedValue(new Error('fixture_home_unavailable'));
+    const inputSchema = {
+      type: 'object',
+      properties: { scope: { type: 'string' } },
+      additionalProperties: false,
+    };
     daemonBoundary.readCatalog.mockResolvedValue({
       kind: 'available',
       plugins: [],
@@ -47,23 +53,23 @@ describe('callBuiltInHappierTool plugin tools', () => {
         name: 'acme_review_start',
         title: 'Acme Review Start',
         description: 'Start a plugin-defined review workflow',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            scope: { type: 'string' },
-          },
-          additionalProperties: false,
-        },
+        inputSchema,
         surfaces: ['agent', 'mcp', 'cli'],
       }],
     });
-    daemonBoundary.executeAction.mockResolvedValue({
-      matched: true,
-      result: {
-        ok: true,
-        result: { completed: true },
-      },
+    // Daemon IPC is the boundary. Placement admission reads a descriptor before
+    // dispatch; a completed-effect payload cannot stand in for that reply.
+    const actionSpec = ActionDefinitionV1Schema.parse({
+      id: 'acme.review.plugin/actions/review-start', title: 'Acme Review Start',
+      description: null, safety: 'safe', executionPlacement: 'machine',
+      placements: [], slash: null, bindings: null, examples: null, inputHints: null,
+      surfaces: { agent: true, mcp: true, cli: true },
+      inputSchema,
     });
+    daemonBoundary.executeAction.mockImplementation(async (request: { actionId: string }) => ({
+      matched: true,
+      result: { ok: true, result: request.actionId === 'action.spec.get' ? { actionSpec } : { completed: true } },
+    }));
   });
 
   it('discovers and dispatches a daemon-projected tool through the CLI source entrypoint', async () => {

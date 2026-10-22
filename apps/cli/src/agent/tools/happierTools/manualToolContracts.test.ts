@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { normalizeExecutionRunStartToolInput } from './manualToolContracts';
 
 describe('normalizeExecutionRunStartToolInput', () => {
+  it('retains content-free field repair details when run-start tool input is malformed', () => {
+    const result = normalizeExecutionRunStartToolInput({ sessionId: 'sess_mcp_1', args: {
+      intent: 'review', backendId: 'claude', instructions: { privateRejectedValue: 'private-instructions' },
+    } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters', details: { issues: [
+      { code: 'invalid_type', path: ['instructions'], expected: 'string' },
+    ] } });
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+
   it('accepts review execution_run_start requests with a built-in backend target', () => {
     const result = normalizeExecutionRunStartToolInput({
       sessionId: 'sess_mcp_1',
@@ -118,11 +128,13 @@ describe('normalizeExecutionRunStartToolInput', () => {
     });
   });
 
-  it('keeps invalid_action_input for an unparseable payload (missing intent)', () => {
+  it('identifies the missing intent and its declared choices', () => {
     const result = normalizeExecutionRunStartToolInput({
       sessionId: 'sess_mcp_1',
       args: { backendTarget: { kind: 'builtInAgent', agentId: 'claude' } },
     });
-    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_action_input' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters', details: { issues: [
+      { code: 'invalid_value', path: ['intent'], acceptedValues: expect.arrayContaining(['review']) },
+    ] } });
   });
 });

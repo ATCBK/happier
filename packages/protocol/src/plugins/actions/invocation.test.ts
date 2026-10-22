@@ -77,6 +77,34 @@ function createInvocation(params: Readonly<{
 }
 
 describe('createPluginActionInvocation', () => {
+  it('retains content-free field repair facts for general JSON Schema input refusals', async () => {
+    const invocation = createInvocation({ inputSchema: {
+      type: 'object', definitions: { scope: { type: 'string', enum: ['diff', 'all'] } },
+      properties: { scope: { $ref: '#/definitions/scope' } }, required: ['scope'], additionalProperties: false,
+    } });
+    const handler = vi.fn(() => null);
+    for (const testCase of [
+      { input: { scope: 42 }, issue: { code: 'type', path: ['scope'], expected: 'string' } },
+      { input: { scope: 'private-rejected-value' }, issue: { code: 'enum', path: ['scope'], acceptedValues: ['diff', 'all'] } },
+      { input: { 'private-unknown-key': 'private-rejected-value' }, issue: { code: 'required', path: ['scope'], expected: 'nonoptional' } },
+    ]) {
+      const result = await invocation.invoke(testCase.input, { handler });
+      expect(result).toMatchObject({ status: 'invalid', code: 'plugin_action_input_schema_invalid',
+        issues: expect.arrayContaining([expect.objectContaining(testCase.issue)]) });
+      expect(JSON.stringify(result)).not.toContain('private-');
+    }
+    expect(handler).not.toHaveBeenCalled();
+    expect(await invocation.invoke({ scope: 'diff' }, { handler })).toMatchObject({ status: 'executed', value: null });
+    const nested = createInvocation({ inputSchema: {
+      type: 'object', definitions: { text: { type: 'string' } }, properties: { items: { type: 'array', items: {
+        type: 'object', properties: { 'a/b~c': { $ref: '#/definitions/text' } }, required: ['a/b~c'], additionalProperties: false,
+      } } }, required: ['items'], additionalProperties: false,
+    } });
+    expect(await nested.invoke({ items: [{ 'a/b~c': 42 }] }, { handler })).toMatchObject({
+      status: 'invalid', issues: [{ code: 'type', path: ['items', 0, 'a/b~c'], expected: 'string' }],
+    });
+  });
+
   it('uses null as the canonical handler input only when an input-less Action omits input', async () => {
     const inputlessHandler = vi.fn(() => ({ accepted: true }));
     await expect(createInvocation().invoke(undefined, {

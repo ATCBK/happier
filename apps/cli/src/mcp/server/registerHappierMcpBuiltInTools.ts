@@ -162,36 +162,17 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         };
         return adapter;
     }
-    if (schema instanceof z.core.$ZodType) {
-        // Action schemas are executable parser contracts and can contain
-        // normalization transforms that the MCP SDK cannot render. Present
-        // the same canonical structural JSON Schema used by Action discovery
-        // through a non-transforming Zod object adapter. Validation delegates
-        // to the original schema, while dispatch retains the authoritative
-        // parse/normalization rather than receiving MCP-transformed input.
-        const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }));
-        if (jsonSchema === undefined) return undefined;
-        const adapter = z.looseObject({}).check(z.superRefine((value, ctx) => {
-            if (!z.safeParse(schema, value).success) {
-                ctx.addIssue({
-                    code: 'custom',
-                    message: `Value does not match the Action ${field}`,
-                });
-            }
-        }));
-        adapter._zod.processJSONSchema = (_ctx, json) => {
-            Object.assign(json, jsonSchema);
-            json.type = 'object';
-        };
-        return adapter;
-    }
-    // External plugin declarations use the protocol-owned bounded JSON Schema
-    // vocabulary. The MCP SDK accepts Zod at registration, so use the protocol
-    // owner's presentation adapter; daemon action execution remains the
-    // authoritative validation and dispatch owner.
-    const adapter = createPluginJsonSchemaZodObjectAdapter(schema);
-    const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(adapter, { target: 'draft-7' }));
-    adapter._zod.processJSONSchema = (_ctx, json) => { Object.assign(json, jsonSchema); };
+    // Advertise the canonical schema without parsing or normalizing the input
+    // in the MCP SDK. Tool dispatch enforces declared Tool contracts; Action
+    // execution owns its parsing and normalization. Both use the content-free
+    // issue projection. A validating presentation
+    // wrapper would refuse before that owner can return field repair details.
+    const parser = schema instanceof z.core.$ZodType
+        ? schema
+        : createPluginJsonSchemaZodObjectAdapter(schema);
+    const jsonSchema = projectMcpToolInputJsonSchema(zodSchemaToJsonSchemaObject(parser, { target: 'draft-7' }));
+    const adapter = z.looseObject({});
+    adapter._zod.processJSONSchema = (_ctx, json) => { Object.assign(json, jsonSchema); json.type = 'object'; };
     return adapter;
 }
 

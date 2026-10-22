@@ -253,7 +253,8 @@ describe('target action invocation registry', () => {
     it.each(['agent', 'mcp', 'cli'] as const)('withholds string-secret numeric issue-path suffixes on %s', async surface => {
         const secret = '738291642';
         const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
-        const publicIssue = { path: ['items', 31], code: 'invalid_value', message: 'Public item 31' };
+        const publicIssue = { path: ['items', 31], code: 'invalid_value', message: 'Public item 31',
+            expected: `starts_with "${secret}"`, acceptedValues: [secret, 'public-choice'] };
         const registry = createRegistry({ ...owners, actions: [{
             ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['value'], surfaces: ['agent', 'mcp', 'cli'] }),
             inputParser: () => ({ success: false as const,
@@ -265,7 +266,8 @@ describe('target action invocation registry', () => {
             expect(result).toMatchObject({ status: 'invalid', code: 'plugin_action_input_schema_invalid' });
             if (result.status !== 'invalid') throw new Error('Expected invalid input');
             expect(result.issues?.[0]?.path).toEqual(['value']);
-            expect(result.issues?.[1]).toEqual(publicIssue);
+            expect(result.issues?.[1]).toEqual({ ...publicIssue,
+                expected: 'starts_with [REDACTED]', acceptedValues: ['[REDACTED]', 'public-choice'] });
             expect(JSON.stringify(result)).not.toContain(secret);
         } finally { registry.dispose(); }
     });

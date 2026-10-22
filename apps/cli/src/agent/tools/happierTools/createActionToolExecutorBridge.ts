@@ -5,13 +5,20 @@ import {
   type ResolvedActionOption,
   type ReviewCommentPrincipalHeaderV1,
 } from '@happier-dev/protocol';
-import { createActionToolNameToIdMap, resolveActionToolCatalogAvailability, resolveDiscoveredPluginActionAvailability } from './actionToolCatalog';
+import { createActionToolNameToIdMap, listPluginActionBackedTools, resolveActionToolCatalogAvailability, resolveDiscoveredPluginActionAvailability } from './actionToolCatalog';
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { normalizeExecutionRunToolResult } from './executionRunToolResult';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
-import { bindContextualActionToolInput } from './actionToolContext';
+import { bindContextualActionToolInput, projectSessionBoundActionToolInputSchema } from './actionToolContext';
+import { preparePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { actionInputIssueFailure, projectActionInputJsonSchemaIssues } from '@happier-dev/protocol/actions/executor/actionInputValidation';
+import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { createSensitiveDiagnosticTextRedactor } from '@happier-dev/protocol/bugs/reports/redaction';
+import type { SensitiveDiagnosticValuesLease } from '@happier-dev/protocol/bugs/reports';
+import { projectTargetActionFailure } from '@/plugins/runtime/invocation/actionExecutor';
+import { registerTargetActionDiagnosticInput } from '@/plugins/runtime/invocation/diagnostics';
 
 type ActionExecutorResult = Readonly<
   | { ok: true; result: unknown }
@@ -405,6 +412,51 @@ export function createActionToolExecutorBridge(params: Readonly<{
       const availability = resolveAvailability(actionId);
       if (!availability.available) {
         return { ok: false, errorCode: 'action_disabled', error: 'Action is disabled', details: availability };
+      }
+
+      // Host-generated Tools share their Action's schema and parser. Declared
+      // plugin Tools (bundled or installed) own an independent, possibly narrower
+      // JSON Schema contract. Admit that contract without running Action parsing,
+      // defaults or transforms in the Tool/presentation layer.
+      const tool = listPluginActionBackedTools({ registry: params.registry, pluginToolCatalog: params.pluginToolCatalog })
+        .find(candidate => candidate.name === toolName && candidate.actionId === actionId);
+      if (tool) {
+        const schema = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: tool.inputSchema,
+          contextualDefaults: tool.contextualDefaults, registry: params.registry, pluginToolCatalog: params.pluginToolCatalog,
+          context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId } });
+        if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+          return { ok: false, errorCode: 'action_schema_invalid', error: 'action_schema_invalid' };
+        }
+        const prepared = preparePluginJsonSchema(schema);
+        if (!prepared.validate(toolArgs)) {
+          // Capture the compiler's error bag before awaiting discovery, which
+          // can itself compile/validate another schema in the same realm.
+          const issues = projectActionInputJsonSchemaIssues(prepared.validate, prepared.jsonSchema, toolArgs);
+          const context = await buildActionExecutorContext({ defaultSessionId, surface, options,
+            actionsSettings: readActionsSettings() });
+          const discovery = await params.executor.execute('action.spec.get', { id: actionId }, context);
+          if (!discovery.ok) return normalizeActionExecutorResult(discovery);
+          const definition = ActionDefinitionV1Schema.safeParse(isInputRecord(discovery.result) ? discovery.result.actionSpec : null);
+          if (!definition.success || definition.data.id !== actionId) {
+            return { ok: false, errorCode: 'action_disabled', error: 'Action is unavailable' };
+          }
+          const secretInputPaths = (definition.data.inputHints?.fields ?? [])
+            .filter(field => field.widget === 'secret').map(field => field.path);
+          const input = AgentRuntimeJsonValueV1Schema.safeParse(toolArgs);
+          if (!input.success) return actionInputIssueFailure({ code: 'invalid_json_value', path: [] });
+          const redactor = createSensitiveDiagnosticTextRedactor();
+          const leases: SensitiveDiagnosticValuesLease[] = [];
+          try {
+            registerTargetActionDiagnosticInput(input.data, secretInputPaths, value => {
+              if (value.length > 0) leases.push(redactor.register([value]));
+            });
+            const failure = projectTargetActionFailure({ status: 'invalid', code: 'plugin_action_input_schema_invalid',
+              message: 'plugin_action_input_schema_invalid', issues: issues.map(issue => ({ ...issue, message: 'invalid_parameters' })) },
+            value => redactor.redact(value), { input: input.data, secretInputPaths });
+            return { ...actionInputIssueFailure(...('issues' in failure ? failure.issues ?? [] : [])),
+              errorCode: 'plugin_action_input_schema_invalid', error: 'plugin_action_input_schema_invalid' };
+          } finally { for (const lease of leases.reverse()) lease.close(); }
+        }
       }
 
       const actionInput = bindContextualActionToolInput({

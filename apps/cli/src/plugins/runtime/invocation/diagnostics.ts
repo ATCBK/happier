@@ -1,5 +1,6 @@
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
 
 export type TargetActionDiagnosticConfidentiality = Readonly<{
     paths: readonly string[];
@@ -26,6 +27,36 @@ export function readTargetActionDiagnosticConfidentiality(
         paths: [...new Set([...(retained?.paths ?? []), ...projection.confidentialPaths])],
         nonStringPaths: [...new Set([...(retained?.nonStringPaths ?? []), ...nonStringPaths])],
     };
+}
+
+/** Enroll the declaration/SecretString owner's confidential subtrees in a diagnostic redactor. */
+export function registerTargetActionDiagnosticInput(
+    input: JsonValue,
+    secretInputPaths: readonly string[],
+    registerText: (value: string) => void,
+): TargetActionDiagnosticConfidentiality {
+    const projection = readTargetActionDiagnosticConfidentiality(input, secretInputPaths);
+    const confidentialPaths = new Set(projection.paths);
+    if (confidentialPaths.size === 0) return projection;
+    const pending: Array<Readonly<{ value: JsonValue; path: string; confidential: boolean }>> = [
+        { value: input, path: '', confidential: confidentialPaths.has('') },
+    ];
+    while (pending.length) {
+        const { value, path, confidential } = pending.pop()!;
+        if (typeof value === 'string') {
+            if (confidential) {
+                registerText(value);
+                registerText(JSON.stringify(value));
+            }
+        } else if (value !== null && typeof value === 'object') {
+            for (const [key, child] of Object.entries(value)) {
+                const childPath = path ? `${path}.${key}` : key;
+                pending.push({ value: child, path: childPath,
+                    confidential: confidential || confidentialPaths.has(childPath) });
+            }
+        }
+    }
+    return projection;
 }
 
 export function projectTargetActionDiagnosticIssue(

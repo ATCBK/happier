@@ -17,10 +17,16 @@ import { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture }
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
 import { createHappierMcpBridge } from '@/agent/runtime/createHappierMcpBridge';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { projectExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalog';
+import { createCommittedContributedActionDefinitionLister } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createDaemonPluginActionExecutor } from '@/session/actions/createDaemonPluginActionExecutor';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
@@ -44,6 +50,9 @@ import { createCliActionExecutor } from '@/session/actions/createCliActionExecut
 import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
 import { ApprovalRequestV2Schema, decodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { deriveSessionMessageReplyReturnLocalIdV1, SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { forEachJsonSchemaChild, type JsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { AgentModelsProbeObservationSchema, AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 
 const env = process.env;
 
@@ -56,6 +65,7 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
   sessionId: string;
   readMetadata: () => Readonly<Record<string, unknown>> | null;
   mode?: 'plain' | 'e2ee';
+  machineActionDirectTargetTransport?: Parameters<typeof createCliActionExecutorFromCredentials>[0]['machineActionDirectTargetTransport'];
 }>) {
   const mode = params.mode ?? 'plain';
   const secret = new Uint8Array(32).fill(17);
@@ -75,12 +85,15 @@ async function installAccountCatalogDaemonTransport(params: Readonly<{
   const executor = createCliActionExecutorFromCredentials({
     credentials, serverId: getTestServerBinding().serverId, serverApiUrl: getTestServerBinding().serverUrl,
     pluginActionExecutionOwner: 'current_process',
+    listContributedActionDefinitions: createCommittedContributedActionDefinitionLister(),
+    ...(params.machineActionDirectTargetTransport ? { machineActionDirectTargetTransport: params.machineActionDirectTargetTransport } : {}),
     actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
     resolveServerFeaturesSnapshot: async () => ({ status: 'ready', provenance: 'authenticated',
       features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) }),
   });
   const registryLease = await pluginReloadController.acquireRuntimeRegistry({ resolveRuntimeRegistry: () =>
-    resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }) });
+    resolveExecutablePluginRuntimeRegistry({ contributes: params.machineActionDirectTargetTransport
+      ? getResolvedContributionRegistry() : createResolvedContributionRegistry({}), pluginIds: [] }) });
   await registryLease.release();
   const control = createDaemonControlApp({
     getChildren: () => [], machineId: 'machine-1', controlToken: 'catalog-control-token',
@@ -326,7 +339,14 @@ describe('createHappierMcpServer real host admission', () => {
     const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
     process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
     vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
-    const bridge = await createHappierMcpBridge(hostClient(sessionId));
+    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId,
+      execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
+        surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId,
+      }) });
+    const bridge = await createHappierMcpBridge(hostClient(sessionId, {
+      getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+    }));
     const client = new Client({ name: 'native-discovery-contract-test', version: '1' });
     try {
       const config = bridge.mcpServers.happier;
@@ -359,8 +379,116 @@ describe('createHappierMcpServer real host admission', () => {
         expect(content.text).not.toContain('private-home-value');
         expect(content.text).not.toContain('private-unknown-action');
       }
-    } finally { await client.close(); bridge.happierMcpServer.stop(); await daemon.close(); }
+    } finally { await client.close(); bridge.happierMcpServer.stop(); await sessionAuthority.close(); await daemon.close(); }
   }, 30_000);
+
+  it.each([
+    { name: 'action_spec_get', arguments: { id: 'workflow.run.start', schemaPath: 'private-malformed-pointer' },
+      issue: { code: 'invalid_format', path: ['schemaPath'], expected: 'starts_with "/"' } },
+    { name: 'session_title_set', arguments: { title: { privateRejectedValue: 'private-malformed-title' } },
+      issue: { code: 'invalid_type', path: ['title'], expected: 'string' } },
+    { name: 'change_title', arguments: { title: { privateRejectedValue: 'private-malformed-title' } },
+      issue: { code: 'invalid_type', path: ['title'], expected: 'string' } },
+    { name: 'action_execute', arguments: { actionId: { privateRejectedValue: 'private-malformed-action' } },
+      issue: { code: 'invalid_type', path: ['actionId'], expected: 'string' } },
+    { name: 'qa_input_read', arguments: { scope: { privateRejectedValue: 'private-malformed-scope' } },
+      issue: { code: 'type', path: ['scope'], expected: 'string' } },
+    { name: 'qa_input_ref_read', arguments: { scope: { privateRejectedValue: 'private-malformed-scope' } },
+      issue: { code: 'type', path: ['scope'], expected: 'string' } },
+    { name: 'qa_input_tool_only_read', arguments: { scope: { privateRejectedValue: 'private-malformed-scope' } },
+      issue: { code: 'type', path: ['scope'], expected: 'string' } },
+  ])('retains content-free MCP input repair details for $name over the native daemon bridge', async testCase => {
+    const sessionId = 'c666666666666666666666669';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
+    const pluginInputSchema = testCase.name === 'qa_input_ref_read'
+      ? { type: 'object', definitions: { scope: { type: 'string' } }, properties: { scope: { $ref: '#/definitions/scope' } },
+        required: ['scope'], additionalProperties: false }
+      : { type: 'object', properties: { scope: { type: 'string' } }, required: ['scope'], additionalProperties: false };
+    const plugin = testCase.name.startsWith('qa_input_') ? await createAuthoredAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController, plugins: [{
+        manifest: createPluginManifestV2Fixture({ id: 'acme.mcp-input', contributes: {
+          actions: [{ id: 'read', title: 'Read scope', scopes: ['global'], surfaces: ['agent', 'mcp'],
+            execution: { target: 'daemon' }, dangerLevel: 'safe',
+            inputSchema: testCase.name === 'qa_input_tool_only_read' ? { type: 'object' } : pluginInputSchema }],
+          tools: [{ id: 'read-tool', name: testCase.name, title: 'Read scope', action: 'read', surfaces: ['agent', 'mcp'],
+            inputSchema: pluginInputSchema }],
+        } }),
+        files: { 'daemon.mjs': 'export function activate(api) { api.actions.register("read", async input => input); }' },
+      }],
+    }) : null;
+    if (plugin) await plugin.registry.activateContributionsOnDemand([{ pluginId: 'acme.mcp-input', family: 'actions', localId: 'read' }]);
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [],
+      tools: plugin ? projectExecutablePluginToolCatalog(plugin.registry) : [] });
+    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId,
+      execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
+        surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId,
+      }) });
+    const bridge = await createHappierMcpBridge(hostClient(sessionId, {
+      getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+    }), { requiredDirectActionIds: ['session.title.set'] });
+    const client = new Client({ name: 'native-input-repair-test', version: '1' });
+    try {
+      const config = bridge.mcpServers.happier;
+      await client.connect(new StdioClientTransport({ command: config.command,
+        args: [...(config.args ?? [])], env: config.env ? { ...config.env } : undefined }));
+      const reply = CallToolResultSchema.parse(await client.callTool({ name: testCase.name, arguments: testCase.arguments }));
+      expect(reply.isError, JSON.stringify(reply)).toBe(true);
+      const content = reply.content.find(item => item.type === 'text');
+      if (content?.type !== 'text') throw new Error('Missing refusal payload');
+      expect(content.text, content.text).toMatch(/^\{/u);
+      expect(JSON.parse(content.text), content.text).toMatchObject({
+        errorCode: plugin ? 'plugin_action_input_schema_invalid' : 'invalid_parameters',
+        details: { issues: [testCase.issue] } });
+      expect(content.text).not.toContain('private-malformed');
+      expect(content.text).not.toContain('privateRejectedValue');
+    } finally { await client.close(); bridge.happierMcpServer.stop(); await sessionAuthority.close(); await plugin?.dispose(); await daemon.close(); }
+  }, 30_000);
+
+  it('enforces the narrower declared Tool contract on the Agent bridge with confidential repair facts and contextual defaults', async () => {
+    const sessionId = 'c666666666666666666666669';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const plugin = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController, plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: 'acme.agent-tool-input', contributes: {
+        actions: [{ id: 'read', title: 'Read scope', scopes: ['global'], surfaces: ['agent', 'mcp'],
+          execution: { target: 'daemon' }, dangerLevel: 'safe', inputSchema: { type: 'object', properties: {
+            scope: { type: 'string' }, secretText: { type: 'string' }, bundle: { type: 'string' }, machineId: { type: 'string' },
+          } },
+          contextualDefaults: { machineId: 'current_session_machine' },
+          inputHints: { fields: [{ path: 'bundle', title: 'Bundle', widget: 'secret' },
+            { path: 'secretText', title: 'Secret text', widget: 'secret' }] } }],
+        tools: [{ id: 'read-tool', name: 'qa_agent_input_read', title: 'Read scope', action: 'read', surfaces: ['agent', 'mcp'],
+          inputSchema: { type: 'object', properties: {
+            scope: { type: 'string', enum: ['declared-private-secret', 'read'] }, secretText: { type: 'string' },
+            bundle: { type: 'array', items: { type: 'string' } }, machineId: { type: 'string' },
+          }, required: ['scope', 'machineId'], additionalProperties: false } }],
+      } }),
+      files: { 'daemon.mjs': 'let calls = 0; export function activate(api) { api.actions.register("read", async input => ({ input, calls: ++calls })); }' },
+    }] });
+    try {
+      await plugin.registry.activateContributionsOnDemand([{ pluginId: 'acme.agent-tool-input', family: 'actions', localId: 'read' }]);
+      const bridge = createActionToolExecutorBridge({ surface: 'agent', defaultSessionMachineId: 'worker',
+        pluginToolCatalog: projectExecutablePluginToolCatalog(plugin.registry), executor: createDaemonPluginActionExecutor({ base: daemon.executor }) });
+      const invalid = await bridge.executeActionByToolName('qa_agent_input_read', {
+        scope: 'bad', secretText: 'declared-private-secret', bundle: [42],
+      }, sessionId);
+      expect(invalid).toMatchObject({ ok: false, errorCode: 'plugin_action_input_schema_invalid', details: { issues: [
+        { code: 'enum', path: ['scope'], acceptedValues: ['[REDACTED]', 'read'] },
+        { code: 'invalid_value', path: ['bundle'] },
+      ] } });
+      expect(JSON.stringify(invalid)).not.toContain('declared-private-secret');
+      expect(await bridge.executeActionByToolName('qa_agent_input_read', {
+        scope: 'bad', secretText: '',
+      }, sessionId)).toMatchObject({ ok: false, errorCode: 'plugin_action_input_schema_invalid', details: { issues: [
+        { code: 'enum', path: ['scope'], acceptedValues: ['declared-private-secret', 'read'] },
+      ] } });
+      const validInput = { scope: 'read', secretText: 'another-secret' };
+      expect(await bridge.executeActionByToolName('qa_agent_input_read', validInput, sessionId)).toEqual({
+        ok: true, result: { input: { ...validInput, machineId: 'worker' }, calls: 1 },
+      });
+    } finally { await plugin.dispose(); await daemon.close(); }
+  });
 
   it('discovers the callable Workflow validator named by start guidance over native MCP', async () => {
     const sessionId = 'c666666666666666666666668';
@@ -380,6 +508,141 @@ describe('createHappierMcpServer real host admission', () => {
         if (!validatorId) throw new Error('Start must identify its definition validator');
         const validator = ActionDiscoveryDefinitionV1Schema.parse(await readSpec(validatorId));
         expect(validator.id).toBe('workflow.validate');
+      });
+    } finally { await daemon.close(); }
+  });
+
+  it.each([
+    { agentId: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+    { agentId: 'acme.discovery/assistant', identity: { pluginId: 'acme.discovery', localId: 'assistant' } },
+  ])('discovers one exact-Machine model and config inventory without probe opt-in for $agentId over native MCP', async ({ agentId, identity }) => {
+    const sessionId = 'c666666666666666666666669';
+    const backendTargetKey = `agent:${identity.pluginId}/${identity.localId}`;
+    if (!agentId.includes('/')) await pluginReloadController.adoptPreparedRuntimeRegistry({
+      registry: await resolveExecutablePluginRuntimeRegistry({ contributes: getResolvedContributionRegistry(), pluginIds: [] }),
+      changedPluginIds: [], runningSessionDisposition: 'retainRunningSessions',
+    });
+    const plugin = agentId.includes('/') ? await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: identity.pluginId, contributes: { agents: [{ id: identity.localId,
+        title: 'Discovery Assistant', runtime: { kind: 'custom' }, primary: 'sessions',
+        capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+      }] } }), files: {
+        'runtime.mjs': 'export async function createRuntime() { return { sessions: { open: async () => ({ send: async () => ({ status: "admitted" }), cancel: async () => ({ status: "requested" }), watch: () => ({ dispose() {} }), dispose() {} }) } }; }',
+        'daemon.mjs': 'import { createRuntime } from "./runtime.mjs"; export function activate(api) { api.agents.register("assistant", createRuntime, { sessionRunnerFactory: { module: "./runtime.mjs", export: "createRuntime", runtimeApiVersion: 1 } }); }',
+      } }],
+    }) : null;
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata(),
+      // Machine capability transport is the system boundary. Native observations
+      // follow the producer schema; inventory selection and projection stay real.
+      machineActionDirectTargetTransport: { machineId: 'worker', invoke: async (method, request) => {
+        if (method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) return { status: 'unavailable' };
+        expect(method).toBe(RPC_METHODS.CAPABILITIES_INVOKE);
+        const probe = z.object({ id: z.string(), method: z.string(), params: z.unknown() }).parse(request);
+        expect(probe.id).toBe(`cli.${agentId}`);
+        if (probe.method === 'probeModels') return { ok: true, result: AgentModelsProbeObservationSchema.parse({ agentId,
+          availableModels: [{ id: 'small', name: 'Small', modelOptions: [{ id: 'reasoning_effort', name: 'Thinking', type: 'select',
+            currentValue: 'private-current', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }] },
+            { id: 'large', name: 'Large' }], supportsFreeform: false, source: 'dynamic' }) };
+        expect(probe.method).toBe('probeConfigOptions');
+        return { ok: true, result: AgentConfigOptionsProbeObservationSchema.parse({ agentId, configOptions: [], source: 'dynamic' }) };
+      } },
+    });
+    const authority = await createSessionDaemonAuthorityFixture({ sessionId,
+      execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
+        surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+        defaultSessionId: sessionId, serverId: 'test-home',
+      }) });
+    const runtime = createHappierMcpServer(hostClient(sessionId, {
+      getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+    }));
+    try {
+      await withMcpClient(runtime, async client => {
+        const read = async (name: string, args: Record<string, unknown>) => {
+          const reply = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));
+          const content = reply.content.find(item => item.type === 'text');
+          if (content?.type !== 'text') throw new Error('Missing discovery payload');
+          expect(reply.isError, content.text).not.toBe(true);
+          return JSON.parse(content.text);
+        };
+        const selection = { agentId, backendTargetKey, machineId: 'worker' };
+        const models = await read('action_execute', { actionId: 'agents.models.list', input: selection });
+        expect(models).toMatchObject({ items: [{ id: 'small' }, { id: 'large' }], source: 'dynamic' });
+        const modelOptions = await read('action_options_resolve', { actionId: 'session.spawn_new', fieldPath: 'modelSelection',
+          draftInput: { agentTarget: { kind: 'agent', identity }, executionTarget: { serverId: 'test-home', machineId: 'worker' } } });
+        expect(modelOptions.options.map((option: { value: string }) => option.value)).toEqual(models.items.map((item: { id: string }) => item.id));
+        const config = await read('action_execute', { actionId: 'agents.config_options.list', input: { ...selection, modelId: 'small' } });
+        expect(config).toMatchObject({ items: [{ id: 'reasoning_effort', options: [{ value: 'low' }, { value: 'high' }] }], source: 'dynamic' });
+        expect(JSON.stringify(config)).not.toContain('private-current');
+        for (const [actionId, fieldPath, draftInput] of [
+          ['session.spawn_new', 'configuration', { agentTarget: { kind: 'agent', identity },
+            executionTarget: { serverId: 'test-home', machineId: 'worker' }, modelSelection: { v: 1,
+              ref: { agentTargetKey: backendTargetKey, modelId: 'small', providerConnectionId: null }, updatedAt: 1 } }],
+          ['execution.run.start', 'configOptions', { ...selection, modelId: 'small' }],
+        ] as const) {
+          const options = await read('action_options_resolve', { actionId, fieldPath, draftInput });
+          expect(options.options.map((option: { value: string }) => option.value)).toEqual(config.items.map((item: { id: string }) => item.id));
+        }
+      });
+    } finally { await authority.close(); await daemon.close(); await plugin?.dispose(); }
+  });
+
+  it.each(['workflow.run.start', 'workflow.validate'] as const)('discovers recursive Workflow block shapes for %s over native MCP', async id => {
+    const sessionId = 'c666666666666666666666670';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer(hostClient(sessionId));
+    try {
+      await withMcpClient(runtime, async client => {
+        const read = async (schemaPath?: string) => {
+          const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id,
+            ...(schemaPath ? { schemaPath } : {}) } }));
+          const content = reply.content.find(item => item.type === 'text');
+          if (content?.type !== 'text') throw new Error('Missing discovery payload');
+          expect(reply.isError, content.text).not.toBe(true);
+          return PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(JSON.parse(content.text));
+        };
+        const root = (await readCompleteActionSpecV1({ actionId: id, read: input => read(input.schemaPath) })).inputSchema;
+        const definitions = root.definitions as Record<string, JsonSchemaObject>;
+        const candidates: unknown[] = [root];
+        const visited = new Set<unknown>();
+        let fragment: JsonSchemaObject | undefined;
+        while (candidates.length && !fragment) {
+          const node = candidates.pop();
+          if (!node || typeof node !== 'object' || Array.isArray(node) || visited.has(node)) continue;
+          visited.add(node);
+          const schema = node as JsonSchemaObject;
+          const properties = schema.properties as Record<string, JsonSchemaObject> | undefined;
+          if (properties?.definition) { fragment = properties.definition; break; }
+          if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/definitions/')) {
+            candidates.push(definitions[schema.$ref.slice('#/definitions/'.length)]);
+          }
+          forEachJsonSchemaChild(schema, child => candidates.push(child));
+        }
+        expect(fragment, 'actual Workflow definition property').toBeDefined();
+        const pending: unknown[] = [fragment];
+        const needed: Record<string, unknown> = {};
+        while (pending.length) {
+          const node = pending.pop();
+          if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+          const schema = node as JsonSchemaObject;
+          if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/definitions/')) {
+            const name = schema.$ref.slice('#/definitions/'.length);
+            if (!(name in needed)) {
+              needed[name] = definitions[name];
+              pending.push(definitions[name]);
+            }
+          }
+          forEachJsonSchemaChild(schema, child => pending.push(child));
+        }
+        const validate = new Ajv({ strict: false, validateFormats: false }).compile({ ...fragment, definitions: needed });
+        const step = { kind: 'step', id: 'work', document: { text: 'Work', references: [], attachments: [] } };
+        const definition = { version: 1, blocks: [{ kind: 'loop', id: 'loop', body: [step],
+          repetition: { kind: 'count', count: { kind: 'literal', value: 1 } } }] };
+        expect(validate(definition), JSON.stringify(validate.errors)).toBe(true);
+        for (const block of [{}, { ...step, unknown: true }, { ...definition.blocks[0], body: [{}] }]) {
+          const invalid = { ...definition, blocks: [block] };
+          expect(validate(invalid), JSON.stringify(block)).toBe(false);
+        }
       });
     } finally { await daemon.close(); }
   });

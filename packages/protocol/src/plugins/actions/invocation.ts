@@ -32,6 +32,7 @@ import type {
   PluginActionDangerLevelV2,
 } from './v2.js';
 import type { ActionRequiredAuthority } from '../../actions/metadata.js';
+import { projectActionInputJsonSchemaIssues } from '../../actions/executor/actionInputValidation.js';
 
 const PLUGIN_ACTION_FAILURE_FALLBACK_CODE = 'plugin_action_execution_failed';
 const PLUGIN_ACTION_FAILURE_FALLBACK_MESSAGE = 'Plugin operation failed';
@@ -98,6 +99,8 @@ export type PluginActionInputParserIssue = Readonly<{
   path: readonly (string | number)[];
   code: string;
   message: string;
+  expected?: string;
+  acceptedValues?: readonly (string | number | boolean | null)[];
 }>;
 
 export type PluginActionInputParserResult = Readonly<
@@ -173,6 +176,8 @@ function invalidInputFromParserIssues(
     path: Object.freeze([...issue.path]),
     code: issue.code,
     message: issue.message,
+    ...(issue.expected === undefined ? {} : { expected: issue.expected }),
+    ...(issue.acceptedValues === undefined ? {} : { acceptedValues: Object.freeze([...issue.acceptedValues]) }),
   })));
   return Object.freeze({
     status: 'invalid' as const,
@@ -931,7 +936,10 @@ export function createPluginActionInvocation(params: Readonly<{
         normalizedInput = parsedNormalizedInput.data;
       }
       if (!validates(inputValidator, normalizedInput)) {
-        return settled(inputParser ? inputSchemaProjectionMismatch : invalidInput);
+        return settled(inputParser ? inputSchemaProjectionMismatch : inputValidator && params.inputSchema
+          ? invalidInputFromParserIssues(projectActionInputJsonSchemaIssues(inputValidator, params.inputSchema, normalizedInput)
+            .map(issue => ({ ...issue, message: invalidInput.message })))
+          : invalidInput);
       }
       return Object.freeze({
         kind: 'ready', input: normalizedInput,

@@ -75,7 +75,7 @@ describe('registerHappierMcpBuiltInTools', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('presents and validates Mini Action inputs and completed outputs without treating parsers as JSON', () => {
+  it('presents Mini Action inputs and validates completed outputs without treating parsers as JSON', () => {
     const schema = mini.strictObject({ label: mini.string().check(mini.minLength(1)) });
     const inventory = {
       tools: [{ name: 'mini_action', title: 'Mini Action', description: 'Read a label', inputSchema: schema, outputSchema: schema }],
@@ -86,11 +86,11 @@ describe('registerHappierMcpBuiltInTools', () => {
     expect(z.toJSONSchema(meta.inputSchema, { target: 'draft-7', io: 'input' })).toMatchObject({
       type: 'object', properties: { label: { type: 'string', minLength: 1 } }, required: ['label'],
     });
-    for (const adapter of [meta.inputSchema, meta.outputSchema]) {
-      expect(adapter.safeParse({ label: 'Garden' }).success).toBe(true);
-      expect(adapter.safeParse({ label: '' }).success).toBe(false);
-      expect(adapter.safeParse({ label: 'Garden', undeclared: true }).success).toBe(false);
-    }
+    // Input admission belongs to Action dispatch; output validation stays here.
+    expect(meta.inputSchema.safeParse({ label: 'Garden' }).success).toBe(true);
+    expect(meta.outputSchema.safeParse({ label: 'Garden' }).success).toBe(true);
+    expect(meta.outputSchema.safeParse({ label: '' }).success).toBe(false);
+    expect(meta.outputSchema.safeParse({ label: 'Garden', undeclared: true }).success).toBe(false);
   });
 
   it('keeps tools available when optional output metadata is unrepresentable while refusing unrepresentable inputs', () => {
@@ -316,7 +316,6 @@ describe('registerHappierMcpBuiltInTools', () => {
     expect(presented.success).toBe(true);
     if (!presented.success) throw new Error('Expected MCP presentation input to be valid');
     expect(presented.data).toEqual(rawInput);
-    expect(tool.meta.inputSchema.safeParse({ title: '   ' }).success).toBe(false);
 
     await tool.handler(rawInput);
     expect(executeActionByToolName).toHaveBeenCalledWith(
@@ -452,7 +451,6 @@ describe('registerHappierMcpBuiltInTools', () => {
       _meta?: unknown;
     } | undefined;
     expect(meta?.inputSchema?.safeParse({ scope: 'diff' }).success).toBe(true);
-    expect(meta?.inputSchema?.safeParse({}).success).toBe(false);
     expect(meta?.inputSchema ? z.toJSONSchema(meta.inputSchema, { target: 'draft-7' }) : null).toMatchObject({
       type: 'object',
       properties: {

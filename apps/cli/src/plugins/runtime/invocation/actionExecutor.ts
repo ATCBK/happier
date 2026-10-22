@@ -338,6 +338,10 @@ export function projectTargetActionFailure(
       issues = projected.issues?.map(issue => Object.freeze({
         path: Object.freeze(issue.path.map(segment => typeof segment === 'string' ? redactText(segment) : segment)),
         code: redactText(issue.code), message: redactText(issue.message),
+        ...(issue.expected === undefined ? {} : { expected: redactText(issue.expected) }),
+        ...(issue.acceptedValues === undefined ? {} : {
+          acceptedValues: Object.freeze(issue.acceptedValues.map(value => typeof value === 'string' ? redactText(value) : value)),
+        }),
       }));
     } catch {
       // A failed scoped redactor cannot disclose a partially projected diagnostic.

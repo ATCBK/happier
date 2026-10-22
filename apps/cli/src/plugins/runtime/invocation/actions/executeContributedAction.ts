@@ -4,6 +4,7 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { MACHINE_PROVISIONER_EFFECT_ROLES_V1, readMachineProvisionerActionRolesV1, isMachineProvisionerBootstrapCredentialRoleV1, type MachineProvisionerRoleV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import type { ActionExecutorContext, ActionId, QualifiedPluginActionId } from '@happier-dev/protocol/actions';
 import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
+import { actionInputIssueFailure } from '@happier-dev/protocol/actions/executor/actionInputValidation';
 import { randomUUID } from 'node:crypto';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent, pluginActionDeclarationRequiresConfirmationForInput } from '@happier-dev/protocol/plugins/actions/invocation';
@@ -1051,6 +1052,8 @@ export async function executeContributedAction(params: Readonly<{
           result: validatedResult === null ? targetResult.value : validatedResult.value,
         };
       }
+      const inputFailure = targetResult.status === 'invalid' && targetResult.code === 'plugin_action_input_schema_invalid'
+        && targetResult.issues ? actionInputIssueFailure(...targetResult.issues) : null;
       return {
         ok: false,
         errorCode: targetResult.status === 'unavailable'
@@ -1059,7 +1062,8 @@ export async function executeContributedAction(params: Readonly<{
             targetResult.actionHandlerInvocation,
           )
           : targetResult.code,
-        error: targetResult.message,
+        error: inputFailure ? targetResult.code : targetResult.message,
+        ...(inputFailure ? { details: inputFailure.details } : {}),
         ...(targetResult.retryable === undefined
           ? {}
           : { retryable: targetResult.retryable }),

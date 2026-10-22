@@ -21,6 +21,7 @@ import {
   normalizeExecutionRunStartToolInput,
 } from './manualToolContracts';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { actionInputValidationFailure } from '@happier-dev/protocol/actions/executor/actionInputValidation';
 
 type DispatchDeps = Readonly<{
   changeTitle: (
@@ -203,7 +204,7 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
 
   if (params.toolName === 'change_title') {
     const parsed = changeTitleToolInputSchema.safeParse(params.args ?? {});
-    if (!parsed.success) return err('invalid_action_input', 'Invalid title payload');
+    if (!parsed.success) return actionInputValidationFailure(parsed.error);
     return normalizeChangeTitleResult(await params.deps.changeTitle(
       params.sessionId,
       parsed.data.title,
@@ -247,7 +248,7 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
       sessionId: params.sessionId,
       args: params.args,
     });
-    if (!normalized.ok) return err(normalized.errorCode, normalized.error);
+    if (!normalized.ok) return normalized;
 
     const equivalentActionId = getExecutionRunStartEquivalentActionId(normalized.request);
     if (equivalentActionId) {
@@ -267,7 +268,7 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
 
   if (params.toolName === 'action_execute') {
     const parsed = actionExecuteToolInputSchema.safeParse(params.args ?? {});
-    if (!parsed.success) return err('invalid_action_input', 'Invalid action execute request');
+    if (!parsed.success) return actionInputValidationFailure(parsed.error);
     // Qualified Actions are admitted by the bridge's current Action discovery
     // owner, independently of whether they declare a named Tool.
     if (!parseQualifiedPluginActionId(parsed.data.actionId)) {

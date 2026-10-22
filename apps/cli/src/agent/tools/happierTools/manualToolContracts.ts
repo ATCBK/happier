@@ -5,6 +5,7 @@ import { ExecutionRunIntentSchema } from '@happier-dev/protocol/execution/runs/r
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { SpawnConfigOptionValueSchema, findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
 import { normalizeConnectedServiceSelectionInput } from '@happier-dev/protocol/connect/normalizeConnectedServiceSelectionInput';
+import { actionInputValidationFailure } from '@happier-dev/protocol/actions/executor/actionInputValidation';
 import {
   defaultIoModeForExecutionRunIntent,
   defaultPermissionModeForExecutionRunIntent,
@@ -56,14 +57,10 @@ export function normalizeExecutionRunStartToolInput(params: Readonly<{
   args: unknown;
 }>):
   | Readonly<{ ok: true; request: z.infer<typeof ExecutionRunStartRequestSchema> }>
-  | Readonly<{ ok: false; errorCode: 'invalid_action_input' | 'invalid_parameters' | 'execution_run_not_allowed'; error: string }> {
+  | Readonly<{ ok: false; errorCode: 'invalid_parameters' | 'execution_run_not_allowed'; error: string; details?: unknown }> {
   const parsed = executionRunStartToolInputSchema.safeParse(params.args ?? {});
   if (!parsed.success) {
-    return {
-      ok: false,
-      errorCode: 'invalid_action_input',
-      error: 'Invalid execution run payload',
-    };
+    return { ...actionInputValidationFailure(parsed.error), errorCode: 'invalid_parameters' };
   }
 
   if (typeof parsed.data.sessionId === 'string' && parsed.data.sessionId.trim() !== params.sessionId) {
@@ -128,11 +125,7 @@ export function normalizeExecutionRunStartToolInput(params: Readonly<{
     ...(sessionConfigOptionOverrides ? { sessionConfigOptionOverrides } : {}),
   });
   if (!request.success) {
-    return {
-      ok: false,
-      errorCode: 'invalid_action_input',
-      error: 'Invalid execution run payload',
-    };
+    return { ...actionInputValidationFailure(request.error), errorCode: 'invalid_parameters' };
   }
 
   return {

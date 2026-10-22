@@ -44,7 +44,7 @@ import type {
 } from '@happier-dev/plugin-sdk';
 import type { PluginDiagnosticData } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
-import { readTargetActionDiagnosticConfidentiality } from '../diagnostics';
+import { registerTargetActionDiagnosticInput } from '../diagnostics';
 import type { ExecSystemToolServiceV1 } from '../../exec/privateContract';
 import {
     bindDeclaredEventSubscriptions,
@@ -287,28 +287,9 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         // The approval projection is the declaration/SecretString classifier.
         // Enroll its actual confidential subtrees in the incumbent redactor;
         // diagnostic key spelling must not classify plugin operands.
-        const projection = readTargetActionDiagnosticConfidentiality(input, secretInputPaths);
-        const confidentialPaths = new Set(projection.paths);
-        if (confidentialPaths.size === 0) return;
+        const projection = registerTargetActionDiagnosticInput(input, secretInputPaths,
+            value => secretRedactor.registerRaw(scope, value));
         secretRedactor.registerConfidentialPaths(scope, projection.paths, projection.nonStringPaths);
-        const pending: Array<Readonly<{ value: JsonValue; path: string; confidential: boolean }>> = [
-            { value: input, path: '', confidential: confidentialPaths.has('') },
-        ];
-        while (pending.length) {
-            const { value, path, confidential } = pending.pop()!;
-            if (typeof value === 'string') {
-                if (confidential) {
-                    secretRedactor.registerRaw(scope, value);
-                    secretRedactor.registerRaw(scope, JSON.stringify(value));
-                }
-            } else if (value !== null && typeof value === 'object') {
-                for (const [key, child] of Object.entries(value)) {
-                    const childPath = path ? `${path}.${key}` : key;
-                    pending.push({ value: child, path: childPath,
-                        confidential: confidential || confidentialPaths.has(childPath) });
-                }
-            }
-        }
     };
     const listenerDiagnosticLoggers = new WeakMap<object, ReturnType<typeof createPluginInvocationLogger>>();
     const invocationLoggers = new WeakMap<object, ReturnType<typeof createPluginInvocationLogger>>();
