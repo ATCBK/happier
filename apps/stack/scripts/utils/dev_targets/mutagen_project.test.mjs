@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { parseDevTargetsConfig } from './config.mjs';
@@ -268,6 +268,13 @@ test('renderMutagenProject preserves default exclusions inside re-included proje
     for (const file of ['env.local', '.env.local', 'tsconfig.tsbuildinfo', 'output.log', 'output.trace', '.DS_Store']) {
       excluded.push(`${root}/${file}`);
     }
+    // Scratch copies can link entire dependency directories to an absolute
+    // install path. Ignore the link itself before portable symlink scanning.
+    const scratch = `${root}/scratch/repo/apps/ui`;
+    await mkdir(fixture.path(scratch), { recursive: true });
+    await symlink(fixture.root, fixture.path(scratch, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    excluded.push(`${scratch}/node_modules`);
+    included.push(`${scratch}/package.json`);
   }
   excluded.push('.project/reviews/report.md', '.project/plans/qa/browser-diagnostics.json',
     '.project/plans/qa/capture.har', 'packages/fixture/.project/plans/source.ts');
