@@ -1,12 +1,13 @@
 import { PluginUiHostApiSurfaceContextV1Schema, type PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import { act } from 'react';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storage';
 
-import { createPluginSurfaceContext, usePluginSurfaceEnvironment } from './pluginSurfaceContext';
+import { createPluginSurfaceContext, preparePluginSurfaceContext, usePluginSurfaceEnvironment } from './pluginSurfaceContext';
+import * as stableJson from '@/utils/json/stableJsonStringify';
 
 const targetedContributions: PluginUiTargetedContributionsV1 = {
     target: {
@@ -18,6 +19,66 @@ const targetedContributions: PluginUiTargetedContributionsV1 = {
 };
 
 describe('createPluginSurfaceContext', () => {
+    it('admits host publications once and does no parsing, walking or stringify on unchanged reads', () => {
+        const fixture = createPluginSurfaceContextFixture();
+        const translations = { title: 'Original' };
+        const input = {
+            mount: fixture.mount,
+            target: fixture.target,
+            accountEncryptionMode: fixture.accountEncryptionMode,
+            environment: { ...fixture, columnVisible: false },
+            translations,
+            targetedContributions: fixture.targetedContributions,
+        };
+        const prepared = preparePluginSurfaceContext(createPluginSurfaceContext(input));
+        const published = prepared.surface;
+        // Instrument the real owners; none of their implementations is replaced.
+        const parse = vi.spyOn(PluginUiHostApiSurfaceContextV1Schema, 'parse');
+        const stringify = vi.spyOn(stableJson, 'stableJsonStringify');
+        const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
+        onTestFinished(() => { parse.mockRestore(); stringify.mockRestore(); descriptors.mockRestore(); });
+        const reads = Array.from({ length: 100 }, () => preparePluginSurfaceContext(published, prepared));
+        const counts = { parses: parse.mock.calls.length, stringify: stringify.mock.calls.length, walks: descriptors.mock.calls.length };
+        expect(counts).toEqual({ parses: 0, stringify: 0, walks: 0 });
+        expect(reads.every(value => value === prepared)).toBe(true);
+        expect(prepared.surface).toBe(published);
+        expect(Object.isFrozen(published.translations)).toBe(true);
+        expect(Object.isFrozen(translations)).toBe(false);
+        translations.title = 'Changed';
+        expect(published.translations.title).toBe('Original');
+        const next = preparePluginSurfaceContext(createPluginSurfaceContext(input), prepared);
+        expect(next.surface.translations.title).toBe('Changed');
+        expect(next.semanticKey).not.toBe(prepared.semanticKey);
+        expect(next.surface.target).toBe(prepared.surface.target);
+        expect(next.surface.theme).toBe(prepared.surface.theme);
+
+        // Copying/freezing a wrapper never admits mutable children or invalid input.
+        const raw = Object.freeze({ ...published, translations });
+        parse.mockClear();
+        expect(preparePluginSurfaceContext(raw).surface.translations.title).toBe('Changed');
+        translations.title = 'Changed again';
+        expect(preparePluginSurfaceContext(raw).surface.translations.title).toBe('Changed again');
+        expect(parse).toHaveBeenCalledTimes(2);
+        expect(() => preparePluginSurfaceContext(Object.freeze({ ...published, textScale: -1 }))).toThrow();
+    });
+    it('validates fresh input publications but builds no key when their admitted content is unchanged', () => {
+        const source = createPluginSurfaceContextFixture();
+        const previous = preparePluginSurfaceContext(source);
+        const parse = vi.spyOn(PluginUiHostApiSurfaceContextV1Schema, 'parse');
+        const stringify = vi.spyOn(stableJson, 'stableJsonStringify');
+        onTestFinished(() => { parse.mockRestore(); stringify.mockRestore(); });
+        const publications = Array.from({ length: 100 }, () => preparePluginSurfaceContext({ ...source }, previous));
+        expect(parse).toHaveBeenCalledTimes(100);
+        expect(stringify).toHaveBeenCalledTimes(0);
+        expect(publications.every(value => value === previous)).toBe(true);
+        stringify.mockClear();
+        const changed = preparePluginSurfaceContext({ ...source, locale: 'de' }, previous);
+        expect(stringify).toHaveBeenCalledTimes(1);
+        expect(changed.semanticKey).not.toBe(previous.semanticKey);
+        expect(changed.surface.locale).toBe('de');
+        expect(changed.surface.theme).toBe(previous.surface.theme);
+        expect(() => preparePluginSurfaceContext({ ...source, textScale: -1 }, previous)).toThrow();
+    });
     it('projects live local spinner preferences without subscribing to unrelated local settings', async () => {
         const previous = storage.getState();
         onTestFinished(() => { storage.setState(previous, true); });
