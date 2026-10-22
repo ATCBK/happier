@@ -72,7 +72,7 @@ export type SessionTargetingActionInputById = {
     };
     readonly "session.messages.recent.get": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
         limit?: number | undefined;
         cursor?: string | null | undefined;
         includeUser?: boolean | undefined;

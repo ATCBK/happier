@@ -1399,6 +1399,18 @@ export type AccountProfileActionResultById = {
     readonly "account.public_profile.preview": {
         kind: 'ready';
         view: {
+            service: {
+                displayName: string;
+                publicBaseUrl: string;
+            } | null;
+            urls: {
+                page: string;
+                json: string;
+                badgeBase: string;
+                card: string;
+                og: string;
+                report: string;
+            } | null;
             appearance: {
                 atmosphere: {
                     source: 'none';
@@ -1827,18 +1839,6 @@ export type AccountProfileActionResultById = {
                 name?: string | undefined;
                 sinceMs?: number | undefined;
                 avatarUrl?: string | undefined;
-            };
-            service: {
-                displayName: string;
-                publicBaseUrl: string;
-            };
-            urls: {
-                page: string;
-                json: string;
-                badgeBase: string;
-                card: string;
-                og: string;
-                report: string;
             };
             state: 'published';
         };

@@ -88,6 +88,9 @@ export type ArtifactAccessActionResultById = {
         }[];
         access: 'view' | 'edit' | 'admin' | 'owner' | null;
         changed: boolean;
+        preparation?: {
+            status: 'pending';
+        } | undefined;
     };
     readonly "artifact.access.grants.remove": {
         artifactId: string;
@@ -114,5 +117,8 @@ export type ArtifactAccessActionResultById = {
         }[];
         access: 'view' | 'edit' | 'admin' | 'owner' | null;
         changed: boolean;
+        preparation?: {
+            status: 'pending';
+        } | undefined;
     };
 };

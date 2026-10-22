@@ -319,7 +319,7 @@ export type SessionLifecycleActionInputById = {
         } | undefined;
     };
     readonly "session.handoff": {
-        sessionId?: string | undefined;
+        sessionId?: SessionTargetV1<true> | undefined;
         targetMachineId?: string | undefined;
         targetPath?: string | undefined;
         targetSessionStorageMode?: 'persisted' | 'direct' | undefined;

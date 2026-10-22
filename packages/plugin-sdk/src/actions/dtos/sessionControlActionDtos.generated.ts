@@ -102,7 +102,7 @@ export type SessionControlActionInputById = {
         decision: 'stop';
     };
     readonly "session.turn.cancel": {
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.runtime.refresh": {
         sessionId: string;
@@ -111,7 +111,7 @@ export type SessionControlActionInputById = {
     };
     readonly "session.stop": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.terminalComposer.clear": {
         [x: string]: unknown;
@@ -125,7 +125,6 @@ export type SessionControlActionInputById = {
         expectedStateAtMs?: number | undefined;
     };
     readonly "session.coordinator.enable": {
-        sessionId: string;
         roleId: string;
         keep: 'rail_bot' | 'list_pin' | 'none';
         ruleSuggestions: {
@@ -166,6 +165,7 @@ export type SessionControlActionInputById = {
             };
             expectedVersion: number;
         }[];
+        sessionId: SessionTargetV1<true>;
         answersWorkerQuestions?: boolean | undefined;
         managedBy?: {
             managerSessionId: string | null;
@@ -332,7 +332,7 @@ export type SessionControlActionInputById = {
         } | undefined;
     };
     readonly "session.archive": {
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
         alsoArchiveReports?: boolean | undefined;
     };
     readonly "session.delete": {
@@ -348,7 +348,7 @@ export type SessionControlActionInputById = {
     };
     readonly "session.unarchive": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.status.get": {
         [x: string]: unknown;
@@ -397,11 +397,11 @@ export type SessionControlActionInputById = {
     };
     readonly "session.goal.get": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.goal.set": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
         objective?: string | undefined;
         status?: 'unknown' | 'active' | 'pending' | 'paused' | 'blocked' | 'complete' | 'cancelled' | undefined;
         tokenBudget?: number | null | undefined;
@@ -409,12 +409,12 @@ export type SessionControlActionInputById = {
     };
     readonly "session.goal.clear": {
         [x: string]: unknown;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.manager.set": {
         managerSessionId: string | null;
         expectedManagerSessionId: string | null;
-        sessionId: string;
+        sessionId: SessionTargetV1<true>;
     };
     readonly "session.usageLimit.waitResume.enable": {
         [x: string]: unknown;
