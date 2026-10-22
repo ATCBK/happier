@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Server, type Socket } from 'socket.io';
 import { io as connect } from 'socket.io-client';
@@ -52,8 +53,9 @@ import { eventRouter } from './connectionEventRouter';
 import { buildNewMessageUpdate } from './eventPayloadBuilders';
 
 export function registerTranscriptFollowTimingTests(provider: 'sqlite' | 'postgres',
-    httpRoundTripDelayMs = 0): void {
-describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${provider}, HTTP delay ${httpRoundTripDelayMs}ms`, () => {
+    httpRoundTripDelayMs = 0, scenario: 'timing' | 'heavy-history-transfer' = 'timing'): void {
+const measureTransfer = scenario === 'heavy-history-transfer';
+describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${provider}, HTTP delay ${httpRoundTripDelayMs}ms${measureTransfer ? ', heavy-history-transfer' : ''}`, () => {
     let harness: LightSqliteHarness;
     const originalEnv = snapshotEnv();
     beforeAll(async () => {
@@ -80,7 +82,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         else await harness?.close();
     });
 
-    it.each([1, 2] as const)(provider === 'postgres'
+    it.each([1, 2] as const)(measureTransfer ? 'reports V%s transfer after heavy history without changing retained content' : provider === 'postgres'
         ? 'queues committed rows through V%s behind a held writer, then returns with a retained subscription'
         : 'returns committed rows promptly through V%s, with a held writer and retained subscription', async version => {
         const material = version === 2 ? { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) } : null;
@@ -111,6 +113,19 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
             ...(sessionKey ? { dataKeyEnvelopes: { create: { recipientAccountId: owner.id,
                 encryptedDataKey: sessionKey.dataEncryptionKey } } } : {}),
             metadata: sessionMetadata.t === 'encrypted' ? sessionMetadata.c : JSON.stringify(sessionMetadata.v) } });
+        // Synthetic history is deliberately varied, so future negotiated compression
+        // cannot hide replaying it behind a repeated-character fixture.
+        const history = measureTransfer ? Array.from({ length: 10 }, (_, index) => ({
+            sessionId: session.id, seq: index + 1, localId: `retained-history-${index}`, messageRole: 'agent',
+            content: sealSessionStoredContent({ ...contentContext, payload: {
+                role: 'agent', content: { type: 'text', text: Array.from({ length: 1024 }, (_, line) =>
+                    createHash('sha256').update(`history-${index}-${line}`).digest('hex')).join('\n') },
+            } }),
+        })) : [];
+        if (history.length > 0) {
+            await db.sessionMessage.createMany({ data: history });
+            await db.session.update({ where: { id: session.id }, data: { seq: history.length } });
+        }
         await db.accessKey.create({ data: { accountId: owner.id, sessionId: session.id, machineId: machine.id, data: 'test' } });
         const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
         const pat = await auth.createApiToken({ accountId: owner.id, tokenId: crypto.randomUUID(), label: 'follow harness' });
@@ -165,7 +180,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         const upstream = await app.listen({ host: '127.0.0.1', port: 0 });
         // Existing network-boundary proxy models finite HTTP RTT only. Socket
         // frames remain real loopback delivery, with no simulated frame delay.
-        const network = httpRoundTripDelayMs > 0 ? await startHttpRequestRecordingProxy({
+        const network = httpRoundTripDelayMs > 0 || measureTransfer ? await startHttpRequestRecordingProxy({
             targetBaseUrl: upstream, delayRequestMs: () => httpRoundTripDelayMs,
         }) : null;
         const endpoint = network?.baseUrl ?? upstream;
@@ -202,6 +217,23 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
             reconnection: false, auth: { clientType: 'machine-scoped' } });
         const runner = connect(endpoint, { path: '/v1/updates/', transports: ['websocket'],
             reconnection: false, auth: { clientType: 'session-scoped', runner: true } });
+        const meter = measureTransfer ? connect(endpoint, { path: '/v1/updates/', transports: ['websocket'],
+            reconnection: false, query: { transferObserver: 'measured' }, auth: { clientType: 'session-scoped' } }) : null;
+        let receivedPackets = 0;
+        let decodedPacketBytes = 0;
+        let expectedMeterSeq: number | undefined;
+        let meterDelivered: (() => void) | undefined;
+        meter?.io.on('open', () => {
+            meter.io.engine.on('packet', packet => {
+                if (packet.type === 'message' && typeof packet.data === 'string' && packet.data.startsWith('2["update",')) {
+                    receivedPackets++;
+                    decodedPacketBytes += Buffer.byteLength(packet.data);
+                }
+            });
+        });
+        meter?.on('update', (payload: ReturnType<typeof buildNewMessageUpdate>) => {
+            if (payload.body.t === 'new-message' && payload.body.message.seq === expectedMeterSeq) meterDelivered?.();
+        });
         const abort = new AbortController();
         daemon.on(SOCKET_RPC_EVENTS.REQUEST, async (rpc: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
             const request = rpc.params as ExternalActionDaemonDispatchRequest;
@@ -247,6 +279,10 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         let testFailed = false;
         try {
             await new Promise<void>((resolve, reject) => { daemon.once('connect', resolve); daemon.once('connect_error', reject); });
+            if (meter) await new Promise<void>((resolve, reject) => {
+                if (meter.connected) { resolve(); return; }
+                meter.once('connect', resolve); meter.once('connect_error', reject);
+            });
             const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
             const registration = await presence.registerPublisher({ socket: await runnerSocket, binding,
                 completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
@@ -272,6 +308,10 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 await Promise.race([baseline, response.then(() => {
                     throw new Error('Home follow returned before a transcript baseline was read');
                 })]);
+                const transferBefore = network?.entries() ?? [];
+                const packetsBefore = receivedPackets;
+                const decodedBefore = decodedPacketBytes;
+                const receivedByMeter = meter ? new Promise<void>(resolve => { meterDelivered = resolve; }) : Promise.resolve();
                 stamps.appendStart = performance.now();
                 const transaction = db.$transaction;
                 // Instrument the database adapter without substituting its
@@ -300,6 +340,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 if (!written.ok) throw new Error(`Append failed: ${written.error}`);
                 const message = written.message;
                 if (!message) throw new Error('Runner append returned no row');
+                expectedMeterSeq = message.seq;
                 const recipients = 'recipientCursorsMessage' in written ? written.recipientCursorsMessage : written.recipientCursors;
                 let enteredWriter!: () => void;
                 const entered = new Promise<void>(resolve => { enteredWriter = resolve; });
@@ -310,6 +351,12 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     await release;
                 });
                 await entered;
+                if (measureTransfer) {
+                    // The transfer scenario exercises ordinary delivery. The timing
+                    // scenario below separately owns the held-writer stress case.
+                    releaseWriter?.();
+                    await writer;
+                }
                 let deliveryTransactions = 0;
                 const deliveryTransaction = db.$transaction;
                 // Observe the real database boundary: a queued inTx read has
@@ -348,11 +395,11 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                         releaseWriter?.();
                         await writer;
                     }
-                    const observed = await Promise.race([response,
+                    const observed = measureTransfer ? await response : await Promise.race([response,
                         new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
                     const hopMs = (from: string, to: string) => stamps[from] === undefined || stamps[to] === undefined
                         ? null : stamps[to]! - stamps[from]!;
-                    console.info('WAKE3_HOME_TIMING', JSON.stringify({ provider, version, index, httpRoundTripDelayMs,
+                    if (!measureTransfer) console.info('WAKE3_HOME_TIMING', JSON.stringify({ provider, version, index, httpRoundTripDelayMs,
                         stamps: { ...stamps }, hops: {
                             appendToCommitAcknowledged: hopMs('appendStart', 'commitAcknowledged'),
                             commitToChangeEmit: hopMs('commitAcknowledged', 'emit'),
@@ -372,7 +419,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                         ? 'Home follow must return after the queued delivery can acquire the released permit'
                         : 'Home follow must return before the next writer releases').not.toBeNull();
                     const deliveryReadyAt = provider === 'postgres' ? stamps.writerReleased! : stamps.commitAcknowledged!;
-                    expect(stamps.responseOpened! - deliveryReadyAt).toBeLessThan(1000);
+                    if (!measureTransfer) expect(stamps.responseOpened! - deliveryReadyAt).toBeLessThan(1000);
                     expect(observed).toMatchObject({ status: 200, body: { execution: { ok: true,
                         result: { items: [{ seq: message.seq }], nextCursor: String(message.seq) } } } });
                     const items = observed!.body.execution.result.items;
@@ -380,7 +427,31 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     const nextCursor = observed!.body.execution.result.nextCursor;
                     if (typeof nextCursor !== 'string') throw new Error('Committed row must advance the follow cursor');
                     cursor = nextCursor;
-                    expect(observerConnections).toBe(1);
+                    expect(observerConnections).toBe(measureTransfer ? 2 : 1);
+                    if (measureTransfer && network && meter) {
+                        await receivedByMeter;
+                        const after = network.entries();
+                        const before = new Map(transferBefore.map(entry => [entry.id, entry]));
+                        const http = after.filter(entry => !entry.upgraded).map(entry => ({
+                            ...entry, delta: entry.responseBodyWireBytes - (before.get(entry.id)?.responseBodyWireBytes ?? 0),
+                        })).filter(entry => entry.delta > 0);
+                        const ws = after.filter(entry => entry.upgraded && entry.path.includes('transferObserver=measured'));
+                        expect(ws).toHaveLength(1);
+                        const transport: unknown = meter.io.engine.transport;
+                        const websocket: unknown = typeof transport === 'object' && transport !== null ? Reflect.get(transport, 'ws') : null;
+                        const extensions: unknown = typeof websocket === 'object' && websocket !== null ? Reflect.get(websocket, 'extensions') : null;
+                        console.info('PERFCI_TRANSFER', JSON.stringify({ scenario: 'transcript-follow-heavy-history-v1',
+                            provider, encryptionVersion: version, phase: index,
+                            history: { rows: history.length, storedContentBytes: history.reduce((total, row) => total + Buffer.byteLength(JSON.stringify(row.content)), 0) },
+                            http: { responses: http.length, wireBodyBytes: http.reduce((total, entry) => total + entry.delta, 0),
+                                decodedBodyBytes: http.every(entry => entry.responseContentEncoding === null || entry.responseContentEncoding === 'identity')
+                                    ? http.reduce((total, entry) => total + entry.delta, 0) : null,
+                                contentEncodings: [...new Set(http.map(entry => entry.responseContentEncoding ?? 'none'))] },
+                            websocket: { messages: receivedPackets - packetsBefore, decodedPacketBytes: decodedPacketBytes - decodedBefore,
+                                wireBytes: ws[0]!.upgradedResponseWireBytes - (before.get(ws[0]!.id)?.upgradedResponseWireBytes ?? 0),
+                                extensions: typeof extensions === 'string' ? extensions || 'none' : 'unknown' },
+                        }));
+                    }
                 } catch (error) {
                     deliveryFailed = true;
                     throw error;
@@ -398,6 +469,11 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                     } finally { db.$transaction = deliveryTransaction; }
                 }
             }
+            if (measureTransfer) {
+                const retained = await db.sessionMessage.findMany({ where: { sessionId: session.id, seq: { lte: history.length } },
+                    orderBy: { seq: 'asc' }, select: { seq: true, content: true } });
+                expect(retained).toEqual(history.map(row => ({ seq: row.seq, content: row.content })));
+            }
         } catch (error) {
             testFailed = true;
             throw error;
@@ -410,6 +486,7 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 async () => {
                     daemon.disconnect();
                     runner.disconnect();
+                    meter?.disconnect();
                     eventRouter.clearIo();
                     await new Promise<void>(resolve => io.close(() => resolve()));
                 },
