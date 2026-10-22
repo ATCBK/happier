@@ -81,6 +81,72 @@ describe('resident streamed disk index', () => {
             expect(index.state()!.progress).toEqual({ ...kept, sizedBytes: kept.sizedBytes + 4096, items: kept.items + 2 });
         } finally { index.close(); }
     });
+    it.each([
+        { childComplete: true, replaceChild: false },
+        { childComplete: false, replaceChild: false },
+        { childComplete: true, replaceChild: true },
+    ])('retains measured descendants when a resumed parent enumeration is cancelled again (complete: $childComplete, replaced: $replaceChild)', async ({ childComplete, replaceChild }) => {
+        const fixture = `partial-parent-resume-${childComplete}-${replaceChild}`;
+        const root = join(scratch, fixture); const child = join(root, 'measured');
+        await mkdir(child, { recursive: true }); await writeFile(join(child, 'data'), Buffer.alloc(8192));
+        const index = createStorageScanIndex({ activeServerDir: join(scratch, `${fixture}-state`) });
+        const admission = { volumeId: 'partial-parent-resume', root, target: { folderPath: root }, usedBytes: 0,
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } } as const;
+        try {
+            await index.initialize([], true); index.begin(admission);
+            // Model the interrupted state observed live: child facts reached the
+            // index before the parent's enumeration proof. Use real producer
+            // records for all entry, coverage and physical-identity shapes.
+            const first = startNativeDiskScan({ root, keepMinBytes: 0 }, { onRecord: record => {
+                if (record.type.startsWith('frontier') || record.type === 'dir' && (record.id === root || !childComplete && record.id === child)) return;
+                index.ingest(admission.volumeId, record);
+            } });
+            await first.done; index.finish(admission.volumeId, 'cancelled');
+            const kept = index.state()!.progress.sizedBytes;
+            const completedChild = index.readNode(child)!;
+            expect(completedChild.complete).toBe(childComplete);
+            expect(kept).toBe((await measureNativeDisk({ paths: [root] })).totalAllocatedBytes);
+            expect(index.frontier(admission.volumeId)).toContain(root);
+            if (replaceChild) {
+                await rename(child, join(scratch, `${fixture}-retired`));
+                await mkdir(child); await writeFile(join(child, 'replacement'), Buffer.alloc(4096));
+            }
+            index.begin({ ...admission, resume: true });
+            const prior = await index.writePriorProjection(admission.volumeId, { resume: true });
+            let cut = false; let sawChild = false;
+            try {
+                const resumed = startNativeDiskScan({ root, resumeFrom: [], previousIndexPath: prior!.path, keepMinBytes: 0 }, { onRecord: record => {
+                    if (cut) return;
+                    index.ingest(admission.volumeId, record);
+                    // An abrupt transport/process stop may land immediately after
+                    // rediscovering the same child, before another child fact arrives.
+                    if (record.type === 'dir-entry' && record.node.id === child) { sawChild = true; cut = true; }
+                } });
+                await resumed.done;
+            } finally { await prior?.dispose(); }
+            expect(sawChild).toBe(true);
+            index.finish(admission.volumeId, 'cancelled');
+            const page = MachineStorageScanGetResultV1Schema.parse(index.readView({ view: { tab: 'folders', depth: 1 } }));
+            expect(page.root!.size.allocatedBytes).toBe(page.state!.progress.sizedBytes);
+            if (replaceChild) expect(index.readNode(join(child, 'data'))).toBeNull();
+            else {
+                expect(page.state!.progress.sizedBytes).toBe(kept);
+                expect(page.nodes.find(node => node.nodeId === child)).toEqual(completedChild.node);
+                expect(index.readNode(child)?.scannedAt).toBe(completedChild.scannedAt);
+            }
+            index.begin({ ...admission, resume: true });
+            const finalPrior = await index.writePriorProjection(admission.volumeId, { resume: true });
+            try {
+                const final = startNativeDiskScan({ root, resumeFrom: [], previousIndexPath: finalPrior!.path, keepMinBytes: 0 }, {
+                    onRecord: record => index.ingest(admission.volumeId, record),
+                });
+                index.finish(admission.volumeId, await final.done);
+            } finally { await finalPrior?.dispose(); }
+            expect(index.state()!.progress.sizedBytes).toBe((await measureNativeDisk({ paths: [root] })).totalAllocatedBytes);
+            expect(index.readNode(root)?.complete).toBe(true);
+            if (childComplete && !replaceChild) expect(index.readNode(child)?.scannedAt).toBe(completedChild.scannedAt);
+        } finally { index.close(); }
+    });
     it('keeps finished folders visible after abrupt cancellation, reopens them, and resumes only unfinished folders', async () => {
         const volume = join(scratch, 'cancel-volume'); const root = join(volume, 'selected'); const finished = join(root, 'finished');
         await mkdir(finished, { recursive: true }); await writeFile(join(finished, 'data'), Buffer.alloc(8192));

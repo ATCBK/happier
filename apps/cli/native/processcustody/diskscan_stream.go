@@ -186,7 +186,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			case "prior-dir":
 				return prior.set("directory:"+path, strconv.FormatInt(*row.AllocatedBytes, 10))
 			case "prior-child":
-				if request.RelistOnly {
+				if request.RelistOnly || request.ResumeFrom != nil {
 					data, err := json.Marshal(row)
 					if err != nil {
 						return err
@@ -260,6 +260,20 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 		return nil
 	}
+	// A resumed directory is a continuation when its own physical identity is
+	// still the one in the retained index. Its already measured descendants
+	// must survive rediscovery and another abrupt cancellation.
+	priorDirectory := func(path string, facts []diskAllocationFact) (bool, error) {
+		if request.ResumeFrom == nil || len(facts) == 0 {
+			return false, nil
+		}
+		_, found, err := prior.get("directory:" + path)
+		if err != nil || !found {
+			return false, err
+		}
+		winner, observed, err := winners.get(facts[0].Key)
+		return observed && winner == path, err
+	}
 	makeDirectory := func(path string, meta diskMetadata, atomicParent string) (*diskStreamDirectory, error) {
 		node := diskNodeFromEntry(diskEntry{name: filepath.Base(path), path: path, meta: meta})
 		record := diskDirRecord{V: 1, Type: "dir", ID: node.ID, Name: node.Name, NameBytes: node.NameBytes, OwnLogicalBytes: meta.logicalBytes, AllocatedBytes: meta.allocatedBytes, LogicalBytes: meta.logicalBytes, Items: 1, MtimeMs: meta.mtimeMs, Flags: node.Flags, Children: []diskNode{}, Files: []diskNode{}, Streamed: true, RelistOnly: request.RelistOnly, meta: meta, rawPath: path, atomicParent: atomicParent}
@@ -284,7 +298,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 		return nil
 	}
-	startDirectory := func(directory *diskStreamDirectory) error {
+	startDirectory := func(directory *diskStreamDirectory, continuing bool) error {
 		record := directory.record
 		if record.atomicParent != "" {
 			return nil
@@ -293,11 +307,13 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		// Until its subtree finishes this is a lower bound, even when the
 		// directory's own metadata was readable.
 		record.Flags.AtLeast = true
-		if err := emit(struct {
-			diskDirRecord
-			RelistOnly bool `json:"relistOnly"`
-		}{record, request.RelistOnly}); err != nil {
-			return err
+		if !continuing {
+			if err := emit(struct {
+				diskDirRecord
+				RelistOnly bool `json:"relistOnly"`
+			}{record, request.RelistOnly}); err != nil {
+				return err
+			}
 		}
 		return writeFacts(record.rawPath, directory.facts)
 	}
@@ -326,6 +342,10 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			if meta.cloudOnly {
 				facts = nil
 			}
+			continuing, err := priorDirectory(path, facts)
+			if err != nil {
+				return err
+			}
 			if err := observe(path, facts); err != nil {
 				return err
 			}
@@ -341,7 +361,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 				if err != nil {
 					return err
 				}
-				if err := startDirectory(directory); err != nil {
+				if err := startDirectory(directory, continuing); err != nil {
 					return err
 				}
 				return enqueue(directory)
@@ -506,7 +526,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 			record.Flags.AtLeast = record.Flags.AtLeast || node.Flags.AtLeast
 			if prior := node.retained; prior != nil {
 				diskAddAge(&record.AgeGroupBytes, prior.ageGroups)
-				record.Complete = false
+				record.Complete = record.Complete && !request.RelistOnly
 			} else if node.Kind == "folder" || node.Kind == "package" {
 				child, err := getDirectory(node.rawPath)
 				if err != nil {
@@ -559,7 +579,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 					node.Flags.AtLeast = node.Flags.AtLeast || node.retained == nil && (child == nil || !child.record.Complete)
 				}
 				node.AllocationFacts = nil
-				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, node, visible && record.atomicParent == "" && !record.Summarized && record.meta.kind != "package", node.retained != nil, false}); err != nil {
+				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, node, visible && record.atomicParent == "" && !record.Summarized && record.meta.kind != "package", node.retained != nil && request.RelistOnly, false}); err != nil {
 					return err
 				}
 			}
@@ -755,6 +775,13 @@ walk:
 				}
 				node := diskNodeFromEntry(entry)
 				isDirectory := entry.meta.kind == "folder" || entry.meta.kind == "package"
+				continuing := false
+				if isDirectory {
+					continuing, err = priorDirectory(entry.path, node.AllocationFacts)
+					if err != nil {
+						return err
+					}
+				}
 				skip, reason := diskShouldSkip(entry.path, request.Root, entry.meta)
 				skip, reason = diskDirectoryBoundary(entry.meta.device, record.meta.device, request.AllowedDevices, skip, reason)
 				if entry.path == request.ScratchDirectory || isDirectory && scratchIdentity != "" && entry.meta.identity == scratchIdentity {
@@ -778,8 +805,8 @@ walk:
 					node.AllocatedBytes = 0
 					node.LogicalBytes = 0
 					summary.Skipped = append(summary.Skipped, diskIssue{entry.path, reason})
-				} else if isDirectory && !entry.meta.cloudOnly && request.RelistOnly {
-					record.Flags.AtLeast = true
+				} else if isDirectory && !entry.meta.cloudOnly && (request.RelistOnly || request.ResumeFrom != nil) {
+					record.Flags.AtLeast = record.Flags.AtLeast || request.RelistOnly
 					data, found, err := prior.get("child:" + entry.path)
 					if err != nil {
 						return err
@@ -812,7 +839,7 @@ walk:
 				if visible && node.retained == nil {
 					out.Flags.AtLeast = true
 				}
-				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, out, visible, node.retained != nil, node.retained == nil}); err != nil {
+				if err := emit(diskEntryRecord{1, "dir-entry", record.ID, out, visible, node.retained != nil && request.RelistOnly, node.retained == nil && !continuing}); err != nil {
 					return err
 				}
 				if err := observe(entry.path, node.AllocationFacts); err != nil {
@@ -824,7 +851,7 @@ walk:
 				if err := entries.append(node); err != nil {
 					return err
 				}
-				if isDirectory && !skip && !entry.meta.cloudOnly && !request.RelistOnly {
+				if isDirectory && !skip && !entry.meta.cloudOnly && !request.RelistOnly && node.retained == nil {
 					if err := visited.set(entry.meta.identity, "1"); err != nil {
 						return err
 					}
@@ -833,7 +860,7 @@ walk:
 						return err
 					}
 					directory.pending++
-					if err := startDirectory(child); err != nil {
+					if err := startDirectory(child, continuing); err != nil {
 						return err
 					}
 					if err := enqueue(child); err != nil {
