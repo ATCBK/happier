@@ -144,9 +144,6 @@ const startHappyServerSpy = vi.fn(async (_client: any) => ({
   stop: vi.fn(),
 }));
 const persistTerminalAttachmentInfoIfNeededSpy = vi.fn<(info: { sessionId: string }) => Promise<void>>(async () => {});
-const sendTerminalFallbackMessageIfNeededSpy = vi.fn<
-  typeof import('@/agent/runtime/startupSideEffects').sendTerminalFallbackMessageIfNeeded
->(() => {});
 const reportSessionToDaemonIfRunningSpy = vi.fn<
   typeof import('@/agent/runtime/startupSideEffects').reportSessionToDaemonIfRunning
 >(async () => {});
@@ -341,12 +338,17 @@ vi.mock('@/rpc/handlers/killSession', () => ({
   registerKillSessionHandler: vi.fn(),
 }));
 
-vi.mock('@/agent/runtime/startupSideEffects', () => ({
-  primeAgentStateForUi: vi.fn(),
-  persistTerminalAttachmentInfoIfNeeded: persistTerminalAttachmentInfoIfNeededSpy,
-  reportSessionToDaemonIfRunning: reportSessionToDaemonIfRunningSpy,
-  sendTerminalFallbackMessageIfNeeded: sendTerminalFallbackMessageIfNeededSpy,
-}));
+vi.mock('@/agent/runtime/startupSideEffects', async () => {
+  const actual = await vi.importActual<typeof import('@/agent/runtime/startupSideEffects')>(
+    '@/agent/runtime/startupSideEffects',
+  );
+  return {
+    primeAgentStateForUi: vi.fn(),
+    persistTerminalAttachmentInfoIfNeeded: persistTerminalAttachmentInfoIfNeededSpy,
+    reportSessionToDaemonIfRunning: reportSessionToDaemonIfRunningSpy,
+    sendTerminalFallbackMessageIfNeeded: actual.sendTerminalFallbackMessageIfNeeded,
+  };
+});
 
 vi.mock('@/agent/runtime/startupMetadataUpdate', () => ({
   applyStartupMetadataUpdateToSession: vi.fn(),
@@ -1520,7 +1522,7 @@ describe('runClaude fast-start', () => {
     autoSessionReady = true;
     initResolved = false;
     backendInitDelayMs = 0;
-    sendTerminalFallbackMessageIfNeededSpy.mockClear();
+    sendSessionEventSpy.mockClear();
     getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
 
     const { runClaude } = await import('./runClaude');
@@ -1538,7 +1540,9 @@ describe('runClaude fast-start', () => {
     try {
       await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
       if (testError) throw testError;
-      expect(sendTerminalFallbackMessageIfNeededSpy).not.toHaveBeenCalled();
+      expect(sendSessionEventSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'message', message: expect.stringContaining('tmux') }),
+      );
     } finally {
       loopExit.resolve(0);
       await runPromise;
@@ -1555,7 +1559,7 @@ describe('runClaude fast-start', () => {
     autoSessionReady = true;
     initResolved = false;
     backendInitDelayMs = 0;
-    sendTerminalFallbackMessageIfNeededSpy.mockClear();
+    sendSessionEventSpy.mockClear();
     getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
 
     const { runClaude } = await import('./runClaude');
@@ -1573,9 +1577,12 @@ describe('runClaude fast-start', () => {
     try {
       await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
       if (testError) throw testError;
-      expect(sendTerminalFallbackMessageIfNeededSpy).toHaveBeenCalledWith(expect.objectContaining({
-        terminal: expect.objectContaining({ mode: 'plain', requested: 'tmux' }),
-      }));
+      expect(sendSessionEventSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'message',
+          message: expect.stringMatching(/couldn't be started in tmux.*Reason: tmux is not available on this machine\./),
+        }),
+      );
     } finally {
       loopExit.resolve(0);
       await runPromise;
