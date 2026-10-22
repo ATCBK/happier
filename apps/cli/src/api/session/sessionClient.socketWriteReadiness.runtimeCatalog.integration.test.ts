@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { mkdir, readFile, rmdir } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createAccountScopedCryptoMaterialSnapshotV1,
@@ -50,6 +51,10 @@ import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, ty
 import { createSessionRuntimeModelsPublisher } from '@/agent/runtime/controls/sessionRuntimeModelsPublisher';
 import { applyActiveModelFacts } from '@/providers/sessions/applyActiveModelFacts';
 import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
+import { resolveSessionClientDurableMutationOutboxPath } from './client/transport/mutations/sessionClientDurableMutationPersistence';
+import { SessionMutationJournalAdmissionBlockedError } from './client/transport/mutations/createSessionClientDurableMutationOutbox';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -123,6 +128,46 @@ describe('ApiSessionClient socket write readiness', () => {
     } finally {
       release.resolve();
       await pending;
+    }
+  });
+
+  it('refuses MCP startup when its optional capability notice cannot enter the real journal', async () => {
+    let transcriptRequests = 0;
+    const transcript = createSessionTranscriptHomeStub();
+    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) transcriptRequests += 1;
+      return transcript.answer(event, payload) ?? { result: 'success' };
+    } });
+    const client = createClient(createPlainSessionFixture({ id: 'mcp-notice-journal-refusal' }), [socket], {
+      initialRegisteredSessionStateFieldMutations: [],
+    });
+    await client.flushDurableMutationDelivery();
+    const queuePath = resolveSessionClientDurableMutationOutboxPath(client.sessionId);
+    // A directory at the exact journal destination forces the real atomic
+    // rename to fail on every platform, without mocking journal admission.
+    await expect(readFile(queuePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await mkdir(queuePath, { recursive: true });
+    const accountCredentials = { token: 'tok', encryption: null };
+    const accountSettings = accountSettingsParse({ mcpServersStrictMode: false });
+    try {
+      await expect(resolveRunnerMcpServers({ session: client, credentials: accountCredentials,
+        accountSettings, accountSettingsSnapshot: {
+          source: 'network', scopeKey: runWithServerHttpBaseUrl(serverUrl, () => resolveAccountSettingsScopeKey(accountCredentials)),
+          settings: accountSettings, rawSettings: {}, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+          mcpServerCatalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [],
+            catalog: { v: 1, servers: [{ id: 'missing-value', name: 'Missing value', transport: 'stdio',
+              stdio: { command: 'echo', args: [] }, env: { REQUIRED: { t: 'literal', v: '${B15_MISSING_MCP_VALUE}' } },
+              createdAt: 1, updatedAt: 1 }], bindings: [] } },
+        }, machineId: 'machine-1', directory: '/tmp', env: {}, agentId: 'codex', agentAcceptsUserMcp: true,
+        sessionMetadata: { mcpSelectionV1: { v: 1, managedServersEnabled: true,
+          forceIncludeServerIds: ['missing-value'], forceExcludeServerIds: [] } },
+        includeHappierMcpServer: false,
+      })).rejects.toBeInstanceOf(SessionMutationJournalAdmissionBlockedError);
+      expect(transcriptRequests).toBe(0);
+      await expect(readFile(queuePath, 'utf8')).rejects.toBeDefined();
+    } finally {
+      await rmdir(queuePath);
+      await client.close();
     }
   });
 
