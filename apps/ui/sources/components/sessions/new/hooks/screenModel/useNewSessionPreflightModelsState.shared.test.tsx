@@ -2,7 +2,7 @@ import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSess
 import { standardCleanup } from '@/dev/testkit';
 import { describe, expect, it, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import { act } from 'react-test-renderer';
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
 import * as cache from '@/sync/domains/models/dynamicModelProbeCache';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
@@ -20,7 +20,7 @@ beforeEach(async () => {
 afterEach(standardCleanup);
 afterAll(() => preflight.dispose());
 
-it('synchronizes exact-key consumers after refresh without probing unrelated subscribers', async () => {
+it('shares one fresh-cache revalidation across demanded siblings and revalidates again after their observer gap', async () => {
     cache.resetDynamicModelProbeCacheForTests();
     capabilityRpc.mockReset();
     const key = buildDynamicModelProbeCacheKey({ machineId: 'shared-machine', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }), providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo' })!;
@@ -35,9 +35,11 @@ it('synchronizes exact-key consumers after refresh without probing unrelated sub
     const screen = await render('/repo');
     const detail = await render('/repo');
     const other = await render('/other', false);
-    expect(capabilityRpc).not.toHaveBeenCalled();
+    await waitForHomeGovernance(async () => {
+        await flushHookEffects();
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+    });
     const otherOptions = other.getCurrent().modelOptions;
-    await act(async () => { detail.getCurrent().probe.onRefresh?.(); });
     await waitForHomeGovernance(async () => {
         await flushHookEffects();
         expect(screen.getCurrent().preflightModels?.availableModels.map((model) => model.id)).toEqual(['after']);
@@ -45,9 +47,31 @@ it('synchronizes exact-key consumers after refresh without probing unrelated sub
     expect(screen.getCurrent().preflightModels).toBe(detail.getCurrent().preflightModels);
     expect(other.getCurrent().modelOptions).toBe(otherOptions);
     expect(capabilityRpc).toHaveBeenCalledTimes(1);
+    const cached = screen.getCurrent().preflightModels;
     await screen.unmount();
     await detail.unmount();
     await other.unmount();
+    const pending = createDeferred<{ ok: true; result: { availableModels: { id: string; name: string }[]; supportsFreeform: boolean } }>();
+    capabilityRpc.mockImplementationOnce(() => pending.promise);
+    const reopened = await render('/repo');
+    try {
+        expect(reopened.getCurrent().preflightModels).toBe(cached);
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(2);
+        });
+        await act(async () => pending.resolve({ ok: true, result: {
+            availableModels: [{ id: 'reopened', name: 'Reopened' }], supportsFreeform: false,
+        } }));
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(reopened.getCurrent().preflightModels?.availableModels.map(model => model.id)).toEqual(['reopened']);
+        });
+        expect(capabilityRpc).toHaveBeenCalledTimes(2);
+    } finally {
+        pending.resolve({ ok: true, result: { availableModels: [], supportsFreeform: false } });
+        await reopened.unmount();
+    }
 });
 
 it('retains another model picker but releases an abandoned occurrence before remount', async () => {

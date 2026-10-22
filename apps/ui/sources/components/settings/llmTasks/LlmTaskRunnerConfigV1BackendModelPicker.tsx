@@ -67,22 +67,23 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   }));
 
   const backendMenuItems = React.useMemo(() => {
-    return backendEntries.map((entry) => {
+    return choices.groups.map(({ entry, selectable }) => {
       const displayAgentId = entry.iconAgentId ?? entry.catalogAgentId ?? entry.builtInAgentId;
       const iconName = getAgentCore(displayAgentId ?? '')?.ui?.agentPickerIconName ?? NEUTRAL_AGENT_ICON_NAME;
       return {
         id: entry.backendTargetKey,
         title: entry.title,
         subtitle: entry.subtitle ?? undefined,
+        disabled: !selectable,
         icon: <Icon name={iconName as any} size={20} color={theme.colors.text.secondary} />,
       };
     });
-  }, [backendEntries, theme.colors.text.secondary]);
+  }, [choices.groups, theme.colors.text.secondary]);
 
   const selectableModelMenuItems = selectedGroup ? choices.items.flatMap(item => {
-    const selection = choices.selections.get(item.id);
-    if (selection?.modelSelection.agentTargetKey === selectedGroup.targetKey)
-      return [{ ...item, id: selection.modelSelection.modelId }];
+    const profile = selectedGroup.offered.find(profile => profile.catalogId === item.id);
+    if (profile?.modelSelector)
+      return [{ ...item, id: profile.modelSelector.modelId }];
     if (choices.customModelTargets.get(item.id) === selectedGroup.targetKey) return [{ ...item, id: '__custom__' }];
     return choices.discoveryTargets.get(item.id) === selectedGroup.targetKey ? [item] : [];
   }) : [];
@@ -105,7 +106,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   React.useEffect(() => setCustomModelDraft(null), [selectedBackendKey, props.value?.modelSelection.modelId]);
   const customModelTestID = `${props.modelTestID ?? 'llm-task-runner-model'}.custom`;
   const saveCustomModel = () => {
-    if (customModelDraft === null || !selectedBackendEntry) return;
+    if (customModelDraft === null || !selectedBackendEntry || !selectedGroup?.selectable) return;
     writeModel(selectedGroup!.targetKey, customModelDraft.trim() || 'default');
     setCustomModelDraft(null);
   };
@@ -146,6 +147,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
             return;
           }
           const nextBackendEntry = backendEntries.find((entry) => entry.backendTargetKey === targetKey) ?? null;
+          if (choices.groups.find(group => group.targetKey === targetKey)?.selectable === false) return;
           if (!nextBackendEntry) {
             props.onChange(null);
             setOpenMenu(null);
@@ -182,6 +184,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
         }}
         items={modelMenuItems as any}
         onSelect={(id) => {
+          if (selectedGroup?.selectable === false) return;
           if (!selectedBackendEntry) {
             props.onChange(null);
             setOpenMenu(null);
@@ -221,7 +224,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
           <SectionContentRow>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: theme.space.s8 }}>
               <RoundButton testID={`${customModelTestID}.cancel`} size="small" display="secondary" title={t('common.cancel')} onPress={() => setCustomModelDraft(null)} />
-              <RoundButton testID={`${customModelTestID}.save`} size="small" title={t('common.save')} onPress={saveCustomModel} />
+              <RoundButton testID={`${customModelTestID}.save`} size="small" title={t('common.save')} disabled={!selectedGroup?.selectable} onPress={saveCustomModel} />
             </View>
           </SectionContentRow>
         </>

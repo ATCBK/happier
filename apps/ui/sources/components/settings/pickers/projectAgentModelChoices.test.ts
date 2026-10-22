@@ -17,6 +17,17 @@ describe('shared background Agent/model choices', () => {
     const sources: readonly AgentModelChoiceSource[] = entries.map(entry => ({ entry, models, catalogModels: models, runnerCapable: true, discoverable: true }));
     const configuredKey = 'agent:happier.agent.custom-acp/custom-acp:definition:codex';
 
+    it('retains stale configured display models without admitting them as selectable models', () => {
+        const result = projectAgentModelChoices({ purpose: 'runner',
+            sources: sources.map(source => ({ ...source, selectable: source.entry.kind !== 'configuredBackend' })),
+            defaultModelTitle: 'Default' });
+        const group = result.groups.find(candidate => candidate.targetKey === configuredKey)!;
+        expect(group.offered.length).toBeGreaterThan(0);
+        expect(group.selectable).toBe(false);
+        expect([...result.selections.values()].some(selection => selection.modelSelection.agentTargetKey === configuredKey)).toBe(false);
+        expect(result.groups.find(candidate => candidate.entry.kind === 'builtInAgent')?.selectable).toBe(true);
+    });
+
     it('offers only the executing catalog candidates and never defaults a signed-out static route', () => {
         const connectedProfiles = buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(configuredKey), models });
         const connected = projectAgentModelChoices({ purpose: 'walkthrough', sources, executableProfiles: connectedProfiles, automaticProfiles: [], defaultModelTitle: 'Default' });

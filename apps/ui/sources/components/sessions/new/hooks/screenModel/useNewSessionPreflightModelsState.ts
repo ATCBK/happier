@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { readBackendTargetRefV2, type BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
@@ -49,6 +50,8 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         onRefresh?: () => void;
     }>;
 }> {
+    const presented = useLayoutPresentationActive();
+    const enabled = params.enabled !== false && presented;
     const [preflightModels, setPreflightModels] = React.useState<PreflightModelList | null>(null);
     const [preflightModelsTargetKey, setPreflightModelsTargetKey] = React.useState<string | null>(null);
     const [probePhase, setProbePhase] = React.useState<'idle' | 'loading' | 'refreshing'>('idle');
@@ -170,7 +173,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         const scheduleRetry = (entry: DynamicModelProbeCacheEntry | null) => {
             if (retryTimeout) clearTimeout(retryTimeout);
             retryTimeout = null;
-            if (params.enabled === false) return;
+            if (!enabled) return;
             const retryAt = dynamicModelProbeRetryAt(entry);
             if (retryAt === null) return;
             const isStaticFallback = entry?.kind === 'success' && entry.staticFallback;
@@ -183,13 +186,13 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
                 setRetryNonce((n) => n + 1);
             }, Math.max(0, retryAt - Date.now()));
         };
+        if (!enabled) return;
         const unsubscribe = subscribeDynamicModelProbeCache(preflightModelsKey, () => {
             const entry = readDynamicModelProbeCache(preflightModelsKey, modelSuccessCacheMaxAgeMs);
             applyEntry(entry);
             if (dynamicModelProbeRetryAt(entry) === null) staticFallbackRetryRef.current = null;
             scheduleRetry(entry);
         });
-        if (params.enabled === false) return unsubscribe;
         const force = refreshNonce !== lastHandledRefreshNonceRef.current;
         lastHandledRefreshNonceRef.current = refreshNonce;
         if (!force && isDynamicModelProbeCacheFresh(cacheEntry)) {
@@ -228,7 +231,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
             unsubscribe();
             if (retryTimeout) clearTimeout(retryTimeout);
         };
-    }, [agentType, backendTargetForProbe, backendTargetKey, preflightModelsKey, modelSuccessCacheMaxAgeMs, params.enabled, params.capabilityServerId, params.cwd, params.selectedMachineId, refreshNonce, retryNonce, probeContextCapabilityParams]);
+    }, [agentType, backendTargetForProbe, backendTargetKey, preflightModelsKey, modelSuccessCacheMaxAgeMs, enabled, params.capabilityServerId, params.cwd, params.selectedMachineId, refreshNonce, retryNonce, probeContextCapabilityParams]);
 
     const hasCurrentIdentity = lastCacheKeyRef.current === preflightModelsKey;
     const currentModels = hasCurrentIdentity ? preflightModels : null;
@@ -253,7 +256,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         refreshedAt: hasCurrentIdentity ? refreshedAt : null,
         spawnFailure: hasCurrentIdentity ? spawnFailure : null,
         ...(hasCurrentIdentity ? failure : {}),
-        ...(dynamicProbeEnabled && preflightModelsKey && params.enabled !== false ? { onRefresh } : {}),
-    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, failure, dynamicProbeEnabled, preflightModelsKey, params.enabled, onRefresh]);
+        ...(dynamicProbeEnabled && preflightModelsKey && enabled ? { onRefresh } : {}),
+    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, failure, dynamicProbeEnabled, preflightModelsKey, enabled, onRefresh]);
     return { preflightModels: currentModels, preflightModelsTargetKey: currentModels ? preflightModelsTargetKey : null, modelOptions, probe };
 }

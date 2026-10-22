@@ -20,6 +20,8 @@ export type AgentModelChoiceSource = Readonly<{
     agentFormats?: readonly string[] | null;
     runnerCapable: boolean;
     discoverable: boolean;
+    /** Retained display models stay visible while their catalog revalidates. */
+    selectable?: boolean;
 }>;
 
 export function readAgentModelChoiceTarget(entry: ResolvedBackendCatalogEntry): BackendTargetRefV2 | null {
@@ -57,20 +59,22 @@ export function projectAgentModelChoices(params: Readonly<{
         const discoverable = params.purpose === 'walkthrough' ? params.discoveryTargetKeys?.includes(targetKey) === true : source.discoverable;
         if (params.purpose === 'walkthrough' && profiles.length === 0 && !discoverable && params.probeFailureTargetKeys?.includes(targetKey) !== true) return [];
         const offered = selectAgentModelProfilesForPurpose(profiles, params.purpose);
-        for (const profile of offered) {
+        const selectable = source.selectable !== false;
+        for (const profile of selectable ? offered : []) {
             const modelSelector = profile.modelSelector;
             if (!modelSelector?.modelId) continue;
             const modelSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey: targetKey, providerConnectionId: null, modelId: modelSelector.modelId });
             selections.set(profile.catalogId, { backendTarget: target, modelSelection, modelSelector });
         }
-        return [{ entry: source.entry, target, targetKey, profiles, offered,
+        return [{ entry: source.entry, target, targetKey, profiles, offered, selectable,
             hiddenModelCount: profiles.length - offered.length, discoverable,
             customModelIdAllowed: params.purpose === 'runner' }];
     });
     const catalogProfiles = params.purpose === 'walkthrough' ? params.executableProfiles ?? [] : groups.flatMap(group => group.profiles);
+    const selectableTargets = new Set(groups.filter(group => group.selectable).map(group => group.targetKey));
     const defaultProfile = params.purpose === 'walkthrough'
-        ? resolveScmDiffSummaryDefaultModelProfile(params.automaticProfiles ?? [], params.defaultBackendTarget)
-        : groups.find(group => group.targetKey === (params.selected?.agentTargetKey
+        ? resolveScmDiffSummaryDefaultModelProfile((params.automaticProfiles ?? []).filter(profile => selectableTargets.has(profile.modelSelector?.backendTargetKey ?? '')), params.defaultBackendTarget)
+        : groups.find(group => group.selectable && group.targetKey === (params.selected?.agentTargetKey
             ?? (params.defaultBackendTarget ? buildBackendTargetKeyV2(params.defaultBackendTarget) : null)))?.offered.find(profile => profile.modelSelector?.modelId === 'default') ?? null;
     return { groups, selections, catalogProfiles, defaultProfile };
 }

@@ -78,19 +78,21 @@ describe('NewSessionConnectedServicesSelectionContent on a Team route', () => {
         return capturedSelectionLists[capturedSelectionLists.length - 1]!;
     }
 
-    it('checks the Team row the session is bound to, and not its own sign-in', async () => {
-        const list = await renderRoute({
-            kind: 'team', teamId: 'team-1', resourceId: 'resource-1', deliveryMode: 'brokered',
-            sourceLabel: 'QA43 Leeroy brokered', modelId: 'gpt-5.6-luna',
-        }, true);
-        expect(list.selectedOptionId).toBe(createTeamResourceServiceOptionId(SELECTION));
+    const TEAM_ROUTE: SessionRoute = {
+        kind: 'team', teamId: 'team-1', resourceId: 'resource-1', deliveryMode: 'brokered',
+        sourceLabel: 'QA43 Leeroy brokered', modelId: 'gpt-5.6-luna',
+    };
+
+    // A Session's route follows its model selection, so it can name a Team source while the Session carries
+    // no connected-service binding: the applied route is what the chip says, and the row must agree with it.
+    it('checks the Team row the applied route names, with or without a binding on the session', async () => {
+        const expected = createTeamResourceServiceOptionId(SELECTION);
+        expect((await renderRoute(TEAM_ROUTE, false)).selectedOptionId).toBe(expected);
+        expect((await renderRoute(TEAM_ROUTE, true)).selectedOptionId).toBe(expected);
     });
 
-    it('checks nothing rather than its own sign-in when no Team binding backs the route', async () => {
-        const list = await renderRoute({
-            kind: 'team', teamId: 'team-1', resourceId: 'resource-1', deliveryMode: 'brokered',
-            sourceLabel: 'QA43 Leeroy brokered', modelId: 'gpt-5.6-luna',
-        }, false);
+    it('checks nothing rather than its own sign-in when the applied Team source is not in the catalog', async () => {
+        const list = await renderRoute({ ...TEAM_ROUTE, resourceId: 'resource-gone' }, false);
         expect(list.selectedOptionId).toBeNull();
     });
 });

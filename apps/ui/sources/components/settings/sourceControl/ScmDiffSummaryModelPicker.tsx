@@ -69,6 +69,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
         variant="selectable" closeOnSelect={false} showCategoryTitles categoryDecorations={choices.sections}
         {...(inline ? inlineTrigger : { matchTriggerWidth: true, connectToTrigger: true, ...rowTrigger })}
         onSelect={(id) => {
+            if (choices.items.find(item => item.id === id)?.disabled) return;
             if (id === SCM_SUMMARY_CATALOG_NOTICE_ITEM_ID || id === SCM_SUMMARY_GROUPED_AGENTS_RETRY_ITEM_ID) { choices.onRefresh?.(); return; }
             const discoveryTarget = choices.discoveryTargets.get(id);
             if (discoveryTarget) {

@@ -93,6 +93,8 @@ export type BuildNewSessionConnectedServicesSelectionListModelParams = Readonly<
     includeNativeAuthOption?: boolean;
     /** Runs through browses one native model source for the exact selected Agent. */
     nativeRoute?: Readonly<{ agentTargetKey: string; active: boolean; onBrowse?: () => void }>;
+    /** The Team source the Session's applied route runs through; it follows the model selection, so the Session may carry no binding for it. */
+    appliedTeamRoute?: Readonly<{ teamId: string; resourceId: string; deliveryMode: 'direct' | 'brokered' }>;
     /** Exact-binding consumers can prevent stale selections from visually adopting a different default profile. */
     allowDefaultProfileFallback?: boolean;
     quotaBadgesByKey: Readonly<Record<string, ReadonlyArray<ConnectedServicesSelectionListBadge> | undefined>>;
@@ -294,7 +296,11 @@ export function buildNewSessionConnectedServicesSelectionListModel(
                     || buildQualifiedPluginContributionKey(selection.disclosedMember.service) !== serviceId)) continue;
                 const matchesBinding = binding?.source === 'team_resource'
                     && areTeamResourceConnectedServiceSelectionsEqual(binding, selection);
-                const selected = bindingsActive && matchesBinding;
+                const matchesAppliedRoute = params.appliedTeamRoute !== undefined
+                    && params.appliedTeamRoute.teamId === resource.teamId
+                    && params.appliedTeamRoute.resourceId === resource.id
+                    && params.appliedTeamRoute.deliveryMode === selection.deliveryMode;
+                const selected = matchesAppliedRoute || (bindingsActive && matchesBinding);
                 const optionId = createTeamResourceServiceOptionId(selection);
                 if (seenSelectionIds.has(optionId)) continue;
                 seenSelectionIds.add(optionId);

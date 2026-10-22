@@ -1,8 +1,10 @@
 import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { standardCleanup } from '@/dev/testkit';
 import { describe, expect, it, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import { act } from 'react-test-renderer';
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
 import * as cache from '@/sync/domains/models/dynamicModelProbeCache';
 import { DYNAMIC_MODEL_PROBE_SUCCESS_TTL_MS, DYNAMIC_MODEL_PROBE_ERROR_BACKOFF_MS, DYNAMIC_MODEL_PROBE_STATIC_FALLBACK_RETRY_MS } from '@/sync/domains/models/dynamicModelProbeCache';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -23,6 +25,50 @@ afterEach(standardCleanup);
 afterAll(() => preflight.dispose());
 
 describe('model discovery stale-while-revalidate contract', () => {
+    it.each(['disabled', 'hidden'] as const)('releases %s model cache observation and returns cached models before one stale revalidation', async mode => {
+        capabilityRpc.mockReset();
+        const key = buildDynamicModelProbeCacheKey({ machineId: 'demand-machine', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
+            providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo' })!;
+        const staleAt = Date.now() - DYNAMIC_MODEL_PROBE_SUCCESS_TTL_MS - 1;
+        const before = { availableModels: [{ id: 'before', name: 'Before' }], supportsFreeform: true };
+        const retained = { availableModels: [{ id: 'retained', name: 'Retained' }], supportsFreeform: true };
+        cache.writeDynamicModelProbeCacheSuccess(key, before, staleAt);
+        let active = false;
+        let renders = 0;
+        const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(
+            PluginSurfaceFocusEligibilityProvider, { active: mode === 'disabled' || active, children },
+        );
+        const pending = createDeferred<{ ok: true; result: typeof retained }>();
+        capabilityRpc.mockImplementation(() => pending.promise);
+        const hook = await renderHook(({ enabled }: { enabled: boolean }) => {
+            renders += 1;
+            return useNewSessionPreflightModelsState({ backendTarget: { kind: 'backend', backendId: 'codex' },
+                selectedMachineId: 'demand-machine', capabilityServerId: preflight.serverId, cwd: '/repo', enabled: mode === 'hidden' || enabled });
+        }, { initialProps: { enabled: false }, wrapper });
+        try {
+            expect(capabilityRpc).not.toHaveBeenCalled();
+            expect(hook.getCurrent().preflightModels).toBe(before);
+            renders = 0;
+            await act(async () => cache.writeDynamicModelProbeCacheSuccess(key, retained, staleAt));
+            expect(renders).toBe(0);
+            active = true;
+            await hook.rerender({ enabled: true });
+            expect(hook.getCurrent().preflightModels).toBe(retained);
+            await waitForHomeGovernance(async () => {
+                await flushHookEffects();
+                expect(capabilityRpc).toHaveBeenCalledTimes(1);
+            });
+            await act(async () => pending.resolve({ ok: true, result: retained }));
+            await waitForHomeGovernance(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().probe.phase).toBe('idle');
+            });
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        } finally {
+            pending.resolve({ ok: true, result: retained });
+            await hook.unmount();
+        }
+    });
     async function setup() {
         capabilityRpc.mockReset();
         cache.resetDynamicModelProbeCacheForTests();

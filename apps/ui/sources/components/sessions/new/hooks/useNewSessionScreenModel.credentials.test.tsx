@@ -43,6 +43,7 @@ import { createProviderModelProjectionFixture, createProviderModelProjectionGrou
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/contributions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { resolveActiveSuggestionsHandler } from '@/components/autocomplete/useActiveSuggestions';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { randomUUID } from '@/platform/randomUUID';
@@ -179,7 +180,7 @@ describe('New Session selected credential launch gate', () => {
                 const model = hook.getCurrent();
                 if (model.variant !== 'simple') throw new Error('Expected real simple launcher');
                 await act(async () => {
-                    await model.simpleProps.emptyAutocompleteSuggestions('/project', new AbortController().signal,
+                    await resolveActiveSuggestionsHandler(model.simpleProps.emptyAutocompleteSuggestions, '/project')('/project', new AbortController().signal,
                         rows => published.push(...rows.map(row => row.text)));
                 });
                 expect(probes).toEqual([expect.objectContaining({ connectedServices: expect.objectContaining({
@@ -194,7 +195,7 @@ describe('New Session selected credential launch gate', () => {
             }, true); });
             const model = hook.getCurrent();
             if (model.variant !== 'simple') throw new Error('Expected real simple launcher');
-            await act(async () => { await model.simpleProps.emptyAutocompleteSuggestions('/project', new AbortController().signal, () => {}); });
+            await act(async () => { await resolveActiveSuggestionsHandler(model.simpleProps.emptyAutocompleteSuggestions, '/project')('/project', new AbortController().signal, () => {}); });
             await flushHookEffects();
             expect(probes).toEqual([]);
         } finally { await hook.unmount(); }

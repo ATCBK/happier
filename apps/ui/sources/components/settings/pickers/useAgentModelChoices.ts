@@ -14,6 +14,7 @@ import { decodeScmDiffSummaryModelOverride, encodeScmDiffSummaryModelOverride } 
 import { t } from '@/text';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { readScmDiffSummaryModelCatalogForMachine } from '@/sync/ops/actions/scmDiffSummarySettingsCatalog';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -78,13 +79,15 @@ export function useAgentModelChoices(params: Readonly<{
         setDiscoveryTarget(targetKey);
     }, []);
     const enabledAgentIds = useEnabledAgentIds();
-    const { snapshot: acpCatalog } = useAcpCatalogForServer(params.serverId);
+    const presented = useLayoutPresentationActive();
+    const observing = presented && (open || params.observeSelection === true);
+    const { snapshot: acpCatalog } = useAcpCatalogForServer(params.serverId, undefined, { enabled: observing });
     const catalogReady = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale;
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey') as Record<string, boolean> | undefined;
-    const observing = open || params.observeSelection === true;
     const daemon = useDaemonMergedProjectionInputs({ machineId: params.machineId ?? null, serverId: params.serverId ?? null, enabled: observing && Boolean(params.machineId) });
     const entries = React.useMemo(() => getResolvedBackendCatalogEntries({ enabledAgentIds,
         acpCatalogSnapshot: acpCatalog?.catalog, backendEnabledByTargetKey,
+        retainedAcpCatalogRecord: acpCatalog?.data,
         discoveredBackendIds: daemon.inputs?.discoveredBackendIds,
         mergedProviderProjectionById: daemon.inputs?.mergedProviderProjectionById,
         mergedBackendProjectionById: daemon.inputs?.mergedBackendProjectionById,
@@ -159,6 +162,7 @@ export function useAgentModelChoices(params: Readonly<{
             : PluginBackendExecutionRunCapabilitiesV1Schema.safeParse(entry.capabilities.executionRun);
         const agentFormats = entry.kind === 'builtInAgent' ? getAgentCore(entry.agentId)?.structuredOutput?.formats : null;
         return { entry, models: staticModels, catalogModels: staticModels, agentFormats,
+            selectable: entry.kind !== 'configuredBackend' || catalogReady,
             runnerCapable: capability === null || (capability.success && capability.data.supported),
             discoverable: purpose === 'runner' || entry.kind === 'configuredBackend' || entry === discoveryEntry || entry === selectedEntry || agentFormats?.includes('json') === true };
     });
@@ -194,7 +198,7 @@ export function useAgentModelChoices(params: Readonly<{
     const modelLessGroups = purpose === 'walkthrough' && params.machineId ? projected.groups.filter(group => group.offered.length === 0
         && (group.discoverable || probeFailures.has(group.targetKey)) && !group.customModelIdAllowed) : [];
     const groupedTargetKeys = new Set(modelLessGroups.length >= 2 ? modelLessGroups.map(group => group.targetKey) : []);
-    for (const { entry, target, targetKey, offered: usable, hiddenModelCount: hidden, discoverable, customModelIdAllowed } of projected.groups) {
+    for (const { entry, target, targetKey, offered: usable, hiddenModelCount: hidden, discoverable, customModelIdAllowed, selectable } of projected.groups) {
         if (groupedTargetKeys.has(targetKey)) continue;
         // Only models that can write a walkthrough are offered. An agent with none keeps its section only where a
         // machine can ask it for models that could: one whose format supports it, a configured agent, or the one asked.
@@ -206,12 +210,16 @@ export function useAgentModelChoices(params: Readonly<{
             // One row per model; the default is that row, marked, and the quiet line carries the catalog's relative cost when it has one.
             const meta = [profile.catalogId === defaultProfile?.catalogId ? t('walkthroughSettings.defaultModel') : null,
                 profile.costTier ? costTierLabels[profile.costTier] : null].filter(Boolean).join(' · ') || undefined;
-            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, subtitle: meta });
+            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, subtitle: meta,
+                disabled: !selectable,
+                ...(!selectable && acpCatalog?.catalog.status === 'loading'
+                    ? { rightElement: React.createElement(ActivitySpinner, { size: 'small' }) } : {}) });
         }
         if (customModelIdAllowed) {
             const id = `backend-custom-model:${targetKey}`;
             customModelTargets.set(id, targetKey);
             items.push({ id, category: entry.title, title: t('settingsSession.replayResume.summaryRunner.customTitle'),
+                disabled: !selectable,
                 subtitle: t('settingsSession.replayResume.summaryRunner.customModelIdSubtitle') });
         }
         // Finding more models is one operation at the end of its agent's section, offered only where a machine can answer it.
@@ -226,6 +234,7 @@ export function useAgentModelChoices(params: Readonly<{
         const row = startFailure ? describeAgentStartFailure(startFailure) : null;
         const automaticReason = !row && unavailableTargets.has(targetKey) ? describeAutomaticUnavailable(unavailableTargets.get(targetKey)!) : null;
         items.push({ id, category: entry.title,
+            disabled: !selectable,
             title: row?.title ?? (failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels')),
             ...(row ? { subtitle: row.next } : automaticReason ? { subtitle: automaticReason } : {}),
             rightElement: purpose === 'runner' && probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
