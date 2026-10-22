@@ -288,7 +288,7 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
     serverId?: string | null;
     /** Exact routed Account lifetime; required for background descriptor publication. */
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
-    /** App-shell readers may reuse the same fresh, Account-qualified projection. */
+    /** App-shell readers may reuse a fresh Account-qualified answer, including unsupported. */
     reuseFreshReady?: boolean;
     /** Automatic recovery: share its cadence, or false to refresh its authority.
      * Omit for an explicit one-shot read with ordinary fresh/rejection semantics. */
@@ -335,7 +335,7 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
             serverId: params.serverId,
             accountLifetime,
         });
-        if (cached?.kind === 'ready') {
+        if (cached) {
             return accountLifetime && !accountLifetime.isCurrent() ? null : cached;
         }
     }

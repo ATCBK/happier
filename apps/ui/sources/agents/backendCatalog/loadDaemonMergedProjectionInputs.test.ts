@@ -454,6 +454,40 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
     });
 
+    it('reuses a current unsupported answer without re-reading its Machine, but revalidates changed, explicit and stale demand', async () => {
+        const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        const params = { ...projectionScope, accountLifetime: account.lifetime, reuseFreshReady: true };
+        const machineReads = () => network.httpRequests.filter(request => (
+            new URL(request.url).pathname === '/v1/machines/read-batch'
+        )).length;
+        projectionDescribeMock.mockResolvedValue({ supported: false, reason: 'not-supported' });
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            await expect(loadDaemonMergedProjectionCacheEntry(params)).resolves.toMatchObject({ kind: 'unsupported' });
+            expect(machineReads()).toBe(1);
+
+            await expect(loadDaemonMergedProjectionCacheEntry(params)).resolves.toMatchObject({ kind: 'unsupported' });
+            expect(machineReads()).toBe(1);
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+
+            publishMachineContributionRegistryProjectionInvalidation(projectionScope);
+            await expect(loadDaemonMergedProjectionCacheEntry(params)).resolves.toMatchObject({ kind: 'unsupported' });
+            expect(machineReads()).toBe(2);
+
+            await expect(loadDaemonMergedProjectionCacheEntry({ ...params, reuseFreshReady: false }))
+                .resolves.toMatchObject({ kind: 'unsupported' });
+            expect(machineReads()).toBe(3);
+
+            // Keep the incumbent 60-second projection freshness boundary.
+            vi.setSystemTime(Date.now() + 60_001);
+            await expect(loadDaemonMergedProjectionCacheEntry(params)).resolves.toMatchObject({ kind: 'unsupported' });
+            expect(machineReads()).toBe(4);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it.each(['active', 'background'] as const)('reuses a settled describe for another reader of the same Account until the projection changes on an %s Home', async (placement) => {
         const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         const { storage } = await import('@/sync/domains/state/storage');
