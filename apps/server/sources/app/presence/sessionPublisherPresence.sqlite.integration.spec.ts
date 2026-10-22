@@ -25,6 +25,8 @@ import { holdSqliteWriteLock } from "@/testkit/sqliteWriteLock";
 import { createSessionPublisherPresence, expireSessionPublisherCandidates, readSessionPublisherAuthorityProjection } from "./sessionPublisherPresence";
 import { resolveCurrentSessionPublisherFromServer } from "@/app/api/socket/externalActionDispatcher";
 import { blockPendingDelivery, enqueuePendingMessage, materializeNextPendingMessage, resolveAcceptedPendingDelivery } from "@/app/session/pending/pendingMessageService";
+import { logger } from '@/utils/logging/log';
+import { withWebLatencyTrace } from '@/utils/webLatencyTrace';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -81,6 +83,39 @@ describe("session publisher presence on SQLite", () => {
             fence,
         };
     }
+
+    it("observes publisher queue admission separately from the active operation for each request", async () => {
+        const seeded = await seed();
+        const presence = createSessionPublisherPresence({ now: () => seeded.fence });
+        const socket = {};
+        const registered = await presence.registerPublisher({ socket, binding: seeded.binding,
+            completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
+        if (registered.status !== 'registered') throw new Error('expected registration');
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        const firstId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+        const secondId = '33b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+        let enter!: () => void;
+        const entered = new Promise<void>(resolve => { enter = resolve; });
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const first = withWebLatencyTrace(firstId, () => presence.runAsCurrentPublisher({ socket,
+            operation: async () => { enter(); await held; return 'first'; } }));
+        await entered;
+        const second = withWebLatencyTrace(secondId, () => presence.runAsCurrentPublisher({ socket,
+            operation: async () => 'second' }));
+        try {
+            expect(sink).toHaveBeenCalledWith(expect.objectContaining({ phase: 'session.publisher.queue', requestId: firstId }), '[web-latency]');
+            expect(sink.mock.calls.some(([value]) => typeof value === 'object' && value !== null && 'requestId' in value && value.requestId === secondId)).toBe(false);
+            release();
+            expect(await Promise.all([first, second])).toEqual(['first', 'second']);
+            for (const requestId of [firstId, secondId]) {
+                for (const phase of ['session.publisher.queue', 'session.publisher.operation']) {
+                    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ phase, requestId, elapsedMs: expect.any(Number) }), '[web-latency]');
+                }
+            }
+        } finally { release(); await Promise.all([first, second]); sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
 
     it("does not replace a newer snapshot registration fence with a delayed heartbeat observation", async () => {
         const seeded = await seed();

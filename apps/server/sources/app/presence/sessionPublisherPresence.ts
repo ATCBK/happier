@@ -33,6 +33,7 @@ import { scheduleSessionActivityRemoteAlerts } from '@/app/activity/remoteAlerts
 import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
 import type { InTxOptions, ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { AsyncLock } from "@/utils/runtime/lock";
+import { recordWebLatencyPhase, timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import {
     mapPendingActivationAuthorization,
     type PendingActivationTarget,
@@ -353,7 +354,12 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             lock = new AsyncLock();
             operationLocks.set(socket, lock);
         }
-        return await lock.inLock(operation, options);
+        if (process.env.HAPPIER_WEB_LATENCY_TRACE !== '1') return await lock.inLock(operation, options);
+        const queuedAt = performance.now();
+        return await lock.inLock(async () => {
+            recordWebLatencyPhase('session.publisher.queue', performance.now() - queuedAt);
+            return await timeWebLatencyPhase('session.publisher.operation', operation);
+        }, options);
     };
 
     const registerOnce = async (
