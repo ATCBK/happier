@@ -8,7 +8,7 @@ import { getActionSpec } from '../actionSpecs.js';
 
 export type WorkflowActionFailureDiagnosticV1 = Readonly<{
   event: 'workflow_action_failure';
-  errorCode: 'storage_unavailable' | 'content_unavailable';
+  errorCode: 'storage_unavailable' | 'content_unavailable' | 'run_access_denied';
   originalCode: string | null;
   httpStatus: number | null;
   operation: string;
@@ -67,7 +67,7 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   });
   const result: WorkflowActionFailureV1 = failure.success ? failure.data
     : { ok: false, errorCode: 'storage_unavailable', error: 'storage_unavailable' };
-  if ((result.errorCode === 'storage_unavailable'
+  if ((result.errorCode === 'storage_unavailable' || result.errorCode === 'run_access_denied'
     || (rawCode === 'account_role_overrides_unavailable' && result.errorCode === 'content_unavailable')) && diagnostic) {
     let originalCode: string | null = null;
     let httpStatus: number | null = null;
