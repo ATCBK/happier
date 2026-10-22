@@ -1493,6 +1493,7 @@ describe('Channels mounted provider setup recovery', () => {
   it('relays one exact selected provider settlement through prepare and create without adding it to either outer Action input', async () => {
     const setupGuidanceUrl = 'https://provider.example.test/install';
     const openedLinks: string[] = [];
+    const copied: string[] = [];
     const credentialRef = {
       service: {
         pluginId: 'com.example.conversation-provider',
@@ -1562,6 +1563,7 @@ describe('Channels mounted provider setup recovery', () => {
         executeAction,
         readResource: bindingResourceReader(),
         openExternalLink: async ({ url }) => { openedLinks.push(url); },
+        writeClipboard: async ({ value }) => { copied.push(value); },
       },
     });
 
@@ -1572,8 +1574,17 @@ describe('Channels mounted provider setup recovery', () => {
       await expect(fixture.getByText('#engineering')).resolves.toBeDefined();
       expect(document.body.textContent).toContain('Messages sent during an interruption may not be recoverable.');
       await expect(fixture.getByText('Read messages, Send messages')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('link', { name: 'Resolve provider setup' }));
+      // Guided setup: open the provider, copy what is pasted elsewhere, then create and test.
+      const guidance = document.querySelector('[data-testid="channels-provider-setup-guidance"]')?.textContent ?? '';
+      expect(guidance).toContain('Grant what it asks for');
+      expect(guidance).toContain('Create and test the connection');
+      await fixture.press(await fixture.getByRole('link', { name: 'Open Integration provider' }));
       expect(openedLinks).toEqual([setupGuidanceUrl]);
+      await fixture.press(await fixture.getByRole('button', { name: 'Copy link' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Copy permissions' }));
+      await vi.waitFor(() => {
+        expect(copied).toEqual([setupGuidanceUrl, 'Read messages, Send messages']);
+      });
       await expect(fixture.getByRole('button', { name: 'Create connection' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Create connection' }));
       await vi.waitFor(() => {
@@ -9857,6 +9868,92 @@ describe('Channels collapsed row identity', () => {
     }
   });
 
+  it('groups delivery decisions by the conversation each belongs to, not by their connection', async () => {
+    const account = createOfflineChannelStateFixture();
+    const morges = offlineBindingRow();
+    const morgesBinding = {
+      ...morges,
+      rowId: 'binding-2',
+      value: {
+        ...morges.value,
+        id: 'binding-2',
+        'binding-id': 'binding-2',
+        payload: {
+          ...morges.value.payload,
+          endpoint: { kind: 'direct', audience: 'direct', id: 'chat-2', label: 'Chantier Morges' },
+        },
+      },
+    };
+    account.collection.rows.set(morgesBinding.rowId, morgesBinding);
+    const base = offlineAmbiguousDeliveryRow();
+    const deliveryFor = (custodyId: string, bindingId: string | undefined) => {
+      const { 'binding-id': _bindingId, ...unbound } = base.value;
+      return {
+        ...base,
+        rowId: custodyId,
+        value: bindingId === undefined
+          ? {
+            ...unbound,
+            id: custodyId,
+            payload: { ...base.value.payload, routeAuthority: { connectionAuthorityEpoch: 1 } },
+          }
+          : { ...base.value, id: custodyId, 'binding-id': bindingId },
+      };
+    };
+    const exampleCustodyId = 'c'.repeat(43);
+    const morgesCustodyId = 'd'.repeat(43);
+    const unboundCustodyId = 'e'.repeat(43);
+    for (const row of [
+      deliveryFor(exampleCustodyId, 'binding-1'),
+      deliveryFor(morgesCustodyId, 'binding-2'),
+      deliveryFor(unboundCustodyId, undefined),
+    ]) account.deliveries.rows.set(row.rowId, row);
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-148g', mountNonce: 'fixture-mount-148g' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(account.dataClient),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+      },
+    });
+
+    try {
+      await pressButtonWithAccessibleLabelFragment('Example conversation');
+      const group = (key: string) => document.querySelector<HTMLElement>(
+        `[data-testid="channels-delivery-resolution-group-${key}"]`,
+      );
+      const rowIn = (key: string, custodyId: string) => group(key)?.querySelector(
+        `[data-testid="channels-delivery-resolution-${custodyId}.header"]`,
+      ) ?? null;
+      await vi.waitFor(() => {
+        expect(group('binding-2')?.textContent).toContain('Chantier Morges');
+      });
+      // One connection carries three deliveries: each conversation is its own named group holding
+      // only its deliveries, and the delivery outside any linked conversation stays connection-level.
+      expect(group('binding-1')?.textContent).toContain('Example conversation');
+      expect(group('binding-1')?.textContent).toContain('1 delivery with an unknown outcome');
+      expect(rowIn('binding-1', exampleCustodyId)).not.toBeNull();
+      expect(rowIn('binding-1', morgesCustodyId)).toBeNull();
+      expect(rowIn('binding-2', morgesCustodyId)).not.toBeNull();
+      expect(rowIn('binding-2', exampleCustodyId)).toBeNull();
+      expect(group('connection')?.textContent).toContain('Outside linked conversations');
+      expect(rowIn('connection', unboundCustodyId)).not.toBeNull();
+      expect(rowIn('connection', exampleCustodyId)).toBeNull();
+      // Conversations read by name; the connection-level group comes last.
+      const order = Array.from(document.querySelectorAll('[data-testid^="channels-delivery-resolution-group-"]'))
+        .map((element) => element.getAttribute('data-testid'));
+      expect(order).toEqual([
+        'channels-delivery-resolution-group-binding-2',
+        'channels-delivery-resolution-group-binding-1',
+        'channels-delivery-resolution-group-connection',
+      ]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('names each ambiguous delivery decision by its short custody identity offline', async () => {
     const account = createOfflineChannelStateFixture();
     const first = offlineAmbiguousDeliveryRow();
@@ -9887,11 +9984,9 @@ describe('Channels collapsed row identity', () => {
       // Undecided deliveries of one kind are one group: its count leads, its cause is said once,
       // and each delivery is one folded row instead of a repeated block.
       await vi.waitFor(() => {
-        const group = document.querySelector('[data-testid="channels-delivery-resolution-group-outcomeUnknown"]');
+        const group = document.querySelector('[data-testid="channels-delivery-resolution-group-binding-1"]');
         expect(group?.textContent).toContain('2 deliveries with an unknown outcome');
       });
-      const controls = document.querySelector('[data-testid="channels-delivery-resolution-controls"]')?.textContent ?? '';
-      expect(controls.split('Happier lost the answer while sending').length - 1).toBe(1);
       expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-accept-"]').length).toBe(0);
       await openDeliveryDecision('c'.repeat(43));
       await openDeliveryDecision(secondCustodyId);

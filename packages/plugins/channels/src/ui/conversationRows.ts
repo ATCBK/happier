@@ -822,7 +822,7 @@ export function formatConversationTime(atMs: number, locale: string, nowMs = Dat
   const at = new Date(atMs);
   const now = new Date(nowMs);
   if (at.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(at);
+    return new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(at);
   }
   if (nowMs - atMs < 6 * 86_400_000 && nowMs >= atMs) {
     return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(at);

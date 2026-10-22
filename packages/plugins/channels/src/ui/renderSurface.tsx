@@ -65,6 +65,7 @@ import {
   useWidgetPresentation,
   type PluginUiResourceSnapshot,
   type SessionStateReadV1,
+  SetupSteps,
 } from '@happier-dev/plugin-ui';
 import {
   usePluginUiDataClient,
@@ -6348,8 +6349,8 @@ function BindingCreateJourney(props: Readonly<{
         props.t('plugins.channels.surface.bindingCreateStaleDescription', 'Refresh binding details and make a new selection.'),
       ],
       resolverNotReady: [
-        props.t('plugins.channels.surface.bindingCreateUnavailableTitle', 'Binding setup is not ready'),
-        props.t('plugins.channels.surface.bindingCreateUnavailableDescription', 'Wait for the provider to become ready, then refresh this page.'),
+        props.t('plugins.channels.surface.bindingCreateNotReadyTitle', 'Binding setup is not ready'),
+        props.t('plugins.channels.surface.bindingCreateNotReadyDescription', 'Wait for the provider to become ready, then search again.'),
       ],
       sessionUnavailable: [
         props.t('plugins.channels.surface.bindingCreateSessionUnavailableTitle', 'Sessions are unavailable'),
@@ -9705,6 +9706,7 @@ function AccountLocalBindingsSurface(props: Readonly<{
           />
           <ConnectionsContent
             connections={channels.sortedConnections}
+            bindingPresentations={channels.presentations}
             connectionState={channels.connectionState}
             signal={props.signal}
             resource={channels.connectionsRead.resource}
@@ -9854,6 +9856,8 @@ function useExplicitFreshRereadAfterUnknownOutcome(input: Readonly<{
 
 function ConnectionRow(props: Readonly<{
   connection: ChannelsConnection;
+  /** The page's binding reads, which name the conversation each undecided delivery belongs to. */
+  bindings: readonly ChannelsBinding[];
   expanded: boolean;
   signal: AbortSignal;
   resource: ResourcePresentation;
@@ -10021,6 +10025,7 @@ function ConnectionRow(props: Readonly<{
         <ConnectionDeliveryResolutionControls
           key="delivery"
           connection={props.connection}
+          bindings={props.bindings}
           signal={props.signal}
           resolveOperation={props.resolveOperation}
           onRefresh={requestRefresh}
@@ -10170,6 +10175,7 @@ function AccountLocalConnectionRow(props: Readonly<{
   collection: ChannelStateCollection;
   deliveriesCollection: ChannelDeliveriesCollection;
   connection: ChannelsConnection;
+  bindings: readonly ChannelsBinding[];
   expanded: boolean;
   signal: AbortSignal;
   resource: ResourcePresentation;
@@ -10192,6 +10198,7 @@ function AccountLocalConnectionRow(props: Readonly<{
   return (
     <ConnectionRow
       connection={props.connection}
+      bindings={props.bindings}
       expanded={props.expanded}
       signal={props.signal}
       resource={props.resource}
@@ -10691,6 +10698,8 @@ function ConnectionLifecycleControls(props: Readonly<{
       ) : null}
       <Button
         testID={mayAbandon ? 'channels-connection-accept-loss' : 'channels-connection-delete'}
+        // Both end something for good, so neither may read as the detail's primary action.
+        variant="destructive"
         title={busy
           ? mayAbandon
             ? props.t('plugins.channels.surface.acceptingPossibleLoss', 'Accepting…')
@@ -11986,22 +11995,66 @@ function IngressAttentionControls(props: Readonly<{
 
 type DeliveryDecisionState = ConversationOutwardDeliveryResolutionRow['state'];
 
+const DELIVERY_DECISION_ORDER: readonly DeliveryDecisionState[] = ['outcomeUnknown', 'partial', 'archiveRecoverable'];
+
+type DeliveryDecisionGroup = Readonly<{
+  /** The conversation's binding, or `undefined` for deliveries the connection sent outside any linked conversation. */
+  bindingId: string | undefined;
+  title: string;
+  rows: readonly ConversationOutwardDeliveryResolutionRow[];
+}>;
+
 /**
- * A connection's undecided deliveries, one group per decision they need, in the order the reader
- * should take them: unknown outcomes, partial sends, then archived destinations. Rows keep the
- * owner's read order inside a group.
+ * A connection's undecided deliveries, one group per conversation they belong to, named from the
+ * binding reads the page already holds. Deliveries the connection sent outside any linked
+ * conversation form one connection-level group last. Inside a group the reader takes unknown
+ * outcomes, partial sends, then archived destinations, keeping the owner's read order per decision.
  */
 function deliveryDecisionGroups(
   rows: readonly ConversationOutwardDeliveryResolutionRow[],
-): readonly Readonly<{ state: DeliveryDecisionState; rows: readonly ConversationOutwardDeliveryResolutionRow[] }>[] {
-  const order: readonly DeliveryDecisionState[] = ['outcomeUnknown', 'partial', 'archiveRecoverable'];
-  return order.flatMap((state) => {
-    const matching = rows.filter((row) => row.state === state);
-    return matching.length === 0 ? [] : [{ state, rows: matching }];
+  bindings: readonly ChannelsBinding[],
+  t: Translate,
+): readonly DeliveryDecisionGroup[] {
+  const bindingById = new Map(bindings.map((binding) => [binding.bindingId, binding]));
+  const rowsByBinding = new Map<string | undefined, ConversationOutwardDeliveryResolutionRow[]>();
+  for (const row of rows) {
+    const bucket = rowsByBinding.get(row.bindingId);
+    if (bucket === undefined) rowsByBinding.set(row.bindingId, [row]);
+    else bucket.push(row);
+  }
+  const groupTitle = (bindingId: string | undefined): string => {
+    if (bindingId === undefined) {
+      return t('plugins.channels.surface.deliveryResolutionGroupConnection', 'Outside linked conversations');
+    }
+    const binding = bindingById.get(bindingId);
+    return binding === undefined
+      ? t('plugins.channels.surface.deliveryResolutionGroupUnlistedConversation', 'Conversation {id}', {
+        id: shortRowIdentity(bindingId),
+      })
+      : bindingEndpointLabel(binding, t);
+  };
+  const groups = [...rowsByBinding.entries()].map(([bindingId, groupRows]) => ({
+    bindingId,
+    title: groupTitle(bindingId),
+    rows: DELIVERY_DECISION_ORDER.flatMap((state) => groupRows.filter((row) => row.state === state)),
+  }));
+  return groups.sort((left, right) => {
+    if (left.bindingId === undefined || right.bindingId === undefined) {
+      return left.bindingId === right.bindingId ? 0 : left.bindingId === undefined ? 1 : -1;
+    }
+    return left.title.localeCompare(right.title) || left.bindingId.localeCompare(right.bindingId);
   });
 }
 
-function deliveryDecisionGroupTitle(state: DeliveryDecisionState, count: number, t: Translate): string {
+/** What a conversation's deliveries need, counted per decision: "2 deliveries with an unknown outcome · 1 delivery partly sent". */
+function deliveryDecisionGroupSummary(rows: readonly ConversationOutwardDeliveryResolutionRow[], t: Translate): string {
+  return DELIVERY_DECISION_ORDER.flatMap((state) => {
+    const count = rows.filter((row) => row.state === state).length;
+    return count === 0 ? [] : [deliveryDecisionCountLabel(state, count, t)];
+  }).join(' · ');
+}
+
+function deliveryDecisionCountLabel(state: DeliveryDecisionState, count: number, t: Translate): string {
   if (state === 'archiveRecoverable') {
     return count === 1
       ? t('plugins.channels.surface.deliveryResolutionGroupArchivedOne', '1 delivery to an archived destination')
@@ -12017,6 +12070,34 @@ function deliveryDecisionGroupTitle(state: DeliveryDecisionState, count: number,
     : t('plugins.channels.surface.deliveryResolutionGroupUnknown', '{count} deliveries with an unknown outcome', { count });
 }
 
+/** The decision's cause and what each choice does, said where the choice is made. */
+function deliveryDecisionExplanation(state: DeliveryDecisionState, t: Translate): string {
+  if (state === 'archiveRecoverable') {
+    return t(
+      'plugins.channels.surface.deliveryResolutionArchivedExplanation',
+      'The provider confirmed these were not sent because the destination is archived. Unarchive it, then send again.',
+    );
+  }
+  return state === 'partial'
+    ? t(
+      'plugins.channels.surface.deliveryResolutionPartialExplanation',
+      'Some parts reached the conversation before one failed. Accept keeps what arrived; discard records that the rest won’t be sent. Nothing is sent again either way.',
+    )
+    : t(
+      'plugins.channels.surface.deliveryResolutionUnknownExplanation',
+      'Happier lost the answer while sending, so this may have arrived. Accept it if it did, discard it if it didn’t. Nothing is sent again either way.',
+    );
+}
+
+function deliveryDecisionStateLabel(state: DeliveryDecisionState, t: Translate): string {
+  if (state === 'archiveRecoverable') {
+    return t('plugins.channels.surface.deliveryResolutionArchived', 'Not sent: the destination is archived');
+  }
+  return state === 'partial'
+    ? t('plugins.channels.surface.deliveryResolutionPartial', 'Partly sent')
+    : t('plugins.channels.surface.deliveryResolutionOutcomeUnknown', 'Outcome unknown');
+}
+
 /**
  * This present-user surface intentionally offers only the two terminal
  * decisions the custody owner supports. It never reopens or resends the
@@ -12024,6 +12105,8 @@ function deliveryDecisionGroupTitle(state: DeliveryDecisionState, count: number,
  */
 function ConnectionDeliveryResolutionControls(props: Readonly<{
   connection: ChannelsConnection;
+  /** The page's binding reads, which name each delivery's conversation. */
+  bindings: readonly ChannelsBinding[];
   signal: AbortSignal;
   resolveOperation?: DeliveryResolveOperation;
   onRefresh: () => void;
@@ -12164,139 +12247,136 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
         />
       ) : null}
 
-      {deliveryDecisionGroups(rows).map((group) => (
-        <ItemGroup
-          key={group.state}
-          testID={`channels-delivery-resolution-group-${group.state}`}
-          title={deliveryDecisionGroupTitle(group.state, group.rows.length, props.t)}
-          // The cause and what each choice does are said once for the group, not on every delivery.
-          description={group.state === 'archiveRecoverable'
-            ? props.t(
-              'plugins.channels.surface.deliveryResolutionArchivedExplanation',
-              'The provider confirmed these were not sent because the destination is archived. Unarchive it, then send again.',
-            )
-            : group.state === 'partial'
-              ? props.t(
-                'plugins.channels.surface.deliveryResolutionPartialExplanation',
-                'Some parts reached the conversation before one failed. Accept keeps what arrived; discard records that the rest won’t be sent. Nothing is sent again either way.',
-              )
-              : props.t(
-                'plugins.channels.surface.deliveryResolutionUnknownExplanation',
-                'Happier lost the answer while sending, so this may have arrived. Accept it if it did, discard it if it didn’t. Nothing is sent again either way.',
-              )}
-        >
-          {group.rows.map((row, index) => {
-            const busy = action.execution.status === 'pending' && activeCustodyId === row.custodyId;
-            // The canonical recommendation names the decision and the exact revision it applies to;
-            // a delivery without one has no decision to offer.
-            const recommendation = row.recommendedRecovery ?? undefined;
-            const accepted = row.acceptedPartCount === 0
-              ? props.t('plugins.channels.surface.deliveryResolutionAcceptedNone', 'None confirmed')
-              : row.acceptedPartCount === 1
-                ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
-                : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount });
-            const facts = row.state === 'archiveRecoverable' ? undefined : [
-              `${props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted')}: ${accepted}`,
-              ...(row.failedChunk === undefined ? [] : [
-                `${props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part')}: ${props.t(
-                  'plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 },
-                )}`,
-              ]),
-            ].join(' · ');
-            return (
-              <CountedDisclosureItem
-                key={row.custodyId}
-                testID={`channels-delivery-resolution-${row.custodyId}`}
-                // The privacy-safe projection carries no content or endpoint label: a delivery is
-                // named by its short custody identity and the revision a decision applies to.
-                title={`${props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery')} ${props.t(
-                  'plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
-                    id: shortRowIdentity(row.custodyId),
-                    revision: row.revision,
-                  },
-                )}`}
-                {...(facts === undefined ? {} : { subtitle: facts })}
-                showDivider={index > 0}
-              >
-                {recommendation === undefined ? null : row.state === 'archiveRecoverable' ? (
-                  // Not ambiguous: the provider proved no effect, so the recovery is to send again
-                  // once the owner unarchived the destination.
-                  <Row gap="small" wrap>
-                    <Button
-                      testID={`channels-delivery-resolution-retry-${row.custodyId}`}
-                      title={busy
-                        ? props.t('plugins.channels.surface.deliveryResolutionRetrying', 'Retrying…')
-                        : props.t('plugins.channels.surface.deliveryResolutionRetryAfterUnarchive', 'Unarchived it — send again')}
-                      accessibilityLabel={`${props.t(
-                        'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
-                        'Unarchived it — send again',
-                      )} (${deliveryRowName(row.custodyId)})`}
-                      busy={busy}
-                      disabled={actionUnavailable}
-                      onPress={() => resolve(row, 'retryAfterUnarchive')}
-                    />
-                  </Row>
-                ) : (
+      {deliveryDecisionGroups(rows, props.bindings, props.t).map((group) => {
+        // A conversation whose deliveries need one kind of decision says it once in its summary;
+        // only a mixed group names each row's decision.
+        const mixed = new Set(group.rows.map((row) => row.state)).size > 1;
+        return (
+          <ItemGroup
+            key={group.bindingId ?? 'connection'}
+            testID={`channels-delivery-resolution-group-${group.bindingId ?? 'connection'}`}
+            title={group.title}
+            description={deliveryDecisionGroupSummary(group.rows, props.t)}
+          >
+            {group.rows.map((row, index) => {
+              const busy = action.execution.status === 'pending' && activeCustodyId === row.custodyId;
+              // The canonical recommendation names the decision and the exact revision it applies to;
+              // a delivery without one has no decision to offer.
+              const recommendation = row.recommendedRecovery ?? undefined;
+              const accepted = row.acceptedPartCount === 0
+                ? props.t('plugins.channels.surface.deliveryResolutionAcceptedNone', 'None confirmed')
+                : row.acceptedPartCount === 1
+                  ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
+                  : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount });
+              const facts = [
+                ...(mixed ? [deliveryDecisionStateLabel(row.state, props.t)] : []),
+                ...(row.state === 'archiveRecoverable' ? [] : [
+                  `${props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted')}: ${accepted}`,
+                ]),
+                ...(row.failedChunk === undefined ? [] : [
+                  `${props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part')}: ${props.t(
+                    'plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 },
+                  )}`,
+                ]),
+              ].join(' · ');
+              return (
+                <CountedDisclosureItem
+                  key={row.custodyId}
+                  testID={`channels-delivery-resolution-${row.custodyId}`}
+                  // The privacy-safe projection carries no content or endpoint label: a delivery is
+                  // named by its short custody identity and the revision a decision applies to.
+                  title={`${props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery')} ${props.t(
+                    'plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
+                      id: shortRowIdentity(row.custodyId),
+                      revision: row.revision,
+                    },
+                  )}`}
+                  {...(facts === '' ? {} : { subtitle: facts })}
+                  showDivider={index > 0}
+                >
                   <Stack gap="small">
-                    {row.createdThreadEndpointRequired === undefined ? null : (
-                      <Text
-                        tone="secondary"
-                        value={props.t(
-                          'plugins.channels.surface.deliveryResolutionThreadIdDescription',
-                          'This started a new conversation. If it arrived, enter the ID of the thread it created so replies reach the session. Without it, only Discard is possible.',
+                    <Text tone="secondary" value={deliveryDecisionExplanation(row.state, props.t)} />
+                    {recommendation === undefined ? null : row.state === 'archiveRecoverable' ? (
+                      // Not ambiguous: the provider proved no effect, so the recovery is to send again
+                      // once the owner unarchived the destination.
+                      <Row gap="small" wrap>
+                        <Button
+                          testID={`channels-delivery-resolution-retry-${row.custodyId}`}
+                          title={busy
+                            ? props.t('plugins.channels.surface.deliveryResolutionRetrying', 'Retrying…')
+                            : props.t('plugins.channels.surface.deliveryResolutionRetryAfterUnarchive', 'Unarchived it — send again')}
+                          accessibilityLabel={`${props.t(
+                            'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
+                            'Unarchived it — send again',
+                          )} (${deliveryRowName(row.custodyId)})`}
+                          busy={busy}
+                          disabled={actionUnavailable}
+                          onPress={() => resolve(row, 'retryAfterUnarchive')}
+                        />
+                      </Row>
+                    ) : (
+                      <Stack gap="small">
+                        {row.createdThreadEndpointRequired === undefined ? null : (
+                          <Text
+                            tone="secondary"
+                            value={props.t(
+                              'plugins.channels.surface.deliveryResolutionThreadIdDescription',
+                              'This started a new conversation. If it arrived, enter the ID of the thread it created so replies reach the session. Without it, only Discard is possible.',
+                            )}
+                          />
                         )}
-                      />
+                        {row.createdThreadEndpointRequired === undefined ? null : (
+                          <Form.TextField
+                            testID={`channels-delivery-resolution-thread-${row.custodyId}`}
+                            label={props.t('plugins.channels.surface.deliveryResolutionThreadId', 'Started thread ID')}
+                            placeholder={props.t('plugins.channels.surface.deliveryResolutionThreadIdPlaceholder', 'For email, the sent message’s Message-ID')}
+                            value={createdThreadIds[row.custodyId] ?? ''}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            disabled={actionUnavailable}
+                            onChange={(value) => setCreatedThreadIds((current) => ({ ...current, [row.custodyId]: value }))}
+                          />
+                        )}
+                        <Row gap="small" wrap>
+                          <Button
+                            testID={`channels-delivery-resolution-accept-${row.custodyId}`}
+                            title={busy
+                              ? props.t('plugins.channels.surface.deliveryResolutionAccepting', 'Accepting…')
+                              : props.t('plugins.channels.surface.deliveryResolutionAccept', 'Accept as sent')}
+                            accessibilityLabel={`${props.t(
+                              'plugins.channels.surface.deliveryResolutionAccept',
+                              'Accept as sent',
+                            )} (${deliveryRowName(row.custodyId)})`}
+                            busy={busy}
+                            disabled={actionUnavailable
+                              || (row.createdThreadEndpointRequired !== undefined
+                                && (createdThreadIds[row.custodyId]?.trim() ?? '') === '')}
+                            onPress={() => resolve(row, 'accepted')}
+                          />
+                          <Button
+                            testID={`channels-delivery-resolution-discard-${row.custodyId}`}
+                            title={busy
+                              ? props.t('plugins.channels.surface.deliveryResolutionDiscarding', 'Discarding…')
+                              : props.t('plugins.channels.surface.deliveryResolutionDiscard', 'Discard delivery')}
+                            variant="secondary"
+                            accessibilityLabel={`${props.t(
+                              'plugins.channels.surface.deliveryResolutionDiscard',
+                              'Discard delivery',
+                            )} (${deliveryRowName(row.custodyId)})`}
+                            busy={busy}
+                            disabled={actionUnavailable}
+                            onPress={() => resolve(row, 'discarded')}
+                          />
+                        </Row>
+                      </Stack>
                     )}
-                    {row.createdThreadEndpointRequired === undefined ? null : (
-                      <Form.TextField
-                        testID={`channels-delivery-resolution-thread-${row.custodyId}`}
-                        label={props.t('plugins.channels.surface.deliveryResolutionThreadId', 'Started thread ID')}
-                        placeholder={props.t('plugins.channels.surface.deliveryResolutionThreadIdPlaceholder', 'For email, the sent message’s Message-ID')}
-                        value={createdThreadIds[row.custodyId] ?? ''}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        disabled={actionUnavailable}
-                        onChange={(value) => setCreatedThreadIds((current) => ({ ...current, [row.custodyId]: value }))}
-                      />
-                    )}
-                    <Row gap="small" wrap>
-                      <Button
-                        testID={`channels-delivery-resolution-accept-${row.custodyId}`}
-                        title={busy
-                          ? props.t('plugins.channels.surface.deliveryResolutionAccepting', 'Accepting…')
-                          : props.t('plugins.channels.surface.deliveryResolutionAccept', 'Accept as sent')}
-                        accessibilityLabel={`${props.t(
-                          'plugins.channels.surface.deliveryResolutionAccept',
-                          'Accept as sent',
-                        )} (${deliveryRowName(row.custodyId)})`}
-                        busy={busy}
-                        disabled={actionUnavailable
-                          || (row.createdThreadEndpointRequired !== undefined
-                            && (createdThreadIds[row.custodyId]?.trim() ?? '') === '')}
-                        onPress={() => resolve(row, 'accepted')}
-                      />
-                      <Button
-                        testID={`channels-delivery-resolution-discard-${row.custodyId}`}
-                        title={busy
-                          ? props.t('plugins.channels.surface.deliveryResolutionDiscarding', 'Discarding…')
-                          : props.t('plugins.channels.surface.deliveryResolutionDiscard', 'Discard delivery')}
-                        variant="secondary"
-                        accessibilityLabel={`${props.t(
-                          'plugins.channels.surface.deliveryResolutionDiscard',
-                          'Discard delivery',
-                        )} (${deliveryRowName(row.custodyId)})`}
-                        busy={busy}
-                        disabled={actionUnavailable}
-                        onPress={() => resolve(row, 'discarded')}
-                      />
-                    </Row>
                   </Stack>
-                )}
-              </CountedDisclosureItem>
-            );
-          })}
-        </ItemGroup>
-      ))}
+                </CountedDisclosureItem>
+              );
+            })}
+          </ItemGroup>
+        );
+      })}
 
       {!initialLoading && rows.length === 0 && !canLoadMore && deliveryRows.resource.error === undefined ? (
         <Status
@@ -13391,25 +13471,12 @@ function ProviderSetupPicker(props: Readonly<{
             t={props.t}
           />
           {preparedConnection.setupGuidance === undefined ? null : (
-            <Stack gap="small" testID="channels-provider-setup-guidance">
-              <Heading
-                level={4}
-                value={props.t(
-                  'plugins.channels.surface.providerSetupRemediationTitle',
-                  'Finish provider setup',
-                )}
-              />
-              <Text value={preparedConnection.setupGuidance.requiredPermissionsLabel} />
-              <Link
-                testID="channels-provider-setup-guidance-link"
-                title={props.t(
-                  'plugins.channels.surface.providerSetupRemediationAction',
-                  'Resolve provider setup',
-                )}
-                url={preparedConnection.setupGuidance.externalUrl}
-                disabled={actionUnavailable}
-              />
-            </Stack>
+            <ProviderSetupGuidanceSteps
+              guidance={preparedConnection.setupGuidance}
+              providerDisplayName={preparedConnection.presentation.providerDisplayName}
+              disabled={actionUnavailable}
+              t={props.t}
+            />
           )}
           <Form.Field
             label={props.t('plugins.channels.surface.transport', 'Transport')}
@@ -13579,8 +13646,82 @@ function ProviderSetupPicker(props: Readonly<{
   );
 }
 
+/**
+ * The provider's own setup, as numbered steps: open its page, grant what it asks for (copyable, since it
+ * is pasted on the provider's side), then create the connection here and test it. The steps carry only
+ * what the provider's prepare result said; the test is the connection's existing Test control.
+ */
+function ProviderSetupGuidanceSteps(props: Readonly<{
+  guidance: NonNullable<PreparedConnectionSetup['setupGuidance']>;
+  providerDisplayName: string;
+  disabled: boolean;
+  t: Translate;
+}>): React.ReactElement {
+  const { guidance, providerDisplayName, t } = props;
+  const openTitle = t('plugins.channels.surface.setupGuidanceOpen', 'Open {provider}', { provider: providerDisplayName });
+  let host: string | undefined;
+  try {
+    host = new URL(guidance.externalUrl).host;
+  } catch {
+    host = undefined;
+  }
+  return (
+    <Stack gap="small" testID="channels-provider-setup-guidance">
+      <Heading
+        level={4}
+        value={t('plugins.channels.surface.providerSetupRemediationTitle', 'Finish provider setup')}
+      />
+      <SetupSteps
+        steps={[
+          {
+            key: 'open',
+            title: openTitle,
+            ...(host === undefined ? {} : { detail: host }),
+            body: (
+              <Action.Copy
+                title={t('plugins.channels.surface.setupGuidanceCopyLink', 'Copy link')}
+                value={guidance.externalUrl}
+              />
+            ),
+            action: (
+              <Link
+                testID="channels-provider-setup-guidance-link"
+                title={openTitle}
+                url={guidance.externalUrl}
+                disabled={props.disabled}
+              />
+            ),
+          },
+          {
+            key: 'grant',
+            title: t('plugins.channels.surface.setupGuidanceGrant', 'Grant what it asks for'),
+            detail: guidance.requiredPermissionsLabel,
+            action: (
+              <Action.Copy
+                title={t('plugins.channels.surface.setupGuidanceCopyPermissions', 'Copy permissions')}
+                value={guidance.requiredPermissionsLabel}
+              />
+            ),
+          },
+          {
+            key: 'verify',
+            title: t('plugins.channels.surface.setupGuidanceVerify', 'Create and test the connection'),
+            detail: t(
+              'plugins.channels.surface.setupGuidanceVerifyDetail',
+              'Create it below. Then Test connection checks that Happier can reach {provider} with it.',
+              { provider: providerDisplayName },
+            ),
+          },
+        ]}
+      />
+    </Stack>
+  );
+}
+
 function ConnectionsContent(props: Readonly<{
   connections: readonly ChannelsConnection[];
+  /** The page's linked conversations; delivery decisions are grouped and named by them. */
+  bindingPresentations: readonly BindingPresentation[];
   connectionState: 'ready' | 'loading' | 'error';
   signal: AbortSignal;
   targetPluginId?: string;
@@ -13601,6 +13742,10 @@ function ConnectionsContent(props: Readonly<{
 }>): React.ReactElement {
   const [pendingDeletedConnectionId, setPendingDeletedConnectionId] = React.useState<string | undefined>();
   const [announceDeletedConnection, setAnnounceDeletedConnection] = React.useState(false);
+  const bindings = React.useMemo(
+    () => props.bindingPresentations.map((presentation) => presentation.binding),
+    [props.bindingPresentations],
+  );
   const expandedConnection = props.expandedConnectionId === undefined
     ? undefined
     : props.connections.find((connection) => connection.connectionId === props.expandedConnectionId);
@@ -13697,6 +13842,7 @@ function ConnectionsContent(props: Readonly<{
                   <ConnectionRow
                     key={connection.connectionId}
                     connection={connection}
+                    bindings={bindings}
                     expanded={connection.connectionId === props.expandedConnectionId}
                     signal={props.signal}
                     resource={props.resource}
@@ -13712,6 +13858,7 @@ function ConnectionsContent(props: Readonly<{
                     collection={props.accountLocalPolicy.collection}
                     deliveriesCollection={props.accountLocalPolicy.deliveriesCollection}
                     connection={connection}
+                    bindings={bindings}
                     expanded={connection.connectionId === props.expandedConnectionId}
                     signal={props.signal}
                     resource={props.resource}
@@ -13902,6 +14049,7 @@ function DaemonChannelsSurface(props: Readonly<{
           </Stack>
           <ConnectionsContent
             connections={channels.connections}
+            bindingPresentations={channels.presentations}
             connectionState={channels.connectionState}
             signal={props.signal}
             targetPluginId={props.targetPluginId}
