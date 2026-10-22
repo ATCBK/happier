@@ -100,8 +100,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Current access is an explicit authority projection, even when its payload is malformed.
- * Consumers use this marker — through the exported
- * `hasExplicitCurrentOrResponsibilitySessionProjection` below — to fail closed instead of
+ * List readers use this marker to fail closed instead of
  * retrying the same response through a released-shape fallback that has no way to preserve
  * or validate current access semantics.
  */
@@ -119,11 +118,6 @@ function hasResponsibilityProjectionClaim(value: unknown): boolean {
         Object.prototype.hasOwnProperty.call(value, 'responsibleAccountId')
         || Object.prototype.hasOwnProperty.call(value, 'responsibleAccount')
     );
-}
-
-export function hasExplicitCurrentOrResponsibilitySessionProjection(value: unknown): boolean {
-    if (!isRecord(value) || !isRecord(value.session)) return false;
-    return hasCurrentSessionRecordMarker(value.session) || hasResponsibilityProjectionClaim(value.session);
 }
 
 function hasExplicitCurrentOrResponsibilitySessionListProjection(value: unknown): boolean {
@@ -546,20 +540,6 @@ function looksLikeMissingV2SessionsListRoute(status: number, body: unknown): boo
     return path.includes('/v2/sessions') || message.includes('/v2/sessions');
 }
 
-export function looksLikeMissingV2SessionRoute404(body: unknown, sessionId: string): boolean {
-    if (!body || typeof body !== 'object') return false;
-    const record = body as Record<string, unknown>;
-    const error = typeof record.error === 'string' ? record.error : '';
-    const path = typeof record.path === 'string' ? record.path : '';
-    const message = typeof record.message === 'string' ? record.message : '';
-    if (error !== 'Not found') return false;
-    const encodedSessionId = encodeURIComponent(sessionId);
-    return path.includes(`/v2/sessions/${sessionId}`)
-        || path.includes(`/v2/sessions/${encodedSessionId}`)
-        || message.includes(`/v2/sessions/${sessionId}`)
-        || message.includes(`/v2/sessions/${encodedSessionId}`);
-}
-
 export function looksLikeCurrentV2SessionNotFound404(body: unknown): boolean {
     return V2SessionByIdNotFoundSchema.safeParse(body).success;
 }
@@ -760,37 +740,4 @@ export async function fetchSessionListPageCompat(params: Readonly<{
         metadataUpgradeRequiredCount: 0,
         source: 'v1',
     };
-}
-
-export async function scanSessionByIdFromCompatList(params: Readonly<{
-    request: SessionRequest;
-    token: string;
-    sessionId: string;
-    limit?: number;
-}>): Promise<V2SessionRecord | null> {
-    const limit = typeof params.limit === 'number' && params.limit > 0 ? Math.trunc(params.limit) : 200;
-    let cursor: string | null = null;
-    const seenCursors = new Set<string>();
-
-    while (true) {
-        const page = await fetchSessionListPageCompat({
-            request: params.request,
-            token: params.token,
-            cursor,
-            limit,
-            allowLegacyV1Fallback: true,
-        });
-        const match = page.sessions.find((row) => String(row.id ?? '').trim() === params.sessionId);
-        if (match) {
-            return match;
-        }
-        if (!page.hasNext || !page.nextCursor) {
-            return null;
-        }
-        if (seenCursors.has(page.nextCursor)) {
-            return null;
-        }
-        seenCursors.add(page.nextCursor);
-        cursor = page.nextCursor;
-    }
 }

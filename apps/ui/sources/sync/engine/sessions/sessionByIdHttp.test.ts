@@ -9,6 +9,38 @@ const runtimeFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
 afterEach(() => { runtimeFetch.mockReset(); resetSessionByIdHttpReadsForTests(); });
 const unusedRequest = async (): Promise<Response> => { throw new Error('Captured transport must own the physical read'); };
+
+it('cancels an unshared request at its network boundary when its deadline expires', async () => {
+  const request = (_path: string, init: RequestInit): Promise<Response> => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+  });
+  await expect(readSessionByIdHttp({ sessionId: 'session', token: 'opaque', request, timeoutMs: 10 }))
+    .rejects.toMatchObject({ name: 'AbortError' });
+});
+
+it('does not dispatch an unshared request that is already cancelled', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const request = vi.fn(async () => Response.json({}));
+  await expect(readSessionByIdHttp({ sessionId: 'session', token: 'opaque', request, signal: controller.signal }))
+    .rejects.toMatchObject({ name: 'AbortError' });
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('does not turn cancellation during response-body consumption into a successful null body', async () => {
+  const controller = new AbortController();
+  const request = async (): Promise<Response> => {
+    const body = new ReadableStream<Uint8Array>({ start(stream) {
+      controller.signal.addEventListener('abort', () => stream.error(new DOMException('Aborted', 'AbortError')), { once: true });
+    } });
+    const response = new Response(body);
+    queueMicrotask(() => controller.abort());
+    return response;
+  };
+  await expect(readSessionByIdHttp({ sessionId: 'session', token: 'opaque', request, signal: controller.signal }))
+    .rejects.toMatchObject({ name: 'AbortError' });
+});
+
 function transport(token = 'bearer', serverUrl = 'https://home.example.test') {
   return createCapturedServerReadTransport({ serverId: 'home', profile: { serverUrl }, credentials: { token } });
 }

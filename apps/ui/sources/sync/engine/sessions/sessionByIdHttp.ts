@@ -1,6 +1,5 @@
-import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { readSessionParts, SessionPartsHttpError, resetSessionPartsReadsForTests } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionBatchForAuthority';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
 
@@ -47,17 +46,15 @@ export async function readSessionByIdHttp(params: SessionByIdHttpReadParams): Pr
       }
     }
     // Restricted/opaque requests do not establish a neutral Account carrier.
-    // Give each its own invocation of the same cancellation mechanism, never a shared identity map.
-    return await createScopedResolutionSingleFlight<SessionByIdHttpRead>().run('legacy', async signal => {
-      const path = projection === 'turns' ? `/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`
-        : `/v2/sessions/${encodeURIComponent(params.sessionId)}${params.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`;
-      const init = { method: 'GET', headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' }, signal };
-      const consume = async (response: Response): Promise<SessionByIdHttpRead> => {
-        const body = await response.json().catch(() => null);
-        return { ok: response.ok, status: response.status, body };
-      };
-      return await consume(await params.request(path, init));
-    }, { signal: cancellation.signal });
+    // Their request owner already propagates cancellation to the physical carrier.
+    throwIfAborted(cancellation.signal);
+    const path = projection === 'turns' ? `/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`
+      : `/v2/sessions/${encodeURIComponent(params.sessionId)}${params.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`;
+    const response = await params.request(path, { method: 'GET',
+      headers: { Authorization: `Bearer ${params.token}`, 'Content-Type': 'application/json' }, signal: cancellation.signal });
+    const body = await response.json().catch(() => null);
+    throwIfAborted(cancellation.signal);
+    return { ok: response.ok, status: response.status, body };
   } finally {
     cancellation.dispose();
     if (timeoutId !== null) clearTimeout(timeoutId);

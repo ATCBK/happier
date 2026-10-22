@@ -33,11 +33,8 @@ import {
 } from './parsePlainSessionPayload';
 import { classifySessionTupleApplyCurrentness } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import {
-  hasExplicitCurrentOrResponsibilitySessionProjection,
   looksLikeCurrentV2SessionNotFound404,
-  looksLikeMissingV2SessionRoute404,
   parseCompatSessionByIdResponse,
-  scanSessionByIdFromCompatList,
 } from './sessionHttpCompat';
 import {
   buildSessionOwnerMetadataUnavailableShell,
@@ -397,23 +394,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
       if (looksLikeCurrentV2SessionNotFound404(body)) {
         return { ok: false, session: null, errorCode: 'not_found', httpStatus: 404 };
       }
-      if (looksLikeMissingV2SessionRoute404(body, sessionId)) {
-        if (params.accessProjectionVersion === 1 || params.sessionKey !== undefined) {
-          return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: 404 };
-        }
-        const fallbackRow = await scanSessionByIdFromCompatList({
-          request: params.request,
-          token: params.credentials.token,
-          sessionId,
-        });
-        if (!fallbackRow) {
-          // A legacy route fallback cannot prove absence from the current
-          // single-session contract. Keep the existing local carrier until
-          // current-route evidence arrives.
-          return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: 404 };
-        }
-        body = { session: fallbackRow };
-      }
+      return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: 404 };
     }
 
     if (body === null) {
@@ -434,30 +415,9 @@ export async function fetchAndApplySessionById(params: Readonly<{
     && isUnknownRecord(body)
     ? parseCurrentSessionProjectionForHydration(body.session)
     : null;
-  let parsed = negotiatedCurrentProjection?.success
+  const parsed = negotiatedCurrentProjection?.success
     ? { session: negotiatedCurrentProjection.data }
     : parseCompatSessionByIdResponse(body);
-  if (!parsed?.session) {
-    // A negotiated current projection cannot recover its authority from an
-    // unqualified list. Failed detail bodies must not fan out into full scans.
-    if (params.accessProjectionVersion === 1 || params.sessionKey !== undefined) {
-      return { ok: false, session: null, errorCode: 'invalid_response' };
-    }
-    if (hasExplicitCurrentOrResponsibilitySessionProjection(body)) {
-      return { ok: false, session: null, errorCode: 'invalid_response' };
-    }
-    const fallbackRow = await scanSessionByIdFromCompatList({
-      request: params.request,
-      token: params.credentials.token,
-      sessionId,
-    });
-    if (!fallbackRow) {
-      return { ok: false, session: null, errorCode: 'invalid_response' };
-    }
-    body = { session: fallbackRow };
-    parsed = parseCompatSessionByIdResponse(body);
-  }
-
   if (!parsed?.session) {
     const status = responseStatus;
     return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: responseOk ? undefined : status };

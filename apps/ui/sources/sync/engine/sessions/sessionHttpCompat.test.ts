@@ -4,7 +4,6 @@ import type { SessionListQueryV1 } from '@happier-dev/protocol';
 import {
     fetchSessionListPageCompat,
     parseCompatSessionByIdResponse,
-    scanSessionByIdFromCompatList,
 } from './sessionHttpCompat';
 
 /**
@@ -186,53 +185,6 @@ function buildLegacyCompatSession(id: string) {
         share: null,
     };
 }
-
-describe('scanSessionByIdFromCompatList', () => {
-    it('falls back to /v1/sessions when older servers are missing both /v2 session routes', async () => {
-        const request = vi.fn(async (path: string) => {
-            if (path === '/v2/sessions?limit=200') {
-                return new Response(JSON.stringify({
-                    error: 'Not found',
-                    path: '/v2/sessions',
-                    method: 'GET',
-                }), { status: 404 });
-            }
-
-            expect(path).toBe('/v1/sessions');
-            return new Response(JSON.stringify({
-                sessions: [buildLegacyCompatSession('older-session')],
-            }), { status: 200 });
-        });
-
-        await expect(scanSessionByIdFromCompatList({
-            request,
-            token: 'token',
-            sessionId: 'older-session',
-        })).resolves.toEqual(expect.objectContaining({
-            id: 'older-session',
-        }));
-    });
-
-    it('fails a malformed marked-current page after one request without retrying v1', async () => {
-        const request = vi.fn(async () => new Response(JSON.stringify({
-            sessions: [{
-                ...buildLegacyCompatSession('marked-malformed'),
-                effectiveAccess: { v: 1, level: 'admin', capabilities: {} },
-                responsibleAccountId: null,
-                responsibleAccount: null,
-            }],
-            nextCursor: null,
-            hasNext: false,
-        }), { status: 200 }));
-
-        await expect(scanSessionByIdFromCompatList({
-            request,
-            token: 'token',
-            sessionId: 'marked-malformed',
-        })).rejects.toMatchObject({ code: 'invalid_response' });
-        expect(request).toHaveBeenCalledTimes(1);
-    });
-});
 
 describe('fetchSessionListPageCompat query source', () => {
     it('posts the strict Home-local query and never falls back to the ordinary GET routes', async () => {
