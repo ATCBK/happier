@@ -16897,6 +16897,7 @@ export async function startDaemonSessionControlRuntime(
         unregister?.();
       };
       unregister = registerPidSpawnResourceCleanup({ pid: input.tracked.pid, spawnResourceCleanupByPid: params.spawnResourceCleanupByPid,
+        label: 'provider_managed.binding.open',
         isCurrentPidOwner: account.isCurrentPidOwner,
         cleanup: async () => { await cleanup?.(); } });
       if (!unregister) { await cleanup(); return null; }
@@ -17430,6 +17431,7 @@ export async function startDaemonSessionControlRuntime(
                   activatePurposeBindings: activate, registry: connectedAccountRequestAuthRegistry,
                   httpPort: requireConnectedAccountRequestAuthHttpPort(), isCurrent, assertCurrent,
                   registerLifetimeCleanup: cleanup => registerPidSpawnResourceCleanup({ pid: tracked.pid,
+                    label: operation.kind,
                     spawnResourceCleanupByPid: params.spawnResourceCleanupByPid,
                     isCurrentPidOwner: isCurrent, cleanup }),
                   readExecutionRunAuthority: async (request, requestSignal) => {
@@ -17713,6 +17715,7 @@ export async function startDaemonSessionControlRuntime(
                 : null;
             const unregisterCleanup = registerPidSpawnResourceCleanup({
               pid: tracked.pid,
+              label: operation.kind,
               spawnResourceCleanupByPid: params.spawnResourceCleanupByPid,
               isCurrentPidOwner: () =>
                 params.pidToTrackedSession.get(tracked.pid) === tracked,
