@@ -1460,7 +1460,7 @@ test('source-dev runtime preparation admits SDK outputs without deriving Action 
   }
   writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - apps/*\n');
   const sdkScripts = JSON.parse(readFileSync(new URL('../../packages/plugin-sdk/package.json', import.meta.url))).scripts;
   mkdirSync(join(packageDir, 'src'), { recursive: true });
   mkdirSync(join(packageDir, 'scripts'), { recursive: true });
@@ -1470,7 +1470,7 @@ test('source-dev runtime preparation admits SDK outputs without deriving Action 
     scripts: {
       build: 'fixture-compiler',
       'prepare:declarations:prepared': sdkScripts['prepare:declarations:prepared'],
-      'check:action-type-map': sdkScripts['check:action-type-map'],
+      'generate:action-type-map': sdkScripts['generate:action-type-map'],
     },
   }));
   writeFileSync(join(packageDir, 'tsconfig.json'), '{}\n');
@@ -1499,7 +1499,7 @@ test('source-dev runtime preparation admits SDK outputs without deriving Action 
   await assert.doesNotReject(() => syncSharedDepsForSourceDev(options));
   assert.equal(existsSync(markerPath), false, 'warm runtime readiness must not invoke Action derivation');
   await assert.rejects(() => runPluginSdkPreparedScript('prepare:declarations:prepared', { pluginSdkDir: packageDir }));
-  assert.equal(existsSync(markerPath), true, 'declaration preparation must retain its drift gate');
+  assert.equal(existsSync(markerPath), true, 'declaration preparation invokes the producer and reports derivation failures');
 });
 
 test('source-dev refresh observes root UI config inputs through workspace build admission', async (t) => {

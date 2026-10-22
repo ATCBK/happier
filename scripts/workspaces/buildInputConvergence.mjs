@@ -1,4 +1,4 @@
-import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, readlink, rm, symlink } from 'node:fs/promises';
+import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { readCachedFileDigest } from '../../apps/stack/scripts/utils/fs/cached_file_digest.mjs';
 import { createHash } from 'node:crypto';
@@ -110,6 +110,35 @@ export async function captureBuildInputFiles({ sourceDir, captureDir, readPaths 
 }
 
 /**
+ * Share installed packages through a real modules directory. pnpm 12 rejects
+ * linked modules/task-state directories; its mutable journal must stay local.
+ * @param {{ sourceModules: string, targetModules: string, excludedNames?: string[] }} input
+ */
+export async function mountInstalledNodeModules({ sourceModules, targetModules, excludedNames = [] }) {
+  await mkdir(targetModules, { recursive: true });
+  // A capture may replace a source workspace alias with its captured sources.
+  // Keep dependency links bound to the installed tree, not that movable alias.
+  const installedModules = await realpath(sourceModules).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (installedModules === null) return;
+  const entries = await readdir(installedModules, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  for (const entry of entries) {
+    if (entry.name === '.pnpm-task-run-state-v1' || excludedNames.includes(entry.name)) continue;
+    const source = join(installedModules, entry.name);
+    const target = join(targetModules, entry.name);
+    const info = entry.isSymbolicLink() ? await stat(source) : entry;
+    if (info.isDirectory()) await symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+    // Files such as .modules.yaml need no shared writes or Windows symlink privilege.
+    else await copyFile(source, target);
+  }
+}
+
+/**
  * Reuse installed external tools, but resolve first-party packages inside the
  * capture. Publishers must never write through a link into live node_modules.
  * @param {{ sourceDir: string, captureDir: string, workspaceDirs: string[] }} input
@@ -124,15 +153,7 @@ export async function mountCapturedWorkspaceDependencies({ sourceDir, captureDir
   for (const dir of ['', ...workspaceDirs]) {
     const sourceModules = join(sourceDir, dir, 'node_modules');
     const modules = join(captureDir, dir, 'node_modules');
-    await mkdir(modules, { recursive: true });
-    const names = await readdir(sourceModules).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
-    for (const name of names) {
-      if (name === '@happier-dev') continue;
-      const source = join(sourceModules, name);
-      const target = join(modules, name);
-      if (process.platform === 'win32' && !(await lstat(source)).isDirectory()) await cp(source, target, { verbatimSymlinks: true });
-      else await symlink(source, target, process.platform === 'win32' ? 'junction' : undefined);
-    }
+    await mountInstalledNodeModules({ sourceModules, targetModules: modules, excludedNames: ['@happier-dev'] });
     await mkdir(join(modules, '@happier-dev'), { recursive: true });
     const installedWorkspaces = await readdir(join(sourceModules, '@happier-dev')).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
     for (const name of installedWorkspaces) if (!workspaces.has(`@happier-dev/${name}`)) {

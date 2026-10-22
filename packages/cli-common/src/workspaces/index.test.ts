@@ -5,7 +5,9 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  atomicReplaceDirSync,
   bundleInstalledPackageWithRuntimeDependencies,
   bundleWorkspacePackage,
   bundleWorkspacePackageWithRuntimeDependencies,
@@ -198,6 +201,59 @@ describe('sanitizeBundledPackageJson', () => {
 });
 
 describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
+  it.each(['live', 'artifact'] as const)('replaces dangling workspace links during %s publication', (publicationMode) => {
+    const root = createTempRoot('workspace-dangling-link-');
+    const sourceDir = join(root, 'packages', 'sdk');
+    const destinationDir = join(root, 'apps', 'cli', 'node_modules', '@happier-dev', 'sdk');
+    const linkedRoot = join(root, 'removed-capture', 'sdk');
+    writePackage(sourceDir, { name: '@happier-dev/sdk', version: '0.0.0', main: './dist/index.js' }, {
+      'dist/index.js': 'export const generation = 1;\n',
+    });
+    mkdirSync(linkedRoot, { recursive: true });
+    mkdirSync(dirname(destinationDir), { recursive: true });
+    symlinkSync(linkedRoot, destinationDir, process.platform === 'win32' ? 'junction' : 'dir');
+    rmSync(linkedRoot, { recursive: true });
+    const publish = () => bundleWorkspacePackagesWithRuntimeDependencies({
+      publicationMode,
+      bundles: [{ packageName: '@happier-dev/sdk', srcDir: sourceDir, destDir: destinationDir }],
+    });
+
+    publish();
+    expect(lstatSync(destinationDir).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('generation = 1');
+    expect(existsSync(linkedRoot)).toBe(false);
+    writeFileSync(join(sourceDir, 'dist/index.js'), 'export const generation = 2;\n');
+    publish();
+    expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('generation = 2');
+  });
+
+  it.each(['live', 'artifact'] as const)('restores a dangling workspace link after failed %s publication', (publicationMode) => {
+    const root = createTempRoot('workspace-dangling-link-rollback-');
+    const destinationDir = join(root, 'destination');
+    const linkedRoot = join(root, 'removed-capture');
+    mkdirSync(linkedRoot);
+    symlinkSync(linkedRoot, destinationDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const originalLink = readlinkSync(destinationDir);
+    rmSync(linkedRoot, { recursive: true });
+    const publicationError = new Error('Filesystem rejected the staged publication');
+
+    expect(() => atomicReplaceDirSync({
+      destDir: destinationDir,
+      preserveDestinationPath: publicationMode === 'live',
+      buildInto: tempDir => writePackage(tempDir, { name: '@fixture/sdk' }),
+      fsOps: {
+        // Only the failing OS rename is replaced; real staging and rollback run.
+        renameSync: (source, destination) => {
+          if (String(source).includes('.__sync_tmp__.')) throw publicationError;
+          renameSync(source, destination);
+        },
+      },
+    })).toThrow(publicationError);
+    expect(lstatSync(destinationDir).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(destinationDir)).toBe(originalLink);
+    expect(existsSync(linkedRoot)).toBe(false);
+  });
+
   it('materializes overlapping read-only declared and included author files', () => {
     const root = createTempRoot('workspace-readonly-author-files-');
     const sourceDir = join(root, 'source');

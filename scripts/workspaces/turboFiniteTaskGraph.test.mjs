@@ -175,7 +175,7 @@ test('the finite Turbo graph is activated through the current package manager wi
   assert.equal(pluginUi.scripts['prepare:finite'], undefined);
   assert.equal(
     pluginUi.scripts['typecheck:source:finite'],
-    'pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit --tsBuildInfoFile node_modules/.cache/tsc/plugin-ui.typecheck.tsbuildinfo -p tsconfig.json',
+    'pnpm --dir ../plugin-sdk --silent run generate:public-toolchain:prepared && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit --tsBuildInfoFile node_modules/.cache/tsc/plugin-ui.typecheck.tsbuildinfo -p tsconfig.json',
   );
   assert.equal(pluginUi.scripts['build:finite'], 'pnpm --silent run build:compiled');
   assert.equal(

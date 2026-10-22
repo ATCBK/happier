@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import {
   copyDirDereferenceContainedSync,
@@ -66,18 +66,13 @@ function atomicReplaceBuiltDirSync(targetDir, buildInto) {
 
   try {
     buildInto(stagingDir);
-    if (existsSync(outDir)) {
-      publishStagedDirectoryMountedSync({
-        stagedDir: stagingDir,
-        liveDir: outDir,
-        rollbackDir,
-        pruneStale: false,
-      });
-      rmDirSafeSync(stagingDir);
-      return;
-    }
-
-    renameSync(stagingDir, outDir);
+    publishStagedDirectoryMountedSync({
+      stagedDir: stagingDir,
+      liveDir: outDir,
+      rollbackDir,
+      pruneStale: false,
+    });
+    rmDirSafeSync(stagingDir);
   } catch (error) {
     rmDirSafeSync(stagingDir);
     throw error;

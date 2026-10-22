@@ -143,10 +143,12 @@ export function workspaceSourceCompilerPaths(packages) {
 /** CLI exports/imports and the generated semantic projection are the entry
  * authority for both retained source QA and native artifact construction. */
 export async function readCliSourceEntries({ repoDir, manifest, transform,
+  projectionRoot = repoDir,
   cliPrefix = 'apps/cli', mainOutput = `${cliPrefix}/src/index`,
   publicPrefix = `${cliPrefix}/package-dist`,
   pluginPrefix = (name) => `packages/plugins/${name.slice('@happier-dev/plugins-'.length)}` }) {
   const projectDir = join(repoDir, 'apps/cli');
+  const projectionDir = join(projectionRoot, 'apps/cli');
   const entries = { [mainOutput]: join(projectDir, 'src/index.ts') };
   for (const [key, value] of Object.entries(manifest.exports ?? {})) {
     const source = sourceExport(value, key);
@@ -157,7 +159,7 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
     entries[`${publicPrefix}/${source.slice('./src/'.length).replace(/\.[^.]+$/, '')}`] = resolve(projectDir, source);
   }
   const pluginMetadata = [];
-  const locatorPath = join(projectDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
+  const locatorPath = join(projectionDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
   if (existsSync(locatorPath)) {
     const transformed = await transform(await readFile(locatorPath, 'utf8'), { loader: 'ts', format: 'esm' });
     const generated = await import(`data:text/javascript;base64,${Buffer.from(transformed.code).toString('base64')}`);
@@ -170,7 +172,7 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
       entries[key] = resolve(pluginDir, sourceExport(pluginManifest.exports['.'], packageName));
       // Locators are locator-only; the manifest lives in the generated asset beside them.
       const pluginManifestDocument = locator.manifest
-        ?? JSON.parse(await readFile(join(projectDir, locator.manifestRelativePath), 'utf8'));
+        ?? JSON.parse(await readFile(join(projectionDir, locator.manifestRelativePath), 'utf8'));
       // Declaration-only plugins still own packaged Resources and a package
       // root. A missing daemon contribution does not remove that closure.
       if (locator.daemonEntryPath) {

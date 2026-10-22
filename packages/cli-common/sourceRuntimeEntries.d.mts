@@ -29,6 +29,7 @@ export type CliSourcePluginMetadata = Readonly<{
 }>;
 export function readCliSourceEntries(options: Readonly<{
   repoDir: string;
+  projectionRoot?: string;
   manifest: { exports?: Record<string, unknown>; imports?: Record<string, unknown> };
   transform: (input: string, options: TransformOptions) => Promise<TransformResult>;
   cliPrefix?: string;

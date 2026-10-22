@@ -307,7 +307,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginSdkPackage.scripts['check:prepare:api-governance:prepared'],
-    'pnpm --silent run prepare:declarations:prepared && node ./scripts/apiSurfaceCli.mjs --materialize-source --check && pnpm --silent run build:compiled',
+    'pnpm --silent run check:action-type-map && node ./scripts/apiSurfaceCli.mjs --materialize-source --check && pnpm --silent run build:compiled',
   );
   assert.match(
     pluginSdkPackage.scripts['test:prepared'],
@@ -320,7 +320,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     pluginUiPackage.scripts['prepare:api-governance'],
-    'pnpm --silent run prepare:declarations && pnpm --dir ../plugin-sdk --silent run check:public-toolchain:prepared && pnpm --silent run build:compiled',
+    'pnpm --silent run prepare:declarations && pnpm --dir ../plugin-sdk --silent run generate:public-toolchain:prepared && pnpm --silent run build:compiled',
   );
   assert.equal(
     pluginUiPackage.scripts['build:compiled'],
@@ -353,7 +353,7 @@ test('plugin package scripts prepare declarations and invoke the shared governan
   );
   assert.equal(
     sdkPackage.scripts.prepack,
-    'pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && pnpm --silent run check:api-governance:prepared',
+    'pnpm --silent run check:actions && pnpm --silent run prepare:api-governance && node ../../scripts/api-governance/cli.mjs --profile sdk --write && pnpm --silent run check:api-governance:prepared',
     'SDK prepack must materialize the exact bundled declaration graph and its generated records before governing them',
   );
 

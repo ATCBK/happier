@@ -137,13 +137,18 @@ function recordLivePathForRollbackSync({
   rollbackDir,
   rollbackEntries,
   mkdir,
+  rename,
 }) {
   const backupPath = liveStats
     ? resolve(rollbackDir, `entry-${rollbackEntries.length}`)
     : null;
   if (backupPath) {
     mkdir(dirname(backupPath), { recursive: true });
-    if (liveStats.isFile()) {
+    if (liveStats.isSymbolicLink()) {
+      // Move the link itself so dangling targets and Windows junctions keep
+      // their exact filesystem identity without copying or following them.
+      renameLivePathWithRetry({ sourcePath: livePath, targetPath: backupPath, rename });
+    } else if (liveStats.isFile()) {
       try {
         linkSync(livePath, backupPath);
       } catch {
@@ -158,7 +163,7 @@ function recordLivePathForRollbackSync({
     }
   }
 
-  const entry = { livePath, backupPath, mutated: false };
+  const entry = { livePath, backupPath, mutated: liveStats?.isSymbolicLink() ?? false };
   rollbackEntries.push(entry);
   return entry;
 }
@@ -246,6 +251,7 @@ function reconcileStagedDirectoryIntoLiveDirectorySync({
         rollbackDir,
         rollbackEntries,
         mkdir,
+        rename,
       });
       if (liveStats) {
         rollbackEntry.mutated = true;
@@ -271,6 +277,7 @@ function reconcileStagedDirectoryIntoLiveDirectorySync({
       rollbackDir,
       rollbackEntries,
       mkdir,
+      rename,
     });
     if (liveStats?.isDirectory()) {
       rollbackEntry.mutated = true;
@@ -308,6 +315,7 @@ function reconcileStagedDirectoryIntoLiveDirectorySync({
         rollbackDir,
         rollbackEntries,
         mkdir,
+        rename,
       });
       rollbackEntry.mutated = true;
       removePathSync(stalePath, remove);
@@ -322,8 +330,8 @@ export function publishStagedDirectoryMountedSync({
   pruneStale = false,
   fsOps = {},
 }) {
-  const exists = fsOps.existsSync ?? existsSync;
   const lstat = fsOps.lstatSync ?? lstatSync;
+  const exists = fsOps.existsSync ?? (path => lstat(path, { throwIfNoEntry: false }) !== undefined);
   const mkdir = fsOps.mkdirSync ?? mkdirSync;
   const readDir =
     fsOps.readdirSync ?? ((path) => readdirSync(path, { withFileTypes: true }));
@@ -343,7 +351,7 @@ export function publishStagedDirectoryMountedSync({
     // at producer inputs; publishing through it would rewrite that producer.
     if (liveStats?.isSymbolicLink()) {
       const entry = recordLivePathForRollbackSync({ livePath: liveDir, liveStats,
-        rollbackDir, rollbackEntries, mkdir });
+        rollbackDir, rollbackEntries, mkdir, rename });
       entry.mutated = true;
       removePathSync(liveDir, remove);
     }
