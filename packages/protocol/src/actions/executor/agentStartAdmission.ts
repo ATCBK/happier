@@ -6,7 +6,7 @@ import { admitAgentStartV1, AgentStartSessionCallerV1Schema, type AgentStartFact
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { BackendTargetKeyV2Schema, PersistedBackendTargetRefV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
 import { normalizeConnectedServiceSelectionInput } from '../../connect/normalizeConnectedServiceSelectionInput.js';
-import { projectConnectedServiceBindingsForChild } from '../../connect/connectedServiceBindings.js';
+import { resolveConnectedServiceBindingsForChild } from '../../connect/connectedServiceBindings.js';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '../../providers/selection/v1.js';
 import { parseAgentPermissionIntentV1Alias } from '../../runtime/permissionIntentV1.js';
 import { AcpConfigOptionOverridesV1Schema } from '../../sessions/metadata/metadataOverridesV1.js';
@@ -480,10 +480,14 @@ export function stampAgentStartSelectionV1(input: Readonly<Record<string, unknow
     // owner considers Account defaults. An explicit empty/native selection wins.
     const parent = baseline.configuration;
     const target = readAgentStartTargetV1(selected.agentTarget);
-    return kind === 'spawn_new' && selected.connectedServices === undefined && parent?.connectedServices !== undefined
-        && target && parent.agentTarget && buildBackendTargetKeyV2(target) === buildBackendTargetKeyV2(parent.agentTarget)
-        ? { ...selected, connectedServices: projectConnectedServiceBindingsForChild(parent.connectedServices) }
-        : selected;
+    if (kind !== 'spawn_new') return selected;
+    const connectedServices = resolveConnectedServiceBindingsForChild({
+        explicitSelection: selected.connectedServices,
+        resolvedTargetKey: target ? buildBackendTargetKeyV2(target) : undefined,
+        originTargetKey: parent?.agentTarget ? buildBackendTargetKeyV2(parent.agentTarget) : undefined,
+        originBindings: parent?.connectedServices,
+    });
+    return connectedServices === selected.connectedServices ? selected : { ...selected, connectedServices };
 }
 export function projectAgentStartSelectionV1(input: Readonly<Record<string, unknown>>, selection: Readonly<{
     engine: RoleEngineV1;

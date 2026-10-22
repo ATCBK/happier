@@ -172,6 +172,19 @@ export function projectConnectedServiceBindingsForChild(bindings: ConnectedServi
     ] as const)) };
 }
 
+/** Caller ingress owns explicit selections; only omitted same-Agent choices inherit. */
+export function resolveConnectedServiceBindingsForChild<T>(input: Readonly<{
+    explicitSelection: T;
+    resolvedTargetKey: string | null | undefined;
+    originTargetKey: string | null | undefined;
+    originBindings: ConnectedServiceBindingsV2 | null | undefined;
+}>): T | ConnectedServiceBindingsV2 | null | undefined {
+    if (input.explicitSelection !== undefined) return input.explicitSelection;
+    if (!input.resolvedTargetKey || input.resolvedTargetKey !== input.originTargetKey
+        || input.originBindings === undefined) return undefined;
+    return input.originBindings === null ? null : projectConnectedServiceBindingsForChild(input.originBindings);
+}
+
 export const PersistedConnectedServiceBindingSelectionV1Schema = lazyZodSchema(() => z.union([
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceNativeBindingV1Schema),
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceProfileBindingV1Schema),

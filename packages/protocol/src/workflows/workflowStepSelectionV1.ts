@@ -1,5 +1,5 @@
 import { parseQualifiedPluginContributionKey } from '../plugins/contributionIdentity.js';
-import { projectConnectedServiceBindingsForChild } from '../connect/connectedServiceBindings.js';
+import { resolveConnectedServiceBindingsForChild } from '../connect/connectedServiceBindings.js';
 import { BackendTargetKeyV2Schema, buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { resolveRoleSelectionV1, type ResolveRoleSelectionV1Input, type RoleSelectionRefusalV1 } from '../prompts/roles/resolveRoleSelectionV1.js';
 import type { ResolvedRoleV1 } from '../prompts/roles/rolesV1.js';
@@ -178,11 +178,14 @@ export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelecti
   // Connected choice follows the resolved Agent, regardless of whether that
   // Agent came from a Role, a literal engine or an input-bound engine. Freeze
   // it here so Session and detached leaves consume the same admitted choice.
-  if (input.purpose !== 'authoring' && selection.connectedServices === undefined && selection.agentTarget
-    && input.roleSelection?.defaultConnectedServices !== undefined
-    && buildBackendTargetKeyV2(selection.agentTarget) === input.roleSelection.defaultEngine?.agentTargetKey) {
-    selection = { ...selection, connectedServices: input.roleSelection.defaultConnectedServices === null
-      ? null : projectConnectedServiceBindingsForChild(input.roleSelection.defaultConnectedServices) };
+  if (input.purpose !== 'authoring') {
+    const connectedServices = resolveConnectedServiceBindingsForChild({
+      explicitSelection: selection.connectedServices,
+      resolvedTargetKey: selection.agentTarget ? buildBackendTargetKeyV2(selection.agentTarget) : undefined,
+      originTargetKey: input.roleSelection?.defaultEngine?.agentTargetKey,
+      originBindings: input.roleSelection?.defaultConnectedServices,
+    });
+    if (connectedServices !== selection.connectedServices) selection = { ...selection, connectedServices };
   }
 
   const runTarget = input.runExecutionTarget ?? defaultTarget;

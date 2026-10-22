@@ -3,12 +3,35 @@ import { describe, expect, it } from 'vitest';
 import {
   ConnectedServiceBindingsV2IngressSchema,
   ConnectedServiceBindingsV2Schema,
+  resolveConnectedServiceBindingsForChild,
 } from './connectedServiceBindings.js';
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from './sessionConnectedServiceAuthSwitch.js';
 
 const serviceKey = 'plugin.acme/service';
 
 describe('ConnectedServiceBindingsV2', () => {
+  it('inherits only an omitted same-Agent choice and reuses Pool identity without its active member', () => {
+    const originBindings = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: {
+      [serviceKey]: { source: 'connected', selection: 'group', groupId: 'origin-pool', profileId: 'active-member' },
+    } });
+    const input = { explicitSelection: undefined, resolvedTargetKey: 'agent:plugin.acme/reviewer',
+      originTargetKey: 'agent:plugin.acme/reviewer', originBindings };
+    const before = structuredClone(originBindings);
+    expect(resolveConnectedServiceBindingsForChild(input)).toEqual({ v: 2, bindingsByServiceId: {
+      [serviceKey]: { source: 'connected', selection: 'group', groupId: 'origin-pool' },
+    } });
+    expect(resolveConnectedServiceBindingsForChild({ ...input, resolvedTargetKey: 'agent:plugin.acme/other' })).toBeUndefined();
+    expect(resolveConnectedServiceBindingsForChild({ ...input, resolvedTargetKey: undefined, originTargetKey: undefined })).toBeUndefined();
+    expect(resolveConnectedServiceBindingsForChild({ ...input, originBindings: undefined })).toBeUndefined();
+    expect(resolveConnectedServiceBindingsForChild({ ...input, originBindings: null })).toBeNull();
+    const native = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: { [serviceKey]: { source: 'native' } } });
+    const empty = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: {} });
+    for (const explicitSelection of [null, native, empty, originBindings]) {
+      expect(resolveConnectedServiceBindingsForChild({ ...input, explicitSelection })).toBe(explicitSelection);
+    }
+    expect(originBindings).toEqual(before);
+  });
+
   it('admits one strict team-resource selection with an exact disclosed member', () => {
     expect(ConnectedServiceBindingsV2Schema.parse({
       v: 2,
