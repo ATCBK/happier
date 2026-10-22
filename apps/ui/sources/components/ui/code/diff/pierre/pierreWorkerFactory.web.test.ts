@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { findPackageJSON } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -24,7 +25,9 @@ describe('createPierreDiffWorker', () => {
 
     it('keeps the worker protocol version aligned with the exact package pin and installed library', async () => {
         const { PIERRE_DIFFS_VERSION } = await import('./pierreVersion');
-        const installed = JSON.parse(readFileSync(new URL('../../../../../../node_modules/@pierre/diffs/package.json', import.meta.url), 'utf8'));
+        const installedPackageJson = findPackageJSON('@pierre/diffs', import.meta.url);
+        if (!installedPackageJson) throw new Error('Expected the installed Pierre package');
+        const installed = JSON.parse(readFileSync(installedPackageJson, 'utf8'));
         const app = JSON.parse(readFileSync(new URL('../../../../../../package.json', import.meta.url), 'utf8'));
 
         expect(PIERRE_DIFFS_VERSION).toBe('1.5.2');
