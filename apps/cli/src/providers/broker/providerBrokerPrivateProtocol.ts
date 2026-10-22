@@ -16,6 +16,9 @@ export function teamCredentialBrokerLocalCredentialTransport(protocol: ProviderW
  * part of a Provider's `/v1` surface and never reach Provider dispatch. */
 export const PROVIDER_BROKER_PRIVATE_CLOSE_PATH =
   '/v1/_happier/provider-broker/close' as const;
+/** Optional UUID correlation only; never an authority or a Provider header. */
+export const PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER =
+  'x-happier-provider-broker-close-request-id' as const;
 export const PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH =
   '/v1/_happier/provider-broker/endpoint' as const;
 export const PROVIDER_BROKER_ENDPOINT_PATH_HEADER =

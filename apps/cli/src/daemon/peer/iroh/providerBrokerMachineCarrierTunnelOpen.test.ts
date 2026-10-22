@@ -12,6 +12,7 @@ import {
 import { createProviderBrokerMachineCarrierTunnelOpen } from './providerBrokerMachineCarrierTunnelOpen';
 import type { DaemonMachineIrohRuntime } from './daemonMachineIrohRuntime';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
+import { registerPidSpawnResourceCleanup } from '@/daemon/sessions/cleanupPidSessionResources';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
 const root = { keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') };
@@ -77,6 +78,44 @@ function brokerOpen(
 }
 
 describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
+  it.each(['public_listener_withdrawal', 'private_control_dial', 'delete_dispatched', 'response_received'] as const)(
+    'retains %s attribution and the original failure through registered Session cleanup', async phase => {
+      const original = new Error('native or HTTP boundary failure');
+      let opens = 0;
+      let sentRequestId: string | null = null;
+      const openHttpTunnel: DaemonMachineIrohRuntime['openHttpTunnel'] = async () => {
+        const control = opens++ > 0;
+        if (control && phase === 'private_control_dial') throw original;
+        return { localPort: control ? 41002 : 41001, localCapability: 'c'.repeat(64),
+          remoteEndpointId: targetEndpoint, observedPath: 'direct', close: async () => {
+            if (!control && phase === 'public_listener_withdrawal') throw original;
+          } };
+      };
+      const open = createProviderBrokerMachineCarrierTunnelOpen({
+        accountId: 'account-worker', localMachineId: 'machine-worker',
+        runtime: { endpoint: { endpointId: initiatorEndpoint }, openHttpTunnel },
+        resolveTrustRoots: () => [root], nowMs: () => 200,
+        fetchImpl: async (_url, init) => {
+          sentRequestId = new Headers(init?.headers).get('x-happier-provider-broker-close-request-id');
+          if (phase === 'delete_dispatched') throw original;
+          return new Response(null, { status: 503 });
+        },
+      });
+      const tunnel = await open({ brokerOpen: brokerOpen() });
+      const cleanups = new Map<number, () => void | Promise<void>>();
+      registerPidSpawnResourceCleanup({ pid: 42, label: 'provider_broker.binding.open',
+        spawnResourceCleanupByPid: cleanups, isCurrentPidOwner: () => true, cleanup: tunnel.retire });
+      const failure = await Promise.resolve(cleanups.get(42)!()).then(() => null, (error: unknown) => error);
+      expect(failure).toMatchObject({ cause: { cause: {
+        phase, targetMachineId: 'machine-broker', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+        error: phase === 'response_received' ? expect.objectContaining({ code: 'broker_close_rejected' }) : original,
+      } } });
+      if (phase === 'delete_dispatched' || phase === 'response_received') {
+        expect(failure).toMatchObject({ cause: { cause: { requestId: sentRequestId } } });
+      }
+    },
+  );
+
   it.each([
     { consumer: { kind: 'session' as const, sessionId: 'session-1' } },
     { consumer: { kind: 'execution_run' as const, executionRunId: 'run-1' }, executionRunOccurrenceId: 'run-occurrence-1' },
@@ -310,7 +349,9 @@ describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
       resolveTrustRoots: () => [root], nowMs: () => 200,
       fetchImpl: async () => { releases++; return new Response(null, { status: 204 }); } });
     const tunnel = await open({ brokerOpen: brokerOpen() });
-    await expect(tunnel.retire()).rejects.toThrow('native release failed');
+    await expect(tunnel.retire()).rejects.toMatchObject({ cause: {
+      phase: 'private_control_close', error: { message: 'native release failed' },
+    } });
     await expect(tunnel.retire()).resolves.toBeUndefined();
     expect(controlClosed).toBe(true);
     expect(releases).toBe(1);

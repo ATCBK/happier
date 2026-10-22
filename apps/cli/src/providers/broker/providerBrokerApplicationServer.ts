@@ -2,6 +2,7 @@ import fastify, { errorCodes, type FastifyError, type FastifyInstance, type Fast
 import { Readable } from 'node:stream';
 import { constants } from 'node:os';
 import { AxiosError } from 'axios';
+import { z } from 'zod/mini';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
 import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -14,7 +15,8 @@ import type {
     ProviderBrokerAuthenticatedStreamContext,
     ProviderBrokerRequestHandler,
 } from './providerBrokerRequestHandler';
-import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_PRIVATE_CLOSE_PATH,
+    PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER } from './providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
 import { ProviderBrokerApplicationPhaseError } from './providerBrokerApplicationFailureContext';
 export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
@@ -46,6 +48,7 @@ const RESPONSE_HOP_BY_HOP_HEADERS = new Set([
     'transfer-encoding',
     'upgrade',
 ]);
+const closeRequestIdSchema = z.uuid();
 // These are diagnostic classifications, never arbitrary error properties:
 // Provider exceptions can contain credentials even in their name/code fields.
 const APPLICATION_ERROR_NAMES = new Set([
@@ -283,6 +286,8 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                 // The Agent's bearer is its local capability, meaningful only to
                 // the tunnel; authority comes from the stream's admission.
                 delete headers.authorization;
+                // Private diagnostics must never become upstream Provider headers.
+                delete headers[PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER];
                 // Native HTTP adds Host, Connection and framing headers. They are
                 // transport facts, not public Provider headers; managed access
                 // correctly rejects them. Project once at this shared ingress,
@@ -302,9 +307,32 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                     ...(body ? { body } : {}),
                     signal: controller.signal,
                 };
+                const privateClose = context && context.kind !== 'external'
+                    && request.method === 'DELETE' && forwardedRequest.pathAndQuery === PROVIDER_BROKER_PRIVATE_CLOSE_PATH;
+                const suppliedCloseId = privateClose
+                    ? closeRequestIdSchema.safeParse(request.headers[PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER])
+                    : null;
+                const closeDiagnostic = privateClose ? {
+                    // Older initiators omit this optional header. Invalid text
+                    // is never logged or treated as transport/operation authority.
+                    requestId: suppliedCloseId?.success ? suppliedCloseId.data : request.id,
+                    applicationRequestId: request.id,
+                    targetMachineId: context.authority.payload.target.machineId,
+                } : null;
+                const recordClose = (event: 'received' | 'retirement_completed'): void => {
+                    if (!closeDiagnostic) return;
+                    try {
+                        logger.infoFile('[provider-broker-close]', { ...closeDiagnostic, event });
+                    } catch {
+                        // File diagnostics cannot change the private close outcome.
+                    }
+                };
+                recordClose('received');
                 const result = localConsumer
                     ? await localConsumer.request(forwardedRequest)
                     : await input.handler({ context, request: forwardedRequest });
+                // The canonical handler returns 204 only after retirement.
+                if (result.ok && result.response.status === 204) recordClose('retirement_completed');
                 return await sendResponse(reply, result, controller.signal, context);
             },
         });

@@ -1,5 +1,10 @@
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
+import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
+import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
+import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
+import { createTeamCredentialBrokerSourceOwner } from './teamCredentialBrokerSourceOwner';
+import { createPrivateProviderBrokerStreamLifetime } from './daemonProviderBrokerRuntime';
 
 import {
   createProviderBrokerRouteGrantSigningInputV1,
@@ -121,11 +126,13 @@ async function closeApplicationTarget(input: Readonly<{
   port: number;
   localCapability: string;
   authority: SignedProviderBrokerRouteGrantV1;
+  requestId?: string;
 }>): Promise<string> {
   const request = [
     `DELETE ${PROVIDER_BROKER_PRIVATE_CLOSE_PATH} HTTP/1.1`,
     'Host: 127.0.0.1',
     `Authorization: Bearer ${encodeProviderBrokerAuthorityV1(input.authority)}`,
+    ...(input.requestId ? [`X-Happier-Provider-Broker-Close-Request-Id: ${input.requestId}`] : []),
     'Connection: close',
     '',
     '',
@@ -144,6 +151,55 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it('correlates private close receipt and completed real retirement without logging untrusted header values', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ controller, activateAgent: false });
+    const sourceOwner = createTeamCredentialBrokerSourceOwner({
+      machineId: payload.target.machineId,
+      custody: createManagedProviderExplicitStartCustody({ machineId: payload.target.machineId,
+        happyHomeDir: fixture.happyHomeDir, controller }),
+      // This is the release-only stream: no source-selection/acquisition path
+      // is entered. Retirement uses the real registry and managed custody.
+      selectConnectedServicesSourceMember: async () => null,
+      openConnectedServicesSource: async () => null,
+      openProviderConnectionSource: async () => null,
+    });
+    const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [{ keyId: 'home-1', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+      nowMs: () => 200, resolveRequestPolicy: async () => null, createRequestId: () => 'broker-request',
+      admit: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+    }) });
+    try {
+      for (const requestId of ['d0d1cc6c-1c83-4ca9-a263-5ed116c00845', undefined, 'private credential header']) {
+        diagnostics.mockClear();
+        const target = await server.createStreamTarget({
+          authenticatedRemoteEndpointId: payload.initiator.endpointId, authority: signedAuthority(), expected: expectedBinding,
+          streamLifetime: createPrivateProviderBrokerStreamLifetime({ sourceOwner,
+            application: payload.application, operation: payload.consumer }),
+        });
+        expect(await closeApplicationTarget({ ...target, authority: signedAuthority(), requestId }))
+          .toContain('HTTP/1.1 204 No Content');
+        const records = diagnostics.mock.calls.filter(([marker]) => marker === '[provider-broker-close]');
+        const received = records[0]?.[1];
+        expect(received).toEqual({ event: 'received', targetMachineId: payload.target.machineId,
+          requestId: requestId?.startsWith('d0d1') ? requestId : expect.stringMatching(/^req-/u),
+          applicationRequestId: expect.any(String) });
+        if (!received || typeof received !== 'object') throw new Error('Missing close receipt diagnostic');
+        expect(records).toEqual([
+          ['[provider-broker-close]', received],
+          ['[provider-broker-close]', { ...received, event: 'retirement_completed' }],
+        ]);
+        expect(JSON.stringify(records)).not.toContain('private credential header');
+        expect(JSON.stringify(records)).not.toContain(encodeProviderBrokerAuthorityV1(signedAuthority()));
+      }
+    } finally {
+      await server.close();
+      await fixture.cleanup();
+      diagnostics.mockRestore();
+    }
+  });
+
   it.each([
     { name: 'Error', code: 'ECONNRESET', expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
     { name: 'Error', code: 'ECONNRESET', statusCode: 400, expected: { errorName: 'Error', errorCode: 'ECONNRESET' } },
