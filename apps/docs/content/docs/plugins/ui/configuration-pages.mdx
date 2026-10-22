@@ -430,3 +430,55 @@ function RetainedStatus({ label, refresh }: { label: string; refresh(): void }) 
 Here `label` is the status your data owner already knows, such as “As of 10:42”.
 Neither presentation decides when data becomes stale or starts a refresh on its
 own. Check your installed API inventory before using these development exports.
+
+## Installable things (development)
+
+In **unreleased 0.3 development source**, a plugin that manages installable
+things (extensions, servers, skills) can draw them with the same capability kit
+Happier's Skills, MCP servers and Agents pages use. Import it from
+`@happier-dev/plugin-ui/components`:
+
+- `capabilityCollectionAnatomy` gives a `Collection` list its rows: the name, where
+  it is on at the end of the title line, the description, then one facts line. A
+  status that needs attention takes the facts line's place.
+- `CapabilityFacts` draws source, trust and cost on one quiet line ("You · Runs
+  scripts · 12 tools"). "Runs scripts" is the one fact drawn with more weight.
+- `CapabilityStatusChip` shows a status only when it says something. A healthy
+  status draws nothing. A stop or a blocked run keeps its pill short and gives
+  the reason on its own line. `showFix` adds the status's one fix beside it.
+- `CapabilityDetailHeader` is the detail page header: mark, name, purpose, the
+  facts on the meta line, and the status when it speaks.
+- `CapabilityBlockingBanner` leads a page only for a status that blocks (amber
+  for needs-you, rose for a failure), with the fix as its action.
+- `pickMostBlockingCapabilityStatus` picks the one status to show when an item has
+  several (for example one per machine).
+
+You supply the data and the fix handlers; the words come from Happier's
+defaults or your translation bundle (`happier.plugin-ui.capability.*`).
+
+```tsx
+import {
+  CapabilityBlockingBanner, CapabilityDetailHeader, pickMostBlockingCapabilityStatus,
+  type CapabilityStatus,
+} from '@happier-dev/plugin-ui/components';
+
+function ExtensionHeader({ statuses }: { statuses: readonly CapabilityStatus[] }) {
+  const status = pickMostBlockingCapabilityStatus(statuses, 'header');
+  return <>
+    <CapabilityDetailHeader
+      testID="extension.header"
+      title="Linear"
+      purpose="Read and update the issues your team works on."
+      facts={{ source: { kind: 'registry', label: 'Extension registry' }, trust: 'runs_scripts', cost: { toolCount: 12 } }}
+      status={status}
+    />
+    {status ? <CapabilityBlockingBanner status={status} title="Linear is signed out"
+      body="Sessions can’t use its tools until you sign in." /> : null}
+  </>;
+}
+```
+
+A status's fix is `{ kind: 'sign_in', onPress }` (also `reconnect`, `add_key`,
+`how_to_fix`, `try_again`, `review_update`, `compare`, `turn_on`,
+`grant_access`); the kind picks the button's words. Check your installed API
+inventory before using these development exports.
