@@ -104,7 +104,7 @@ type diskPriorRow struct {
 	AgeGroupBytes  *diskAgeGroups `json:"ageGroupBytes,omitempty"`
 }
 
-func diskReadPrevious(path, root string, visit func(diskPriorRow, string) error) error {
+func diskReadPrevious(path, root string, resume bool, visit func(diskPriorRow, string) error) error {
 	fail := func(err error) error {
 		return &diskPreviousIndexError{message: err.Error()}
 	}
@@ -144,8 +144,10 @@ func diskReadPrevious(path, root string, visit func(diskPriorRow, string) error)
 			}
 		case "prior-child":
 			validSize := func(value *int64) bool { return value != nil && *value >= 0 && *value <= (1<<53)-1 }
-			if filepath.Dir(id) != root || item.Key != "" || item.IdentityKey == "" || !validSize(item.LogicalBytes) || !validSize(item.Items) || item.Flags == nil || item.AgeGroupBytes == nil {
-				return fail(errors.New("invalid previous direct child projection"))
+			// Resume reuses completed descendants at any depth; a one-folder
+			// relist consumes only direct children. Neither includes the root.
+			if id == root || !resume && filepath.Dir(id) != root || item.Key != "" || item.IdentityKey == "" || !validSize(item.LogicalBytes) || !validSize(item.Items) || item.Flags == nil || item.AgeGroupBytes == nil {
+				return fail(errors.New("invalid previous child projection"))
 			}
 			groups := *item.AgeGroupBytes
 			for _, value := range []int64{groups.Unknown, groups.Months3, groups.Months6, groups.Months12} {

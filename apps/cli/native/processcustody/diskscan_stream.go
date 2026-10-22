@@ -169,7 +169,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 	}
 	if request.PreviousIndexPath != "" {
-		if err := diskReadPrevious(request.PreviousIndexPath, request.Root, func(row diskPriorRow, path string) error {
+		if err := diskReadPrevious(request.PreviousIndexPath, request.Root, request.ResumeFrom != nil, func(row diskPriorRow, path string) error {
 			switch row.Type {
 			case "prior-observation":
 				if request.ResumeFrom != nil {

@@ -18,7 +18,7 @@ import { createMachineResourceSummary } from '@/daemon/resources/machineResource
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
 import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
 import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES,
-    DiskScanStateV1Schema, HappierStorageSummaryV1Schema, MachineStorageScanGetResultV1Schema, MachineStoragePileResultV1Schema,
+    DiskScanStateV1Schema, type DiskScanStateV1, HappierStorageSummaryV1Schema, MachineStorageScanGetResultV1Schema, MachineStoragePileResultV1Schema,
     MachineStorageTrashMoveInputV1Schema, MachineStorageDeleteNowInputV1Schema, PileReviewV1Schema, PileApplyResultV1Schema,
     MachineStorageCategoryListResultV1Schema, TrashEntryV1Schema, TrashRestoreResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createStorageScanIndex } from './scan/scanIndex';
@@ -30,6 +30,8 @@ import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { createStorageWorktreeOperations } from './worktrees/storageWorktreeOperations';
 import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
 import { createTrashStore, resolveTrashOsUserId } from './trash/trashStore';
+import { createMachineResourcesPolicyRuntime } from '@/daemon/resources/machineResourcesPolicy';
+import { startNativeDiskScan, measureNativeDisk } from './measure/nativeDiskMeasure';
 
 // Pass through the real OS boundaries while observing summary enumeration and helper work.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -454,6 +456,99 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             changed();
             expect((await service.summary()).wholeDisk).toEqual({ enabled: false, scans: [] });
         } finally { service.dispose(); }
+    });
+
+    it.each(['cancelled', 'interrupted'] as const)('retains a %s folder scan across a storage-service restart before policy hydration', async termination => {
+        const home = join(scratch, `restart-${termination}-home`);
+        const server = join(home, 'servers', 'home');
+        const root = join(scratch, `restart-${termination}-target`);
+        const finished = join(root, 'finished');
+        await mkdir(server, { recursive: true }); await mkdir(join(finished, 'nested'), { recursive: true });
+        await writeFile(join(finished, 'nested', 'bytes'), Buffer.alloc(8192));
+        let metadata: Record<string, unknown> = { resourcesPolicyV1: { v: 1, storage: { wholeDiskEnabled: true } } };
+        let availability: 'ready' | 'unavailable' | 'locked' = 'ready';
+        let observedAt = 1_000;
+        const volumes = [{ id: 'restart-volume', label: 'Restart', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }];
+        const seed = createStorageScanIndex({ activeServerDir: server, nowMs: () => observedAt });
+        const retainedDates = new Map<string, number>();
+        let cut = false;
+        let state: DiskScanStateV1;
+        try {
+            await seed.initialize([{ id: volumes[0].id, mountPath: scratch, usedBytes: 500_000 }], true);
+            state = seed.begin({ volumeId: volumes[0].id, root, target: { folderPath: root }, usedBytes: 0,
+                fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
+            // Retain a real native stream prefix ending after a finished child,
+            // before the parent completes, as an abrupt transport stop does.
+            const native = startNativeDiskScan({ root, keepMinBytes: 0 }, { onRecord: record => {
+                if (cut) return;
+                seed.ingest(volumes[0].id, record);
+                if (record.type === 'dir' && record.id === finished && record.complete) cut = true;
+            } });
+            await native.done;
+            expect(cut).toBe(true);
+            for (const path of [finished, join(finished, 'nested')]) retainedDates.set(path, seed.readNode(path)!.scannedAt);
+            if (termination === 'cancelled') seed.finish(volumes[0].id, 'cancelled');
+        } finally { seed.close(); }
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const openService = () => {
+            const policy = createMachineResourcesPolicyRuntime({ port: {
+                read: async () => availability === 'ready' ? { status: 'ready', metadata, metadataVersion: 1 } : { status: availability },
+                compareAndSwap: async () => ({ status: 'unavailable' }),
+            } });
+            const service = createStorageService({ machineId: 'machine', homeDir: scratch, nowMs: () => observedAt,
+                catalog: { happyHomeDir: home, activeServerDir: server, tempRoot: join(scratch, 'restart-no-temp') },
+                resourcesPolicy: policy,
+                // The daemon supplies this same safe default while metadata is unavailable.
+                readPolicy: () => { const snapshot = policy.read(); return snapshot.status === 'ready'
+                    ? snapshot.policy.storage : MachineStoragePolicyV1Schema.parse({}); },
+                subscribeChanges: listener => policy.subscribe(listener), readVolumes: () => volumes,
+            });
+            return { service, policy };
+        };
+        const first = openService();
+        let restarted: ReturnType<typeof openService> | undefined;
+        try {
+            await first.policy.reload(); await first.service.initialize();
+            const before = MachineStorageScanGetResultV1Schema.parse(await first.service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor }));
+            expect(before.state?.status).toBe(termination);
+            expect(before.nodes.find(node => node.nodeId === finished)?.size.atLeast).toBe(false);
+            expect(before.state!.progress.sizedBytes).toBeGreaterThan(0);
+            first.service.dispose(); first.policy.stop();
+            availability = 'unavailable';
+            restarted = openService();
+            await restarted.service.initialize();
+            await expect(restarted.service.scanStart({ machineId: 'machine', target: state.target, resume: true }, { actor }))
+                .rejects.toMatchObject({ code: 'storage_whole_disk_disabled' });
+            for (const status of ['unavailable', 'locked'] as const) {
+                availability = status;
+                await restarted.policy.reload();
+                await restarted.service.initialize();
+            }
+            availability = 'ready';
+            await restarted.policy.reload();
+            const summary = HappierStorageSummaryV1Schema.parse(await restarted.service.summary({ actor }));
+            expect(summary.wholeDisk.scans).toContainEqual(before.state);
+            const after = MachineStorageScanGetResultV1Schema.parse(await restarted.service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor }));
+            expect(after.state).toEqual(before.state);
+            expect(after.nodes.find(node => node.nodeId === finished)).toEqual(before.nodes.find(node => node.nodeId === finished));
+            observedAt = 2_000;
+            const resumed = await restarted.service.scanStart({ machineId: 'machine', target: state.target, resume: true }, { actor });
+            expect(resumed.scanId).toBe(state.scanId);
+            await waitForStorageScan(restarted.service, resumed.scanId, actor);
+            const complete = await restarted.service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor });
+            expect(complete.state?.status).toBe('complete');
+            expect(complete.root?.size.allocatedBytes).toBe((await measureNativeDisk({ paths: [root] })).totalAllocatedBytes);
+            const persisted = createStorageScanIndex({ activeServerDir: server, nowMs: () => observedAt });
+            try {
+                await persisted.initialize([{ id: volumes[0].id, mountPath: scratch, usedBytes: 500_000 }], true);
+                for (const [path, scannedAt] of retainedDates) expect(persisted.readNode(path)?.scannedAt).toBe(scannedAt);
+            } finally { persisted.close(); }
+            metadata = { resourcesPolicyV1: { v: 1, storage: { wholeDiskEnabled: false } } };
+            await restarted.policy.reload(); await restarted.service.initialize();
+            expect((await restarted.service.summary({ actor })).wholeDisk).toEqual({ enabled: false, scans: [] });
+        } finally {
+            first.service.dispose(); first.policy.stop(); restarted?.service.dispose(); restarted?.policy.stop();
+        }
     });
 
     it('owns opted-in native folder scans, exposes folded files to queries and purges indexes when disabled', async () => {

@@ -630,7 +630,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             }
                 if (options.relistOnly || options.resume) for (const value of db.prepare(`SELECT n.id,n.data,d.unknown,d.months3,d.months6,d.months12,
                     (SELECT key FROM observations o WHERE o.owner=n.id AND o.path=n.id AND o.ageIncluded=0 ORDER BY key LIMIT 1) AS identityKey
-                    FROM nodes n LEFT JOIN dirs d ON d.id=n.id WHERE ${options.relistOnly ? 'n.parent=?' : `d.complete=1 AND n.id IN (${scope('nodes')})`} AND n.kind IN ('folder','package')`).iterate(root)) {
+                    FROM nodes n LEFT JOIN dirs d ON d.id=n.id WHERE n.id<>? AND ${options.relistOnly ? 'n.parent=?' : `d.complete=1 AND n.id IN (${scope('nodes')})`} AND n.kind IN ('folder','package')`).iterate(root, root)) {
                     const row = z.object({ id: z.string(), data: z.string(), unknown: z.nullable(z.number()), months3: z.nullable(z.number()), months6: z.nullable(z.number()), months12: z.nullable(z.number()), identityKey: z.nullable(z.string()) }).parse(value);
                     if (!row.identityKey) continue;
                     const node = StoredDiskNodeV1Schema.parse(JSON.parse(row.data) as unknown);

@@ -5,7 +5,7 @@ import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '
 import { physicalPathWithoutFollowingLeaf } from '@/utils/path/physicalAncestorPath';
 
 export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex; readVolumes: () => readonly StorageScanVolume[] | Promise<readonly StorageScanVolume[]>;
-    readEnabled: () => boolean | Promise<boolean>; readLowPower?: () => boolean | Promise<boolean>;
+    readEnabled: () => boolean | undefined | Promise<boolean | undefined>; readLowPower?: () => boolean | Promise<boolean>;
     readScanHints?: (root: string) => Pick<NativeDiskScanRequest, 'priorityHints' | 'atomicRules'> | Promise<Pick<NativeDiskScanRequest, 'priorityHints' | 'atomicRules'>>;
     fullDiskAccess: () => DiskScanStateV1['fullDiskAccess']; onChange?: () => void; onCompleted?: (state: DiskScanStateV1) => void | Promise<void>;
     beforeScheduledEffect?: () => Promise<void>; readVolumesReported?: () => boolean | Promise<boolean>; onScheduledError?: (error: unknown) => void }>) {
@@ -27,6 +27,9 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
             const removed = [...runs.values()].filter(run => !enabled || !volumes.some(volume => volume.id === run.volumeId));
             for (const run of removed) { run.cancelled = true; run.native?.cancel(); }
             await Promise.allSettled(removed.map(run => run.done));
+            // Unknown policy blocks work without authorizing index deletion.
+            // Apply retention only once the whole-disk policy is known.
+            if (enabled === undefined) return;
             await deps.index.initialize(volumes, enabled, new Set(runs.keys()), () => !disposed);
         }); },
         start(input: Readonly<{ target: DiskScanStateV1['target']; resume?: boolean }>, options: Readonly<{ beforeEffect?: () => Promise<void>; relistOnly?: boolean }> = {}) { return admit(async () => {

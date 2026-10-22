@@ -82,9 +82,18 @@ export function createStorageService(deps: StorageServiceDeps) {
     let scanLifecycle: Promise<void> = Promise.resolve();
     let scheduledPolicyKey: string | undefined;
     const scheduledSubscriptions: (() => void)[] = [];
+    const readWholeDiskEnabled = (): boolean | undefined => {
+        // The daemon's presentation defaults cannot authorize deleting retained
+        // scans before its canonical resources policy has loaded (or while locked).
+        if (deps.resourcesPolicy) {
+            const snapshot = deps.resourcesPolicy.read();
+            return snapshot.status === 'ready' ? snapshot.policy.storage.wholeDiskEnabled : undefined;
+        }
+        return deps.readPolicy?.().wholeDiskEnabled;
+    };
     const currentScheduledPolicyKey = () => {
         const policy = deps.readPolicy?.();
-        return policy?.wholeDiskEnabled && policy.scheduledScan
+        return readWholeDiskEnabled() === true && policy?.scheduledScan
             ? JSON.stringify(policy.scheduledScan) : undefined;
     };
     let items: readonly SizedStorageCategoryItem[] = [];
@@ -95,7 +104,7 @@ export function createStorageService(deps: StorageServiceDeps) {
     const invalidate = () => { if (disposed) return; dirty = true; revision += 1; notify(); };
     const reconcileScans = () => {
         if (!scanOwner || disposed) return;
-        const key = JSON.stringify([deps.readPolicy?.().wholeDiskEnabled ?? false, deps.readVolumesReported?.() ?? true,
+        const key = JSON.stringify([readWholeDiskEnabled(), deps.readVolumesReported?.() ?? true,
             deps.readVolumes().map(volume => [volume.id, volume.mount]).sort()]);
         if (scanLifecycleKey === key) return;
         scanLifecycleKey = key;
@@ -143,7 +152,7 @@ export function createStorageService(deps: StorageServiceDeps) {
                     readVolumes: () => deps.readVolumes().map(volume => ({ id: volume.id, mountPath: volume.mount,
                         usedBytes: Math.max(0, volume.totalBytes - volume.availableBytes),
                         reservedBytes: volume.reservedBytes, apfsContainerId: volume.apfsContainerId })),
-                    readEnabled: () => deps.readPolicy?.().wholeDiskEnabled ?? false,
+                    readEnabled: readWholeDiskEnabled,
                     readVolumesReported: deps.readVolumesReported,
                     readLowPower: deps.readLowPower,
                     readScanHints: async root => {
@@ -293,7 +302,7 @@ export function createStorageService(deps: StorageServiceDeps) {
             categories, suggestionsTop,
             pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] },
             trash: { count: trash?.count ?? 0, allocatedBytes: trash?.size.allocatedBytes ?? 0 },
-            wholeDisk: { enabled: deps.readPolicy?.().wholeDiskEnabled ?? false,
+            wholeDisk: { enabled: readWholeDiskEnabled() === true,
                 scans: scanOwner ? (await scanOwner).index.states() : [] },
         });
         // Cancellation or owner retirement cannot replace the last-known-good snapshot.
@@ -350,13 +359,13 @@ export function createStorageService(deps: StorageServiceDeps) {
         assertActive(options.signal);
         const measured = cached && !dirty && !pending ? cached : await join(begin(), options.signal);
         const current = { ...measured, revision, wholeDisk: {
-            enabled: deps.readPolicy?.().wholeDiskEnabled ?? false,
+            enabled: readWholeDiskEnabled() === true,
             scans: scanOwner ? [...(await scans()).index.states()] : [],
         } };
         return options.actor ? operations.summaryForActor(current, options.actor, items) : current;
     }
     const readCompletedStorageScan: () => Promise<CompletedStorageSuggestionScan | null> = deps.readCompletedStorageScan ?? (async () => {
-        if (!deps.readPolicy?.().wholeDiskEnabled) return null;
+        if (readWholeDiskEnabled() !== true) return null;
         const owner = await scans();
         if (!deps.readVolumes().some(volume => owner.index.hasWholeDiskCoverage(volume.id))) return null;
         const [projects, use, protection] = await Promise.all([
@@ -402,7 +411,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         async initialize() { await scans(); await maintenance?.start(); },
         async scanStart(request: MachineStorageScanStartInputV1, options: Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>) {
             await assertScanActor(options.actor, options.signal);
-            if (!deps.readPolicy?.().wholeDiskEnabled) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'storage_whole_disk_disabled' });
+            if (readWholeDiskEnabled() !== true) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'storage_whole_disk_disabled' });
             const owner = await scans();
             await assertScanActor(options.actor, options.signal);
             return owner.runner.start(request, { beforeEffect: () => assertScanActor(options.actor, options.signal) });
