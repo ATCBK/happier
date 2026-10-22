@@ -214,13 +214,24 @@ function snapshotPluginReleaseFactsV1(value: PluginReleaseFactsV1): PluginReleas
   } });
 }
 
+// Only this owner's recursively frozen outputs can reuse admission. Caller
+// freezing cannot vouch for nested declarations or their signing semantics.
+const admittedReleaseFacts = new WeakMap<object, {
+  facts: PluginReleaseFactsV1;
+  comparison?: string;
+}>();
+
 /**
  * Produces the one comparison representation for immutable release facts. It does
  * not invent a release digest or identity: callers still use pluginId@version.
  */
 export function normalizePluginReleaseFactsV1(input: unknown): PluginReleaseFactsV1 {
+  if (input !== null && typeof input === 'object') {
+    const admitted = admittedReleaseFacts.get(input);
+    if (admitted) return admitted.facts;
+  }
   const parsed = PluginReleaseFactsV1Schema.parse(input);
-  return snapshotPluginReleaseFactsV1({
+  const facts = snapshotPluginReleaseFactsV1({
     ...parsed,
     ref: { ...parsed.ref },
     collectionContracts: Object.freeze([...parsed.collectionContracts]
@@ -231,6 +242,16 @@ export function normalizePluginReleaseFactsV1(input: unknown): PluginReleaseFact
       .map((slot) => ({ ...slot }))),
     packageAssetArchive: normalizePackageAssetArchiveDescriptorV1(parsed.packageAssetArchive),
   });
+  admittedReleaseFacts.set(facts, { facts });
+  return facts;
+}
+
+function releaseFactsComparison(input: unknown): string {
+  const facts = normalizePluginReleaseFactsV1(input);
+  const admission = admittedReleaseFacts.get(facts)!;
+  // Manifest normalization may preserve unsupported contribution-point JSON.
+  // Signing must succeed before its immutable comparison can be retained.
+  return admission.comparison ??= createCanonicalJsonSigningInput(facts);
 }
 
 /**
@@ -242,8 +263,7 @@ export function pluginReleaseFactsEqualV1(
   left: unknown,
   right: unknown,
 ): boolean {
-  return createCanonicalJsonSigningInput(normalizePluginReleaseFactsV1(left))
-    === createCanonicalJsonSigningInput(normalizePluginReleaseFactsV1(right));
+  return releaseFactsComparison(left) === releaseFactsComparison(right);
 }
 
 export const PluginUiArtifactHostingCapabilityV1Schema = lazyZodSchema(() => z.union([
