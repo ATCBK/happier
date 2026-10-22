@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { createHash } from 'node:crypto';
 import { open, readFile, stat } from 'node:fs/promises';
 
@@ -67,7 +68,7 @@ export type AntigravityTranscriptPageLinesOutcome =
   | Readonly<{ kind: 'gap_or_cursor_expired'; tailCursor: string; sourceRevision: string }>
   | Readonly<{ kind: 'source_replaced'; sourceRevision: string }>
   | Readonly<{ kind: 'source_unavailable' }>
-  | Readonly<{ kind: 'read_failed'; error: string }>;
+  | Readonly<{ kind: 'read_failed'; error: string; code?: 'JSONL_RECORD_TOO_LARGE' }>;
 
 export type AntigravityTranscriptAfterLinesOutcome =
   | Readonly<{ kind: 'already_current'; cursor: string; sourceRevision: string }>
@@ -87,7 +88,7 @@ export type AntigravityTranscriptAfterLinesOutcome =
   | Readonly<{ kind: 'gap_or_cursor_expired'; sourceRevision?: string }>
   | Readonly<{ kind: 'source_replaced'; sourceRevision: string }>
   | Readonly<{ kind: 'source_unavailable' }>
-  | Readonly<{ kind: 'read_failed'; error: string }>;
+  | Readonly<{ kind: 'read_failed'; error: string; code?: 'JSONL_RECORD_TOO_LARGE' }>;
 
 function isRecord(value: unknown): value is AntigravityTranscriptJsonRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -551,7 +552,8 @@ export async function pageAntigravityTranscriptLines(params: Readonly<{
       sourceRevision: before.sourceRevision,
     };
   } catch (error) {
-    return { kind: 'read_failed', error: error instanceof Error ? error.message : 'read failed' };
+    return { kind: 'read_failed', error: error instanceof Error ? error.message : 'read failed',
+      ...(isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE' ? { code: 'JSONL_RECORD_TOO_LARGE' as const } : {}) };
   }
 }
 
@@ -646,6 +648,7 @@ export async function readAntigravityTranscriptLinesAfter(params: Readonly<{
       sourceRevision: before.sourceRevision,
     };
   } catch (error) {
-    return { kind: 'read_failed', error: error instanceof Error ? error.message : 'read failed' };
+    return { kind: 'read_failed', error: error instanceof Error ? error.message : 'read failed',
+      ...(isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE' ? { code: 'JSONL_RECORD_TOO_LARGE' as const } : {}) };
   }
 }

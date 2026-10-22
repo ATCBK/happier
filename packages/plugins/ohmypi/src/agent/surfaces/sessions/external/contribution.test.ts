@@ -71,6 +71,22 @@ afterEach(async () => {
 });
 
 describe('Oh My Pi public External Sessions contribution', () => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const agentDir = await createAgentDir();
+    const file = await writeTranscript({ agentDir, remoteSessionId: 'record-limit', records: [
+      { type: 'session', id: 'record-limit', timestamp: '2026-07-23T10:00:00.000Z', cwd: '/repo' },
+      { type: 'message', id: 'before', parentId: null, message: { role: 'user', content: 'before' } },
+    ] });
+    const contribution = createOhMyPiExternalSessionsContribution({ env: {} });
+    const request = { ...invocation(4096), source: { kind: 'ohMyPiAgentDir', agentDir }, remoteSessionId: 'record-limit', maxItems: 10 };
+    const initial = await contribution.pageTranscript({ ...request, direction: 'older' });
+    if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+    await appendFile(file, jsonlLine({ type: 'message', id: 'after', parentId: 'before', message: { role: 'assistant', content: 'after' }, padding: 'x'.repeat(9 * 1024 * 1024) }));
+    const result = operation === 'page' ? await contribution.pageTranscript({ ...request, direction: 'older' })
+      : await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+    expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+  });
   it('lists only the explicitly configured source when ambient Pi storage points elsewhere', async () => {
     const configured = await createAgentDir();
     const ambient = await createAgentDir();

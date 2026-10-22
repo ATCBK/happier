@@ -17,7 +17,6 @@ import {
     type ExternalSessionContentSearchControl,
     searchExternalSessionContent,
     ExternalSessionContentSearchYield,
-    createExternalSessionContentSearchControl,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
@@ -288,7 +287,6 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     let cwd: string | undefined;
     // JSONL rows are indivisible continuation units. Cancellation reaches every
     // native read; cooperative time is checked after a decoded row is retained.
-    const nativeFileSystem = createExternalSessionContentSearchControl({ signal: params.signal }).fileSystem;
     try {
         const result = await searchExternalSessionContent({
             query: params.query, ...(params.progress || params.prefiltered ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: params.control,
@@ -299,7 +297,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                     throwIfAborted(params.signal);
                     const initialEndOffsetBytes = progress.endOffsetBytes;
                     const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: progress.endOffsetBytes,
-                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: nativeFileSystem, includeMalformedRecords: true,
+                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), signal: params.signal, includeMalformedRecords: true,
                         onDiagnostic: () => { progress = { ...progress, partial: true }; },
                         onLine: (line, tailOffsetBytes) => {
                             throwIfAborted(params.signal);
@@ -391,7 +389,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     async function readSearchRow(row: z.infer<typeof ClaudeContentSearchRowSchema>) {
         throwIfAborted(params.signal);
         const page = await readJsonlFileForward({ filePath: params.filePath, offsetBytes: row.startOffsetBytes,
-            maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), maxItems: 1, fileSystem: nativeFileSystem });
+            maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), maxItems: 1, signal: params.signal });
         throwIfAborted(params.signal);
         const line = page.items[0];
         return line?.startOffsetBytes === row.startOffsetBytes ? line : null;

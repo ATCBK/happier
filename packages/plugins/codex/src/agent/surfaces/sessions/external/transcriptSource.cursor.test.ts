@@ -11,6 +11,7 @@ import {
   pageCodexExternalSessionTranscript,
   readAfterCodexExternalSessionTranscript,
   searchCodexExternalTranscript,
+  CodexExternalTranscriptSourceUnavailableError,
 } from './transcriptSource.js';
 
 function jsonl(value: unknown): string {
@@ -1828,7 +1829,7 @@ describe('Codex external transcript cursor generations', () => {
     }
   });
 
-  it('treats complete rollout-stream loss as source replacement', async () => {
+  it('reports complete rollout-stream loss as unavailable instead of restarting history', async () => {
     const fixture = await createFixture();
     try {
       const filePath = join(
@@ -1851,35 +1852,26 @@ describe('Codex external transcript cursor generations', () => {
       }
       await rm(filePath);
 
-      const [after, older] = await Promise.all([
-        readAfterCodexExternalSessionTranscript({
+      const after = await readAfterCodexExternalSessionTranscript({
           ...sourceParams(fixture),
           cursor: firstPage.tailCursor,
           maxBytes: 64 * 1024,
           maxItems: 1,
-        }),
-        pageCodexExternalSessionTranscript({
+        });
+      await expect(pageCodexExternalSessionTranscript({
           ...sourceParams(fixture),
           direction: 'older',
           cursor: firstPage.nextCursor,
           maxBytes: 64 * 1024,
           maxItems: 1,
-        }),
-      ]);
+        })).rejects.toBeInstanceOf(CodexExternalTranscriptSourceUnavailableError);
 
       expect(after).toEqual({
         items: [],
         nextCursor: null,
         tailCursor: null,
-        truncated: true,
-        readAfterOutcome: 'source_replaced',
-      });
-      expect(older).toEqual({
-        items: [],
-        nextCursor: null,
-        tailCursor: null,
-        hasMore: false,
-        truncated: true,
+        truncated: false,
+        readAfterOutcome: 'source_unavailable',
       });
     } finally {
       await rm(fixture.root, { recursive: true, force: true });

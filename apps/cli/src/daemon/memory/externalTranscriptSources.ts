@@ -294,7 +294,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         }) : null;
         next.push({ native: { agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey,
           source: resolved.descriptor.source, reader: boundary.externalSessions,
-          ...(demand?.observation ? { observation: demand.observation } : {}) }, demand });
+          ...(demand?.observation ? { observation: demand.observation,
+            readObservation: demand.readObservation } : {}) }, demand });
       }
       operationSignal.throwIfAborted();
     } catch (error) { await Promise.all(next.map(record => record.demand?.dispose())); throw error; }
@@ -310,7 +311,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       // A replaced reader or physical source does require fresh absence proof.
       if (previous?.native.reader === native.reader
         && previous.native.observation?.lifetime === native.observation?.lifetime
-        && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) continue;
+        && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) {
+        previous.native = native;
+        continue;
+      }
       inventories.set(key, { native, candidates: new Map(), pending: null, pendingIdentitiesComplete: true, seenCursorDigests: new Set(),
         refresh: null, refreshRequested: false, preferRefresh: true,
         needsInventory: true, failed: false, initialInventoryComplete: false });
@@ -386,7 +390,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           // discovered by a later ordinary crawl needs the same refresh slot
           // as one found during an interrupted inventory's refresh pass.
           if ((refresh || state.initialInventoryComplete) && !state.pending.has(id) && !state.candidates.has(id)) refreshIds.add(id);
-          state.pending.set(id, { native: { ...native, source: identity.value.source }, source });
+          state.pending.set(id, { native: { ...native, source: identity.value.source,
+            readObservation: () => state.native.readObservation?.() ?? state.native.observation }, source });
         }
         if (page.value.nextCursor) {
           // Opaque cursors may carry a whole native directory snapshot. Keep
@@ -486,8 +491,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       const identity = await native.reader.resolveLinkIdentity({ source: native.source,
         remoteSessionId: request.source.nativeSessionId, signal });
       if (!identity.ok) return null;
+      const observation = native.readObservation?.() ?? native.observation;
       const result = await native.reader.pageTranscript({ source: identity.value.source, remoteSessionId: identity.value.remoteSessionId,
         direction: 'older', ...(request.cursor ? { cursor: request.cursor } : {}),
+        ...(observation ? { observation } : {}),
         maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxItems,
         maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes, signal });
       return result.ok ? result.value : null;

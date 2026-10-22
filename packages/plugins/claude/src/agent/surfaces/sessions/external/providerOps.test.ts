@@ -69,6 +69,19 @@ async function createTranscript(params: Readonly<{
 }
 
 describe('Claude native External Sessions contribution', () => {
+
+    it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+        const root = await mkdtemp(join(tmpdir(), 'claude-record-limit-')); roots.push(root);
+        const file = await createTranscript({ configDir: root, projectId: 'fixture', remoteSessionId: 'native', title: 'before' });
+        const contribution = createClaudeExternalSessionsContribution({ env: { HAPPIER_CLAUDE_CONFIG_DIR: root } });
+        const request = { ...invocation(), source: { kind: 'claudeConfig', projectId: 'fixture' }, remoteSessionId: 'native', maxItems: 10 };
+        const initial = await contribution.pageTranscript({ ...request, direction: 'older' });
+        if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+        await appendFile(file, JSON.stringify({ type: 'assistant', uuid: 'oversized', parentUuid: 'fixture-assistant', message: { content: [{ type: 'text', text: 'after' }] }, padding: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
+        const result = operation === 'page' ? await contribution.pageTranscript({ ...request, direction: 'older' })
+            : await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+        expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+    });
     it('returns a recoverable safe failure when the native file read fails', async () => {
         const root = await mkdtemp(join(tmpdir(), 'claude-transcript-unreadable-'));
         roots.push(root);

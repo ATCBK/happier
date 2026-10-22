@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import type {
     AgentExternalSessionCandidate,
     AgentExternalSessionLinkData,
@@ -355,6 +356,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             } catch (error) {
                 const after = invocationFailure(request);
                 if (after) return after;
+                if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
                 if (error instanceof ClaudeCandidateResultBudgetTooSmallError) {
                     return createAgentExternalSessionsProducerOverflowFailure(error.message);
                 }
@@ -478,6 +480,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             } catch (error) {
                 const after = invocationFailure(request);
                 if (after) return after;
+                if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
                 if (error instanceof ClaudeTranscriptInvalidCursorError) {
                     return failed('invalid_request', 'external_sessions_transcript_cursor_invalid');
                 }
@@ -530,6 +533,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             } catch (error) {
                 const after = invocationFailure(request);
                 if (after) return after;
+                if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
                 if (error instanceof ClaudeTranscriptResultBudgetTooSmallError) {
                     return createAgentExternalSessionsProducerOverflowFailure(error.message);
                 }

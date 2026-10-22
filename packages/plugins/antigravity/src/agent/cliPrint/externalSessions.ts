@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
@@ -180,7 +181,7 @@ type AntigravityExternalReadAfterOutcome =
   | Readonly<{ kind: 'gap_or_cursor_expired'; sourceRevision?: string }>
   | Readonly<{ kind: 'source_replaced'; sourceRevision: string }>
   | Readonly<{ kind: 'source_unavailable' }>
-  | Readonly<{ kind: 'read_failed'; error: string }>;
+  | Readonly<{ kind: 'read_failed'; error: string; code?: 'JSONL_RECORD_TOO_LARGE' }>;
 
 function ok<T>(value: T): AgentExternalSessionsResult<T> {
   return { ok: true, value };
@@ -941,7 +942,9 @@ function mapReadAfterOutcome(
     case 'source_unavailable':
       return ok({ outcome: 'source_unavailable' });
     case 'read_failed':
-      return ok({ outcome: 'read_failed' });
+      return outcome.code === 'JSONL_RECORD_TOO_LARGE'
+        ? failed('agent_error', outcome.error, false)
+        : ok({ outcome: 'read_failed' });
   }
 }
 
@@ -1095,6 +1098,7 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof AntigravityCandidateSourceChangedError) {
           return boundedResult(request, failed('source_invalid', error.message, true));
         }
@@ -1176,7 +1180,8 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
       const after = getAgentExternalSessionsInvocationFailure(request);
       if (after) return after;
       if (outcome.kind === 'source_unavailable') return failed('unavailable', undefined, true);
-      if (outcome.kind === 'read_failed') return boundedResult(request, failed('agent_error', outcome.error));
+      if (outcome.kind === 'read_failed') return boundedResult(request, failed('agent_error', outcome.error,
+        outcome.code === 'JSONL_RECORD_TOO_LARGE' ? false : undefined));
       if (outcome.kind === 'source_replaced') {
         return boundedResult(request, ok({ items: [], nextCursor: null, hasMore: false, truncated: true }));
       }

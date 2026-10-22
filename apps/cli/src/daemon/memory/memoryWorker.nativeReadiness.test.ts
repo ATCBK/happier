@@ -2,6 +2,7 @@ import { appendFile, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promi
 import { Session } from 'node:inspector/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import axios from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -132,6 +133,12 @@ describe('memory worker native source readiness', () => {
         } } });
       const { startMemoryWorker } = await import('./memoryWorker');
       worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine' });
+      if (heap) {
+        heap.connect();
+        await heap.post('HeapProfiler.startSampling');
+        await measure('before-observation');
+        loopDelay.enable();
+      }
       expect(worker.getSettings().conversationSearch.indexExternal).toMatchObject({ enabled: true, agents: ['claude'] });
       worker.attachExternalObservation!(observation);
       await worker.ensureUpToDate();
@@ -211,8 +218,6 @@ describe('memory worker native source readiness', () => {
       const pageSize = EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxItems;
       const backlogSize = pageSize * 3;
       if (heap) {
-        heap.connect();
-        await heap.post('HeapProfiler.startSampling');
         await measure('before-window');
       }
       const padding = (JSON.stringify({ type: 'progress', data: 'x'.repeat(16_000) }) + '\n').repeat(256);
@@ -238,6 +243,10 @@ describe('memory worker native source readiness', () => {
       fileChanges.get(firstPath)!(firstPath);
       pendingSync = worker.ensureUpToDate();
       await secondPageEntered;
+      const { MemoryWorkerStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
+      expect(MemoryWorkerStatusV1Schema.parse(worker.getWorkerStatus()).activeOperations).toEqual([
+        { kind: 'transcript', sessionIds: [] },
+      ]);
       releaseDisk();
       await pendingSync;
       disk.project = '';
@@ -270,7 +279,7 @@ describe('memory worker native source readiness', () => {
         console.log('R224_PROFILE', JSON.stringify(result));
         // Reject retention proportional to the whole corpus, while allowing
         // the registry, bounded pages, SQLite and allocator high-water marks.
-        expect(measurements[1]!.rss - measurements[0]!.rss).toBeLessThan(backlogSize * padding.length / 4);
+        expect(measurements.at(-1)!.rss - measurements[0]!.rss).toBeLessThan(backlogSize * padding.length / 4);
       }
 
       await rm(addedPath);
@@ -319,6 +328,7 @@ describe('memory worker native source readiness', () => {
       expect(await pendingOutcome).toBe('AbortError');
       expect(nativeSources()).toEqual([]);
       expect(fileChanges.size).toBe(0);
+      await measure('native-disabled');
       disk.project = '';
       disk.armed = false;
       await writeMemorySettingsToDisk(enabledSettings);
@@ -333,6 +343,7 @@ describe('memory worker native source readiness', () => {
       console.error('Native readiness workload failed before cleanup', error);
       throw error;
     } finally {
+      loopDelay.disable();
       heap?.disconnect();
       releaseDisk();
       await pendingSync?.catch(() => {});

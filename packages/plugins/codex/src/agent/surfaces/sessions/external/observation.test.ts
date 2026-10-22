@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setFlagsFromString } from 'node:v8';
@@ -31,7 +31,7 @@ vi.mock('node:fs/promises', async () => {
 });
 
 import { createCodexExternalSessionObservationContribution, codexExternalSessionObservationContribution } from './observation.js';
-import { readAfterCodexExternalSessionTranscript } from './transcriptSource.js';
+import { pageCodexExternalSessionTranscript, readAfterCodexExternalSessionTranscript } from './transcriptSource.js';
 import { codexRolloutObservationInventories, inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discovery/sessionsForHome.js';
 
 type CodexObservationContribution = ReturnType<

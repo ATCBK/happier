@@ -63,6 +63,7 @@ export type MemoryExternalSourceReader = Readonly<{
   source: AgentExternalSessionSource;
   reader: Pick<BoundedAgentExternalSessionsContribution, 'pageTranscript' | 'readAfterTranscript' | 'listCandidates' | 'resolveLinkIdentity'>;
   observation?: AgentExternalSessionsPageTranscriptRequest['observation'];
+  readObservation?(): AgentExternalSessionsPageTranscriptRequest['observation'];
 }>;
 
 type Frontier = Readonly<{ type: 'page' | 'tail'; cursor?: string; tailCursor?: string }>;
@@ -116,8 +117,9 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   const effectiveCutoff = resolveMemoryCoverageCreatedAtCutoffMs({ policy: policy.coveragePolicy,
     nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs, historyDays: external.historyDays });
   input.db.pruneSessionArtifacts({ sessionId, policyKey, ...(effectiveCutoff === null ? {} : { createdAtCutoffMs: effectiveCutoff }) });
+  const observation = input.native.readObservation?.() ?? input.native.observation;
   const operation = { source: input.native.source, remoteSessionId: input.source.nativeSessionId,
-    ...(input.native.observation ? { observation: input.native.observation } : {}),
+    ...(observation ? { observation } : {}),
     maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxItems,
     maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes, signal: input.signal };
   let pageCursor: string | undefined;

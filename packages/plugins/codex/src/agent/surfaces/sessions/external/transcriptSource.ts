@@ -102,6 +102,10 @@ export class CodexContentSearchYield extends ExternalSessionContentSearchYield {
 }
 function isCodexContentScanComplete(progress: CodexContentSearchProgress) { return progress.phase === 'done'; }
 
+export class CodexExternalTranscriptSourceUnavailableError extends Error {
+  constructor() { super('Codex transcript source no longer exists.'); }
+}
+
 /** Native rollback replay, shared by content, import and bounded older pages. */
 function selectCodexExternalTranscriptRows<T>(rows: readonly CodexProjectionRow<T>[], pendingTurns = 0) {
   const records: T[] = [];
@@ -135,7 +139,6 @@ async function readCodexExternalTranscriptProjection(params: Readonly<{
   maxBytes: number;
 }> & CodexExternalSessionInvocationBounds) {
   const records: CodexProjectedTranscriptRecord[] = [];
-  const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(params);
   const sourceSizeBytes = await statFileSize(params.stream.filePath, params) ?? 0;
   const retainedOffsets = new Set<number>();
   let endOffsetBytes = sourceSizeBytes;
@@ -147,7 +150,8 @@ async function readCodexExternalTranscriptProjection(params: Readonly<{
       // One preceding newline establishes the first unread row's boundary;
       // avoid decoding a whole page of already-consumed prefix for a tiny append.
       maxBytes: Math.min(params.maxBytes, endOffsetBytes - Math.max(0, params.pageStartOffsetBytes - 1)),
-      maxItems: Math.max(1, sourceSizeBytes), includeMalformedRecords: true, fileSystem,
+      maxItems: Math.max(1, sourceSizeBytes), includeMalformedRecords: true, signal: params.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params),
       onLine(line) {
         throwIfCodexExternalSessionInvocationStopped(params);
         if (line.startOffsetBytes < params.pageStartOffsetBytes) return;
@@ -173,7 +177,8 @@ async function readCodexExternalTranscriptProjection(params: Readonly<{
       throwIfCodexExternalSessionInvocationStopped(params);
       const page = await readJsonlFileForwardLines({ filePath: params.stream.filePath, offsetBytes,
         maxBytes: Math.min(params.maxBytes, params.pageEndOffsetBytes - offsetBytes),
-        maxItems: Math.max(1, sourceSizeBytes), fileSystem,
+        maxItems: Math.max(1, sourceSizeBytes), signal: params.signal,
+        fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params),
         onLine(line) {
           throwIfCodexExternalSessionInvocationStopped(params);
           if (line.startOffsetBytes >= params.pageStartOffsetBytes && pageStartState === null) {
@@ -215,7 +220,7 @@ async function restoreCodexTranscriptSemanticContext(stream: CodexExternalTransc
   const readRow = async (row: z.infer<typeof ContentRowLocationSchema>) => {
     const page = await readJsonlFileForwardLines({ filePath: stream.filePath, offsetBytes: row.startOffsetBytes,
       maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes), maxItems: 1,
-      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(bounds) });
+      signal: bounds.signal, fileSystem: createCodexExternalSessionJsonlScannerFileSystem(bounds) });
     return page.items.find(line => line.startOffsetBytes === row.startOffsetBytes && line.endOffsetBytes === row.endOffsetBytes);
   };
   const assistantLine = locations.assistant ? await readRow(locations.assistant) : null;
@@ -281,10 +286,10 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
   // A native row is indivisible. Commit its semantic facts and location before
   // yielding; native reads and final row verification still observe hard expiry.
   const nativeBounds = { signal: params.signal, deadlineAtMs: params.deadlineAtMs };
-  const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(nativeBounds);
   const readRow = async (stream: CodexExternalTranscriptRolloutStream, row: z.infer<typeof ContentRowLocationSchema>) => {
     const page = await readJsonlFileForwardLines({ filePath: stream.filePath, offsetBytes: row.startOffsetBytes,
-      maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes), maxItems: 1, fileSystem });
+      maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes), maxItems: 1, signal: params.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(nativeBounds) });
     return page.items.find((line) => line.startOffsetBytes === row.startOffsetBytes && line.endOffsetBytes === row.endOffsetBytes);
   };
   const emptySemantic = emptyCodexTranscriptSemanticLocations;
@@ -298,7 +303,8 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
       while (state.selectionEndOffsetBytes > 0) {
         const initialEnd = state.selectionEndOffsetBytes;
         const page = await readJsonlFileBackwardPage({ filePath: stream.filePath, endOffsetBytes: initialEnd,
-          maxBytes: Math.max(1, state.sizeBytes), maxItems: Math.max(1, state.sizeBytes), fileSystem,
+          maxBytes: Math.max(1, state.sizeBytes), maxItems: Math.max(1, state.sizeBytes), signal: params.signal,
+          fileSystem: createCodexExternalSessionJsonlScannerFileSystem(nativeBounds),
           includeMalformedRecords: true,
           onDiagnostic: () => { progress.partial = true; },
           onLine(line, tailOffsetBytes) {
@@ -342,7 +348,8 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
       throwIfCodexExternalSessionInvocationStopped(nativeBounds);
       const initialOffsetBytes = state.offsetBytes;
       const page = await readJsonlFileForwardLines({
-        filePath: stream.filePath, offsetBytes: state.offsetBytes, maxBytes: Math.max(1, state.sizeBytes), maxItems: Math.max(1, state.sizeBytes), fileSystem,
+        filePath: stream.filePath, offsetBytes: state.offsetBytes, maxBytes: Math.max(1, state.sizeBytes), maxItems: Math.max(1, state.sizeBytes), signal: params.signal,
+        fileSystem: createCodexExternalSessionJsonlScannerFileSystem(nativeBounds),
         onDiagnostic: () => { progress.partial = true; },
         onLine(line) {
           throwIfCodexExternalSessionInvocationStopped(nativeBounds);
@@ -1059,7 +1066,8 @@ async function readPrecedingCodexRolloutTimestamp(params: Readonly<{
   while (endOffsetBytes > 0) {
     throwIfCodexExternalSessionInvocationStopped(params);
     const page = await readJsonlFileBackwardPage({ filePath: params.stream.filePath, endOffsetBytes,
-      maxBytes: params.maxBytes, maxItems: params.maxBytes, fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params) });
+      maxBytes: params.maxBytes, maxItems: params.maxBytes, signal: params.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params) });
     if (page.diagnostics?.length) throw new Error('Codex transcript source contains malformed UTF-8.');
     for (let index = page.items.length - 1; index >= 0; index -= 1) {
       const timestampMs = readCodexRolloutLineTimestampMs(page.items[index]!.value);
@@ -1117,6 +1125,7 @@ async function resolveBestHomesWithFiles(params: Readonly<{
         ? codexRolloutObservationInventories.observe(entry.codexHome, params.observation.lifetime)
         : codexRolloutObservationInventories.read(entry.codexHome),
       remoteSessionIds: params.remoteSessionIds,
+      changedFiles: params.observation?.changedFiles,
       signal: params.signal ?? new AbortController().signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
@@ -1196,6 +1205,13 @@ async function readCodexNativeTranscriptIfNeeded(
   follow: boolean,
 ): Promise<CodexExternalSessionTranscriptSourcePage | null> {
   const nativeCursor = decodeCodexNativeTranscriptCursor(params.cursor);
+  // A rollout cursor identifies an existing file-backed conversation. Absence
+  // after a complete inventory is removal, not a switch to native API history.
+  if (!selection.streams.length && params.cursor &&
+    (decodeCodexExternalBackwardCursor(params.cursor) || decodeCodexExternalForwardCursor(params.cursor)?.v === 7)) {
+    if (!follow) throw new CodexExternalTranscriptSourceUnavailableError();
+    return { items: [], nextCursor: null, tailCursor: null, truncated: false, readAfterOutcome: 'source_unavailable' };
+  }
   const metadata = await Promise.all(selection.streams
     .map(stream => readCodexSessionMetaFromRollout(stream.filePath, params)));
   const hasPaginatedRollout = metadata.some(value => value?.history_mode === 'paginated');
@@ -1254,7 +1270,6 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
   maxItems: number;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexExternalSessionTranscriptSourcePage> {
   throwIfCodexExternalSessionInvocationStopped(params);
-  const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(params);
   const selection = await resolveTranscriptStreams(params);
   const nativePage = await readCodexNativeTranscriptIfNeeded({ ...params, direction: 'older' }, selection, false);
   if (nativePage) return nativePage;
@@ -1310,7 +1325,8 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
       maxBytes,
       maxItems: maxItems * 2,
       includeMalformedRecords: true,
-      fileSystem,
+      signal: params.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params),
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
@@ -1440,7 +1456,6 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
   maxItems: number;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexExternalSessionTranscriptSourcePage> {
   throwIfCodexExternalSessionInvocationStopped(params);
-  const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(params);
   const selection = await resolveTranscriptStreams(params);
   const nativePage = await readCodexNativeTranscriptIfNeeded({ ...params, direction: 'older' }, selection, true);
   if (nativePage) return nativePage;
@@ -1556,7 +1571,8 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
       maxBytes,
       maxItems: maxItems * 2,
       includeMalformedRecords: true,
-      fileSystem,
+      signal: params.signal,
+      fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params),
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     malformedSourceDiagnostics.push(...(page.diagnostics ?? []).map((diagnostic) => ({

@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
@@ -307,6 +308,7 @@ function serializedByteLength(value: unknown): number {
 }
 
 function transcriptFailure(error: unknown): AgentExternalSessionsResult<never> {
+  if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
   if (error instanceof OhMyPiExternalSessionSourceUnavailableError) {
     return failed('source_unreachable', error.message, true);
   }
@@ -615,6 +617,7 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = invocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof OhMyPiCandidateSourceChangedError) {
           return failed('source_invalid', error.message, true);
         }
@@ -757,6 +760,7 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = invocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof OhMyPiExternalSessionSourceUnavailableError) {
           return ok({ outcome: 'source_unavailable' });
         }

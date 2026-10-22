@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { createHash } from 'node:crypto';
 import type { Dir, Dirent } from 'node:fs';
 import { lstat, opendir, stat } from 'node:fs/promises';
@@ -1528,6 +1529,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
         if (after) {
           return after;
         }
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof PiCandidateSourceChangedError) {
           return failed('source_invalid', error.message, true);
         }
@@ -1621,376 +1623,396 @@ export function createPiExternalSessionsContribution(params: Readonly<{
     },
 
     async pageTranscript(request: AgentExternalSessionsPageTranscriptRequest & Readonly<{ scannerFileSystem?: JsonlScannerFileSystem }>): Promise<AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage>> {
-      const stopped = getAgentExternalSessionsInvocationFailure(request);
-      if (stopped) return stopped;
-      if (request.direction !== 'older') {
-        return failed('unsupported', 'Pi transcript paging supports only older pages.');
-      }
-      if (!Number.isFinite(request.maxItems) || request.maxItems < 1) {
-        return failed('invalid_request', 'Pi external-session transcript limit must be positive.');
-      }
-      const resolved = resolvePiSource({ source: request.source, env: readEnv() });
-      if (!resolved.ok) return resolved;
-      const requestedFile = readSessionFileFromIdentity(request.source);
-      if (!requestedFile) return failed('invalid_request', 'Pi transcript source requires a session file.');
-      const file = await canonicalizePiSessionFile({
-        source: resolved.value,
-        filePath: requestedFile,
-        remoteSessionId: request.remoteSessionId,
-        maxBytes: request.maxSerializedBytes,
-      }).catch(() => null);
-      if (!file) return failed('unavailable', 'Pi linked session file is unavailable.', true);
+      try {
+        const stopped = getAgentExternalSessionsInvocationFailure(request);
+        if (stopped) return stopped;
+        if (request.direction !== 'older') {
+          return failed('unsupported', 'Pi transcript paging supports only older pages.');
+        }
+        if (!Number.isFinite(request.maxItems) || request.maxItems < 1) {
+          return failed('invalid_request', 'Pi external-session transcript limit must be positive.');
+        }
+        const resolved = resolvePiSource({ source: request.source, env: readEnv() });
+        if (!resolved.ok) return resolved;
+        const requestedFile = readSessionFileFromIdentity(request.source);
+        if (!requestedFile) return failed('invalid_request', 'Pi transcript source requires a session file.');
+        const file = await canonicalizePiSessionFile({
+          source: resolved.value,
+          filePath: requestedFile,
+          remoteSessionId: request.remoteSessionId,
+          maxBytes: request.maxSerializedBytes,
+        }).catch((error: unknown) => {
+          if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') throw error;
+          return null;
+        });
+        if (!file) return failed('unavailable', 'Pi linked session file is unavailable.', true);
 
-      const decodedCursor = request.cursor ? decodeTranscriptCursor(request.cursor) : null;
-      if (request.cursor && (!decodedCursor || decodedCursor.sessionFile !== file.filePath)) {
-        return failed('invalid_request', 'Pi transcript cursor does not match the resolved source.');
-      }
-      const sourceReplaced = Boolean(decodedCursor && decodedCursor.sourceGeneration !== file.sourceGeneration);
-      const projection = sourceReplaced ? undefined : decodedCursor?.projection;
-      if (projection?.kind === 'after') {
-        return failed('invalid_request', 'Pi transcript cursor is not valid for older paging.');
-      }
-      const endOffsetBytes = sourceReplaced || !decodedCursor
-        ? file.fileSize
-        : Math.min(file.fileSize, decodedCursor.endOffsetBytes);
-      const expectedLeafId = sourceReplaced ? undefined : decodedCursor?.activeLeafId;
-      const page = await readJsonlFileBackwardPage({
-        filePath: file.filePath,
-        endOffsetBytes,
-        includeMalformedRecords: true,
-        maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
-        maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
-        maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
-        ...(request.scannerFileSystem ? { fileSystem: request.scannerFileSystem } : {}),
-      });
-      const afterPage = getAgentExternalSessionsInvocationFailure(request);
-      if (afterPage) return afterPage;
-      if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
-        return failed('agent_error', 'Pi transcript source contains malformed UTF-8.');
-      }
-      if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
-        const result = ok({ items: [], nextCursor: null, hasMore: false, truncated: true });
+        const decodedCursor = request.cursor ? decodeTranscriptCursor(request.cursor) : null;
+        if (request.cursor && (!decodedCursor || decodedCursor.sessionFile !== file.filePath)) {
+          return failed('invalid_request', 'Pi transcript cursor does not match the resolved source.');
+        }
+        const sourceReplaced = Boolean(decodedCursor && decodedCursor.sourceGeneration !== file.sourceGeneration);
+        const projection = sourceReplaced ? undefined : decodedCursor?.projection;
+        if (projection?.kind === 'after') {
+          return failed('invalid_request', 'Pi transcript cursor is not valid for older paging.');
+        }
+        const endOffsetBytes = sourceReplaced || !decodedCursor
+          ? file.fileSize
+          : Math.min(file.fileSize, decodedCursor.endOffsetBytes);
+        const expectedLeafId = sourceReplaced ? undefined : decodedCursor?.activeLeafId;
+        const page = await readJsonlFileBackwardPage({
+          filePath: file.filePath,
+          endOffsetBytes,
+          includeMalformedRecords: true,
+          maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
+          maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
+          maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
+          ...(request.scannerFileSystem ? { fileSystem: request.scannerFileSystem } : {}),
+        });
+        const afterPage = getAgentExternalSessionsInvocationFailure(request);
+        if (afterPage) return afterPage;
+        if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
+          return failed('agent_error', 'Pi transcript source contains malformed UTF-8.');
+        }
+        if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
+          const result = ok({ items: [], nextCursor: null, hasMore: false, truncated: true });
+          return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
+            ? result
+            : createAgentExternalSessionsProducerOverflowFailure(
+              'Pi transcript result byte budget cannot fit the page envelope.',
+            );
+        }
+        const values = page.items.map((item) => item.value);
+        const expectedLeafPresent = expectedLeafId === undefined
+          || expectedLeafId === null
+          || values.some((value) => isRecord(value) && value.id === expectedLeafId);
+        if (projection && !expectedLeafPresent) {
+          return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+        }
+        const folded = foldPiV3SessionTree(values, {
+          ...(expectedLeafId == null ? {} : { activeLeafId: expectedLeafId }),
+        });
+        const foldIntegrity = foldIntegrityFailure(folded);
+        if (foldIntegrity) return foldIntegrity;
+        const projectedBranch = projectBranch(request.remoteSessionId,
+          expectedLeafPresent ? folded.activeBranch : [], page.items);
+        const items = projectedBranch.items;
+        const earliest = expectedLeafPresent ? folded.activeBranch[0] ?? null : null;
+        const nextActiveLeafId = expectedLeafPresent
+          ? earliest?.parentId ?? null
+          : expectedLeafId ?? null;
+        if (projection && page.nextEndOffsetBytes !== projection.resumeEndOffsetBytes) {
+          return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+        }
+        const limit = Math.trunc(request.maxItems);
+        let emittedItems: readonly AgentExternalSessionTranscriptItem[] = items;
+        let hasMore = !page.reachedStart && (Boolean(nextActiveLeafId) || folded.activeBranch.length === 0);
+        let nextCursor: string | null = hasMore
+          ? encodeTranscriptCursor({
+            file,
+            endOffsetBytes: page.nextEndOffsetBytes,
+            activeLeafId: nextActiveLeafId,
+            activeLeafFingerprint: null,
+          })
+          : null;
+        if (projection) {
+          if (projection.itemEnd > items.length) {
+            return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+          }
+          const itemStart = Math.max(0, projection.itemEnd - limit);
+          emittedItems = items.slice(itemStart, projection.itemEnd);
+          if (emittedItems.length === 0) {
+            return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+          }
+          if (itemStart > 0) {
+            hasMore = true;
+            nextCursor = encodeTranscriptCursor({
+              file,
+              endOffsetBytes,
+              activeLeafId: decodedCursor?.activeLeafId ?? null,
+              activeLeafFingerprint: null,
+              projection: { ...projection, itemEnd: itemStart },
+            });
+          } else {
+            hasMore = Boolean(projection.resumeActiveLeafId);
+            nextCursor = hasMore
+              ? encodeTranscriptCursor({
+                file,
+                endOffsetBytes: projection.resumeEndOffsetBytes,
+                activeLeafId: projection.resumeActiveLeafId,
+                activeLeafFingerprint: null,
+              })
+              : null;
+          }
+        } else if (items.length > limit) {
+          const itemStart = items.length - limit;
+          emittedItems = items.slice(itemStart);
+          hasMore = true;
+          nextCursor = encodeTranscriptCursor({
+            file,
+            endOffsetBytes,
+            activeLeafId: folded.activeLeafId,
+            activeLeafFingerprint: null,
+            projection: {
+              kind: 'older',
+              nativeMaxItems: limit,
+              nativeMaxSerializedBytes: request.maxSerializedBytes,
+              itemEnd: itemStart,
+              resumeEndOffsetBytes: page.nextEndOffsetBytes,
+              resumeActiveLeafId: nextActiveLeafId,
+            },
+          });
+        }
+        // A missing parent inside a WINDOW is the pagination handoff. A missing
+        // parent once the backward reader has consumed the first byte of the file
+        // is not: the branch has no root in this source, so its reachable suffix
+        // is not the transcript. Reporting ordinary completion here publishes a
+        // partial history as authoritative and retires the continuation that
+        // would have surfaced the gap.
+        if (!hasMore && page.reachedStart && nextActiveLeafId !== null) {
+          return failed(
+            'agent_error',
+            'Pi transcript branch reaches the start of its source with an unresolved parent entry.',
+          );
+        }
+        const tail = request.cursor && !sourceReplaced
+          ? null
+          : await readCurrentTail({ file, maxBytes: request.maxSerializedBytes });
+        const afterTail = getAgentExternalSessionsInvocationFailure(request);
+        if (afterTail) return afterTail;
+        const result: AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage> = ok({
+          items: emittedItems,
+          nextCursor,
+          ...(tail ? { tailCursor: tail.cursor } : {}),
+          hasMore,
+          ...(projectedBranch.unsupportedPositions.length > 0 ? { diagnostics: [{
+            code: 'external_sessions_transcript_unsupported_record',
+            severity: 'benign' as const,
+            count: projectedBranch.unsupportedPositions.length,
+            positions: projectedBranch.unsupportedPositions.slice(0, 200),
+          }] } : {}),
+          ...(sourceReplaced || page.tailOffsetBytes !== endOffsetBytes ? { truncated: true } : {}),
+        });
         return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
           ? result
           : createAgentExternalSessionsProducerOverflowFailure(
             'Pi transcript result byte budget cannot fit the page envelope.',
           );
+      } catch (error) {
+        const stopped = getAgentExternalSessionsInvocationFailure(request);
+        if (stopped) return stopped;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
+        throw error;
       }
-      const values = page.items.map((item) => item.value);
-      const expectedLeafPresent = expectedLeafId === undefined
-        || expectedLeafId === null
-        || values.some((value) => isRecord(value) && value.id === expectedLeafId);
-      if (projection && !expectedLeafPresent) {
-        return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-      }
-      const folded = foldPiV3SessionTree(values, {
-        ...(expectedLeafId == null ? {} : { activeLeafId: expectedLeafId }),
-      });
-      const foldIntegrity = foldIntegrityFailure(folded);
-      if (foldIntegrity) return foldIntegrity;
-      const projectedBranch = projectBranch(request.remoteSessionId,
-        expectedLeafPresent ? folded.activeBranch : [], page.items);
-      const items = projectedBranch.items;
-      const earliest = expectedLeafPresent ? folded.activeBranch[0] ?? null : null;
-      const nextActiveLeafId = expectedLeafPresent
-        ? earliest?.parentId ?? null
-        : expectedLeafId ?? null;
-      if (projection && page.nextEndOffsetBytes !== projection.resumeEndOffsetBytes) {
-        return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-      }
-      const limit = Math.trunc(request.maxItems);
-      let emittedItems: readonly AgentExternalSessionTranscriptItem[] = items;
-      let hasMore = !page.reachedStart && (Boolean(nextActiveLeafId) || folded.activeBranch.length === 0);
-      let nextCursor: string | null = hasMore
-        ? encodeTranscriptCursor({
-          file,
-          endOffsetBytes: page.nextEndOffsetBytes,
-          activeLeafId: nextActiveLeafId,
-          activeLeafFingerprint: null,
-        })
-        : null;
-      if (projection) {
-        if (projection.itemEnd > items.length) {
-          return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-        }
-        const itemStart = Math.max(0, projection.itemEnd - limit);
-        emittedItems = items.slice(itemStart, projection.itemEnd);
-        if (emittedItems.length === 0) {
-          return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-        }
-        if (itemStart > 0) {
-          hasMore = true;
-          nextCursor = encodeTranscriptCursor({
-            file,
-            endOffsetBytes,
-            activeLeafId: decodedCursor?.activeLeafId ?? null,
-            activeLeafFingerprint: null,
-            projection: { ...projection, itemEnd: itemStart },
-          });
-        } else {
-          hasMore = Boolean(projection.resumeActiveLeafId);
-          nextCursor = hasMore
-            ? encodeTranscriptCursor({
-              file,
-              endOffsetBytes: projection.resumeEndOffsetBytes,
-              activeLeafId: projection.resumeActiveLeafId,
-              activeLeafFingerprint: null,
-            })
-            : null;
-        }
-      } else if (items.length > limit) {
-        const itemStart = items.length - limit;
-        emittedItems = items.slice(itemStart);
-        hasMore = true;
-        nextCursor = encodeTranscriptCursor({
-          file,
-          endOffsetBytes,
-          activeLeafId: folded.activeLeafId,
-          activeLeafFingerprint: null,
-          projection: {
-            kind: 'older',
-            nativeMaxItems: limit,
-            nativeMaxSerializedBytes: request.maxSerializedBytes,
-            itemEnd: itemStart,
-            resumeEndOffsetBytes: page.nextEndOffsetBytes,
-            resumeActiveLeafId: nextActiveLeafId,
-          },
-        });
-      }
-      // A missing parent inside a WINDOW is the pagination handoff. A missing
-      // parent once the backward reader has consumed the first byte of the file
-      // is not: the branch has no root in this source, so its reachable suffix
-      // is not the transcript. Reporting ordinary completion here publishes a
-      // partial history as authoritative and retires the continuation that
-      // would have surfaced the gap.
-      if (!hasMore && page.reachedStart && nextActiveLeafId !== null) {
-        return failed(
-          'agent_error',
-          'Pi transcript branch reaches the start of its source with an unresolved parent entry.',
-        );
-      }
-      const tail = request.cursor && !sourceReplaced
-        ? null
-        : await readCurrentTail({ file, maxBytes: request.maxSerializedBytes });
-      const afterTail = getAgentExternalSessionsInvocationFailure(request);
-      if (afterTail) return afterTail;
-      const result: AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage> = ok({
-        items: emittedItems,
-        nextCursor,
-        ...(tail ? { tailCursor: tail.cursor } : {}),
-        hasMore,
-        ...(projectedBranch.unsupportedPositions.length > 0 ? { diagnostics: [{
-          code: 'external_sessions_transcript_unsupported_record',
-          severity: 'benign' as const,
-          count: projectedBranch.unsupportedPositions.length,
-          positions: projectedBranch.unsupportedPositions.slice(0, 200),
-        }] } : {}),
-        ...(sourceReplaced || page.tailOffsetBytes !== endOffsetBytes ? { truncated: true } : {}),
-      });
-      return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
-        ? result
-        : createAgentExternalSessionsProducerOverflowFailure(
-          'Pi transcript result byte budget cannot fit the page envelope.',
-        );
     },
 
     async readAfterTranscript(request) {
-      const stopped = getAgentExternalSessionsInvocationFailure(request);
-      if (stopped) return stopped;
-      if (!Number.isFinite(request.maxItems) || request.maxItems < 1) {
-        return failed('invalid_request', 'Pi external-session transcript limit must be positive.');
-      }
-      const resolved = resolvePiSource({ source: request.source, env: readEnv() });
-      if (!resolved.ok) return resolved;
-      const requestedFile = readSessionFileFromIdentity(request.source);
-      if (!requestedFile) return failed('invalid_request', 'Pi transcript source requires a session file.');
-      const file = await canonicalizePiSessionFile({
-        source: resolved.value,
-        filePath: requestedFile,
-        remoteSessionId: request.remoteSessionId,
-        maxBytes: request.maxSerializedBytes,
-      }).catch(() => null);
-      if (!file) return ok({ outcome: 'source_unavailable' });
-      const cursor = decodeTranscriptCursor(request.cursor);
-      if (!cursor || cursor.sessionFile !== file.filePath) {
-        return ok({ outcome: 'source_replaced' });
-      }
-      const projection = cursor.projection;
-      if (projection?.kind === 'older') {
-        return ok({ outcome: 'source_replaced' });
-      }
-      if (
-        cursor.sourceGeneration !== file.sourceGeneration
-        || cursor.endOffsetBytes > file.fileSize
-      ) {
-        return ok({ outcome: 'source_replaced' });
-      }
-      const anchor = await readTranscriptCursorAnchor({
-        file,
-        cursor,
-        maxBytes: request.maxSerializedBytes,
-      });
-      const afterAnchor = getAgentExternalSessionsInvocationFailure(request);
-      if (afterAnchor) return afterAnchor;
-      if (anchor.matches === null) return ok({ outcome: 'read_failed' });
-      if (!anchor.matches) {
-        return ok({ outcome: 'source_replaced' });
-      }
-      if (cursor.endOffsetBytes === file.fileSize && !projection) {
-        return ok({ outcome: 'already_current' });
-      }
+      try {
+        const stopped = getAgentExternalSessionsInvocationFailure(request);
+        if (stopped) return stopped;
+        if (!Number.isFinite(request.maxItems) || request.maxItems < 1) {
+          return failed('invalid_request', 'Pi external-session transcript limit must be positive.');
+        }
+        const resolved = resolvePiSource({ source: request.source, env: readEnv() });
+        if (!resolved.ok) return resolved;
+        const requestedFile = readSessionFileFromIdentity(request.source);
+        if (!requestedFile) return failed('invalid_request', 'Pi transcript source requires a session file.');
+        const file = await canonicalizePiSessionFile({
+          source: resolved.value,
+          filePath: requestedFile,
+          remoteSessionId: request.remoteSessionId,
+          maxBytes: request.maxSerializedBytes,
+        }).catch((error: unknown) => {
+          if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') throw error;
+          return null;
+        });
+        if (!file) return ok({ outcome: 'source_unavailable' });
+        const cursor = decodeTranscriptCursor(request.cursor);
+        if (!cursor || cursor.sessionFile !== file.filePath) {
+          return ok({ outcome: 'source_replaced' });
+        }
+        const projection = cursor.projection;
+        if (projection?.kind === 'older') {
+          return ok({ outcome: 'source_replaced' });
+        }
+        if (
+          cursor.sourceGeneration !== file.sourceGeneration
+          || cursor.endOffsetBytes > file.fileSize
+        ) {
+          return ok({ outcome: 'source_replaced' });
+        }
+        const anchor = await readTranscriptCursorAnchor({
+          file,
+          cursor,
+          maxBytes: request.maxSerializedBytes,
+        });
+        const afterAnchor = getAgentExternalSessionsInvocationFailure(request);
+        if (afterAnchor) return afterAnchor;
+        if (anchor.matches === null) return ok({ outcome: 'read_failed' });
+        if (!anchor.matches) {
+          return ok({ outcome: 'source_replaced' });
+        }
+        if (cursor.endOffsetBytes === file.fileSize && !projection) {
+          return ok({ outcome: 'already_current' });
+        }
 
-      const page = await readJsonlFileForward({
-        filePath: file.filePath,
-        offsetBytes: cursor.endOffsetBytes,
-        includeMalformedRecords: true,
-        maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
-        maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
-        maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
-      });
-      const afterPage = getAgentExternalSessionsInvocationFailure(request);
-      if (afterPage) return afterPage;
-      const pageValues = page.items.map((item) => item.value);
-      const anchorAfterPage = await readTranscriptCursorAnchor({
-        file,
-        cursor,
-        maxBytes: request.maxSerializedBytes,
-      });
-      const afterAnchorRecheck = getAgentExternalSessionsInvocationFailure(request);
-      if (afterAnchorRecheck) return afterAnchorRecheck;
-      if (anchorAfterPage.matches === null) return ok({ outcome: 'read_failed' });
-      if (!anchorAfterPage.matches) {
-        return ok({ outcome: 'source_replaced' });
-      }
+        const page = await readJsonlFileForward({
+          filePath: file.filePath,
+          offsetBytes: cursor.endOffsetBytes,
+          includeMalformedRecords: true,
+          maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
+          maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
+          maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
+        });
+        const afterPage = getAgentExternalSessionsInvocationFailure(request);
+        if (afterPage) return afterPage;
+        const pageValues = page.items.map((item) => item.value);
+        const anchorAfterPage = await readTranscriptCursorAnchor({
+          file,
+          cursor,
+          maxBytes: request.maxSerializedBytes,
+        });
+        const afterAnchorRecheck = getAgentExternalSessionsInvocationFailure(request);
+        if (afterAnchorRecheck) return afterAnchorRecheck;
+        if (anchorAfterPage.matches === null) return ok({ outcome: 'read_failed' });
+        if (!anchorAfterPage.matches) {
+          return ok({ outcome: 'source_replaced' });
+        }
 
-      const folded = foldPiV3SessionTree([
-        ...anchor.records,
-        ...pageValues,
-      ]);
-      const foldIntegrity = foldIntegrityFailure(folded);
-      if (foldIntegrity) return foldIntegrity;
-      const previousLeafIndex = cursor.activeLeafId === null
-        ? null
-        : folded.activeBranch.findIndex((entry) => entry.id === cursor.activeLeafId);
-      const previousLeaf = previousLeafIndex === null || previousLeafIndex < 0
-        ? null
-        : folded.activeBranch[previousLeafIndex] ?? null;
-      if (
-        (previousLeafIndex === null && folded.activeBranch[0]?.parentId !== null)
-        || (previousLeafIndex !== null && previousLeafIndex < 0)
-        || (
-          previousLeaf !== null
-          && (
-            cursor.activeLeafFingerprint === null
-            || fingerprintTreeEntry(previousLeaf) !== cursor.activeLeafFingerprint
+        const folded = foldPiV3SessionTree([
+          ...anchor.records,
+          ...pageValues,
+        ]);
+        const foldIntegrity = foldIntegrityFailure(folded);
+        if (foldIntegrity) return foldIntegrity;
+        const previousLeafIndex = cursor.activeLeafId === null
+          ? null
+          : folded.activeBranch.findIndex((entry) => entry.id === cursor.activeLeafId);
+        const previousLeaf = previousLeafIndex === null || previousLeafIndex < 0
+          ? null
+          : folded.activeBranch[previousLeafIndex] ?? null;
+        if (
+          (previousLeafIndex === null && folded.activeBranch[0]?.parentId !== null)
+          || (previousLeafIndex !== null && previousLeafIndex < 0)
+          || (
+            previousLeaf !== null
+            && (
+              cursor.activeLeafFingerprint === null
+              || fingerprintTreeEntry(previousLeaf) !== cursor.activeLeafFingerprint
+            )
           )
-        )
-      ) {
-        return ok({ outcome: 'gap_or_cursor_expired' });
-      }
-      const newBranch = previousLeafIndex === null
-        ? folded.activeBranch
-        : folded.activeBranch.slice(previousLeafIndex + 1);
-      const projectedBranch = projectBranch(request.remoteSessionId, newBranch, page.items);
-      const items = projectedBranch.items;
-      const knownNonTranscriptPositions = projectedBranch.knownNonTranscriptPositions;
-      const diagnostics = [
-        ...(projectedBranch.unsupportedPositions.length > 0 ? [{
-          code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const,
-          count: projectedBranch.unsupportedPositions.length,
-          positions: projectedBranch.unsupportedPositions.slice(0, 200),
-        }] : []),
-        ...(knownNonTranscriptPositions.length > 0
-          ? [{
-              code: 'non_transcript_record_skipped',
-              severity: 'benign' as const,
-              count: knownNonTranscriptPositions.length,
-              positions: knownNonTranscriptPositions.slice(0, 200),
-            }]
-          : []),
-      ];
-      if (items.length === 0 && newBranch.length === 0) {
-        return ok({ outcome: 'gap_or_cursor_expired' });
-      }
-      const nextActiveLeaf = folded.activeBranch.at(-1) ?? null;
-      if (projection && page.nextOffsetBytes !== projection.resumeEndOffsetBytes) {
-        return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-      }
-      const limit = Math.trunc(request.maxItems);
-      let emittedItems: readonly AgentExternalSessionTranscriptItem[] = items;
-      let nextCursor = encodeTranscriptCursor({
-        file,
-        endOffsetBytes: page.nextOffsetBytes,
-        activeLeafId: nextActiveLeaf?.id ?? null,
-        activeLeafFingerprint: nextActiveLeaf
-          ? fingerprintTreeEntry(nextActiveLeaf)
-          : null,
-      });
-      let boundary = nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`;
-      if (projection) {
-        if (projection.nextItemIndex > items.length) {
+        ) {
+          return ok({ outcome: 'gap_or_cursor_expired' });
+        }
+        const newBranch = previousLeafIndex === null
+          ? folded.activeBranch
+          : folded.activeBranch.slice(previousLeafIndex + 1);
+        const projectedBranch = projectBranch(request.remoteSessionId, newBranch, page.items);
+        const items = projectedBranch.items;
+        const knownNonTranscriptPositions = projectedBranch.knownNonTranscriptPositions;
+        const diagnostics = [
+          ...(projectedBranch.unsupportedPositions.length > 0 ? [{
+            code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const,
+            count: projectedBranch.unsupportedPositions.length,
+            positions: projectedBranch.unsupportedPositions.slice(0, 200),
+          }] : []),
+          ...(knownNonTranscriptPositions.length > 0
+            ? [{
+                code: 'non_transcript_record_skipped',
+                severity: 'benign' as const,
+                count: knownNonTranscriptPositions.length,
+                positions: knownNonTranscriptPositions.slice(0, 200),
+              }]
+            : []),
+        ];
+        if (items.length === 0 && newBranch.length === 0) {
+          return ok({ outcome: 'gap_or_cursor_expired' });
+        }
+        const nextActiveLeaf = folded.activeBranch.at(-1) ?? null;
+        if (projection && page.nextOffsetBytes !== projection.resumeEndOffsetBytes) {
           return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
         }
-        emittedItems = items.slice(projection.nextItemIndex, projection.nextItemIndex + limit);
-        if (emittedItems.length === 0) {
-          return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
-        }
-        const nextItemIndex = projection.nextItemIndex + emittedItems.length;
-        boundary = `${nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`}:item:${nextItemIndex}`;
-        nextCursor = nextItemIndex < items.length
-          ? encodeTranscriptCursor({
+        const limit = Math.trunc(request.maxItems);
+        let emittedItems: readonly AgentExternalSessionTranscriptItem[] = items;
+        let nextCursor = encodeTranscriptCursor({
+          file,
+          endOffsetBytes: page.nextOffsetBytes,
+          activeLeafId: nextActiveLeaf?.id ?? null,
+          activeLeafFingerprint: nextActiveLeaf
+            ? fingerprintTreeEntry(nextActiveLeaf)
+            : null,
+        });
+        let boundary = nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`;
+        if (projection) {
+          if (projection.nextItemIndex > items.length) {
+            return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+          }
+          emittedItems = items.slice(projection.nextItemIndex, projection.nextItemIndex + limit);
+          if (emittedItems.length === 0) {
+            return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
+          }
+          const nextItemIndex = projection.nextItemIndex + emittedItems.length;
+          boundary = `${nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`}:item:${nextItemIndex}`;
+          nextCursor = nextItemIndex < items.length
+            ? encodeTranscriptCursor({
+              file,
+              endOffsetBytes: cursor.endOffsetBytes,
+              activeLeafId: cursor.activeLeafId,
+              activeLeafFingerprint: cursor.activeLeafFingerprint,
+              projection: { ...projection, nextItemIndex },
+            })
+            : encodeTranscriptCursor({
+              file,
+              endOffsetBytes: projection.resumeEndOffsetBytes,
+              activeLeafId: projection.resumeActiveLeafId,
+              activeLeafFingerprint: projection.resumeActiveLeafFingerprint,
+            });
+        } else if (items.length > limit) {
+          emittedItems = items.slice(0, limit);
+          boundary = `${nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`}:item:${emittedItems.length}`;
+          nextCursor = encodeTranscriptCursor({
             file,
             endOffsetBytes: cursor.endOffsetBytes,
             activeLeafId: cursor.activeLeafId,
             activeLeafFingerprint: cursor.activeLeafFingerprint,
-            projection: { ...projection, nextItemIndex },
-          })
-          : encodeTranscriptCursor({
-            file,
-            endOffsetBytes: projection.resumeEndOffsetBytes,
-            activeLeafId: projection.resumeActiveLeafId,
-            activeLeafFingerprint: projection.resumeActiveLeafFingerprint,
+            projection: {
+              kind: 'after',
+              nativeMaxItems: limit,
+              nativeMaxSerializedBytes: request.maxSerializedBytes,
+              nextItemIndex: emittedItems.length,
+              resumeEndOffsetBytes: page.nextOffsetBytes,
+              resumeActiveLeafId: nextActiveLeaf?.id ?? null,
+              resumeActiveLeafFingerprint: nextActiveLeaf
+                ? fingerprintTreeEntry(nextActiveLeaf)
+                : null,
+            },
           });
-      } else if (items.length > limit) {
-        emittedItems = items.slice(0, limit);
-        boundary = `${nextActiveLeaf?.id ?? `offset:${page.nextOffsetBytes}`}:item:${emittedItems.length}`;
-        nextCursor = encodeTranscriptCursor({
-          file,
-          endOffsetBytes: cursor.endOffsetBytes,
-          activeLeafId: cursor.activeLeafId,
-          activeLeafFingerprint: cursor.activeLeafFingerprint,
-          projection: {
-            kind: 'after',
-            nativeMaxItems: limit,
-            nativeMaxSerializedBytes: request.maxSerializedBytes,
-            nextItemIndex: emittedItems.length,
-            resumeEndOffsetBytes: page.nextOffsetBytes,
-            resumeActiveLeafId: nextActiveLeaf?.id ?? null,
-            resumeActiveLeafFingerprint: nextActiveLeaf
-              ? fingerprintTreeEntry(nextActiveLeaf)
-              : null,
-          },
+        }
+        const result: AgentExternalSessionsResult<AgentExternalSessionsReadAfterTranscriptResult> = ok({
+          outcome: 'advanced',
+          items: emittedItems,
+          nextCursor,
+          boundary,
+          hasMore:
+            page.nextOffsetBytes < file.fileSize
+            || (
+              projection !== undefined
+                ? projection.nextItemIndex + emittedItems.length < items.length
+                : items.length > limit
+            ),
+          ...(diagnostics.length > 0 ? { diagnostics } : {}),
         });
+        return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
+          ? result
+          : createAgentExternalSessionsProducerOverflowFailure(
+            'Pi transcript result byte budget cannot fit the readAfter envelope.',
+          );
+      } catch (error) {
+        const stopped = getAgentExternalSessionsInvocationFailure(request);
+        if (stopped) return stopped;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
+        throw error;
       }
-      const result: AgentExternalSessionsResult<AgentExternalSessionsReadAfterTranscriptResult> = ok({
-        outcome: 'advanced',
-        items: emittedItems,
-        nextCursor,
-        boundary,
-        hasMore:
-          page.nextOffsetBytes < file.fileSize
-          || (
-            projection !== undefined
-              ? projection.nextItemIndex + emittedItems.length < items.length
-              : items.length > limit
-          ),
-        ...(diagnostics.length > 0 ? { diagnostics } : {}),
-      });
-      return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
-        ? result
-        : createAgentExternalSessionsProducerOverflowFailure(
-          'Pi transcript result byte budget cannot fit the readAfter envelope.',
-        );
     },
   } satisfies AgentExternalSessionsContribution);
   return contribution;

@@ -1,5 +1,5 @@
 import { isChangeTitleToolNameAlias } from '@happier-dev/plugin-sdk/sessions';
-import { isRecord } from '@happier-dev/plugin-sdk';
+import { isPluginError, isRecord } from '@happier-dev/plugin-sdk';
 import { readSessionInputPromptUserTextV1 } from '@happier-dev/plugin-sdk/sessions/external';
 import { readJsonlFileForwardLines } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
@@ -137,7 +137,6 @@ export async function readCodexRolloutHead(
   let thread: CodexSessionThread | null = null;
   let cwd: string | undefined;
   let firstRecord = true;
-  const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(bounds);
   let fallbackUserText: string | null = null;
   let offsetBytes = 0;
   let traversedBytes = 0;

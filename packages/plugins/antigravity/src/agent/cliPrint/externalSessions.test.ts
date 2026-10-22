@@ -43,6 +43,22 @@ async function createConversation(
 }
 
 describe('Antigravity external-session pure leaf', () => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const home = await mkdir(join(tmpdir(), `antigravity-record-limit-${Date.now()}-${operation}`), { recursive: true });
+    try {
+      const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');
+      const file = await createConversation(brainDir, 'record-limit', [JSON.stringify({ id: 'before', type: 'USER_INPUT', text: 'before' })]);
+      const contribution = createAntigravityExternalSessionsContribution({ env: { HOME: home } });
+      const request = { ...invocation(), source: { kind: 'antigravityCliPrint' }, remoteSessionId: 'record-limit', maxItems: 10 };
+      const initial = await contribution.pageTranscript({ ...request, direction: 'older' });
+      if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+      await appendFile(file, JSON.stringify({ id: 'oversized', type: 'PLANNER_RESPONSE', text: 'after', padding: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
+      const result = operation === 'page' ? await contribution.pageTranscript({ ...request, direction: 'older' })
+        : await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+      expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
   it('preserves literal whitespace in a content query', async () => {
     const home = await mkdir(join(tmpdir(), `antigravity-content-literal-${Date.now()}-`), { recursive: true });
     const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');

@@ -46,7 +46,7 @@ describe('external memory transcript ingestion', () => {
       const path = join(project, `rollout-2026-10-22T00-00-00-${id}.jsonl`);
       const timestamp = new Date().toISOString();
       const row = (index: number) => JSON.stringify({ type: 'response_item', timestamp, payload: {
-        type: 'message', role: 'user', content: [{ type: 'input_text', text: `r252ordinal${index} ${'native backfill '.repeat(440)}` }],
+        type: 'message', role: index % 2 ? 'assistant' : 'user', content: [{ type: index % 2 ? 'output_text' : 'input_text', text: `r252ordinal${index} café 東京 session_handoff. ${'A coastal walk passes cedar trees and a quiet harbor. '.repeat(132)}` }],
       } }) + '\n';
       await writeFile(path, JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/synthetic' } }) + '\n'
         + Array.from({ length: 200 }, (_, index) => row(index)).join(''));
@@ -59,7 +59,7 @@ describe('external memory transcript ingestion', () => {
       const native = { agentId: 'codex', sourceKey: 'local', source: { kind: 'codexHome', home: 'user' }, reader,
         observation: { lifetime: lifetime.signal } };
       const candidate = { source, native };
-      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' },
+      const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' },
         conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
       const traversal = createMemoryExternalTranscriptTraversal();
       traversal.replace([candidate]);
@@ -109,11 +109,16 @@ describe('external memory transcript ingestion', () => {
       const id = '11111111-1111-4111-8111-111111111111';
       const project = join(dir, 'sessions', '2026', '10', '21');
       await mkdir(project, { recursive: true });
-      await writeFile(join(project, `rollout-2026-10-21T00-00-00-${id}.jsonl`), Buffer.concat([
+      const malformed = Buffer.concat([
         Buffer.from(JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/synthetic' } }) + '\n'),
         Buffer.from('{"type":"response_item","payload":{"type":"message","role":"user","content":"'),
         Buffer.from([0xff, 0xfe]), Buffer.from('"}}\n'),
-      ]));
+      ]);
+      const oversized = JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/synthetic' } }) + '\n'
+        + JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'x'.repeat(EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes) }] } }) + '\n';
+      await writeFile(join(project, `rollout-2026-10-21T00-00-00-${id}.jsonl`), failure === 'malformed' ? malformed : oversized);
+      const reason = failure === 'malformed' ? 'external_sessions_transcript_read_failed' : 'external_sessions_transcript_page_byte_budget';
       const reader = createBoundedAgentExternalSessionsContribution({ contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
         identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
           contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
@@ -121,17 +126,17 @@ describe('external memory transcript ingestion', () => {
         createInvocationExec: async () => createUnavailablePluginServices().exec });
       const source = { type: 'external_transcript' as const, agentId: 'codex', sourceKey: 'local', nativeSessionId: id };
       const candidate = { source, native: { agentId: 'codex', sourceKey: 'local', source: { kind: 'codexHome', home: 'user' }, reader } };
-      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+      const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['codex'] } } });
       const traversal = createMemoryExternalTranscriptTraversal();
       traversal.replace([candidate]);
       await expect(syncExternalMemoryTranscriptsBatch({ candidates: [candidate], db, settings, nowMs: Date.now(),
         signal: new AbortController().signal, onSourceResult: traversal.noteSyncResult,
-      })).rejects.toMatchObject({ code: 'agent_error', reason: 'external_sessions_transcript_read_failed' });
+      })).rejects.toMatchObject({ code: 'agent_error', reason });
       expect(traversal.getIndexSources(db).map(row => MemoryIndexSourceStatusV1Schema.parse(row))).toMatchObject([{ state: 'error', errorCode: 'agent_error',
-        errorReason: 'external_sessions_transcript_read_failed' }]);
+        errorReason: reason }]);
       expect(diagnostic).toHaveBeenCalledWith('[memoryWorker] Native source read failed', {
-        agentId: 'codex', code: 'agent_error', reason: 'external_sessions_transcript_read_failed',
+        agentId: 'codex', code: 'agent_error', reason,
       });
       expect(MemoryIndexSourceStatusV1Schema.safeParse({ source: { type: 'external_transcript', agentId: 'codex', sourceKey: 'local' },
         state: 'error', errorReason: `/private/${id}/transcript text` }).success).toBe(false);

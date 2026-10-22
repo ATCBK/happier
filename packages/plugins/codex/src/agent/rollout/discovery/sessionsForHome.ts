@@ -585,6 +585,10 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
       visitedDirectories.add(dir);
     } catch (error) {
       throwIfCodexExternalSessionInvocationStopped(params);
+      // Unreadable storage is not evidence that a previously indexed rollout
+      // disappeared. Only actual missing paths establish absence.
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
       return;
     }
     for (const entry of entries) {

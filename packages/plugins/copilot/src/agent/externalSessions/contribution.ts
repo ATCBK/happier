@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname } from 'node:path';
 import { stat } from 'node:fs/promises';
 
-import { isRecord } from '@happier-dev/plugin-sdk';
+import { isPluginError, isRecord } from '@happier-dev/plugin-sdk';
 import { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield, searchExternalSessionContent, type ExternalSessionContentSearchControl } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import { createAgentExternalSessionsProducerOverflowFailure, getAgentExternalSessionsInvocationFailure, isAgentExternalSessionsFailureCode, isAgentExternalSessionsResultWithinByteBudget } from '@happier-dev/plugin-sdk/sessions/external';
 import type { AgentExternalSessionCandidate, AgentExternalSessionsContribution, AgentExternalSessionsInvocation, AgentExternalSessionsListCandidatesRequest, AgentExternalSessionsResult } from '@happier-dev/plugin-sdk/sessions/external';
@@ -32,6 +32,7 @@ function bounded<T>(value: T, request: AgentExternalSessionsInvocation): AgentEx
 function failure(error: unknown, request: AgentExternalSessionsInvocation): AgentExternalSessionsResult<never> {
   const stopped = getAgentExternalSessionsInvocationFailure(request);
   if (stopped) return stopped;
+  if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return { ok: false, code: 'agent_error', message: error.message, retryable: false };
   const token = error instanceof Error ? error.message : '';
   if (isAgentExternalSessionsFailureCode(token)) return { ok: false, code: token };
   if (isRecord(error) && error.code === 'ENOENT') return { ok: false, code: 'unavailable', retryable: true };

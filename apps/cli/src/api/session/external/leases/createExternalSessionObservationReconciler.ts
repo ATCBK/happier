@@ -70,6 +70,7 @@ type AccountingRecord = {
     active: boolean;
     demand: ExternalSessionAccountingSourceDemand;
     watchedFiles: Set<string>;
+    unreadChanges: Set<string> | null;
 };
 
 type LinkRedescription = Readonly<{
@@ -359,6 +360,8 @@ export function createExternalSessionObservationReconciler(
                 if (!roots.includes(parent)) continue;
                 change = { reason: 'topology_changed' };
             }
+            if (change.reason !== 'file_changed' || !change.changedFile) record.unreadChanges = null;
+            else record.unreadChanges?.add(change.changedFile);
             try {
                 record.demand.onChange(change);
             } catch {
@@ -1717,6 +1720,7 @@ export function createExternalSessionObservationReconciler(
 
         async registerAccountingSource(input: ExternalSessionAccountingSourceDemand): Promise<Disposable & Readonly<{
             observation: Readonly<{ lifetime: AbortSignal }>;
+            readObservation(): Readonly<{ lifetime: AbortSignal; changedFiles?: readonly string[] }>;
         }>> {
             if (disposed || input.resource.retirementSignal?.aborted) {
                 throw new Error('External accounting observation authority is retired');
@@ -1729,6 +1733,7 @@ export function createExternalSessionObservationReconciler(
                     files: [], topologyDirectories: input.watchFileChanges.topologyDirectories,
                 } } : {}) },
                 watchedFiles: new Set(input.watchFileChanges?.files),
+                unreadChanges: null,
             };
             resource.accounting.add(record);
             const release = async (): Promise<void> => {
@@ -1736,6 +1741,8 @@ export function createExternalSessionObservationReconciler(
                 record.active = false;
                 resource.accounting.delete(record);
                 record.watchedFiles.clear();
+                record.unreadChanges?.clear();
+                record.unreadChanges = null;
                 if (resource.links.size === 0 && resource.accounting.size === 0) {
                     await deactivateResource(resource);
                 } else {
@@ -1750,7 +1757,15 @@ export function createExternalSessionObservationReconciler(
                 throw error;
             }
             return Object.freeze({ dispose: release,
-                observation: Object.freeze({ lifetime: resource.observationLifetime.signal }) });
+                observation: Object.freeze({ lifetime: resource.observationLifetime.signal }),
+                readObservation() {
+                    // Each demand consumes its own invalidations. Linked follow
+                    // and another source alias cannot acknowledge them for it.
+                    if (!record.active) return { lifetime: resource.observationLifetime.signal };
+                    const current = observationFor(resource, record.unreadChanges ? [...record.unreadChanges] : [], record.unreadChanges === null);
+                    record.unreadChanges = new Set();
+                    return current;
+                } });
         },
 
         async reconcileResource(

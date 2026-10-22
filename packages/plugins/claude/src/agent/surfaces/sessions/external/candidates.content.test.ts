@@ -60,6 +60,25 @@ async function corpus() {
 }
 
 describe('Claude candidate conversation search', () => {
+    it('keeps native descriptor acquisition independent of decoded chunk count', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const query = 'native descriptor needle';
+        const rows = [JSON.stringify({ type: 'user', uuid: 'prompt', parentUuid: null,
+            message: { role: 'user', content: query } })];
+        for (let index = 0; index < 800; index++) rows.push(JSON.stringify({ type: 'assistant', uuid: `tool-${index}`,
+            parentUuid: index ? `tool-${index - 1}` : 'prompt', message: { role: 'assistant', content: [
+                { type: 'tool_use', id: `call-${index}`, name: 'Read', input: { padding: 'metadata '.repeat(512) } },
+            ] } }));
+        await writeFile(path, rows.join('\n') + '\n');
+        vi.mocked(fileSystem.open).mockClear();
+        const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: query });
+        expect(page.candidates).toMatchObject([{ remoteSessionId: 'session', match: { snippet: query, messageIndex: 0 } }]);
+        expect(page.contentCoverage).toBe('complete');
+        // Two source-evidence captures, one scan and two locator re-reads. The
+        // 3+ MiB tool-heavy body must not open/close a descriptor for every chunk.
+        expect(vi.mocked(fileSystem.open).mock.calls.length).toBeLessThanOrEqual(5);
+    });
     it('publishes a hit page without prefiltering later or already visited native bodies', async () => {
         const params = await corpus();
         const directory = join(params.source.configDir, 'projects', 'project');
@@ -487,7 +506,13 @@ describe('Claude candidate conversation search', () => {
         const sourceMtime = (await actual.stat(join(params.source.configDir, 'projects', 'project', 'session.jsonl'))).mtime;
         vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
             const handle = await actual.open(...args);
-            nowMs += 3000;
+            // The native read is slow independently of descriptor reuse.
+            const read = handle.read.bind(handle);
+            handle.read = (async (...readArgs: Parameters<typeof read>) => {
+                const result = await read(...readArgs);
+                nowMs += 3000;
+                return result;
+            }) as typeof handle.read;
             return handle;
         });
         const contribution = createClaudeExternalSessionsContribution({ env: {} });

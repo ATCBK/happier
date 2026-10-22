@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import type {
   AgentExternalSessionLinkData,
   AgentExternalSessionSource,
@@ -38,6 +39,7 @@ import {
 import {
   pageCodexExternalSessionTranscript,
   readAfterCodexExternalSessionTranscript,
+  CodexExternalTranscriptSourceUnavailableError,
 } from './transcriptSource.js';
 import {
   isCodexExternalSessionLinkDataValue,
@@ -395,6 +397,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof CodexExternalSessionCandidateSourceChangedError) {
           return failed('source_invalid', error.message);
         }
@@ -450,6 +453,8 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
+        if (error instanceof CodexExternalTranscriptSourceUnavailableError) return failed('candidate_not_found', 'Codex transcript source is no longer available.', false);
         return failed(
           'agent_error',
           'external_sessions_transcript_read_failed',
@@ -483,6 +488,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
+        if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         return ok({ outcome: 'read_failed' });
       }
     },

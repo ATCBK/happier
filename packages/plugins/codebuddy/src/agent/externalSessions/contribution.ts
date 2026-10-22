@@ -1,3 +1,4 @@
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { AgentExternalSessionsContribution, AgentExternalSessionsInvocationBounds, AgentExternalSessionsResult } from '@happier-dev/plugin-sdk/sessions/external';
 import { createAgentExternalSessionsProducerOverflowFailure, getAgentExternalSessionsInvocationFailure, isAgentExternalSessionsResultWithinByteBudget } from '@happier-dev/plugin-sdk/sessions/external';
 import { listCodeBuddyCandidates } from './candidates.js';
@@ -13,6 +14,7 @@ export function createCodeBuddyExternalSessionsContribution(env: NodeJS.ProcessE
         : createAgentExternalSessionsProducerOverflowFailure('CodeBuddy result does not fit the supplied result allowance.');
     } catch (error) {
       const failure = getAgentExternalSessionsInvocationFailure(invocation); if (failure) return failure;
+      if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return { ok: false, code: 'agent_error', message: error.message, retryable: false };
       if (error instanceof CodeBuddySourceError) return { ok: false, code: error.code === 'source_unavailable' ? 'unavailable' : error.code === 'source_discontinuity' ? 'source_invalid' : error.code, message: error.message };
       if (error instanceof Error && error.name === 'AbortError') return { ok: false, code: 'cancelled' };
       return { ok: false, code: 'agent_error', message: 'CodeBuddy native history read failed.', retryable: true };

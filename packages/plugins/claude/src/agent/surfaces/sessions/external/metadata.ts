@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { readSessionInputPromptUserTextV1 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
+    isPluginError,
     isRecord,
 } from '@happier-dev/plugin-sdk';
 import {

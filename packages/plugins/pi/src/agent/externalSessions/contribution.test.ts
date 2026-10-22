@@ -125,7 +125,20 @@ afterEach(async () => {
 });
 
 describe('Pi pure External Sessions contribution leaf', () => {
-  it.each([false, true])('marks history incomplete when an oversized valid row blocks backward progress (continuation: %s)', async (continuation) => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    const sessionFile = await createSessionFile({ sessionRoot, sessionId: 'record-limit', createdAt: '2026-07-23T10:00:00.000Z', title: 'before' });
+    const contribution = createPiExternalSessionsContribution({ env: {} });
+    const request = { ...invocation(4096), source: { kind: 'piAgentDir', agentDir, sessionFile }, remoteSessionId: 'record-limit', maxItems: 10 };
+    const initial = await contribution.pageTranscript({ ...request, direction: 'older' });
+    if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+    await appendFile(sessionFile, line({ type: 'message', id: 'oversized', parentId: 'record-limit-title', message: { role: 'assistant', content: 'after' }, padding: 'x'.repeat(8192) }));
+    const result = operation === 'page' ? await contribution.pageTranscript({ ...request, direction: 'older' })
+      : await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+    expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+  });
+  it.each([false, true])('reports a record-limit failure when an oversized valid row blocks backward progress (continuation: %s)', async (continuation) => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionId = 'pi-oversized-row';
     const sessionFile = join(sessionRoot, `${sessionId}.jsonl`);
@@ -156,9 +169,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
       expect(first).toMatchObject({ ok: true, value: { hasMore: true, nextCursor: expect.any(String) } });
     }
     expect(blocked).toMatchObject({
-      ok: true, value: { items: [], hasMore: false, nextCursor: null, truncated: true },
+      ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL'),
     });
-    if (!continuation && blocked.ok) expect(blocked.value.tailCursor).toBeUndefined();
   });
 
   it('reports a failed follow read when the current anchor exceeds its byte budget', async () => {
@@ -183,7 +195,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     await expect(contribution.readAfterTranscript({
       ...invocation(4_096), source, remoteSessionId: sessionId,
       cursor: initial.value.tailCursor, maxItems: 10,
-    })).resolves.toMatchObject({ ok: true, value: { outcome: 'read_failed' } });
+    })).resolves.toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
   });
 
   it('rejects genuinely malformed UTF-8 in backward transcript records', async () => {

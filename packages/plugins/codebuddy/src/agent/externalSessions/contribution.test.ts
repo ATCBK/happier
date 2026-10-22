@@ -41,6 +41,17 @@ async function setup() {
 }
 
 describe('CodeBuddy native conversation reader', () => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const t = await setup();
+    const initial = await t.page(undefined, 10);
+    if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+    t.invocation.maxSerializedBytes = 4096;
+    await appendFile(t.file, JSON.stringify({ type: 'message', id: 'oversized', parentId: 'result1', role: 'assistant', content: 'after', padding: 'x'.repeat(8192) }) + '\n');
+    const result = operation === 'page' ? await t.page(undefined, 10)
+      : await t.contribution.readAfterTranscript({ ...t.invocation, source: t.source, remoteSessionId: 'fixture-session', maxItems: 10, cursor: initial.value.tailCursor });
+    expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+  });
   it('matches decoded real-producer bodies with stable locators and excludes tool metadata', async () => {
     const t = await setup();
     for (const query of ['harbor question', 'café 東京', 'C:\\garden\\note.txt', '"quoted phrase"', 'riverglass']) {

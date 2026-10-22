@@ -36,6 +36,16 @@ function row(id: string, text: string) {
 }
 
 describe('Copilot native event history contribution', () => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const { reader, request, file } = await fixture();
+    const initial = await reader.pageTranscript({ ...request, remoteSessionId: 'native', direction: 'older' });
+    if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+    await appendFile(file, JSON.stringify({ type: 'user.message', id: 'oversized', timestamp: '2026-10-20T10:00:00Z', data: { content: 'after' }, padding: 'x'.repeat(9 * 1024 * 1024) }) + '\n');
+    const result = operation === 'page' ? await reader.pageTranscript({ ...request, remoteSessionId: 'native', direction: 'older' })
+      : await reader.readAfterTranscript({ ...request, remoteSessionId: 'native', cursor: initial.value.tailCursor });
+    expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+  });
   it('registers a readable history owner through the production plugin activation', async () => {
     let history: AgentExternalSessionsContribution | undefined;
     await COPILOT_PLUGIN.activate({ agents: { register() {}, registerExternalSessions(_id: string, contribution: AgentExternalSessionsContribution) {

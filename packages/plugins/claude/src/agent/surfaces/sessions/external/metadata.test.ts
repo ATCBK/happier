@@ -8,6 +8,7 @@ import {
     applyClaudeTitleRecord,
     resolveClaudeTitle,
     readClaudeJsonlSessionTitle,
+    readClaudeJsonlSessionWorkingDirectory,
     readClaudeJsonlSessionTitleWithIndex,
 } from './metadata.js';
 import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
@@ -18,6 +19,18 @@ function jsonlLine(value: unknown): string {
 }
 
 describe('Claude external-session metadata', () => {
+    it('retains optional working-directory fallback when a native row exceeds the read allowance', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-claude-large-cwd-'));
+        try {
+            const projectDir = join(root, 'projects', 'proj-one');
+            await mkdir(projectDir, { recursive: true });
+            await writeFile(join(projectDir, 'large-row.jsonl'), jsonlLine({ type: 'assistant', data: 'x'.repeat(9 * 1024 * 1024) }));
+            await expect(readClaudeJsonlSessionWorkingDirectory({ source: { kind: 'claudeConfig', configDir: root }, remoteSessionId: 'large-row', env: { CLAUDE_CONFIG_DIR: root } }))
+                .resolves.toBeNull();
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
     it('re-derives an unchanged native title when the stored fallback still contains an injected-only first turn', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-old-title-'));
         try {

@@ -177,6 +177,24 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+
+  it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-record-limit-'));
+    try {
+      const sessions = join(home, 'sessions'); await mkdir(sessions);
+      const id = 'aaaaaaaa-1111-4111-8111-111111111111';
+      const file = join(sessions, `rollout-2026-10-20T10-00-00-${id}.jsonl`);
+      await writeFile(file, jsonl({ type: 'session_meta', payload: { id } }) + jsonl({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'before' }] } }));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const request = { ...invocation(), source: { kind: 'codexHome', home: 'user' }, remoteSessionId: id, maxItems: 10 };
+      const initial = await contribution.pageTranscript({ ...request, direction: 'older' });
+      if (!initial.ok || !initial.value.tailCursor) throw new Error(JSON.stringify(initial));
+      await appendFile(file, jsonl({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'after' }], padding: 'x'.repeat(9 * 1024 * 1024) } }));
+      const result = operation === 'page' ? await contribution.pageTranscript({ ...request, direction: 'older' })
+        : await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+      expect(result).toMatchObject({ ok: false, code: 'agent_error', retryable: false, message: expect.stringContaining('JSONL') });
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
   it('pages complete native history through the existing plugin execution boundary and follows appends', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codex-native-history-plugin-'));
     try {

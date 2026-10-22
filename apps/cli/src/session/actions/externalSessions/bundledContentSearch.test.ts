@@ -19,13 +19,22 @@ vi.mock('@/configuration', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/configuration')>();
     return { ...actual, configuration: { ...actual.configuration, get activeServerDir() { return fixture.activeServerDir; } } };
 });
-// Real files and codecs are retained; only OS open latency is charged to a clock.
+// Real files and codecs are retained; native read latency is charged to a clock.
 vi.mock('node:fs/promises', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
     return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
         const handle = await actual.open(...args);
         await fixture.duringOpen?.(args[0]);
-        if (args[0] === fixture.slowPath) fixture.nowMs += 3_000;
+        if (args[0] === fixture.slowPath) {
+            const read = handle.read.bind(handle);
+            handle.read = (async (...readArgs: Parameters<typeof read>) => {
+                const result = await read(...readArgs);
+                // Slow source throughput: small anchor windows do not cost a
+                // whole transcript chunk. Descriptor reuse keeps this rate.
+                fixture.nowMs += Math.ceil(3_000 * result.bytesRead / (64 * 1024));
+                return result;
+            }) as typeof handle.read;
+        }
         return handle;
     } };
 });

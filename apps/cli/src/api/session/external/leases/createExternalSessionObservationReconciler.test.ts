@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
     ExternalAgentObservationLeafFactV1,
     ExternalAgentObservationLinkEvidenceBatchV1,
@@ -95,6 +98,38 @@ afterEach(() => {
 });
 
 describe('createExternalSessionObservationReconciler', () => {
+    it('carries native dirty files independently to each accounting demand until consumed', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'external-accounting-dirty-'));
+        const path = join(directory, 'known.jsonl');
+        await mkdir(directory, { recursive: true });
+        await writeFile(path, '{"owned":true}\n');
+        const reconciler = createExternalSessionObservationReconciler({ acquireObserver: async () => ({ dispose() {} }) });
+        const changes: string[] = [];
+        const input = { resource: resource(), source: { kind: 'fixture' }, changeObservation: 'watch_file_changes' as const,
+            watchFileChanges: { files: [path], topologyDirectories: [directory] }, onChange: () => { changes.push('changed'); } };
+        const first = await reconciler.registerAccountingSource(input);
+        const second = await reconciler.registerAccountingSource(input);
+        try {
+            // The first read has no prior native facts; subsequent unchanged
+            // reads can use the existing SDK dirty-file hint.
+            expect(first.readObservation()).not.toHaveProperty('changedFiles', []);
+            expect(first.readObservation()).toHaveProperty('changedFiles', []);
+            expect(second.readObservation()).not.toHaveProperty('changedFiles', []);
+            expect(second.readObservation()).toHaveProperty('changedFiles', []);
+            await appendFile(path, '{"owned":"append"}\n');
+            await vi.waitFor(() => expect(changes.length).toBeGreaterThan(0));
+            expect(first.readObservation()).toHaveProperty('changedFiles', [path]);
+            expect(first.readObservation()).toHaveProperty('changedFiles', []);
+            expect(second.readObservation()).toHaveProperty('changedFiles', [path]);
+            await first.dispose();
+            expect(first.readObservation()).not.toHaveProperty('changedFiles');
+            expect(first.readObservation()).not.toHaveProperty('changedFiles');
+        } finally {
+            await first.dispose(); await second.dispose(); await reconciler.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it('requests source discovery for a named file outside the accounting snapshot', async () => {
         let targets: readonly DirectoryTopologyWatchTarget[] = [];
         const received: Parameters<ExternalSessionAccountingSourceDemand['onChange']>[0][] = [];

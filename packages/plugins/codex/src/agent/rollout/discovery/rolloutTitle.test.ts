@@ -29,7 +29,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, default: actual, open };
 });
 
-const { mkdtemp, writeFile } = await import('node:fs/promises');
+const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
 
 const {
   CODEX_ROLLOUT_TITLE_HEAD_BUDGET,
@@ -81,6 +81,20 @@ async function writeRollout(name: string, records: readonly string[]): Promise<s
 }
 
 describe('Codex rollout title reader', () => {
+  it('retains head classification when a later record exceeds the advisory title allowance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-large-title-'));
+    try {
+      const filePath = join(root, 'rollout.jsonl');
+      await writeFile(filePath, JSON.stringify({ type: 'session_meta', payload: { id: 'large-record', cwd: '/repo', thread_source: 'guardian_review' } }) + '\n'
+        + opaqueRecord(8192));
+      const head = await readCodexRolloutHead(filePath, {}, { maxConsideredBytes: 1024, maxConsideredItems: 64, maxTraversedBytes: 4096 });
+      expect(head).toMatchObject({ title: null, cwd: '/repo' });
+      expect(head.thread).toMatchObject({ kind: 'reviewer' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains cwd from the title head read and removes Happier prompt text before deriving its title', async () => {
     const filePath = await writeRollout('native-prompt', [
       JSON.stringify({ type: 'session_meta', payload: { id: 'native-prompt', cwd: '/repo/happier' } }) + '\n',

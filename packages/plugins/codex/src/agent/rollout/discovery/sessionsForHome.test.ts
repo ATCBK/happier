@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -185,6 +185,26 @@ describe('collectCodexSessionRolloutFiles', () => {
 });
 
 describe('inventoryCodexRootSessionRolloutFiles', () => {
+  it('does not turn an unreadable rollout directory into proof of source removal', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-inventory-unavailable-'));
+    const dir = join(codexHome, 'sessions');
+    const file = join(dir, 'rollout-owned.jsonl');
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'owned-session' } }) + '\n');
+      const request = { codexHome, remoteSessionIds: ['owned-session'], signal: new AbortController().signal };
+      expect((await inventoryCodexRootSessionRolloutFiles(request)).requested[0]?.files).toHaveLength(1);
+      fsBoundary.readdir.mockImplementation(async (...args: Parameters<typeof actual.readdir>) => {
+        if (String(args[0]) === dir) throw Object.assign(new Error('storage access revoked'), { code: 'EACCES' });
+        return actual.readdir(...args);
+      });
+      await expect(inventoryCodexRootSessionRolloutFiles(request)).rejects.toMatchObject({ code: 'EACCES' });
+      fsBoundary.readdir.mockImplementation(actual.readdir);
+      await rm(file);
+      expect((await inventoryCodexRootSessionRolloutFiles(request)).requested[0]?.files).toEqual([]);
+    } finally { fsBoundary.readdir.mockImplementation(actual.readdir); await rm(codexHome, { recursive: true, force: true }); }
+  });
   beforeEach(async () => {
     const actual = await vi.importActual<typeof import('node:fs/promises')>(
       'node:fs/promises',
