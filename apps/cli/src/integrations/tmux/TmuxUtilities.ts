@@ -1000,19 +1000,18 @@ export class TmuxUtilities {
       if (!parsed.window) {
         throw new TmuxSessionIdentifierError(`Window identifier required: ${sessionIdentifier}`);
       }
-      const directWindowId = parsed.window.match(/^@\d+$/)?.[0] ?? null;
-      if (directWindowId) return await this.killWindow(directWindowId);
-
-      const result = await this.executeTmuxCommand(['kill-window'], parsed.session, parsed.window);
+      const result = await this.executeTmuxCommand([
+        'kill-window', '-t', formatTmuxSessionIdentifier(parsed, { exactSession: true }),
+      ]);
       if (!result || result.returncode !== 0 || result.timedOut === true) {
         return false;
       }
       const inventory = await this.executeTmuxCommand([
         'list-windows',
         '-t',
-        parsed.session,
+        formatTmuxSessionIdentifier({ session: parsed.session }, { exactSession: true }),
         '-F',
-        '#{window_name}',
+        parsed.window.startsWith('@') ? '#{window_id}' : '#{window_name}',
       ]);
       if (!inventory || inventory.timedOut === true) return false;
       if (inventory.returncode === 0) {

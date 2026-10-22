@@ -46,7 +46,7 @@ describe('TmuxUtilities.killWindow', () => {
     await expect(tmux.killWindow('happy:owned-window')).resolves.toBe(true);
     expect(execute).toHaveBeenNthCalledWith(
       2,
-      ['list-windows', '-t', 'happy', '-F', '#{window_name}'],
+      ['list-windows', '-t', '=happy', '-F', '#{window_name}'],
     );
   });
 

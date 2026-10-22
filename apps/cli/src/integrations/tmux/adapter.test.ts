@@ -159,7 +159,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       },
     });
 
-    expect(utility.executeTmuxCommand).toHaveBeenCalledWith(['kill-session'], 'session-a');
+    expect(utility.executeTmuxCommand).toHaveBeenCalledWith(['kill-session'], '=session-a');
     expect(utility.killWindow).not.toHaveBeenCalled();
   });
 
@@ -207,7 +207,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       { timeoutMs: expect.any(Number) },
     ]);
     expect(calls).toContainEqual([
-      ['paste-buffer', '-p', '-r', '-d', '-b', bufferName, '-t', 'session-a:claude'],
+      ['paste-buffer', '-p', '-r', '-d', '-b', bufferName, '-t', '=session-a:claude'],
       undefined,
       undefined,
       undefined,
@@ -216,7 +216,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       { timeoutMs: expect.any(Number) },
     ]);
     expect(calls).toContainEqual([
-      ['send-keys', '-t', 'session-a:claude', 'C-m'],
+      ['send-keys', '-t', '=session-a:claude', 'C-m'],
       undefined,
       undefined,
       undefined,
@@ -521,7 +521,7 @@ describe('createTmuxTerminalHostAdapter', () => {
 
     const calls = vi.mocked(utility.executeTmuxCommand).mock.calls;
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toEqual(['send-keys', '-t', 'session-a:claude', '-l', '--', '/model']);
+    expect(calls[0]?.[0]).toEqual(['send-keys', '-t', '=session-a:claude', '-l', '--', '/model']);
     // Literal typing must never submit: no Enter / C-m key may be sent by sendLiteralText.
     expect(calls.some(([args]) => args.includes('C-m') || args.includes('Enter'))).toBe(false);
   });

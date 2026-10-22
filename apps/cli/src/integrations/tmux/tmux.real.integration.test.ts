@@ -310,6 +310,117 @@ describe.skipIf(!shouldRunTmuxIntegration())('tmux (real) integration tests (opt
         }
     });
 
+    it('rejects recycled window ownership after the tmux server restarts', async () => {
+        const dir = mkdtempSync(join('/tmp', 'hp-tmux-recycle-'));
+        const socketPath = join(dir, 'tmux.sock');
+        const utils = new TmuxUtilities('happy', undefined, socketPath);
+        const { createTmuxTerminalHostAdapter } = await import('./adapter');
+        const adapter = createTmuxTerminalHostAdapter({ tmux: utils });
+        const options = {
+            workingDirectory: dir,
+            spawnArgv: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+            spawnEnv: {},
+            isolatedEnv: true,
+        };
+        try {
+            const stale = await adapter.createOrAttachHost({ ...options, sessionName: 'retired-owner' });
+            expect((await adapter.evaluateLiveness(stale)).paneAlive).toBe(true);
+            killIsolatedTmuxServer(socketPath);
+            await waitForCondition(() => runTmux(['-S', socketPath, 'has-session']).status !== 0, {
+                timeoutMs: 2_000, label: 'isolated tmux server exit',
+            });
+            const foreign = await adapter.createOrAttachHost({ ...options, sessionName: 'other-owner' });
+            expect(foreign.paneId).toBe(stale.paneId);
+
+            expect(await adapter.evaluateLiveness(stale)).toMatchObject({ paneAlive: false, paneDead: true });
+            const { createClaudeUnifiedPromptInput } = await import('../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/turnInput.js');
+            expect(await adapter.injectUserPrompt(stale, createClaudeUnifiedPromptInput({
+                text: 'must-not-reach-other-owner', sessionId: 'retired-owner', nonce: 1, isSteer: false,
+            }))).toMatchObject({ status: 'failed', reason: 'pane_dead' });
+            await expect(adapter.interruptTurn(stale)).rejects.toThrow();
+            const control = adapter.createControlPort!(stale);
+            expect(control).not.toBeNull();
+            expect(await control!.sendLiteralText('must-not-reach-other-owner')).toMatchObject({ status: 'host_dead' });
+            expect(await control!.captureScreen()).toMatchObject({ status: 'host_dead' });
+            for (const topology of ['exclusive', 'shared'] as const) {
+                await expect(adapter.dispose({
+                    ...stale, attachMetadata: { ...stale.attachMetadata, topology },
+                })).rejects.toThrow();
+                expect((await adapter.evaluateLiveness(foreign)).paneAlive).toBe(true);
+            }
+        } finally {
+            killIsolatedTmuxServer(socketPath);
+            await removeTmuxTempDir(dir);
+        }
+    });
+
+    it('does not adopt an absent window using another live window in the same session', async () => {
+        const dir = mkdtempSync(join('/tmp', 'hp-tmux-missing-'));
+        const socketPath = join(dir, 'tmux.sock');
+        const utils = new TmuxUtilities('happy', undefined, socketPath);
+        const { createTmuxTerminalHostAdapter } = await import('./adapter');
+        const adapter = createTmuxTerminalHostAdapter({ tmux: utils });
+        try {
+            const handle = await adapter.createOrAttachHost({
+                sessionName: 'live-owner', workingDirectory: dir,
+                spawnArgv: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+                spawnEnv: {}, isolatedEnv: true,
+            });
+            const absent = { ...handle, paneId: 'missing.0' };
+            expect(await adapter.evaluateLiveness(absent)).toMatchObject({ paneAlive: false, paneDead: true });
+            expect((await adapter.evaluateLiveness(handle)).paneAlive).toBe(true);
+        } finally {
+            killIsolatedTmuxServer(socketPath);
+            await removeTmuxTempDir(dir);
+        }
+    });
+
+    it('refuses stale foreground attach instead of linking another owners window', async () => {
+        const dir = mkdtempSync(join('/tmp', 'hp-tmux-attach-'));
+        const socketPath = join(dir, 'tmux.sock');
+        const { runTmuxAttach } = await import('@/cli/commands/attach');
+        try {
+            expect(runTmux(['-S', socketPath, 'new-session', '-d', '-s', 'retired-owner-new', 'sleep 120']).status).toBe(0);
+            const result = await runTmuxAttach({
+                sessionId: 'stale-attachment',
+                terminal: { mode: 'tmux', tmux: { target: 'retired-owner:@0' } },
+            }, {
+                isTmuxAvailableFn: async () => true,
+                insideTmux: false,
+                spawnTmuxFn: async ({ args, stdio }) => stdio === 'inherit' ? 0
+                    : runTmux(['-S', socketPath, ...args]).status ?? 1,
+            });
+            expect(result).not.toBe(0);
+            expect(runTmux(['-S', socketPath, 'has-session', '-t', '=retired-owner-new']).status).toBe(0);
+        } finally {
+            killIsolatedTmuxServer(socketPath);
+            await removeTmuxTempDir(dir);
+        }
+    });
+
+    it('disposes a renamed owned window without touching another host', async () => {
+        const dir = mkdtempSync(join('/tmp', 'hp-tmux-rename-'));
+        const socketPath = join(dir, 'tmux.sock');
+        const utils = new TmuxUtilities('happy', undefined, socketPath);
+        const { createTmuxTerminalHostAdapter } = await import('./adapter');
+        const adapter = createTmuxTerminalHostAdapter({ tmux: utils });
+        const options = {
+            workingDirectory: dir, spawnArgv: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+            spawnEnv: {}, isolatedEnv: true,
+        };
+        try {
+            const owned = await adapter.createOrAttachHost({ ...options, sessionName: 'owned-before-rename' });
+            const foreign = await adapter.createOrAttachHost({ ...options, sessionName: 'unrelated-owner' });
+            expect(runTmux(['-S', socketPath, 'rename-window', '-t', `=owned-before-rename:${owned.paneId}`, 'renamed']).status).toBe(0);
+            await adapter.dispose({ ...owned, attachMetadata: { ...owned.attachMetadata, topology: 'shared' } });
+            expect((await adapter.evaluateLiveness(owned)).paneDead).toBe(true);
+            expect((await adapter.evaluateLiveness(foreign)).paneAlive).toBe(true);
+        } finally {
+            killIsolatedTmuxServer(socketPath);
+            await removeTmuxTempDir(dir);
+        }
+    });
+
     it('spawnInTmux can start many windows concurrently without index-conflict failures', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'happier-cli-tmux-it-'));
         const socketPath = join(dir, 'tmux.sock');
