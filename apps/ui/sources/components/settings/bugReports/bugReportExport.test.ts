@@ -8,7 +8,9 @@ const fs = await vi.hoisted(async () => {
 const sdk = vi.hoisted(() => ({ share: vi.fn(), available: true }));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return { ...await createReactNativeWebMock(), Platform: { OS: 'ios' } };
+  // iOS shares through the RN system Share sheet; this is the recipient boundary.
+  const Share = { sharedAction: 'sharedAction', dismissedAction: 'dismissedAction', share: async (content: { url: string }) => { await sdk.share(content.url); return { action: 'sharedAction' }; } };
+  return { ...await createReactNativeWebMock(), Platform: { OS: 'ios' }, Share };
 });
 vi.mock('expo-file-system', () => fs.module);
 vi.mock('expo-file-system/legacy', () => ({
@@ -29,13 +31,11 @@ const input = {
 } satisfies Parameters<typeof exportBugReportDiagnosticsBundle>[0];
 describe('exportBugReportDiagnosticsBundle', () => {
   it('shares one serialized bundle and removes completed iOS custody', async () => {
-    sdk.share.mockImplementation(async (uri: string, options: { mimeType?: string; UTI?: string; dialogTitle?: string }) => {
+    sdk.share.mockImplementation(async (uri: string) => {
       const contents = JSON.parse(new TextDecoder().decode(new Uint8Array(fs.files.get(uri)!)));
       expect(contents.schemaVersion).toBe(1);
       expect(contents.exportedAt).toBe(input.exportedAt);
       expect(JSON.stringify(contents)).toContain('synthetic log');
-      expect(options).toMatchObject({ mimeType: 'application/json', UTI: 'public.json' });
-      expect(options.dialogTitle).toBeTruthy();
       expect(uri).toContain('/happier-downloads/');
     });
     await exportBugReportDiagnosticsBundle(input);

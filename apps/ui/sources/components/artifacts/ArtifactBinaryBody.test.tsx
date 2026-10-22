@@ -13,6 +13,15 @@ const nativeBoundary = vi.hoisted(() => ({
     filesystem: null as ReturnType<typeof import('@/dev/testkit/mocks/expoFileSystem').createExpoFileSystemFileMock> | null,
     share: async (_uri: string, _name?: string, _mime?: string | null) => {},
 }));
+// iOS shares through the RN system Share sheet; this is the recipient boundary.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const Share = {
+        sharedAction: 'sharedAction', dismissedAction: 'dismissedAction',
+        share: async (content: { url: string }) => { await nativeBoundary.share(content.url); return { action: 'sharedAction' }; },
+    };
+    return { ...await createReactNativeWebMock(), Share };
+});
 vi.mock('expo-file-system', async () => {
     nativeBoundary.filesystem = (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock();
     return nativeBoundary.filesystem.module;

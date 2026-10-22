@@ -2,17 +2,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportThemeProfileToJson } from '@/theme/profiles/themeProfileImportExport';
 import { exportThemeProfileFile } from './themeProfileFileExport';
 const platform = vi.hoisted(() => ({ OS: 'ios' }));
+const sharing = vi.hoisted(() => ({ available: true, failed: false, observed: vi.fn() }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     const native = await createReactNativeNativeMock({ platformOS: 'ios' });
-    return { ...native, Platform: Object.assign(platform, native.Platform) };
+    // iOS shares through the RN system Share sheet; Android uses the native file action below.
+    const Share = {
+        sharedAction: 'sharedAction', dismissedAction: 'dismissedAction',
+        share: async (content: { url: string }) => {
+            await sharing.observed(content.url);
+            if (sharing.failed) throw new Error('native_share_failed');
+            return { action: 'sharedAction' };
+        },
+    };
+    return { ...native, Share, Platform: Object.assign(platform, native.Platform) };
 });
 
 const fs = await vi.hoisted(async () => {
     const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
     return createExpoFileSystemFileMock();
 });
-const sharing = vi.hoisted(() => ({ available: true, failed: false, observed: vi.fn() }));
 vi.mock('expo-file-system', () => fs.module);
 vi.mock('expo-sharing', () => ({
     isAvailableAsync: async () => sharing.available,
@@ -47,8 +56,10 @@ describe('theme profile file export custody', () => {
         const json = exportThemeProfileToJson({ schemaVersion: 1, id: 'synthetic', name: 'Synthetic theme', createdAt: '2026-05-12T00:00:00.000Z', updatedAt: '2026-05-12T00:00:00.000Z', base: { light: 'light', dark: 'dark' }, overrides: { light: {}, dark: {} } });
         sharing.observed.mockImplementation((uri: string, _name?: string, mimeType?: string, title?: string) => {
             expect(new TextDecoder().decode(new Uint8Array(fs.files.get(uri)!))).toBe(json);
-            expect(mimeType).toBe('application/json');
-            expect(title).toBeTruthy();
+            if (os === 'android') {
+                expect(mimeType).toBe('application/json');
+                expect(title).toBeTruthy();
+            }
         });
         await exportThemeProfileFile('happier-theme-synthetic.json', json);
         const uri = sharing.observed.mock.calls[0][0];

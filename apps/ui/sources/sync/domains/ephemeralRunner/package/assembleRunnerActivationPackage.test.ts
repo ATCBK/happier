@@ -12,10 +12,26 @@ import { signMachineInstallationProof, type HomeConnectionDescriptorV1 } from '@
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 
-const platform = vi.hoisted(() => ({ OS: 'web' }));
+const platform = vi.hoisted(() => {
+    const state = {
+        OS: 'web',
+        select: (spec: Record<string, unknown>): unknown => spec[state.OS] ?? spec.default,
+    };
+    return state;
+});
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return { ...await createReactNativeWebMock(), Platform: platform };
+    // iOS hands the cache file to the system Share sheet; RN's Share is that OS boundary.
+    const Share = {
+        sharedAction: 'sharedAction',
+        dismissedAction: 'dismissedAction',
+        share: async ({ url }: { url: string }) => {
+            await sharing.observed(url);
+            if (sharing.failed) throw new Error('native_share_failed');
+            return { action: 'sharedAction' };
+        },
+    };
+    return { ...await createReactNativeWebMock(), Platform: platform, Share };
 });
 
 const fs = await vi.hoisted(async () => {
@@ -219,8 +235,7 @@ describe('creator-local Runner package assembly', () => {
         platform.OS = os;
         sharing.observed.mockImplementation(async (uri: string, name?: string, mimeType?: string, UTI?: string) => {
             expect(fs.close).toHaveBeenCalledWith(uri);
-            expect(mimeType).toBe('application/zip');
-            if (os === 'ios') expect(UTI).toBe('public.zip-archive');
+            if (os === 'android') expect(mimeType).toBe('application/zip');
             const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(fs.files.get(uri)!)), { useWebWorkers: false });
             expect((await reader.getEntries()).map(entry => entry.filename)).toContain('happier-runner.activation.json');
             await reader.close();

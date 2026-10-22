@@ -16,6 +16,18 @@ vi.mock('expo-modules-core', async importOriginal => ({
     requireOptionalNativeModule: (name: string) => name === 'HappierFileActions' ? actions : null,
 }));
 vi.mock('expo-sharing', () => ({ isAvailableAsync: actions.iosAvailable, shareAsync: actions.iosShare }));
+// iOS hands the cache file to the system Share sheet; RN's Share is that OS boundary.
+vi.mock('react-native', async importOriginal => ({
+    ...await importOriginal<typeof import('react-native')>(),
+    Share: {
+        sharedAction: 'sharedAction',
+        dismissedAction: 'dismissedAction',
+        share: async ({ url }: { url: string }) => {
+            await actions.iosShare(url);
+            return { action: 'sharedAction' };
+        },
+    },
+}));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: key => key });
@@ -271,7 +283,7 @@ describe('workspace file native download actions through the prepared carrier', 
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
         const transfers = await renderTransfers();
         await act(async () => { expect(await transfers.api().startDownload({ path: 'recording.mp4', asZip: false })).toEqual({ ok: true }); });
-        expect(actions.iosShare).toHaveBeenCalledWith(expect.stringMatching(/\.mp4$/), undefined);
+        expect(actions.iosShare).toHaveBeenCalledWith(expect.stringMatching(/\.mp4$/));
         expect(actions.saveFile).not.toHaveBeenCalled();
         expect((await fs).files.size).toBe(0);
     });

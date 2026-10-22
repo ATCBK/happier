@@ -19,13 +19,18 @@ const mocks = vi.hoisted(() => ({
     createNativeCacheFileSink: vi.fn(),
 }));
 
-vi.mock('react-native', () => ({
-    Platform: {
-        get OS() {
-            return mocks.platform;
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return {
+        ...await createReactNativeWebMock(),
+        Platform: {
+            get OS() {
+                return mocks.platform;
+            },
+            select: (spec: Record<string, unknown>) => spec[mocks.platform] ?? spec.default,
         },
-    },
-}));
+    };
+});
 
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => 'runner-acquisition-id' }));
 vi.mock('@/hooks/workspaces/transfers/webDownloadFileSink', () => ({
