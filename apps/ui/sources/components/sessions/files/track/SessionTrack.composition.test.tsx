@@ -30,6 +30,7 @@ const { createWorkspaceActionAdapter } = await import('@/components/appShell/wor
 const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
 const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
 const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
@@ -61,7 +62,7 @@ async function renderSessionTrack(tool: ScriptedWrite) {
     connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials, request: homes.request });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const sessionId = 'track-session';
-    const scopeId = 'session:track-composition';
+    const scopeId = createSessionPaneScopeId(sessionId, serverId, 'retained-track-session');
     const session = createSessionFixture({ id: sessionId, serverId, active: true, activeAt: Date.now(),
         thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
         metadata: { machineId: 'machine', path: '/repo', host: 'test' } });
@@ -107,6 +108,19 @@ async function renderSessionTrack(tool: ScriptedWrite) {
 }
 
 describe('Session Track composition', () => {
+    it('pauses following when the current file acquires an Account-owned draft in its actual Session pane', async () => {
+        const { hook } = await renderSessionTrack({ id: 'write-dirty', name: 'Write', input: { file_path: '/repo/a.ts', content: 'hello' } });
+        await act(async () => { await waitForHomeGovernance(() => {
+            expect(hook.getCurrent().pane.scopeState?.details.tabs).toEqual([expect.objectContaining({ key: 'file:a.ts' })]);
+        }); });
+        await act(async () => hook.getCurrent().pane.patchDetailsTabState('file:a.ts', {
+            accountId: 'alice', isEditingFile: true, editorOriginalHash: 'base', editorText: 'unsaved draft',
+        }));
+        expect(hook.getCurrent().track).toMatchObject({ paused: true, pauseReason: 'dirtyEditor', target: { path: 'a.ts' } });
+        expect(hook.getCurrent().pane.scopeState?.details.tabState['file:a.ts']).toMatchObject({ editorText: 'unsaved draft' });
+        await hook.unmount();
+    });
+
     it('follows the current writing file through the real opener without navigating or presenting Details', async () => {
         const { hook, hrefs, present } = await renderSessionTrack({ id: 'write-a', name: 'Write', input: { file_path: '/repo/a.ts', content: 'hello' } });
         await act(async () => { await waitForHomeGovernance(() => {

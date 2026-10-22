@@ -10,6 +10,8 @@ import type { ActionApprovalContinuation } from '@/components/approvals/actionAp
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
+import { normalizeLocalPathForComparison } from '@/utils/path/resolvePathRelativeToRoot';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import {
   machineWorkspaceFileReplaceApply,
@@ -113,8 +115,14 @@ export function replaceFileSelection(
   };
 }
 
-function isUnsaved(path: string, unsaved: ReadonlySet<string>): boolean {
-  return unsaved.has(path);
+function replacePathKey(path: string, rootPath?: string): string {
+  return normalizeLocalPathForComparison(rootPath
+    ? resolveMachineAbsolutePath({ rootPath, requestPath: path, pathKind: 'workspace_entry' }) : path,
+    { preserveWhitespace: true }) ?? path;
+}
+
+function isUnsaved(path: string, unsaved: ReadonlySet<string>, rootPath?: string): boolean {
+  return unsaved.has(replacePathKey(path, rootPath));
 }
 
 /** What Apply sends: loaded files with a selected match that the editor does not hold a draft of. */
@@ -122,11 +130,12 @@ export function buildReplaceApplyFiles(
   files: readonly WorkspaceReplacePreviewFile[],
   excluded: WorkspaceReplaceExclusions,
   unsavedPaths: readonly string[],
+  rootPath?: string,
 ): ReplaceSelection[] {
-  const unsaved = new Set(unsavedPaths);
+  const unsaved = new Set(unsavedPaths.map(path => replacePathKey(path, rootPath)));
   return files.flatMap((file): ReplaceSelection[] => {
     if (
-      isUnsaved(file.path, unsaved) ||
+      isUnsaved(file.path, unsaved, rootPath) ||
       replaceFileSelection(file, excluded).state === 'none'
     )
       return [];
@@ -661,20 +670,20 @@ export function useWorkspaceReplace(
   }, [available, key, loadingMore, options, preview, scope]);
 
   const unsavedSet = React.useMemo(
-    () => new Set(input.unsavedPaths),
-    [input.unsavedPaths],
+    () => new Set(input.unsavedPaths.map(path => replacePathKey(path, scope?.rootPath))),
+    [input.unsavedPaths, scope?.rootPath],
   );
   const allFiles = preview?.files ?? NO_FILES;
   const unsavedFiles = React.useMemo(
-    () => allFiles.filter((file) => isUnsaved(file.path, unsavedSet)),
-    [allFiles, unsavedSet],
+    () => allFiles.filter((file) => isUnsaved(file.path, unsavedSet, scope?.rootPath)),
+    [allFiles, unsavedSet, scope?.rootPath],
   );
   const files = React.useMemo(
     () =>
       unsavedFiles.length
-        ? allFiles.filter((file) => !isUnsaved(file.path, unsavedSet))
+        ? allFiles.filter((file) => !isUnsaved(file.path, unsavedSet, scope?.rootPath))
         : allFiles,
-    [allFiles, unsavedFiles.length, unsavedSet],
+    [allFiles, unsavedFiles.length, unsavedSet, scope?.rootPath],
   );
   const totals = React.useMemo(() => {
     let selectedMatches = 0;

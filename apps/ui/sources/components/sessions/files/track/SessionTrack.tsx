@@ -71,6 +71,7 @@ export function useSessionTrack(
   const dirtyList = unsavedWorkspaceFilePaths({
     accountId: accountScope?.accountId ?? null,
     details,
+    rootPath: params.workspaceRoot,
   });
   const dirtyKey = dirtyList.join('\n');
   const dirtyPaths = React.useMemo(
