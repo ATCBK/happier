@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { SettingsDeclarationTargetV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
@@ -10,14 +11,17 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { SettingRef, SettingValue } from './settingDeclarations';
 
-export type SettingActionAddress = Pick<SettingRef, 'anchor'> & Readonly<{ key?: string }>;
+export type SettingActionAddress = Pick<SettingRef, 'anchor'> & Readonly<{ key?: string; target?: SettingsDeclarationTargetV1 }>;
 
 /** Exact declared-setting ingress; the mounted Action owner retains admission and approval. */
-export function useSettingActionWriter(options: Readonly<{ serverId?: string; beforeLocalCommit?: () => void }> = {}) {
+export function useSettingActionWriter(options: Readonly<{ serverId?: string; beforeLocalCommit?: () => void;
+    executorOptions?: NonNullable<Parameters<typeof useMountedActionExecution>[1]>['executorOptions'];
+}> = {}) {
     const scope = getStorage()(state => state.settingsScope);
     const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [scope]);
     const beforeLocalCommit = options.beforeLocalCommit;
-    const executorOptions = React.useMemo(() => ({ beforeLocalSettingCommit: beforeLocalCommit }), [beforeLocalCommit]);
+    const suppliedExecutorOptions = options.executorOptions;
+    const executorOptions = React.useMemo(() => ({ ...suppliedExecutorOptions, beforeLocalSettingCommit: beforeLocalCommit }), [beforeLocalCommit, suppliedExecutorOptions]);
     // A setting control has no inline decision surface: an Ask-first wait opens the existing Inbox review.
     const mounted = useMountedActionExecution(scope, { executorOptions, openOnRequest: true });
     const localFrontDoor = React.useMemo(() => createFrontDoorActionExecute(undefined, executorOptions), [executorOptions]);
@@ -45,7 +49,8 @@ export function useSettingActionWriter(options: Readonly<{ serverId?: string; be
             const cancellation = mergeAbortSignals([localLifetime.controller.signal, operation?.signal]);
             try {
                 return await localFrontDoor('settings.set', { anchor: setting.anchor,
-                    ...(setting.key !== undefined ? { key: setting.key } : {}), value }, {
+                    ...(setting.key !== undefined ? { key: setting.key } : {}),
+                    ...(setting.target ? { target: setting.target } : {}), value }, {
                     surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, signal: cancellation.signal,
                 });
             } finally { cancellation.dispose(); }
@@ -57,9 +62,11 @@ export function useSettingActionWriter(options: Readonly<{ serverId?: string; be
         const retirement = lifetime.onRetire(() => controller.abort());
         const cancellation = mergeAbortSignals([controller.signal, operation?.signal]);
         try {
-            return await mounted.execute('settings.set', { anchor: setting.anchor, ...(setting.key !== undefined ? { key: setting.key } : {}), value }, {
+            return await mounted.execute('settings.set', { anchor: setting.anchor, ...(setting.key !== undefined ? { key: setting.key } : {}),
+                ...(setting.target ? { target: setting.target } : {}), value }, {
                 signal: cancellation.signal,
-                ...(readBuiltInSettingDeclarationV1(setting.anchor)?.storage?.scope === 'local' ? { retainInvocation: true as const } : {}),
+                ...(setting.target?.kind === 'public_profile_draft' || readBuiltInSettingDeclarationV1(setting.anchor)?.storage?.scope === 'local'
+                    ? { retainInvocation: true as const } : {}),
             });
         } finally {
             cancellation.dispose();
