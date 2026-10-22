@@ -1,13 +1,47 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
-    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.test-ui.typecheck.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.test-ui.typecheck.tsbuildinfo",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2018.asynciterable",
+      "es2020",
+      "es2022"
+    ]
   },
   "references": [
-    { "path": "./tsconfig.source.json" },
-    { "path": "../ui/tsconfig.source.json" }
+    {
+      "path": "./tsconfig.source.json"
+    },
+    {
+      "path": "../ui/tsconfig.source.json"
+    }
   ],
-  "files": [],
+  "files": [
+    "src/agent/runtime/capabilitySelectionSynchronizer.test.ts",
+    "src/api/machine/rpcHandlers.voiceInferenceStreaming.test.ts",
+    "src/capabilities/installJobs/agentInstallJobOwner.definition.test.ts",
+    "src/capabilities/installJobs/agentInstallJobOwner.test.ts",
+    "src/capabilities/snapshots/cliSnapshot.inventory.test.ts",
+    "src/daemon/browser/actions/sandbox.actions.test.ts",
+    "src/daemon/computer/driver/nativeInputRecovery.test.ts",
+    "src/daemon/computer/source.relay.test.tsx",
+    "src/daemon/externalActions/executeExternalAction.filesystemApprovals.test.ts",
+    "src/daemon/local/services/launch/feed.test.ts",
+    "src/daemon/local/services/launch/projectDeclarations.test.ts",
+    "src/daemon/machine/metadata.test.ts",
+    "src/daemon/workflows/composedWorkflowHarness.test.ts",
+    "src/mcp/runtime/resolveRunnerMcpServers.test.ts",
+    "src/plugins/projection/registry/projection/v2.agentUiBehavior.test.ts",
+    "src/plugins/projection/registry/projection/v2.test.ts",
+    "src/plugins/runtime/runtimeCore/plugin/session.test.ts",
+    "src/rpc/handlers/capabilities.connectedServicesPreflight.test.ts",
+    "src/rpc/handlers/daemonContributionRegistryProjection.executionOriginIdentity.test.ts",
+    "src/rpc/handlers/sessionControls.skillOrigin.test.ts",
+    "src/session/external/claudeLinkedTranscript.test.ts"
+  ],
   "include": [],
-  "exclude": []
+  "exclude": [],
+  "compileOnSave": false
 }
