@@ -120,6 +120,12 @@ does not write to the provider's interactive terminal.
 
 ## Live runner wake-up recovery (development)
 
+Pending counts and versions come from the server's projection. A materialization
+acknowledgement without that projection, including the released-server adapter,
+retains the last server state. It does not decrement counts or increment versions:
+the same claim's post-commit hint may already have arrived during transcript lookup.
+Older snapshots and hints remain unable to replace newer pending state.
+
 The session client owns pending-input wake subscriptions. A transient socket
 disconnect does not end those subscriptions: idle and active-turn consumers must
 still observe later eligibility updates. Caller cancellation and client close

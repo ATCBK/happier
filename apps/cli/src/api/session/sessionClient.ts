@@ -332,7 +332,6 @@ import {
 import {
     applyKnownPendingQueueState,
     countMaterializablePendingRows,
-    derivePendingQueueStateAfterMaterializeResult,
     readKnownPendingQueueState,
     UNKNOWN_PENDING_QUEUE_STATE,
     type KnownPendingQueueState,
@@ -6546,13 +6545,10 @@ export class ApiSessionClient extends EventEmitter {
                 },
             };
         }
-        const pendingStateUpdate = derivePendingQueueStateAfterMaterializeResult({
-            current: this.pendingQueueState,
-            didMaterialize: materializeResult.didMaterialize,
-            authoritativeState: materializeResult.pendingQueueState ?? null,
-        });
-        if (pendingStateUpdate.state.known) {
-            this.applyPendingQueueState(pendingStateUpdate.state);
+        // Released-server acknowledgements omit the projection. Its post-commit hint may
+        // already be applied, so only the server can advance these counters and version.
+        if (materializeResult.pendingQueueState) {
+            this.applyPendingQueueState(materializeResult.pendingQueueState);
         }
         if (this.closed || this.runtimeTerminationStarted) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
