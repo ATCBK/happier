@@ -3949,6 +3949,32 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
+  it('carries actual failed SDK result usage evidence through the provider event boundary', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'actual-result-evidence',
+    });
+    const events: Array<{ kind: string }> = [];
+    operations.subscribeProviderEvents((event) => events.push(event));
+    try {
+      operations.beginProviderTurn('actual-result-turn');
+      await operations.sendProviderTurnPrompt('parent request');
+      const completion = operations.waitForProviderTurnCompletion();
+      const rejected = expect(completion).rejects.toThrow();
+      await exec.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+        session_id: 'actual-native-result', errors: ['Claude AI usage limit reached|1792656000'],
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await rejected;
+      expect(events.filter((event) => event.kind === 'turn-failed')).toEqual([expect.objectContaining({
+        issue: expect.objectContaining({ usageLimit: expect.objectContaining({
+          limitCategory: 'usage_limit', resetAtMs: 1792656000000,
+        }) }),
+      })]);
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it('keeps Runtime Activity idle after an exact SDK error result with no active provider tasks', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
@@ -3976,7 +4002,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         subtype: 'error_during_execution',
         is_error: true,
         session_id: 'claude-provider-session-result-error-activity',
-        errors: ['rate limited'],
+        errors: ['Claude AI usage limit reached|1792656000'],
         num_turns: 1,
         total_cost_usd: 0,
         duration_ms: 10,
