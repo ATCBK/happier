@@ -76,16 +76,18 @@ it('prepares an isolated requester Agent home without a Connected Account for Pr
     expect(materialized?.env.CODEX_HOME).toBeTruthy();
     expect(existsSync(join(materialized!.env.CODEX_HOME!, 'auth.json'))).toBe(false);
     expect(await readFile(join(aliceHome, 'auth.json'), 'utf8')).toContain('alice-login');
-    // This no-credential launch has five artifact effects: staging,
-    // native-home preparation, staging/target finalization and promotion. Each
-    // retains fresh entry/exit authority; individual preparation files must
-    // not add another Home round trip around the same preparation.
-    expect(requesterVerifications).toBe(10);
+    // Staging, native-home preparation, native credential publication (empty
+    // here) and final publication each retain fresh entry/exit authority.
+    // Final root preparation and promotion are one dependent filesystem effect.
+    expect(requesterVerifications).toBe(8);
     await materialized?.cleanupOnExit?.();
   } finally { await rm(baseDir, { recursive: true, force: true }); }
 });
 
-it.each(['revocation', 'cancellation'] as const)('refuses native-home publication after %s during preparation', async (failure) => {
+it.each([
+  ['revocation', 'native_home_state'], ['cancellation', 'native_home_state'],
+  ['revocation', 'materialization_root_finalize'], ['cancellation', 'materialization_root_finalize'],
+] as const)('refuses native-home publication after %s during %s', async (failure, phase) => {
   const baseDir = await mkdtemp(join(tmpdir(), 'requester-native-preparation-'));
   const materializationKey = 'refused-native-preparation';
   const materializedBase = join(baseDir, 'materialized');
@@ -101,7 +103,7 @@ it.each(['revocation', 'cancellation'] as const)('refuses native-home publicatio
   const log = vi.spyOn(logger, 'infoFile').mockImplementation((message, fields) => {
     originalLog(message, fields);
     if (message === '[CONNECTED ACCOUNT] Materialization phase'
-      && isMaterializationPhase(fields, materializationKey, 'native_home_state', 'completed')) {
+      && isMaterializationPhase(fields, materializationKey, phase, 'completed')) {
       interrupted = true;
       if (failure === 'revocation') current = false;
       else cancellation.abort(new Error('fixture_materialization_cancelled'));

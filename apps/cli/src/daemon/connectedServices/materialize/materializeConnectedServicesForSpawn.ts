@@ -978,26 +978,57 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
       targetMaterializedEnv: materializedEnv,
     })
     ?? (materialized.cleanupOnFailure ? rootDir : null);
-  try {
-    await observeConnectedServiceMaterializationPhase(params, 'materialization_root_finalize',
-      () => writeArtifacts(() => ensurePrivateConnectedServiceMaterializedRoot(attemptRoot)));
-    if (
-      targetMaterializedRoot
-      && resolve(targetMaterializedRoot) !== resolve(rootDir)
-    ) {
-      await writeArtifacts(() => ensurePrivateConnectedServiceMaterializedRoot(targetMaterializedRoot));
+  const cleanupFinalRoot = createBestEffortCleanupDirectory(
+    rootDir, undefined, { failureMode: 'reject' },
+  );
+  // Unretained promoted roots are custody: cleanup awaits real removal and
+  // surfaces failures alongside credential retirement. Resumable native
+  // state remains under the existing home reclamation owner.
+  const runPromotedRootCleanup = async (
+    cleanupCredentials: (() => void | Promise<void>) | null | undefined,
+  ): Promise<void> => {
+    let rootRemovalError: unknown;
+    const rootRemoval = (async () => {
+      if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir })) return;
+      // Native rollouts may be the only resume state. Credential/runtime
+      // retirement still runs; the existing orphan sweep owns later reclamation.
+      if (params.probePurpose === 'probe' || !await isConnectedServiceMaterializedHomeRetainedOnExit({
+        materializationKey: params.materializationKey, homeRoot: rootDir,
+      })) await cleanupFinalRoot();
+    })().catch((error: unknown) => {
+      rootRemovalError = error;
+    });
+    let credentialCleanupError: unknown;
+    try {
+      await cleanupCredentials?.();
+    } catch (error) {
+      credentialCleanupError = error;
     }
-  } catch (error) {
-    await cleanupMaterialized();
-    dropAttemptRoot();
-    forgetActiveAttemptIfCurrent(rootDir, attemptId);
-    throw error;
-  }
-
+    await rootRemoval;
+    const failures = [rootRemovalError, credentialCleanupError]
+      .filter((error) => error !== undefined);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        'Connected-service materialized-root and credential cleanup failed',
+      );
+    }
+  };
   try {
-    await observeConnectedServiceMaterializationPhase(params, 'materialization_promotion', () => writeArtifacts(() => runSerializedMaterializationPromotion(rootDir, async () => {
+    // Final root preparation and promotion form one dependent filesystem
+    // publication. Qualify after entering the existing queue and before
+    // returning its result, not separately around each permission check.
+    await observeConnectedServiceMaterializationPhase(params, 'materialization_promotion', () => runSerializedMaterializationPromotion(rootDir, () => writeArtifacts(async () => {
       assertOpen();
       assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
+      await observeConnectedServiceMaterializationPhase(params, 'materialization_root_finalize', async () => {
+        await ensurePrivateConnectedServiceMaterializedRoot(attemptRoot);
+        if (targetMaterializedRoot && resolve(targetMaterializedRoot) !== resolve(rootDir)) {
+          await ensurePrivateConnectedServiceMaterializedRoot(targetMaterializedRoot);
+        }
+      });
+      assertOpen();
       if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir, allowMissing: true })) {
         throw new Error('connected_service_materialization_root_unsafe');
       }
@@ -1025,43 +1056,6 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
     })));
     assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
 
-    const cleanupFinalRoot = createBestEffortCleanupDirectory(
-      rootDir, undefined, { failureMode: 'reject' },
-    );
-    // Unretained promoted roots are custody: cleanup awaits real removal and
-    // surfaces failures alongside credential retirement. Resumable native
-    // state remains under the existing home reclamation owner.
-    const runPromotedRootCleanup = async (
-      cleanupCredentials: (() => void | Promise<void>) | null | undefined,
-    ): Promise<void> => {
-      let rootRemovalError: unknown;
-      const rootRemoval = (async () => {
-        if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir })) return;
-        // Native rollouts may be the only resume state. Credential/runtime
-        // retirement still runs; the existing orphan sweep owns later reclamation.
-        if (params.probePurpose === 'probe' || !await isConnectedServiceMaterializedHomeRetainedOnExit({
-          materializationKey: params.materializationKey, homeRoot: rootDir,
-        })) await cleanupFinalRoot();
-      })().catch((error: unknown) => {
-        rootRemovalError = error;
-      });
-      let credentialCleanupError: unknown;
-      try {
-        await cleanupCredentials?.();
-      } catch (error) {
-        credentialCleanupError = error;
-      }
-      await rootRemoval;
-      const failures = [rootRemovalError, credentialCleanupError]
-        .filter((error) => error !== undefined);
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) {
-        throw new AggregateError(
-          failures,
-          'Connected-service materialized-root and credential cleanup failed',
-        );
-      }
-    };
     const cleanupOnFailure = materialized.cleanupOnFailure
       ? async () => {
           await runPromotedRootCleanup(materialized.cleanupOnFailure);
@@ -1120,7 +1114,8 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
       },
     };
   } catch (error) {
-    await cleanupMaterialized();
+    if (promoted) await runPromotedRootCleanup(cleanupMaterialized);
+    else await cleanupMaterialized();
     dropAttemptRoot();
     throw error;
   } finally {
