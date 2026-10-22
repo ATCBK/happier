@@ -352,6 +352,8 @@ export function DiscussionComposer(props: Readonly<{
                 voiceAffordance="dictation"
                 messageHistory="none"
                 promptLibrary="none"
+                // The roster (or, before create, the chosen invitees) is who can be addressed; no Account-wide Recent.
+                referenceRecents="none"
             />
         );
     };

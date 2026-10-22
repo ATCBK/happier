@@ -503,6 +503,11 @@ interface AgentInputProps {
     messageHistory?: 'auto' | 'none';
     /** Controls prompt-library contents independently of recalled message history. Default `auto`. */
     promptLibrary?: 'auto' | 'none';
+    /**
+     * `none`: a bare `@` offers only `autocompleteSuggestions`, with no Recent group drawn from the whole
+     * Account (a Discussion, whose roster is the complete set of who can be addressed). Default `auto`.
+     */
+    referenceRecents?: 'auto' | 'none';
     /** Changes to a non-empty key open the model/agent picker for an explicit external action. */
     openModelPickerRequestKey?: string | null;
     /**
@@ -2187,7 +2192,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const activeSuggestionQuery = isInputFocused && hasAutocompleteTextInteraction && !props.disabled ? activeWord : null;
     // Selection follows candidate identity, not an index (INV-6) — the hook owns that.
     const resolveSuggestions = React.useCallback<ActiveSuggestionsHandler>(async (query, signal, publish) => {
-        if (query !== '@' || !composerDropScope) return props.autocompleteSuggestions(query, signal, publish);
+        if (query !== '@' || !composerDropScope || props.referenceRecents === 'none') return props.autocompleteSuggestions(query, signal, publish);
         const rows = readRegisteredStorageState()?.sessionListRowsByServerId?.[composerDropScope.serverId];
         const sessions = props.autocompleteKinds.includes('session')
             ? readComposerSessionSuggestionItems({ serverId: composerDropScope.serverId, currentSessionId: props.sessionId ?? null })
@@ -2215,7 +2220,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const withRecent = (rows: readonly AutocompleteSuggestion[]) => [...recent, ...rows.filter(row => !recentIdentities.has(getAutocompleteSuggestionIdentity(row)))];
         publish(recent);
         return withRecent(await props.autocompleteSuggestions(query, signal, (rows, status) => publish(withRecent(rows), status)));
-    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems]);
+    }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems, props.referenceRecents]);
     // Folder/attachment refreshes only affect bare-@ recents, not an in-flight native catalog query.
     const activeSuggestionsHandler = activeSuggestionQuery === '@' ? resolveSuggestions : props.autocompleteSuggestions;
     const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty, selectionForKind] = useActiveSuggestions(activeSuggestionQuery, activeSuggestionsHandler, { wrapAround: true });
