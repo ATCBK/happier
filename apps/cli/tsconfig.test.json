@@ -3557,6 +3557,7 @@
     "src/server/serverUrlClassification.test.ts",
     "src/session/actions/actionExecutionAuthority.architecture.test.ts",
     "src/session/actions/approvals/artifactStore.crossDeviceApproval.test.ts",
+    "src/session/actions/approvals/artifactStore.performance.test.ts",
     "src/session/actions/approvals/artifactStore.pluginInstall.test.ts",
     "src/session/actions/approvals/artifactStore.secretFill.test.ts",
     "src/session/actions/approvals/artifactStore.settlement.test.ts",
