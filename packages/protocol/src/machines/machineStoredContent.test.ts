@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { encodeBase64 } from '../crypto/base64.js';
 import tweetnacl from 'tweetnacl';
@@ -31,6 +31,24 @@ function encodeJson(value: unknown): string {
 }
 
 describe('machineStoredContent', () => {
+  it('recognizes exact key marker strings and bytes without parsing and rechecks mutated bytes', () => {
+    const bytes = decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER);
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        expect(isPlainMachineDataKeyMarker(MACHINE_PLAIN_DATA_KEY_MARKER)).toBe(true);
+        expect(isPlainMachineDataKeyMarker(bytes)).toBe(true);
+      }
+      expect(parse).not.toHaveBeenCalled();
+      const first = bytes[0]!;
+      bytes[0] = 0;
+      expect(isPlainMachineDataKeyMarker(bytes)).toBe(false);
+      expect(parse).toHaveBeenCalled();
+      bytes[0] = first;
+      expect(isPlainMachineDataKeyMarker(bytes)).toBe(true);
+      expect(isPlainMachineDataKeyMarker(encodePlainMachineStoredContent('not-null'))).toBe(false);
+    } finally { parse.mockRestore(); }
+  });
   it('distinguishes standalone owner material from both historical Account key forms', () => {
     const secret = new Uint8Array(32).fill(17);
     const standalone = new Uint8Array(32).fill(19);

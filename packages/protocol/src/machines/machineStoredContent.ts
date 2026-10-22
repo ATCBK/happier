@@ -72,10 +72,16 @@ function parseEncodedMachinePlainEnvelope(value: string, strict = false): z.infe
 }
 
 export const MACHINE_PLAIN_DATA_KEY_MARKER = encodeMachinePlainEnvelope(null);
+const plainDataKeyMarkerBytes = decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64');
 
 export function isPlainMachineDataKeyMarker(
   value: string | Uint8Array | null | undefined,
 ): boolean {
+  // Byte equality proves the canonical marker without trusting a mutable array's
+  // identity. Noncanonical stored envelopes retain their original admission.
+  if (value === MACHINE_PLAIN_DATA_KEY_MARKER || (value instanceof Uint8Array
+    && value.length === plainDataKeyMarkerBytes.length
+    && plainDataKeyMarkerBytes.every((byte, index) => byte === value[index]))) return true;
   const envelope = typeof value === 'string'
     ? parseEncodedMachinePlainEnvelope(value)
     : value instanceof Uint8Array

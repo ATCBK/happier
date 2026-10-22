@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -9,6 +9,18 @@ import {
 } from './artifactStoredContent.js';
 
 describe('artifactStoredContent', () => {
+  it('recognizes the canonical immutable key marker without decoding it again', () => {
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        expect(isPlainArtifactDataKeyMarker(ARTIFACT_PLAIN_DATA_KEY_MARKER)).toBe(true);
+      }
+      expect(parse).not.toHaveBeenCalled();
+      expect(isPlainArtifactDataKeyMarker(encodePlainArtifactStoredContent({ value: null }))).toBe(false);
+      expect(isPlainArtifactDataKeyMarker('malformed')).toBe(false);
+      expect(parse).toHaveBeenCalled();
+    } finally { parse.mockRestore(); }
+  });
   it('opens unknown stored envelope fields without altering opaque JSON content', () => {
     const value = { custom: { extra: true } };
     const encoded = Buffer.from(JSON.stringify({ t: 'plain', v: value, extra: true }), 'utf8').toString('base64');

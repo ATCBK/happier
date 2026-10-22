@@ -40,6 +40,9 @@ function decodeStoredJsonContentEnvelope(value: string): ArtifactStoredJsonConte
 }
 
 export function isPlainArtifactDataKeyMarker(value: string): boolean {
+  // Exact bytes produced and admitted above are immutable; other stored shapes
+  // still pass through the tolerant reader, including additive envelopes.
+  if (value === ARTIFACT_PLAIN_DATA_KEY_MARKER) return true;
   const envelope = decodeStoredJsonContentEnvelope(value);
   return envelope?.t === 'plain' && envelope.v === null;
 }
