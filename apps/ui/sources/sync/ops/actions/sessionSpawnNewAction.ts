@@ -11,6 +11,7 @@ import { SessionCreationTargetPreparationResultV1Schema, needsSessionCreationDir
     projectSessionCreationDirectoryApprovalV1,
 } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import type { ActionOperationFailureV1, ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { ApprovalStaleFailureDetailsSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import type { UiActionExecutorContext } from './defaultActionExecutor';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
@@ -39,6 +40,7 @@ import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prep
 import { t } from '@/text';
 import { buildManualSessionCreationKey, readManualSessionSpawnOperation, readManualSessionSpawnOperationDetails } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 import { recordBugReportUserAction } from '@/utils/system/bugReportActionTrail';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 export { buildManualSessionCreationKey } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 
 export type StrictSessionSpawnNewInput = SessionSpawnNewInputV2 & Readonly<{
@@ -275,13 +277,41 @@ export async function executeSessionSpawnNewAction(
     context: UiActionExecutorContext,
     executor?: Parameters<typeof createFrontDoorActionExecute>[0],
 ): Promise<SessionSpawnNewActionResult> {
-    const result = await createFrontDoorActionExecute(executor)('session.spawn_new', input, context);
+    const execute = createFrontDoorActionExecute(executor);
+    const result = await execute('session.spawn_new', input, context);
     if (!result.ok) return result;
     requireActionSuccess(result);
-    return {
-        ok: true,
-        result: SessionSpawnNewResultV1Schema.parse(result.result),
-    };
+    const spawn = SessionSpawnNewResultV1Schema.parse(result.result);
+    if (spawn.type !== 'pending' || !spawn.operation) return { ok: true, result: spawn };
+    // A pending receipt names the existing creation owner. Join it through the
+    // same admitted Action transport (including embed credentials), never spawn
+    // again or depend on a best-effort socket notification to finish the caller.
+    const address = spawn.operation;
+    const unavailable = (): SessionSpawnNewActionResult => ({ ok: false,
+        errorCode: 'action_operation_result_unavailable', error: 'action_operation_result_unavailable' });
+    if (!areServerProfileIdentifiersEquivalent(address.serverId, input.executionTarget.serverId)
+        || address.machineId !== input.executionTarget.machineId) return unavailable();
+    context.signal?.throwIfAborted();
+    const observed = await execute('action.operations.get', { ...address, waitForTerminal: true }, context);
+    if (!observed.ok) return observed;
+    requireActionSuccess(observed);
+    const parsed = ActionOperationGetV1ResponseSchema.safeParse(observed.result);
+    if (!parsed.success || parsed.data.kind !== 'found') return unavailable();
+    const operation = parsed.data.operation;
+    if (operation.operationId !== address.operationId || operation.actionId !== 'session.spawn_new'
+        || operation.scope.machineId !== address.machineId
+        || context.expectedAccountId && operation.scope.accountId !== context.expectedAccountId
+        || !['succeeded', 'failed', 'cancelled'].includes(operation.state)) return unavailable();
+    const settled = projectManualSessionSpawnOperationResult(operation);
+    if (settled.ok && settled.result.type === 'success'
+        && (!areServerProfileIdentifiersEquivalent(settled.result.executionTarget.serverId, input.executionTarget.serverId)
+            || settled.result.executionTarget.machineId !== input.executionTarget.machineId)) return unavailable();
+    // Requester reads and pushes advance the same revision-checked store. A
+    // missed notification must not leave every other consumer on `running`.
+    const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+    actionOperationStore.mergeSnapshots({ serverId: address.serverId, snapshots: [operation] });
+    context.signal?.throwIfAborted();
+    return settled;
 }
 
 /**

@@ -298,12 +298,16 @@ export function createEmbedSessionRuntime(input: Readonly<{
                 try {
                     const { executeSessionSpawnNewAction } = await import('@/sync/ops/actions/sessionSpawnNewAction');
                     if (!current(target) || scope !== admitted) throw new Error('credential_unavailable');
-                    const action = await executeSessionSpawnNewAction(payload, { surface: 'ui', serverId: input.endpointUrl, signal: controller.signal }, executor);
+                    const action = await executeSessionSpawnNewAction(payload, { surface: 'ui', serverId: input.endpointUrl,
+                        expectedAccountId: admitted.self.accountId, signal: controller.signal }, executor);
                     // Match the canonical New Session owner's settled Action-refusal contract.
-                    // Transport failures throw; a pending spawn remains retryable below.
+                    // The shared client joins known operations. An unknown receipt
+                    // retains creation custody rather than becoming an auth failure.
                     if (!action.ok) throw Object.assign(new Error(action.errorCode), { code: action.errorCode, retryable: false });
                     if (action.result.type !== 'success') {
-                        if (action.result.type === 'pending') throw new Error('credential_unavailable');
+                        if (action.result.type === 'pending') throw Object.assign(new Error('session_create_pending'), {
+                            code: 'session_create_pending', retryable: true,
+                        });
                         throw Object.assign(new Error(action.result.code), { code: action.result.code, retryable: action.result.retryable });
                     }
                     const sessionId = action.result.sessionId;

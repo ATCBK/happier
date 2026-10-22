@@ -76,6 +76,7 @@ const metadataPatchResponse = vi.fn<(sessionId: string) => Promise<void>>();
 const sessionDetailResponse = vi.fn();
 let sessionOrganizationFailure: Error | null = null;
 const sessionRpcResponse = vi.fn();
+const operationResponse = vi.fn();
 const resumeResponse = vi.fn();
 let runnerObservedAtMs = 2000;
 const globalVoiceStartupInstructionsMarker = Object.freeze({
@@ -267,6 +268,7 @@ installDisconnectedServerSocketBoundary(socket => {
 });
 // Synthetic daemon responses sit below the real scoped transport, Action and catalogs.
 async function dispatchMachineRpc(request: { method: string; payload: unknown; machineId: string; serverId?: string }) {
+    if (request.method === 'actionOperation.get.v2') return await operationResponse(request.payload);
     if (request.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
       // Directory existence is an OS boundary; all Session admission remains real.
       const input = SessionCreationTargetPreparationRequestV1Schema.parse(request.payload);
@@ -319,6 +321,7 @@ await loadSyncSingletonForTests();
 afterAll(() => restoreActionExecutorModuleLoader());
 afterEach(async () => {
   runnerObservedAtMs = 2000;
+  operationResponse.mockReset();
   await connection?.dispose();
   vi.restoreAllMocks();
 });
@@ -570,6 +573,40 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     await restoreAccount();
     listResponse.mockClear();
     sessionDetailResponse.mockClear();
+  });
+
+  it.each(['account-1', 'other-account'])('keeps Voice preparation bound to %s while the canonical creation operation settles without a socket update', async accountId => {
+    const spawn = spawnResponse.getMockImplementation()!;
+    spawnResponse.mockImplementationOnce(async input => {
+      await spawn(input);
+      return { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+        operation: { serverId: homeId, machineId: 'machine-1', operationId: 'voice-pending' } };
+    });
+    const reading = createDeferred<void>();
+    const terminal = createDeferred<void>();
+    operationResponse.mockImplementation(async payload => {
+      expect(payload).toEqual({ operationId: 'voice-pending', waitForTerminal: true });
+      reading.resolve();
+      await terminal.promise;
+      return { kind: 'found', operation: { version: 1, operationId: 'voice-pending', revision: 3,
+        actionId: 'session.spawn_new', state: 'succeeded', scope: { accountId, machineId: 'machine-1' },
+        title: 'Create session', requestId: 'transport-request', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported',
+        result: { type: 'success', disposition: 'created', sessionId: 'voice-home-session',
+          executionTarget: { serverId: homeId, machineId: 'machine-1' },
+          organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } } } };
+    });
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    const preparing = ensureVoiceConversationSessionForVoiceHome();
+    try {
+      await Promise.race([reading.promise, preparing.then(() => { throw new Error('Voice preparation skipped operation settlement'); })]);
+      terminal.resolve();
+      if (accountId === 'account-1') await expect(preparing).resolves.toBe('voice-home-session');
+      else await expect(preparing).rejects.toMatchObject({ code: 'action_operation_result_unavailable' });
+      expect(spawnRequests).toHaveBeenCalledTimes(1);
+    } finally {
+      terminal.resolve();
+      await preparing.catch(() => undefined);
+    }
   });
 
   it('uses the bundled backend when the daemon projects its exact Agent identity without backend entries', async () => {

@@ -1,5 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { RPC_ERROR_CODES, RPC_METHODS, type SessionSpawnNewResultV1 } from '@happier-dev/protocol';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_ERROR_CODES, RPC_METHODS, type SessionSpawnNewResultV1, type ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
@@ -17,24 +17,83 @@ const { captureLazyActionAccountContext } = await import('./actionAccountContext
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+
+beforeEach(() => boundary.resetRequests());
+afterEach(async () => {
+    vi.useRealTimers();
+    await serverScopedRpcSocketPool.stopAll();
+    await resetServerReachabilitySupervisors();
+    resetScopedMachineTransportCacheForTests();
+});
+
+describe('Session creation pending settlement', () => {
+    it.each(['succeeded', 'failed', 'cancelled'] as const)('joins the returned operation and publishes its %s result without another creation', async state => {
+        const home = await boundary.addHome('https://spawn-pending.test', 'spawn-account');
+        const input = { creationKey: SessionCreationKeyV1Schema.parse('pending-creation'),
+            executionTarget: { serverId: home.id, machineId: 'machine-1' }, directory: { kind: 'managed' as const },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        const running: ActionOperationSnapshotV1 = { version: 1, operationId: 'pending-operation', revision: 2,
+            actionId: 'session.spawn_new', state: 'running', scope: { accountId: 'spawn-account', machineId: 'machine-1' },
+            requestId: 'transport-request', title: 'Create session', createdAt: 1, startedAt: 2, cancellation: 'supported' };
+        const success: SessionSpawnNewResultV1 = { type: 'success', disposition: 'created', sessionId: 'settled-session',
+            executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
+        const settled: ActionOperationSnapshotV1 = { ...running, revision: 3, state, settledAt: 3,
+            ...(state === 'succeeded' ? { result: success }
+                : state === 'failed' ? { error: { errorCode: 'target_unavailable', error: 'operation_refused' } } : {}) };
+        const reading = createDeferred<void>();
+        const terminal = createDeferred<void>();
+        const requests: string[] = [];
+        boundary.setRpcResponder(async request => {
+            requests.push(request.method);
+            if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) return { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+                operation: { ...input.executionTarget, operationId: running.operationId } };
+            if (request.method === 'actionOperation.get.v2') {
+                expect(request.payload).toEqual({ operationId: running.operationId, waitForTerminal: true });
+                reading.resolve();
+                await terminal.promise;
+                return { kind: 'found', operation: settled };
+            }
+            throw new Error(`Unexpected RPC: ${request.method}`);
+        });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionSpawnNew: async () => await sessionSpawnNewAction.dispatchSessionSpawnNewToMachine({ payload: input }),
+            actionOperationAction: async ({ actionId, input, signal }) => {
+                const { executeActionOperationActionV1 } = await import('@happier-dev/protocol/actions/executor/actionOperationActions');
+                const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+                return await executeActionOperationActionV1({ actionId, input, signal, transport: machineRpcWithServerScope });
+            },
+        }));
+        actionOperationStore.mergeSnapshots({ serverId: home.id, snapshots: [running] });
+        const action = sessionSpawnNewAction.executeSessionSpawnNewAction(input,
+            { surface: 'ui', authority: 'present_user', serverId: home.id, expectedAccountId: 'spawn-account' }, executor);
+        try {
+            await Promise.race([reading.promise, action.then(() => { throw new Error('Pending creation returned before settlement'); })]);
+            terminal.resolve();
+            await expect(action).resolves.toEqual(state === 'succeeded' ? { ok: true, result: success }
+                : state === 'failed' ? { ok: false, ...settled.error }
+                    : { ok: false, errorCode: 'action_cancelled', error: 'action_cancelled' });
+            expect([...actionOperationStore.getSnapshot().operationsByKey.values()]).toContainEqual({ serverId: home.id,
+                snapshot: settled });
+            expect(requests.filter(method => method === RPC_METHODS.SESSION_SPAWN_NEW)).toHaveLength(1);
+        } finally {
+            terminal.resolve();
+            await action.catch(() => undefined);
+            actionOperationStore.reset();
+        }
+    });
+});
 
 afterAll(() => boundary.dispose());
 
 describe('Session directory preflight through the Action and Machine transport owners', () => {
-    afterEach(async () => {
-        vi.useRealTimers();
-        await serverScopedRpcSocketPool.stopAll();
-        await resetServerReachabilitySupervisors();
-        resetScopedMachineTransportCacheForTests();
-    });
-
     it('preserves the generic Machine setup deadline through the strict spawn Action consumer before any spawn is issued', async () => {
         boundary.resetRequests();
         const home = await boundary.addHome('https://spawn-preflight.test', 'spawn-account');
         const account = await captureLazyActionAccountContext(home.id);
         const reading = createDeferred<void>();
         boundary.setHttpResponder(async (input, init) => {
-            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+            if (!['/v1/machines/machine-1', '/v1/machines/read-batch'].includes(new URL(String(input)).pathname)) return null;
             reading.resolve();
             return await new Promise<Response>((_resolve, reject) => {
                 init?.signal?.addEventListener('abort', () => reject(new DOMException('private request detail', 'AbortError')), { once: true });

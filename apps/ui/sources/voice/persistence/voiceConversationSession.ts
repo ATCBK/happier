@@ -580,6 +580,7 @@ async function spawnVoiceConversationSession(params: Readonly<{
         // tools keep the automation-owned Voice Action surface separately.
         surface: 'ui',
         serverId: params.serverId,
+        ...(params.accountLifetime ? { expectedAccountId: params.accountLifetime.scope.accountId } : {}),
         actionRequestId: params.creationKey,
         signal: params.signal,
     });

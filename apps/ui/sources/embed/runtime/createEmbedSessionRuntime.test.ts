@@ -20,11 +20,11 @@ vi.mock('expo-crypto', async () => ({
 afterEach(() => { resetRuntimeFetch(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 const endpointUrl = 'https://home.example';
-function newChatSelf() {
+function newChatSelf(observeCreation = false) {
     return AccountApiTokenSelfV1Schema.parse({
         accountId: 'account', accountEncryptionMode: 'plain',
         credentialId: '00000000-0000-4000-8000-000000000001', parentTokenId: null, expiresAt: null,
-        grant: { v: 1, actions: { families: [], ids: ['session.spawn_new'] },
+        grant: { v: 1, actions: { families: [], ids: ['session.spawn_new', ...(observeCreation ? ['action.operations.get'] : [])] },
             targets: { sessions: [], machines: ['bound-machine'] }, approve: false,
             origins: ['https://allowed.example'], models: null, permissionModes: null,
             create: { machineId: 'bound-machine', agentTargetKey: 'agent:happier.agent.claude/claude',
@@ -44,6 +44,33 @@ function deferred<T>() {
 }
 
 describe('frame credential authority', () => {
+    it('preserves an unknown creation outcome without reporting a credential failure or issuing another create', async () => {
+        let spawns = 0;
+        setRuntimeFetch(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === ACCOUNT_API_TOKEN_SELF_HTTP_PATH_V1) return Response.json(newChatSelf());
+            if (path === '/v1/actions/action.options.resolve') return optionsResponse();
+            if (path === '/v1/actions/session.spawn_new') {
+                spawns += 1;
+                return Response.json({ v: 1, actionId: 'session.spawn_new', execution: { ok: true,
+                    result: { type: 'pending', outcome: 'unknown', retryWithSameCreationKey: true } } });
+            }
+            throw new Error(`Unexpected request: ${path}`);
+        });
+        const runtime = createEmbedSessionRuntime({ encryption: await createEmbedEncryption(), endpointUrl });
+        try {
+            await runtime.initialize({ parentOrigin: 'https://allowed.example', credential: {
+                token: 'child', expiresAt: new Date(Date.now() + 900_000).toISOString(),
+            } });
+            await expect(runtime.createSession({ creationKey: SessionCreationKeyV1Schema.parse('unknown-create'),
+                executionTarget: { serverId: endpointUrl, machineId: 'bound-machine' }, directory: { kind: 'managed' },
+                agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            }, { attemptId: 'unknown-create' })).rejects.toMatchObject({ code: 'session_create_pending', retryable: true });
+            expect(runtime.getSnapshot()).toMatchObject({ phase: 'ready', credential: { token: 'child' } });
+            expect(spawns).toBe(1);
+        } finally { runtime.dispose(); }
+    });
+
     it('reports credential unavailability while initial admission is still loading', async () => {
         const runtime = createEmbedSessionRuntime({ encryption: await createEmbedEncryption(), endpointUrl });
         try {
@@ -351,14 +378,22 @@ describe('frame credential authority', () => {
         }
     });
 
-    it.each(['open', 'dispose'] as const)('settles a dispatched spawn only for the surviving frame after %s', async (transition) => {
+    it.each([
+        ['open', 'success'], ['dispose', 'success'], ['open', 'pending'], ['dispose', 'pending'],
+    ] as const)('settles a dispatched spawn only for the surviving frame after %s (%s receipt)', async (transition, receipt) => {
         const dispatched = deferred<void>();
         const spawnResponse = deferred<Response>();
+        let spawns = 0;
+        let observations = 0;
+        const success = { type: 'success', disposition: 'created', sessionId: 'session-new',
+            executionTarget: { serverId: endpointUrl, machineId: 'bound-machine' },
+            organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
-            if (path === ACCOUNT_API_TOKEN_SELF_HTTP_PATH_V1) return new Response(JSON.stringify(newChatSelf()));
+            if (path === ACCOUNT_API_TOKEN_SELF_HTTP_PATH_V1) return new Response(JSON.stringify(newChatSelf(receipt === 'pending')));
             if (path === '/v1/actions/action.options.resolve') return optionsResponse();
             if (path === '/v1/actions/session.spawn_new') {
+                spawns += 1;
                 dispatched.resolve();
                 // The network boundary honors cancellation, just as fetch does.
                 return new Promise<Response>((resolve, reject) => {
@@ -367,6 +402,17 @@ describe('frame credential authority', () => {
                     init?.signal?.addEventListener('abort', aborted, { once: true });
                     void spawnResponse.promise.then(resolve);
                 });
+            }
+            if (path === '/v1/actions/action.operations.get') {
+                observations += 1;
+                expect(JSON.parse(String(init?.body))).toMatchObject({ input: {
+                    serverId: endpointUrl, machineId: 'bound-machine', operationId: 'embed-spawn', waitForTerminal: true,
+                } });
+                return Response.json({ v: 1, actionId: 'action.operations.get', execution: { ok: true, result: {
+                    kind: 'found', operation: { version: 1, operationId: 'embed-spawn', revision: 3,
+                        actionId: 'session.spawn_new', state: 'succeeded', scope: { accountId: 'account', machineId: 'bound-machine' },
+                        title: 'Create session', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported', result: success },
+                } } });
             }
             throw new Error(`Unexpected request: ${path}`);
         });
@@ -394,21 +440,23 @@ describe('frame credential authority', () => {
             if (transition === 'open') void runtime.open('session-x');
             else runtime.dispose();
             spawnResponse.resolve(new Response(JSON.stringify({ v: 1, actionId: 'session.spawn_new', execution: {
-                ok: true, result: { type: 'success', disposition: 'created', sessionId: 'session-new',
-                    executionTarget: { serverId: endpointUrl, machineId: 'bound-machine' },
-                    organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } },
+                ok: true, result: receipt === 'success' ? success : { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+                    operation: { serverId: endpointUrl, machineId: 'bound-machine', operationId: 'embed-spawn' } },
             } })));
             if (transition === 'open') {
                 expect(await settled).toEqual({ ok: true, result: { sessionId: 'session-new' } });
                 expect(created).toEqual(['session-new']);
                 expect(requests).toEqual([expect.objectContaining({ sessionId: 'session-x', reason: 'open' })]);
                 expect(runtime.getSnapshot()).toMatchObject({ requestedSessionId: 'session-x', displayedSessionId: null });
+                expect(observations).toBe(receipt === 'pending' ? 1 : 0);
             } else {
                 expect(await settled).toMatchObject({ ok: false });
                 expect(created).toEqual([]);
                 expect(requests).toEqual([]);
                 expect(runtime.getSnapshot()).toMatchObject({ displayedSessionId: null, credential: null });
+                expect(observations).toBe(0);
             }
+            expect(spawns).toBe(1);
         } finally { runtime.dispose(); }
     });
 });
