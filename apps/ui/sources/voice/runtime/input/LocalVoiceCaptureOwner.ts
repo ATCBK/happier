@@ -204,7 +204,7 @@ export function createLocalVoiceCaptureOwner(
     let pendingCaptureStart: Promise<void> | null = null;
     let pendingFailureCleanup: Promise<void> | null = null;
     let captureLifecycleGeneration = 0;
-    const retiredMicSessions = new WeakSet<object>();
+    const retiredMicSessions = new WeakMap<object, Promise<void>>();
     let micPlateauTimer: ReturnType<typeof setTimeout> | null = null;
     let armActiveMicPlateauWatchdog: (() => void) | null = null;
     let latestPartialTranscript: string | null = null;
@@ -238,17 +238,21 @@ export function createLocalVoiceCaptureOwner(
             micPlateauTimer = null;
         }
     };
-    const teardownMicSessionOnce = async (session: MicSession | RecordingMicSession): Promise<void> => {
-        if (retiredMicSessions.has(session)) return;
-        retiredMicSessions.add(session);
-        await session.teardown().catch(() => {});
-        // Reset the retired facade only after releasing physical capture.
-        // Native recording mute is asynchronous and must not reopen End's mic.
-        try {
-            await session.setMuted(false);
-        } catch {
-            // Retirement remains best-effort.
-        }
+    const teardownMicSessionOnce = (session: MicSession | RecordingMicSession): Promise<void> => {
+        const existing = retiredMicSessions.get(session);
+        if (existing) return existing;
+        const teardown = (async () => {
+            await session.teardown().catch(() => {});
+            // Reset the retired facade only after releasing physical capture.
+            // Native recording mute is asynchronous and must not reopen End's mic.
+            try {
+                await session.setMuted(false);
+            } catch {
+                // Retirement remains best-effort.
+            }
+        })();
+        retiredMicSessions.set(session, teardown);
+        return teardown;
     };
     const waitUntilTerminalBound = async (
         work: Promise<unknown> | null,
@@ -305,9 +309,14 @@ export function createLocalVoiceCaptureOwner(
         });
 
         const activeLiveMicSession = liveMicSession;
-        liveMicSession = null;
         const failedLocalNeuralExecution = activeLocalNeuralExecution;
         const cleanup = (async () => {
+            // Physical input is local custody. Never retain it behind an STT
+            // acknowledgement, including failure retirement.
+            if (activeLiveMicSession) {
+                await teardownMicSessionOnce(activeLiveMicSession);
+            }
+            if (liveMicSession === activeLiveMicSession) liveMicSession = null;
             if (activeProvider === 'local_neural' && nativeVadController) {
                 await nativeVadController.stopSession(activeSessionId).catch(() => {});
             }
@@ -320,10 +329,6 @@ export function createLocalVoiceCaptureOwner(
                     : sherpaSttController;
                 await controller?.stop().catch(() => {});
             }
-            if (activeLiveMicSession) {
-                await teardownMicSessionOnce(activeLiveMicSession);
-            }
-
             const error: RuntimeCaptureError = {
                 controlSessionId: activeSessionId,
                 kind: failure.kind,
@@ -353,7 +358,6 @@ export function createLocalVoiceCaptureOwner(
         provider: Extract<LocalVoiceCaptureProvider, 'device' | 'local_neural'>,
         capturedMicSession?: MicSession,
     ): Promise<void> => {
-        await waitForPendingFailureCleanup();
         clearMicPlateauWatchdog();
         runtimeTurnPolicyController.clearHandsFreeCaptureSession({ provider, sessionId });
         if (activeCaptureSessionId === sessionId && activeCaptureProvider === provider) {
@@ -361,13 +365,14 @@ export function createLocalVoiceCaptureOwner(
             activeCaptureProvider = null;
             activeCaptureSettings = null;
         }
-        if (provider === 'local_neural' && nativeVadController) {
-            await nativeVadController.stopSession(sessionId).catch(() => {});
-        }
         const activeLiveMicSession = capturedMicSession ?? liveMicSession;
-        if (liveMicSession === activeLiveMicSession) liveMicSession = null;
         if (activeLiveMicSession) {
             await teardownMicSessionOnce(activeLiveMicSession);
+        }
+        if (liveMicSession === activeLiveMicSession) liveMicSession = null;
+        await waitForPendingFailureCleanup();
+        if (provider === 'local_neural' && nativeVadController) {
+            await nativeVadController.stopSession(sessionId).catch(() => {});
         }
     };
     const forwardEndpointSignal = (signal: TurnEndpointSignal): void => {
@@ -1072,6 +1077,12 @@ export function createLocalVoiceCaptureOwner(
             activeCaptureProvider = null;
             activeCaptureSettings = null;
 
+            // End releases the owned microphone before joining any pending
+            // startup, failure cleanup, recognizer or remote STT teardown.
+            if (activeLiveMicSession) {
+                await teardownMicSessionOnce(activeLiveMicSession);
+            }
+
             await waitUntilTerminalBound(captureStart, terminalDeadlineAt);
             await waitUntilTerminalBound(waitForPendingFailureCleanup(), terminalDeadlineAt);
 
@@ -1111,47 +1122,20 @@ export function createLocalVoiceCaptureOwner(
                     const artifactCleanup = createRecordedAudioArtifactCleanup(
                         deleteRecordedAudioArtifact,
                     );
-                    const terminalArtifactCleanup = (async () => {
-                        try {
-                            artifactCleanup.admit(await activeRecordingMicSession.stopRecording());
-                        } catch {
-                            // `stopRecording` releases its lease in its own finally;
-                            // preserve teardown's best-effort terminal behavior when
-                            // the recorder cannot yield a finalized artifact.
-                        }
-                        return await artifactCleanup.cleanup();
-                    })();
-                    const artifactCleanupSettled = await waitUntilTerminalBound(
-                        terminalArtifactCleanup,
-                        terminalDeadlineAt,
-                    );
-                    if (artifactCleanupSettled) {
-                        const cleanupResult = await terminalArtifactCleanup;
-                        if (cleanupResult.kind === 'failed') {
-                            terminalRecordingCleanupError = cleanupResult.error;
-                            terminalRecordingCleanupFailed = true;
-                        }
-                    } else {
-                        void terminalArtifactCleanup.then((cleanupResult) => {
-                            if (cleanupResult.kind !== 'failed') return;
-                            deps.onCaptureError({
-                                controlSessionId: recordingCaptureSessionId,
-                                kind: 'provider_error',
-                                reason: 'recording_cleanup_failed',
-                            });
-                        });
+                    try {
+                        // This releases physical recording input, not remote
+                        // provider work: End must join its actual completion.
+                        artifactCleanup.admit(await activeRecordingMicSession.stopRecording());
+                    } catch {
+                        // `stopRecording` releases its lease in its own finally.
+                    }
+                    const cleanupResult = await artifactCleanup.cleanup();
+                    if (cleanupResult.kind === 'failed') {
+                        terminalRecordingCleanupError = cleanupResult.error;
+                        terminalRecordingCleanupFailed = true;
                     }
                 }
-                await waitUntilTerminalBound(
-                    teardownMicSessionOnce(activeRecordingMicSession),
-                    terminalDeadlineAt,
-                );
-            }
-            if (activeLiveMicSession) {
-                await waitUntilTerminalBound(
-                    teardownMicSessionOnce(activeLiveMicSession),
-                    terminalDeadlineAt,
-                );
+                await teardownMicSessionOnce(activeRecordingMicSession);
             }
             mutedSessionId = null;
             muted = false;

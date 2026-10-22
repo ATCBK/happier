@@ -2,7 +2,8 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
@@ -209,6 +210,72 @@ describe('local voice engine local conversation binding', () => {
             expect(artifacts.list()).toHaveLength(1);
             expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW)).toEqual([]);
         } finally {
+            await lifecycle.dispose();
+        }
+    }, 60_000);
+
+    it('restarts capture after End on the same root and retained carrier without another Session or Agent run', async () => {
+        await configureAgentMode();
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        const target = { serverId: localVoiceHomeId, sessionId: 'session-1' };
+        try {
+            await lifecycle.toggle(target);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+            const binding = voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID);
+            expect(binding?.conversationSessionId).toBe('voice-home-session');
+            await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+            await lifecycle.toggle(target);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+            expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID))
+                .toEqual(binding);
+            expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW))
+                .toHaveLength(1);
+            expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE
+                || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION))
+                .toEqual([expect.arrayContaining([expect.objectContaining({ payload: expect.objectContaining({
+                    type: 'resume-session', sessionId: binding?.conversationSessionId,
+                }) })])]);
+            expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBeGreaterThan(0);
+        } finally {
+            await lifecycle.dispose();
+        }
+    }, 60_000);
+
+    it('keeps the typed resume failure when a same-target restart loses its RPC outcome', async () => {
+        await configureAgentMode();
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        const target = { serverId: localVoiceHomeId, sessionId: 'session-1' };
+        const incumbent = machineRpcWithServerScope.getMockImplementation();
+        if (!incumbent) throw new Error('Missing canonical machine Socket boundary');
+        try {
+            await lifecycle.toggle(target);
+            await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+            machineRpcWithServerScope.mockImplementation(async (request: MachineRequest) => {
+                if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE
+                    || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION) {
+                    throw createRpcCallError({ error: 'Private transport detail at /Users/private/repository',
+                        errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+                }
+                return incumbent(request);
+            });
+
+            await expect(lifecycle.toggle(target)).rejects.toMatchObject({ code: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+            expect(lifecycle.getSnapshot()).toMatchObject({
+                status: 'disconnected', canStop: false, errorCode: 'provider_error',
+                errorMessage: RPC_ERROR_CODES.OUTCOME_UNKNOWN, errorRecoveryAction: 'retry',
+            });
+            expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW))
+                .toHaveLength(1);
+            expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+            expect(JSON.stringify(lifecycle.getSnapshot())).not.toContain('/Users/private');
+        } finally {
+            machineRpcWithServerScope.mockImplementation(incumbent);
             await lifecycle.dispose();
         }
     }, 60_000);

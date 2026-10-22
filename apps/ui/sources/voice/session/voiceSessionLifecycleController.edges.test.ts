@@ -13,6 +13,10 @@ import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSes
 
 import type { VoiceAdapterController, VoiceSessionSnapshot } from './types';
 
+// Vitest does not select Metro's platform suffix. Exercise the real native PCM
+// owner beneath the installed OS boundary, rather than the unsupported fallback.
+vi.mock('@/voice/runtime/daemonInference/DaemonSpeechPcmCapture', () => import('../runtime/daemonInference/DaemonSpeechPcmCapture.native'));
+
 // Register the existing OS/Socket boundaries before the real Sync/Voice graph.
 const { AppState } = await import('react-native');
 const appState = createReactNativeAppStateEmitter();
@@ -144,6 +148,70 @@ function createSnapshotPublisher(initial: VoiceSessionSnapshot): Readonly<{
 }
 
 describe('voice session lifecycle edge contracts', () => {
+    it('keeps End truthful while real local capture retires ahead of a pending daemon stop', async () => {
+        const { storage, target } = await configureLocalProvider('local_direct');
+        const { readLocalDirectVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+        const { DaemonVoiceInferenceModelsWarmResponseSchema,
+            DaemonVoiceInferenceSttStreamStartResponseSchema, DaemonVoiceInferenceSttStreamCancelResponseSchema,
+            DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT } = await import('@happier-dev/protocol/daemon/voiceInference');
+        const { getSharedVoicePcmCapture } = await import('@happier-dev/audio-stream-native');
+        const voice = storage.getState().settings.voice;
+        const config = readLocalDirectVoiceSettings(voice);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: {
+            ...voice, providers: { ...voice.providers, local_direct: { schemaVersion: 1, config: {
+                ...config, handsFree: { ...config.handsFree, enabled: true },
+                stt: { ...config.stt, provider: 'local_neural', localNeural: {
+                    ...config.stt.localNeural, execution: 'daemon', assetId: 'daemon-stt',
+                } },
+            } } },
+        } } });
+        const incumbent = machineRpcWithServerScope.getMockImplementation();
+        if (!incumbent) throw new Error('Expected incumbent machine Socket responder');
+        let releaseRemoteStop!: () => void;
+        const remoteStop = new Promise<void>(resolve => { releaseRemoteStop = resolve; });
+        let remoteStopEntered = false;
+        machineRpcWithServerScope.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM) {
+                return DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [] });
+            }
+            if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START) {
+                return DaemonVoiceInferenceSttStreamStartResponseSchema.parse({ ok: true,
+                    requestId: request.payload.requestId, streamId: 'end-track-stream', generation: 1,
+                    ackSeq: -1, format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT });
+            }
+            if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL) {
+                remoteStopEntered = true;
+                await remoteStop;
+                return DaemonVoiceInferenceSttStreamCancelResponseSchema.parse({ ok: true,
+                    streamId: 'end-track-stream', generation: 1 });
+            }
+            return incumbent(request);
+        });
+        const capture = getSharedVoicePcmCapture();
+        if (!capture) throw new Error('Expected installed native PCM owner');
+        const controller = createVoiceSessionLifecycleController();
+        controller.setConfiguredProviderId('local_direct');
+        const terminalCapture: number[] = [];
+        const unsubscribe = controller.subscribe(() => {
+            if (!controller.getSnapshot().canStop) terminalCapture.push(capture.getSnapshot().subscriberCount);
+        });
+        let stopping: Promise<void> | undefined;
+        try {
+            await controller.toggle(target);
+            expect(controller.getSnapshot(), JSON.stringify(controller.getSnapshot())).toMatchObject({ status: 'connected', canStop: true });
+            expect(capture.getSnapshot().subscriberCount).toBeGreaterThan(0);
+            stopping = controller.stop(target.sessionId);
+            await vi.waitFor(() => expect(remoteStopEntered).toBe(true));
+            expect(controller.getSnapshot()).toMatchObject({ status: 'connected', mode: 'idle', canStop: true });
+            await vi.waitFor(() => expect(capture.getSnapshot().subscriberCount).toBe(0));
+            releaseRemoteStop();
+            await stopping;
+            expect(controller.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+            expect(terminalCapture.length).toBeGreaterThan(0);
+            expect(terminalCapture.every(count => count === 0)).toBe(true);
+        } finally { unsubscribe(); releaseRemoteStop(); await stopping; await controller.dispose(); }
+    }, 120_000);
+
     it('dismisses a real failed attempt only after physical capture cleanup and permits a fresh explicit Start', async () => {
         const { TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
         const contexts: InstanceType<typeof TestVoiceAudioContext>[] = [];

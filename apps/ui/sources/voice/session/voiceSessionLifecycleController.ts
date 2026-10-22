@@ -409,9 +409,9 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             rejectStop = reject;
         });
         const stop = { adapter, sessionId, reason, completion, retireAttempt, controller: new AbortController(), failed: false };
-        // Explicit End/Dismiss retires the controls before native teardown can
-        // emit `ending` (also used by turn interruption). Keep physical cleanup
-        // and admission at this same coalesced Stop, not at the UI projection.
+        // Explicit End/Dismiss owns the coalesced teardown and queues a later
+        // Start behind it. The adapter still owns the physical release fact;
+        // keep its Stop control until it publishes terminal cleanup.
         adapterStopPromises.set(stopKey, stop);
         if (retireAttempt) publishSnapshot();
         void (async () => {
@@ -551,13 +551,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         // shared machine state. Its existing Stop still owns physical cleanup.
         if (retiringAttempt) return createDisconnectedSnapshot();
         const adapters = listAttemptAdapters();
-        const snapshots = adapters.map((adapter) => {
-            const snapshot = adapter.getSnapshot();
-            const stop = adapterStopPromises.get(adapterStopKey(adapter.id, snapshot.sessionId ?? ''));
-            return stop?.retireAttempt && !stop.failed
-                ? createDisconnectedSnapshot()
-                : snapshot;
-        });
+        const snapshots = adapters.map((adapter) => adapter.getSnapshot());
         const pending = pendingAdapterSwitch;
         if (pending) {
             const sourceSnapshot = snapshots.find((snapshot) => snapshot.adapterId === pending.sourceAdapterId) ?? null;
@@ -752,6 +746,11 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
 
         const sourceAdapter = resolveAttemptAdapter(publishedSnapshot.adapterId);
         if (!sourceAdapter) {
+            return;
+        }
+        // End cancels replacement intent while the source still owns input.
+        // Keeping Stop visible must not recreate the cancelled provider switch.
+        if (adapterStopPromises.get(adapterStopKey(sourceAdapter.id, publishedSnapshot.sessionId))?.retireAttempt) {
             return;
         }
 

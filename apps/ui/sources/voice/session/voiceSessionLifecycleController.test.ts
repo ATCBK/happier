@@ -821,17 +821,25 @@ describe('createVoiceSessionLifecycleController', () => {
     it('stops the owned adapter through the canonical lifecycle controller seam', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
+        const endedTrackStates: MediaStreamTrackState[] = [];
+        const unsubscribe = fixture.lifecycle.subscribe(() => {
+            const snapshot = fixture.lifecycle.getSnapshot();
+            if (snapshot.status === 'disconnected' && !snapshot.canStop) {
+                endedTrackStates.push(fixture.browser.micTrack.readyState);
+            }
+        });
         fixture.audioContext.close.mockImplementation(() => cleanup.promise);
         try {
             await fixture.start();
             const stop = fixture.lifecycle.stop('stale-session');
-            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
             await vi.waitFor(() => expect(fixture.browser.micTrack.stop).toHaveBeenCalled());
             cleanup.resolve();
             await stop;
             expect(fixture.browser.peer.close).toHaveBeenCalled();
             expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
-        } finally { cleanup.resolve(); await fixture.dispose(); }
+            expect(endedTrackStates.length).toBeGreaterThan(0);
+            expect(endedTrackStates.every(state => state === 'ended')).toBe(true);
+        } finally { unsubscribe(); cleanup.resolve(); await fixture.dispose(); }
     });
 
     it.each(['stop', 'toggle'] as const)('%s cancels a queued provider replacement before source cleanup settles', async (operation) => {

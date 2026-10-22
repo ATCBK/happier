@@ -412,6 +412,8 @@ describe('createLocalVoiceCaptureOwner', () => {
         const revokeObjectURL = vi.fn();
         const recordingUri = 'blob:voice-end-recording';
         const { recorder, session: recordingMicSession } = createRecordingBoundary(recordingUri);
+        const localRelease = createDeferred<void>();
+        recorder.stop.mockImplementationOnce(() => localRelease.promise);
         const owner = createLocalVoiceCaptureOwner(
             {
                 getSettings: () => ({}),
@@ -432,16 +434,24 @@ describe('createLocalVoiceCaptureOwner', () => {
                 provider: 'recorded_audio',
                 sessionId: 'end-voice-session',
             });
-            await Promise.all([
+            vi.useFakeTimers();
+            let stopSettled = false;
+            const stopping = Promise.all([
                 owner.stopSession('end-voice-session'),
                 owner.stopSession('end-voice-session'),
-            ]);
+            ]).then(() => { stopSettled = true; });
+            try {
+                await vi.waitFor(() => expect(recorder.stop).toHaveBeenCalledOnce());
+                await vi.advanceTimersByTimeAsync(1_001);
+                expect(stopSettled).toBe(false);
+            } finally { localRelease.resolve(); await stopping; }
 
             expect(recorder.stop).toHaveBeenCalledOnce();
             expect(revokeObjectURL).toHaveBeenCalledOnce();
             expect(revokeObjectURL).toHaveBeenCalledWith(recordingUri);
             expect(sdk.recognitionStart).not.toHaveBeenCalled();
         } finally {
+            localRelease.resolve();
             (Platform as unknown as { OS: string }).OS = originalPlatformOs;
             vi.unstubAllGlobals();
         }
@@ -648,6 +658,31 @@ describe('createLocalVoiceCaptureOwner', () => {
         await owner.stopSession();
     });
 
+    it('releases the owned browser track before a pending daemon STT stop settles', async () => {
+        const browser = installBrowserCaptureBoundary();
+        const { boundary, getSettings } = await installDaemonCaptureBoundary();
+        const remoteStop = createDeferred<void>();
+        const remoteStopEntered = createDeferred<void>();
+        boundary.cancel.mockImplementationOnce(async () => {
+            remoteStopEntered.resolve();
+            await remoteStop.promise;
+        });
+        const owner = createLocalVoiceCaptureOwner({ getSettings, onCaptureStarted() {}, onCaptureError() {} });
+        let stopping: Promise<void> | undefined;
+        try {
+            await owner.startCapture({ handsFree: false, provider: 'local_neural',
+                localNeuralExecution: 'daemon', sessionId: 'end-pending-daemon' });
+            expect(browser.micTrack.readyState).toBe('live');
+            stopping = owner.stopSession('end-pending-daemon');
+            await remoteStopEntered.promise;
+            expect(browser.micTrack.readyState).toBe('ended');
+        } finally {
+            remoteStop.resolve();
+            await stopping;
+            await owner.stopSession();
+        }
+    });
+
     it.each([false, true])('retains finalized manual input across a long daemon mute (resume=%s)', async resume => {
         const { boundary, getSettings, machine, account } = await installDaemonCaptureBoundary();
         let remoteExpired = false;
@@ -852,13 +887,18 @@ describe('createLocalVoiceCaptureOwner', () => {
             });
             captureOwner = createVoiceCaptureAdmissionBinding({ admission, captureOwner: rawCaptureOwner, productOwner: 'dictation' });
             await captureOwner.startCapture({ handsFree: true, provider: 'device', sessionId: 'dictation-session' });
+            vi.useFakeTimers();
             if (failureSource === 'live mic failure') browser.micTrack.dispatchEvent(new Event('ended'));
             else emitRecognition('error', { error: 'audio-capture' });
-            const stopPromise = captureOwner.stopSession('dictation-session');
-            await vi.waitFor(() => expect(browser.audioContext.close).toHaveBeenCalledOnce());
-            expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
-            teardownSettled.resolve();
-            await stopPromise;
+            let stopSettled = false;
+            const stopPromise = captureOwner.stopSession('dictation-session').then(() => { stopSettled = true; });
+            try {
+                await vi.waitFor(() => expect(browser.audioContext.close).toHaveBeenCalledOnce());
+                // The provider-abandonment budget cannot abandon physical media.
+                await vi.advanceTimersByTimeAsync(1_001);
+                expect(stopSettled).toBe(false);
+                expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
+            } finally { teardownSettled.resolve(); await stopPromise; }
             expect(admission.acquire('conversation').status).toBe('acquired');
         },
     );
@@ -878,18 +918,22 @@ describe('createLocalVoiceCaptureOwner', () => {
         captureOwner = createVoiceCaptureAdmissionBinding({ admission, captureOwner: rawCaptureOwner, productOwner: 'dictation' });
         await captureOwner.startCapture({ handsFree: false, provider: 'device', sessionId: 'dictation-session' });
         emitRecognition('error', { error: 'audio-capture' });
-        await Promise.resolve();
-        expect(micVadPause).toHaveBeenCalledOnce();
-        expect(browser.audioContext.close).not.toHaveBeenCalled();
-        expect(onCaptureError).not.toHaveBeenCalled();
-        expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
-        providerCleanup.resolve();
-        await vi.waitFor(() => expect(browser.audioContext.close).toHaveBeenCalledOnce());
-        expect(onCaptureError).not.toHaveBeenCalled();
-        expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
-        micCleanup.resolve();
-        await vi.waitFor(() => expect(onCaptureError).toHaveBeenCalledWith({ controlSessionId: 'dictation-session',
-            kind: 'speech_recognition_unavailable', reason: 'audio-capture' }));
+        try {
+            // DeviceSttController retires its SDK/VAD before forwarding the
+            // failure to the capture owner. End can still release the mic now.
+            await vi.waitFor(() => expect(micVadPause).toHaveBeenCalledOnce());
+            expect(browser.audioContext.close).not.toHaveBeenCalled();
+            expect(onCaptureError).not.toHaveBeenCalled();
+            expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
+            providerCleanup.resolve();
+            await vi.waitFor(() => expect(browser.audioContext.close).toHaveBeenCalledOnce());
+            expect(browser.micTrack.readyState).toBe('ended');
+            expect(onCaptureError).not.toHaveBeenCalled();
+            expect(admission.acquire('conversation')).toEqual({ status: 'busy', activeOwner: 'dictation' });
+            micCleanup.resolve();
+            await vi.waitFor(() => expect(onCaptureError).toHaveBeenCalledWith({ controlSessionId: 'dictation-session',
+                kind: 'speech_recognition_unavailable', reason: 'audio-capture' }));
+        } finally { providerCleanup.resolve(); micCleanup.resolve(); }
         expect(onCaptureError.mock.calls[0]?.[0]).toHaveProperty('cause.reason', 'audio-capture');
         expect(Object.getOwnPropertyDescriptor(onCaptureError.mock.calls[0]?.[0], 'cause')?.enumerable).toBe(false);
         expect(admission.acquire('conversation').status).toBe('acquired');

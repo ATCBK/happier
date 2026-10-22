@@ -55,6 +55,7 @@ import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { buildVoiceSpawnUserAttemptId } from '@/voice/shared/voiceSpawnAttempt';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { resolveVoiceSessionModelSelection } from '@/voice/agent/resolveVoiceSessionModelSelection';
+import { readSafeVoiceRuntimeFailureCode } from '@/voice/runtime/voiceRuntimeFailureCode';
 
 import {
     matchesVoiceConversationScope,
@@ -508,7 +509,7 @@ function toVoiceConversationSpawnError(spawned: unknown): Error {
     const spawnRecord = spawned && typeof spawned === 'object' && !Array.isArray(spawned)
         ? spawned as Readonly<Record<string, unknown>>
         : {};
-    const errorCode = normalizeNonEmptyString(spawnRecord.errorCode);
+    const errorCode = readSafeVoiceRuntimeFailureCode(spawned) ?? normalizeNonEmptyString(spawnRecord.errorCode);
     const errorMessage = normalizeNonEmptyString(spawnRecord.errorMessage);
     const rawErrorDetail = spawnRecord.errorDetail;
     const errorDetail = isConnectedServiceUxDiagnosticSpawnErrorDetail(rawErrorDetail)
