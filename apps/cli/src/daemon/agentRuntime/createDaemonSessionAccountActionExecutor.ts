@@ -1,10 +1,9 @@
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import { SessionSpawnNewAgentAuthoringInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
 import { AgentStartSessionCallerV1Schema, readAgentStartCallerWorkDepthV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import type { createActionExecutor, ActionExecuteResult, ActionExecutorContext, ExternalActionExecutionAuthorizationV1, ExternalActionTargetV1 } from '@happier-dev/protocol';
-import type { SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
+import { isSessionActionRpcMethodV1, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { sameStrictJsonValue, StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
@@ -249,12 +248,14 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       const reason = await readCallerRefusal();
       if (reason) return refuse(reason, authority.signal?.aborted ? 'cancelled' : 'target_unavailable');
     }
-    // Session-bound Role RPCs retain their incumbent origin channel. Actual
-    // Machine effects still require the original Home authorization producer.
+    // Origin-required Session RPCs retain the authenticated source Machine
+    // channel. Wrapping them in an external root loses native Session authority
+    // (notably the question owner's narrow manager-answer admission).
+    const sessionOriginRpc = isSessionActionRpcMethodV1(getActionSpec(operation.actionId).bindings?.rpcMethod ?? operation.actionId);
     const requiresMachineAuthorization = executionPlacement !== 'account'
       && executionPlacement !== 'client'
       && !proposesPluginInstallApproval
-      && !(Object.hasOwn(RoleActionInputSchemasV1, operation.actionId) && operation.actionId.startsWith('session.'));
+      && !sessionOriginRpc;
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
       context = { ...context, serverIdentityId: readServerIdentityIdFromFeaturesSnapshot(await params.resolveServerFeaturesSnapshot?.()) ?? undefined };
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
@@ -289,7 +290,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
         })), authority.signal) : undefined;
       if (operation.actionId === 'workflow.run.start' && !workflowTarget) return refuse('external_authorization_preparation_failed');
       const prepare = params.prepareExternalActionAuthorization;
-      external = prepare && !proposesPluginInstallApproval
+      external = prepare && !proposesPluginInstallApproval && !sessionOriginRpc
         && !(operation.actionId === 'action.invoke' && executionPlacement === 'account')
         ? await runTracedExternalActionStage(operation.actionId, operation.requestId, 'session_action.authorization',
           () => readRequesterHomeWithinActionLifetime(async () => !await authority.isCurrent() ? null

@@ -480,12 +480,12 @@ it.each(['bound', 'restricted', 'foreign-witness', 'wrong-handler'] as const)(
     await client.connect(clientTransport);
     const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: {
       actionId: 'session.user_action.answer', input: { sessionId: childId, requestId,
-        answers: [{ question: 'Continue?', values: ['yes'] }] },
+        answers: [{ question: 'choose', values: ['yes'] }] },
     } }));
     if (binding === 'bound' || binding === 'restricted') {
       expect(result.isError, JSON.stringify(result)).not.toBe(true);
       expect(worker.getAgentStateSnapshot()?.completedRequests?.[requestId!]).toMatchObject({
-        answeredBy: { kind: 'session', sessionId }, structuredAnswersV1: { 'Continue?': ['yes'] } });
+        answeredBy: { kind: 'session', sessionId }, structuredAnswersV1: { choose: ['yes'] } });
       expect(worker.getAgentStateSnapshot()?.requests?.[requestId!]).toBeUndefined();
       expect(f.observations).not.toContainEqual(expect.objectContaining({
         path: '/v1/actions/session.user_action.answer/execution-authorization' }));
