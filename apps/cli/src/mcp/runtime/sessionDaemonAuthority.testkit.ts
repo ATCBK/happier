@@ -14,6 +14,7 @@ import {
 import {
   AGENT_RUNTIME_DAEMON_SERVICES_PATH,
   AgentRuntimeDaemonServiceRequestV1Schema,
+  AgentRuntimeDaemonServiceResponseV1Schema,
   type AgentRuntimeDaemonServiceRequestV1,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
@@ -22,7 +23,9 @@ type ActionOperation = Extract<AgentRuntimeDaemonServiceRequestV1['operation'], 
 /** Real capability files, admission parsers and TCP; only OS identity/remote daemon effects are fixtures. */
 export async function createSessionDaemonAuthorityFixture(input: Readonly<{
   sessionId: string;
+  retainedAgent?: ReturnType<typeof createAgentSessionRunnerFactoryBinding>;
   execute(operation: ActionOperation): Promise<ActionExecuteResult>;
+  dispatchService?: (request: AgentRuntimeDaemonServiceRequestV1) => Promise<unknown>;
 }>) {
   const command = 'node /runtime/.runner-snapshots/mcp-authority/dist/index.mjs';
   const runner = { pid: process.pid, processStartTimeMs: 23_346,
@@ -43,8 +46,14 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const parsed = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      if (parsed.context.sessionId !== input.sessionId || parsed.context.token !== capability
-        || parsed.operation.kind !== 'action.execute') throw new Error('Invalid daemon Action authority');
+      if (parsed.context.sessionId !== input.sessionId || parsed.context.token !== capability) throw new Error('Invalid daemon Action authority');
+      if (parsed.operation.kind !== 'action.execute') {
+        if (!input.dispatchService) throw new Error(`Unexpected daemon service: ${parsed.operation.kind}`);
+        const result = AgentRuntimeDaemonServiceResponseV1Schema.parse(await input.dispatchService(parsed));
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify(result));
+        return;
+      }
       const outcome = await input.execute(parsed.operation);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ ok: true, result: { kind: 'action.execution', requestId: parsed.operation.requestId, outcome } }));
@@ -58,7 +67,7 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
   if (!address || typeof address === 'string') throw new Error('Missing daemon endpoint');
   const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
   const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
-    path, sessionId: input.sessionId, runner, retainedAgent: createAgentSessionRunnerFactoryBinding({
+    path, sessionId: input.sessionId, runner, retainedAgent: input.retainedAgent ?? createAgentSessionRunnerFactoryBinding({
       v: 1, pluginId: 'acme.plugin', pluginVersion: '1.2.3', agentId: 'acme-agent', localAgentId: 'acme-agent',
       sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
       locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
