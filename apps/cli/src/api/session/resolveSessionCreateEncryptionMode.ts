@@ -36,30 +36,32 @@ export async function resolveSessionCreateEncryptionMode(params: Readonly<{
   signal?: AbortSignal;
 }>): Promise<SessionCreateEncryptionModeResolution> {
   params.signal?.throwIfAborted();
-  const featuresSnapshot = await fetchServerFeaturesSnapshot({ serverUrl: params.serverBaseUrl,
-    ...(params.signal ? { signal: params.signal } : {}) });
+  // Both observations belong to this creation preflight, but neither consumes
+  // the other. Join their lifetimes before deciding the mode or exposing failure.
+  const [featuresResult, accountResult] = await Promise.allSettled([
+    fetchServerFeaturesSnapshot({ serverUrl: params.serverBaseUrl,
+      ...(params.signal ? { signal: params.signal } : {}) }),
+    params.accountEncryptionCurrentness
+      ? Promise.resolve(params.accountEncryptionCurrentness)
+      : fetchAccountEncryptionCurrentness({ token: params.token, serverBaseUrl: params.serverBaseUrl,
+        ...(params.signal ? { signal: params.signal } : {}) }),
+  ]);
+  params.signal?.throwIfAborted();
+  if (featuresResult.status === 'rejected') throw featuresResult.reason;
+  if (accountResult.status === 'rejected') {
+    if (accountResult.reason instanceof AccountEncryptionCurrentnessUnavailableError) {
+      return { status: 'currentness_unavailable', error: accountResult.reason };
+    }
+    throw accountResult.reason;
+  }
+  const featuresSnapshot = featuresResult.value;
   const serverSupportsFeatureSnapshot = featuresSnapshot.status === 'ready';
   const storagePolicy: 'required_e2ee' | 'optional' | 'plaintext_only' =
     featuresSnapshot.status === 'ready'
       ? featuresSnapshot.features.capabilities.encryption.storagePolicy
       : 'required_e2ee';
 
-  let accountEncryptionCurrentness = params.accountEncryptionCurrentness;
-  if (!accountEncryptionCurrentness) {
-    try {
-      accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({
-        token: params.token,
-        serverBaseUrl: params.serverBaseUrl,
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-    } catch (error) {
-      params.signal?.throwIfAborted();
-      if (error instanceof AccountEncryptionCurrentnessUnavailableError) {
-        return { status: 'currentness_unavailable', error };
-      }
-      throw error;
-    }
-  }
+  const accountEncryptionCurrentness = accountResult.value;
   const desiredSessionEncryptionMode = storagePolicy === 'plaintext_only'
     ? 'plain'
     : storagePolicy === 'optional'

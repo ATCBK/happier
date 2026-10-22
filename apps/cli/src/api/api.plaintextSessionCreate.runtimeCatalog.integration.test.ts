@@ -11,6 +11,7 @@ import type { Metadata } from './types';
 import { decodeBase64, decrypt } from './encryption';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { resolveSessionCreateEncryptionMode } from './session/resolveSessionCreateEncryptionMode';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 
 const mockPost = vi.fn();
@@ -74,6 +75,39 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
       },
     });
     vi.unstubAllGlobals();
+  });
+
+  it.each([200, 503])('overlaps independent creation preflights without bypassing Account admission (%s)', async status => {
+    let releaseFeatures!: () => void;
+    const features = new Promise<void>(resolve => { releaseFeatures = resolve; });
+    let featureRequests = 0;
+    let accountRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      featureRequests += 1;
+      await features;
+      return serverFeaturesResponse({ encryption: {
+        storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain',
+      } });
+    }));
+    mockGet.mockImplementation(async () => {
+      accountRequests += 1;
+      return { status, data: status === 200 ? {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      } : {} };
+    });
+    const pending = resolveSessionCreateEncryptionMode({ token: 'token-test', serverBaseUrl: 'https://api.example.com' });
+    try {
+      await vi.waitFor(() => expect(accountRequests).toBe(1));
+      expect(featureRequests).toBe(1);
+    } finally {
+      releaseFeatures();
+    }
+    expect(await pending).toMatchObject(status === 200
+      ? { status: 'resolved', desiredSessionEncryptionMode: 'plain', storagePolicy: 'optional' }
+      : { status: 'currentness_unavailable' });
+    expect(accountRequests).toBe(1);
+    expect(featureRequests).toBe(1);
   });
 
   it('sends plaintext metadata when server policy is plaintext_only', async () => {
