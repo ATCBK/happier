@@ -199,6 +199,47 @@ test('library ownership follows the producer program, not excluded consumer test
     'excluded consumer-only support must not be compiled under the producer environment');
 });
 
+test('foreign declaration roots retain their transitive implementation membership', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-compiler-declaration-roots-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cli = join(root, 'apps/cli');
+  const server = join(root, 'apps/server');
+  const files = {
+    'apps/cli/src/entry.ts': 'export const entry = true;',
+    'apps/cli/src/consumer.test.ts': 'export { value } from "../../server/sources/entry";',
+    'apps/server/sources/entry.ts': 'export const value = true;',
+    'apps/server/sources/renderer.ts': 'export { theme } from "@/environment";',
+    'apps/server/sources/environment.ts': 'import type { Palette } from "./palette"; export const theme: Palette = { ink: "black" };',
+    'apps/server/sources/palette.ts': 'export interface Palette { ink: string }',
+    'apps/server/sources/unrelated.ts': 'export const unrelated = true;',
+    ...Object.fromEntries(['ts', 'mts', 'cts'].map(extension => [
+      `apps/server/sources/renderer.generated.d.${extension}`, 'export { theme } from "./renderer.js";',
+    ])),
+    'apps/cli/tsconfig.json': JSON.stringify({ compilerOptions: { module: 'esnext', moduleResolution: 'bundler',
+      types: [], paths: { '@/*': ['./src/*'] } }, include: ['src/**/*.ts'] }),
+    'apps/server/tsconfig.json': JSON.stringify({ compilerOptions: { module: 'esnext', moduleResolution: 'bundler',
+      types: [], paths: { '@/*': ['./sources/*'] } }, include: ['sources/**/*'] }),
+  };
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+  for (const name of ['foundation', 'services', 'core', 'source', 'test', 'test-ui']) {
+    await writeFile(join(cli, `tsconfig.${name}.json`), JSON.stringify({ extends: './tsconfig.json', files: [], include: [] }));
+  }
+  const inventory = await deriveCliTypecheckProjects(cli);
+  const consumer = { project: inventory.find(item => item.project === 'test').configPath,
+    authoredProject: join(cli, 'tsconfig.test.json') };
+  const producers = await prepareReferencedTypecheckDeclarations([consumer], cli, inventory);
+  const producer = producers.find(item => item.project.startsWith(server));
+  const { config } = readTypecheckProject(producer.project);
+  for (const file of ['renderer.generated.d.ts', 'renderer.generated.d.mts', 'renderer.generated.d.cts',
+    'renderer.ts', 'environment.ts', 'palette.ts']) {
+    assert.ok(config.files.includes(join(server, 'sources', file)), `${file} belongs to the declaration producer closure`);
+  }
+  assert.ok(!config.files.includes(join(server, 'sources/unrelated.ts')), 'unreached implementations stay outside the producer slice');
+});
+
 test('foreign ambient implementation roots stay in their producer program', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-compiler-ambient-owner-'));
   t.after(() => rm(root, { recursive: true, force: true }));

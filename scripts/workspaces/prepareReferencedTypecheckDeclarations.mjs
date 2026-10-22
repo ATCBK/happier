@@ -74,7 +74,7 @@ export async function prepareReferencedTypecheckDeclarations(projects, cwd, inve
         ...(Object.keys(publicWorkspacePaths).length ? {
           paths: { ...publicWorkspacePaths, ...absoluteTypecheckPaths(source, foreign.configPath) },
         } : {}) },
-      files: [...new Set([...foreign.files, ...source.parsed.fileNames.filter(file => /\.d\.[cm]?ts$/.test(file))])],
+      files: foreign.files,
       include: [], exclude: [],
     });
     const args = ['--singleThreaded', '--project', project];

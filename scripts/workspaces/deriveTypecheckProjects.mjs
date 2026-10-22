@@ -309,10 +309,14 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
         !/[\\/]node_modules[\\/]/.test(file) && acceptsOwnerInput(file) && contributesAmbientTypes(file));
       const ambientInputs = importClosure([...seeds, ...authoredAmbientRoots, ...primaryInputs], acceptsOwnerInput, owner)
         .filter(contributesAmbientTypes);
+      // Declaration facades can re-export implementations that no consumer
+      // reaches directly. Include their closure before emitting a composite
+      // producer, rather than appending unwalked roots during preparation.
+      const declarationRoots = owner.parsed.fileNames.filter(file => /\.d\.[cm]?ts$/.test(file));
       foreignProjects.set(owner.configPath, {
         configPath: owner.configPath,
         ambientInputs,
-        files: new Set([...producerAmbientInputs, ...importClosure([...seeds, ...producerAmbientInputs])
+        files: new Set([...producerAmbientInputs, ...importClosure([...seeds, ...producerAmbientInputs, ...declarationRoots])
           .filter(file => !/[\\/]node_modules[\\/]/.test(file))]),
       });
     }
