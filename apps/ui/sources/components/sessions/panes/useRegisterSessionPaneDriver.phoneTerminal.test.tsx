@@ -32,7 +32,7 @@ vi.mock('@/components/appShell/panes/AppPaneProvider', () => {
       tabState: {},
     },
   };
-  const context = () => ({
+  const context = (select = (value: unknown) => value) => select({
     dispatch: vi.fn(),
     state: {
       scopes: new Proxy({}, { get: () => scope }),

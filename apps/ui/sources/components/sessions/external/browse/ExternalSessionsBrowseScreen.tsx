@@ -128,7 +128,10 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     const locked = Boolean(lockScope);
     const router = useRouter();
     const phone = useDeviceType() === 'phone';
-    const paneContext = useOptionalAppPaneContext();
+    const paneContext = useOptionalAppPaneContext(value => ({
+        fileFindSeedHandoff: value.fileFindSeedHandoff,
+        fileFindSeedAccountBindings: value.fileFindSeedAccountBindings,
+    }));
     const styles = stylesheet;
     const profile = useProfile();
     const profileScope = useActiveServerAccountScope();

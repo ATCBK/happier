@@ -8,6 +8,7 @@ installAppPaneScopeHostCommonModuleMocks();
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
 const { AppPaneScopeHost } = await import('./AppPaneScopeHost');
+const { useRouter } = await import('expo-router');
 
 function Probe() {
     const { state } = useAppPaneContext();
@@ -15,9 +16,10 @@ function Probe() {
 }
 
 function Harness(props: Readonly<{ focused: string }>) {
+    const navigation = useRouter();
     return <AppPaneProvider><Probe />{['a', 'b'].map((id) => <DestinationInstanceHost key={id}
         tabId={id} ref={{ kind: 'session', params: { id, serverId: 'home-a' } }}
-        pathname={`/session/${id}`} focused={props.focused === id} visible>
+        pathname={`/session/${id}`} navigation={navigation} focused={props.focused === id} visible>
         <AppPaneScopeHost scopeId={`scope:${id}`} main={<div />} />
     </DestinationInstanceHost>)}</AppPaneProvider>;
 }

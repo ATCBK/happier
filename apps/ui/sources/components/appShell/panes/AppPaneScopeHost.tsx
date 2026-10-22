@@ -353,7 +353,11 @@ function PluginAppPaneSurface(props: Readonly<{
 
 const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Readonly<{ paneAdapter: ResolvedPaneAdapter | null }>) => {
     const enclosingNavigationBinding = usePluginSurfaceDestinationNavigationBinding();
-    const { dispatch, state, overlayFocusReturnOwner } = useAppPaneContext();
+    const { dispatch, scopeState, overlayFocusReturnOwner } = useAppPaneContext(value => ({
+        dispatch: value.dispatch,
+        scopeState: value.state.scopes[props.scopeId],
+        overlayFocusReturnOwner: value.overlayFocusReturnOwner,
+    }));
     const pane = useAppPaneScope(props.scopeId);
     const deviceType = useDeviceType();
     const appProjection = useAppShellPluginUiProjection().pluginUiProjection;
@@ -371,7 +375,6 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
         return () => dispatch({ type: 'releaseScope', scopeId: props.scopeId });
     }, [dispatch, props.scopeId, screenFocused]);
 
-    const scopeState = state.scopes[props.scopeId];
     const rightOpen = Boolean(scopeState?.right.isOpen);
     const detailsOpen = Boolean(scopeState?.details.isOpen);
     const bottomOpen = Boolean(scopeState?.bottom?.isOpen);
@@ -800,8 +803,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
  * remains the sole selection/layout owner.
  */
 export const AppPaneScopeHost = React.memo((props: AppPaneScopeHostProps) => {
-    const { getDriver, driverRegistryVersion } = useAppPaneContext();
-    const driver = React.useMemo(() => getDriver(props.scopeId), [driverRegistryVersion, getDriver, props.scopeId]);
+    const driver = useAppPaneContext(value => value.getDriver(props.scopeId));
     const paneAdapter = React.useMemo(() => resolvePaneAdapter(driver, props), [driver, props]);
     const surfaceScope = paneAdapter?.surfaceScope;
     return <PluginDetailsDestinationLaunchScope accountLifetime={surfaceScope !== undefined

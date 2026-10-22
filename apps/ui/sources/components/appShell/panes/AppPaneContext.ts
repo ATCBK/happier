@@ -1,4 +1,5 @@
-import { createContext, useContext } from 'react';
+import { createContext, useCallback, useContext, useSyncExternalStore } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { PaneDriver, PaneScopeId } from './types';
 import { readResourcePaneScopeId } from './paneScopeIdentity';
@@ -20,7 +21,12 @@ export type AppPaneContextValue = Readonly<{
     fileFindSeedAccountBindings: ReadonlyMap<string, ServerCredentialAccountScopeBinding>;
 }>;
 
-export const AppPaneContext = createContext<AppPaneContextValue | null>(null);
+export type AppPaneContextSubscription = Readonly<{
+    getSnapshot: () => AppPaneContextValue;
+    subscribe: (listener: () => void) => () => void;
+}>;
+
+export const AppPaneContext = createContext<AppPaneContextSubscription | null>(null);
 export type AppPaneFindSeedContextValue = Pick<AppPaneContextValue, 'fileFindSeedHandoff' | 'fileFindSeedAccountBindings'>;
 // Launch consumers need credential/handoff changes, not every pane reducer tick.
 export const AppPaneFindSeedContext = createContext<AppPaneFindSeedContextValue | null>(null);
@@ -66,14 +72,30 @@ export function createFileTabFrontSubscription(readState: () => AppPaneState): F
     };
 }
 
-export function useAppPaneContext(): AppPaneContextValue {
-    const ctx = useContext(AppPaneContext);
-    if (!ctx) throw new Error('useAppPaneContext must be used within <AppPaneProvider>');
-    return ctx;
+const readContext = (value: AppPaneContextValue) => value;
+const subscribeToNothing = () => () => {};
+
+function useSelectedAppPaneContext<T>(selector: (value: AppPaneContextValue) => T): T | null {
+    const context = useContext(AppPaneContext);
+    const select = useShallow((value: AppPaneContextValue | null) => value === null ? null : selector(value));
+    const getSnapshot = useCallback(() => select(context?.getSnapshot() ?? null), [context, select]);
+    return useSyncExternalStore(context?.subscribe ?? subscribeToNothing, getSnapshot, getSnapshot);
 }
 
-export function useOptionalAppPaneContext(): AppPaneContextValue | null {
-    return useContext(AppPaneContext);
+export function useAppPaneContext<T>(selector: (value: AppPaneContextValue) => T): T;
+export function useAppPaneContext(): AppPaneContextValue;
+export function useAppPaneContext<T>(selector?: (value: AppPaneContextValue) => T): AppPaneContextValue | T {
+    const context = useContext(AppPaneContext);
+    const selected = useSelectedAppPaneContext<AppPaneContextValue | T>(selector ?? readContext);
+    if (!context) throw new Error('useAppPaneContext must be used within <AppPaneProvider>');
+    // A mounted provider always invokes the selector, whose result may itself be null.
+    return selected as AppPaneContextValue | T;
+}
+
+export function useOptionalAppPaneContext<T>(selector: (value: AppPaneContextValue) => T): T | null;
+export function useOptionalAppPaneContext(): AppPaneContextValue | null;
+export function useOptionalAppPaneContext<T>(selector?: (value: AppPaneContextValue) => T): AppPaneContextValue | T | null {
+    return useSelectedAppPaneContext<AppPaneContextValue | T>(selector ?? readContext);
 }
 
 export function useOptionalAppPaneFindSeedContext(): AppPaneFindSeedContextValue | null {

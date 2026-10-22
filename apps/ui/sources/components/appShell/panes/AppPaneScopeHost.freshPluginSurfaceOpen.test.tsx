@@ -48,7 +48,7 @@ vi.mock('@/utils/platform/responsive', () => ({
 }));
 
 vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: () => ({
+    useAppPaneContext: (select = (value: unknown) => value) => select({
         dispatch: paneHostState.dispatch,
         state: { scopes: { scope1: paneHostState.scope } },
         getDriver: () => null,

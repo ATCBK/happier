@@ -13,7 +13,7 @@ export function usePaneOverlayFocusReturnRef(
     scopeId: string,
     surface: PaneOverlayFocusSurface,
 ): FocusReturnMutableRef {
-    const context = useAppPaneContext();
+    const context = useAppPaneContext(value => ({ overlayFocusReturnOwner: value.overlayFocusReturnOwner }));
     const localRef = React.useRef<FocusReturnTarget>(null);
     const owner = context.overlayFocusReturnOwner;
 

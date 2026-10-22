@@ -28,7 +28,7 @@ import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPan
 import { isTerminalDetailsTab } from '@/components/terminal/terminalDetailsTabModel';
 import { applyCloseDetailsTab } from './details/workspace/detailsWorkspaceReducer';
 import { LocalSettingsPersistenceError } from '@/sync/domains/state/settingsPersistence';
-import { AppPaneContext, AppPaneFindSeedContext, AppPaneFocusReturnContext, AppPaneFileFrontContext, AppPaneDriverContext, createFileTabFrontSubscription, type AppPaneContextValue } from './AppPaneContext';
+import { AppPaneContext, AppPaneFindSeedContext, AppPaneFocusReturnContext, AppPaneFileFrontContext, AppPaneDriverContext, createFileTabFrontSubscription, type AppPaneContextValue, type AppPaneContextSubscription } from './AppPaneContext';
 
 export { useAppPaneContext, useOptionalAppPaneContext, useOptionalAppPaneFindSeedContext, useOptionalPaneFocusReturnOwner, useOptionalPaneDriverReader } from './AppPaneContext';
 
@@ -225,7 +225,6 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     const qualifiedStateRef = useRef(qualifiedState);
     qualifiedStateRef.current = qualifiedState;
     const [fileFrontSubscription] = useState(() => createFileTabFrontSubscription(() => qualifiedStateRef.current));
-    React.useLayoutEffect(() => fileFrontSubscription.notify(), [fileFrontSubscription, qualifiedState]);
     React.useEffect(() => () => fileFindSeedHandoff.dispose(), [fileFindSeedHandoff]);
     const overlayFocusReturnOwnerRef = useRef<PaneOverlayFocusReturnOwner | null>(null);
     if (overlayFocusReturnOwnerRef.current === null) {
@@ -371,9 +370,19 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         fileFindSeedAccountBindings,
     }), [driverRegistryVersion, dispatch, fileFindSeedHandoff, fileFindSeedAccountBindings, getDriver, overlayFocusReturnOwner, persistenceFailed, registerDriver, qualifiedState]);
 
+    // One read-only subscription over the provider's canonical state. A file edit
+    // must not broadcast a new React context through every retained pane subtree.
+    const valueRef = useRef(value);
+    valueRef.current = value;
+    const [subscription] = useState<AppPaneContextSubscription>(() => ({
+        getSnapshot: () => valueRef.current,
+        subscribe: fileFrontSubscription.subscribe,
+    }));
+    React.useLayoutEffect(() => fileFrontSubscription.notify(), [fileFrontSubscription, value]);
+
     const findSeedValue = useMemo(() => ({ fileFindSeedHandoff, fileFindSeedAccountBindings }),
         [fileFindSeedHandoff, fileFindSeedAccountBindings]);
-    return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}><AppPaneFileFrontContext.Provider value={fileFrontSubscription}>
+    return <AppPaneContext.Provider value={subscription}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}><AppPaneFileFrontContext.Provider value={fileFrontSubscription}>
         <AppPaneDriverContext.Provider value={getDriver}>{props.children}</AppPaneDriverContext.Provider>
     </AppPaneFileFrontContext.Provider></AppPaneFocusReturnContext.Provider></AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
 });

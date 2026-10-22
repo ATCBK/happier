@@ -21,8 +21,10 @@ export function useSessionTerminalActionExecute(scopeId: string) {
 }
 
 export function useSessionTerminalWorkspace(scopeId: string, initialWorkspace?: SessionTerminalWorkspaceV1) {
-    const { state, dispatch } = useAppPaneContext();
-    const raw = state.scopes[scopeId]?.bottom.tabState.terminal;
+    const { raw, dispatch } = useAppPaneContext(value => ({
+        raw: value.state.scopes[scopeId]?.bottom.tabState.terminal,
+        dispatch: value.dispatch,
+    }));
     const workspace = React.useMemo(() => readSessionTerminalWorkspace(raw ?? initialWorkspace), [raw, initialWorkspace]);
     const execute = useSessionTerminalActionExecute(scopeId);
     // Only the real SplitCanvasHost writes measured geometry. Process-affecting UI verbs use Actions above.

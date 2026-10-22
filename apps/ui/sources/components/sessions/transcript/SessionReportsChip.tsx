@@ -37,7 +37,7 @@ export const SessionReportsChip = React.memo(function SessionReportsChip(
     props.serverId,
     (session) => session?.managedSessions?.total ?? 0,
   );
-  const hasPaneHost = useOptionalAppPaneContext() !== null;
+  const hasPaneHost = useOptionalAppPaneContext(() => true) !== null;
   if (count <= 0) return null;
   return hasPaneHost ? (
     <PaneReportsChip {...props} count={count} />

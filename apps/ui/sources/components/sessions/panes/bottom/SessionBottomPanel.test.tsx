@@ -45,8 +45,8 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     }),
 }));
 vi.mock('@/components/appShell/panes/AppPaneProvider', () => ({
-    useAppPaneContext: () => ({ state: { scopes: { 'session:s1': scopeState() } }, dispatch: vi.fn() }),
-    useOptionalAppPaneContext: () => ({ state: { scopes: { 'session:s1': scopeState() } }, dispatch: vi.fn() }),
+    useAppPaneContext: (select = (value: unknown) => value) => select({ state: { scopes: { 'session:s1': scopeState() } }, dispatch: vi.fn() }),
+    useOptionalAppPaneContext: (select = (value: unknown) => value) => select({ state: { scopes: { 'session:s1': scopeState() } }, dispatch: vi.fn() }),
 }));
 
 const shell = (id: string, title?: string) => ({ id, target: { kind: 'workspace_shell' }, ...(title ? { title } : {}) });

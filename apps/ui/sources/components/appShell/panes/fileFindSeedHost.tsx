@@ -15,7 +15,7 @@ export function ChatFindSeedHost(props: Readonly<{
     active: boolean;
     children: (input: ChatFindSeedHostInput) => React.ReactNode;
 }>): React.ReactNode {
-    const handoff = useOptionalAppPaneContext()?.fileFindSeedHandoff;
+    const handoff = useOptionalAppPaneContext(value => value.fileFindSeedHandoff);
     const focused = useDestinationFocus();
     const instanceKey = useDestinationInstanceKey();
     const destination = React.useMemo(() => ({ sessionId: props.sessionId, serverId: props.serverId }), [props.sessionId, props.serverId]);
@@ -31,7 +31,7 @@ export function FileFindSeedHost(props: Readonly<{
     active: boolean;
     children: (input: FileFindSeedHostInput) => React.ReactNode;
 }>): React.ReactNode {
-    const handoff = useOptionalAppPaneContext()?.fileFindSeedHandoff;
+    const handoff = useOptionalAppPaneContext(value => value.fileFindSeedHandoff);
     const focused = useDestinationFocus();
     const instanceKey = useDestinationInstanceKey();
     const destination = React.useMemo(() => props.destination, [props.destination.host, props.destination.id,

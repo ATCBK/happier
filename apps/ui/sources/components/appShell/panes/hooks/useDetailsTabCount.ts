@@ -12,7 +12,8 @@ import { useAppPaneContext } from '../AppPaneProvider';
  * keys — not the length of a per-group array.
  */
 export function useDetailsTabCount(scopeId: string): number {
-    const { state } = useAppPaneContext();
-    const details = state.scopes[scopeId]?.details;
-    return details ? Object.keys(details.tabsByKey).length : 0;
+    return useAppPaneContext(value => {
+        const details = value.state.scopes[scopeId]?.details;
+        return details ? Object.keys(details.tabsByKey).length : 0;
+    });
 }

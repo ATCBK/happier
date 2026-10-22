@@ -42,7 +42,7 @@ installAppPaneScopeHostCommonModuleMocks({
 });
 
 vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: () => ({
+    useAppPaneContext: (select = (value: unknown) => value) => select({
         dispatch: dispatchSpy,
         state: {
             scopes: {

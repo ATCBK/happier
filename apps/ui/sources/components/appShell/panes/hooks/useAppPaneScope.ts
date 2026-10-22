@@ -105,8 +105,7 @@ export type AppPaneScopeApi = {
     closeDetailsGroup?: (groupId: string) => void;
 };
 
-function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], scopeId: string): AppPaneScopeStateView | null {
-    const scopeState = state.scopes[scopeId] ?? null;
+function getScopeState(scopeState: PaneScopeState | null): AppPaneScopeStateView | null {
     if (!scopeState) return null;
     return {
         mainHidden: scopeState.mainHidden,
@@ -118,14 +117,17 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
 
 /** The registered driver and scope API share one Details admission/presentation owner. */
 export function useOptionalDetailsTabOpener(scopeId: string): AppPaneScopeApi['openDetailsTab'] | null {
-    const context = useOptionalAppPaneContext();
+    const context = useOptionalAppPaneContext(value => ({
+        dispatch: value.dispatch,
+        details: value.state.scopes[scopeId]?.details,
+    }));
     const dispatch = context?.dispatch;
     const presentPane = usePanePresentation();
     const detailsPaneTabsBehavior = useLocalSetting('detailsPaneTabsBehavior');
     const paneRegion = usePaneRegion();
     const lastPreviewOpenRef = React.useRef<LastPreviewOpen | null>(null);
     const detailsTabsRef = React.useRef<ReadonlyArray<{ key: string; isPreview: boolean; isPinned: boolean }> | null>(null);
-    const details = context?.state?.scopes[scopeId]?.details;
+    const details = context?.details;
     React.useEffect(() => {
         detailsTabsRef.current = details ? buildDetailsWorkspaceStateView(details).tabs : null;
     }, [details]);
@@ -148,8 +150,13 @@ export function useOptionalDetailsTabOpener(scopeId: string): AppPaneScopeApi['o
 }
 
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
-    const { state, dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext();
-    const scopeState = getScopeState(state, scopeId);
+    const { scope, dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext(value => ({
+        scope: value.state.scopes[scopeId] ?? null,
+        dispatch: value.dispatch,
+        overlayFocusReturnOwner: value.overlayFocusReturnOwner,
+        persistenceFailed: value.persistenceFailed,
+    }));
+    const scopeState = React.useMemo(() => getScopeState(scope), [scope]);
     const presentPane = usePanePresentation();
     const openDetailsTab = useOptionalDetailsTabOpener(scopeId)!;
     const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);

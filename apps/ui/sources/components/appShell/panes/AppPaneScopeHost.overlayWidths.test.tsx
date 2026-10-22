@@ -46,7 +46,7 @@ vi.mock('@/utils/platform/responsive', () => ({
 }));
 
 vi.mock('./AppPaneProvider', () => ({
-    useAppPaneContext: () => ({
+    useAppPaneContext: (select = (value: unknown) => value) => select({
         dispatch: vi.fn(),
         state: {
             scopes: {

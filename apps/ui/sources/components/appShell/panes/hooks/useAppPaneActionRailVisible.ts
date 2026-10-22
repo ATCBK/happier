@@ -8,12 +8,12 @@ export function useAppPaneActionRailVisible(
     scopeId: string,
     resolvedAdapter?: PaneRightSidebarAdapter | null,
 ): boolean {
-    const context = useAppPaneContext();
+    const driver = useAppPaneContext(value => value.getDriver(scopeId));
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     // Hosts pass their resolved adapter, including null on an authority collision.
     const adapter = resolvedAdapter === undefined
-        ? context.getDriver(scopeId)?.rightSidebarAdapter
+        ? driver?.rightSidebarAdapter
         : resolvedAdapter;
     return multiPaneEnabled && deviceType !== 'phone' && Boolean(adapter?.renderActionRail);
 }

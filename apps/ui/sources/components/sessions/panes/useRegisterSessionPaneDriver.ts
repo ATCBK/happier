@@ -62,7 +62,7 @@ export function useRegisterSessionPaneDriver(
     }>,
 ): string {
     const instanceKey = useDestinationInstanceKey();
-    const paneCtx = useOptionalAppPaneContext();
+    const paneCtx = useOptionalAppPaneContext(value => ({ registerDriver: value.registerDriver }));
     const cockpitChrome = useSessionCockpitChromeRegistration();
     // The bottom pane exists only where the terminal docks there. A phone shows it as the Terminal
     // page, yet every cockpit scene mounts this scope's pane host, so a bottom pane a wider layout

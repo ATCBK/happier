@@ -350,7 +350,7 @@ export function WorkerUpdateCard(props: Readonly<{
     // Peek: the worker beside the lead, in the lead's own Details pane (lab `session-D`). Offered only
     // where that pane exists: not on a phone (the one way in is the Session itself) and not where the
     // card renders outside a pane host (a run page, a shared transcript).
-    const hasPaneHost = useOptionalAppPaneContext() !== null;
+    const hasPaneHost = useOptionalAppPaneContext(() => true) !== null;
     const peekSessionId = canInspect && needsYou && pointer?.kind === 'session' && deviceType !== 'phone' && hasPaneHost
         ? pointer.sessionId : null;
 

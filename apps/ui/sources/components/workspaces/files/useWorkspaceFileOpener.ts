@@ -43,7 +43,7 @@ export function useWorkspaceFileOpener() {
     // The route carries the file into Details without the column it was opened from, so the opener
     // names it first; the pane layout keeps Details off that column (details lab opener rule).
     const paneRegion = usePaneRegion();
-    const paneDispatch = useOptionalAppPaneContext()?.dispatch;
+    const paneDispatch = useOptionalAppPaneContext(value => ({ dispatch: value.dispatch }))?.dispatch;
     const openApproval = React.useCallback((href: Href) => {
         if (destinationNavigation) destinationNavigation.push(href);
         else fireAndForget(openWorkspaceHrefOrElse(resolveHref(href), () => router.push(href)), { tag: 'useWorkspaceFileOpener.openApproval' });
