@@ -38,7 +38,10 @@ export function normalizeUiScmFacadeResult<T extends { success: boolean; error?:
             return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED, declined: true,
                 ...(actionErrorCode ? { actionErrorCode } : {}), error: error ?? 'The confirmation was declined.' };
         }
-        return { ...result, success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+        // A response rejected by the Action's output contract is a failed command result,
+        // not evidence that this Machine lacks the capability.
+        return { ...result, success: false, errorCode: actionErrorCode === 'invalid_action_output'
+            ? SCM_OPERATION_ERROR_CODES.COMMAND_FAILED : SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
             ...(actionErrorCode ? { actionErrorCode } : {}),
             error: error ?? 'The SCM Action is unavailable.' };
     }

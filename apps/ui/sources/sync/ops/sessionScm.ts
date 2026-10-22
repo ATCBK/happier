@@ -102,11 +102,14 @@ async function callScmPreferMachineTransport<
     );
 
     if (!machineTarget) {
-        return {
+        const failure = {
             success: false,
             error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
             errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
-        };
+        } as const;
+        return method.startsWith('scm.diffSummary.')
+            ? { ok: false, errorCode: failure.errorCode, error: failure.error }
+            : failure;
     }
 
     const cwd = resolveMachineAbsolutePath({

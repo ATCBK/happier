@@ -54,7 +54,9 @@ describe('machineScm', () => {
             machineId: 'machine', method: 'scm.blame.file', payload: { ...request, outcomeVersion: 1 },
         }));
         machineRpcWithServerScopeMock.mockResolvedValue({ success: true, ranges: [{ startLine: 1, lineCount: 1, commitIndex: 0 }], commits: [] });
-        expect(await machineScmBlameFile('machine', request)).toMatchObject({ success: false, errorCode: 'COMMAND_FAILED' });
+        expect(await machineScmBlameFile('machine', request)).toMatchObject({
+            success: false, errorCode: 'COMMAND_FAILED', actionErrorCode: 'invalid_action_output',
+        });
     });
 
     it('delivers exact revision bytes through the scoped SCM read and rejects altered content', async () => {

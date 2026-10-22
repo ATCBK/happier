@@ -57,6 +57,21 @@ const finalCheckpointParams = { ...params,
 } satisfies Parameters<ReturnType<typeof createScmDiffSummaryOperations>['prefetch']>[0];
 
 describe('SCM diff summary operations', () => {
+    it('preserves an absent Session target refusal through real capture Action validation', async () => {
+        const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({ scmActionExecute: createUiScmAction() }));
+        const ops = createScmDiffSummaryOperations({ actionExecutor });
+        expect(await ops.captureComparison({ sessionId: 'unresolved-session', input: { cwd: '/repo',
+            source: { kind: 'turnCheckpoint', sessionId: 'unresolved-session', turnId: 'turn-2', evidenceMode: 'reconciled' },
+        } })).toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+        const { createScmDiffSummaryResultOperations } = await import('./results');
+        const results = createScmDiffSummaryResultOperations({ sessionId: 'unresolved-session', shouldContinue: () => true, actionExecutor });
+        expect(await results.read({ cwd: '/repo', resultId: 'saved-result' }))
+            .toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+        const { runSessionScmRpc } = await import('@/sync/ops/sessionScm');
+        const git = await runSessionScmRpc('unresolved-session', RPC_METHODS.SCM_STATUS_SNAPSHOT, { cwd: '/repo' });
+        expect(git).toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+        expect(git).not.toHaveProperty('ok');
+    });
     it('preserves a named-Turn capture transport refusal instead of reporting invalid Action output', async () => {
         machineRpc.mockRejectedValueOnce(new Error('Machine connection closed'));
         const actionExecutor = createActionExecutor(createActionExecutorBoundaryFixture({
