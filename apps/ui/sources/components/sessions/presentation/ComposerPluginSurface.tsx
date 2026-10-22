@@ -107,11 +107,17 @@ export type ComposerPluginSurfaceProps = Readonly<{
  * incumbent owners through the one existing Composer host arm.
  */
 export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.ReactElement | null {
-    const requestedMount = readComposerPluginSurfaceMountBinding({
+    // Parents rebuild the small launch request on layout changes. The catalog
+    // is an immutable acquisition-owned snapshot; unchanged inputs need no
+    // further strict JSON walks of its renderer graph. Replacements and changed
+    // request data still pass through the same admission reader.
+    const requestKey = stableJsonStringify(props.request);
+    const requestedMount = React.useMemo(() => readComposerPluginSurfaceMountBinding({
         request: props.request,
         projectionGeneration: props.projectionGeneration,
         catalogEntries: props.catalogEntries,
-    });
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- request data, rather than its caller's allocation, invalidates admission.
+    }), [requestKey, props.projectionGeneration, props.catalogEntries]);
     // Scope renderers reconstruct request and catalog object graphs as part of
     // ordinary React renders. The bound host, however, uses this mount's
     // handler identity as its controller lifetime boundary. Retain the exact
