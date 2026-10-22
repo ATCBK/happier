@@ -57,6 +57,11 @@
       "types": "./dist/widgets/widgetPublicSnapshotV1.d.ts",
       "default": "./dist/widgets/widgetPublicSnapshotV1.js"
     },
+    "./widgets/widgetPublicProfileAdmissionV1": {
+      "happier-source": "./src/widgets/widgetPublicProfileAdmissionV1.ts",
+      "types": "./dist/widgets/widgetPublicProfileAdmissionV1.d.ts",
+      "default": "./dist/widgets/widgetPublicProfileAdmissionV1.js"
+    },
     "./widgets/publicProfileWidgetPresetsV1": {
       "happier-source": "./src/widgets/publicProfileWidgetPresetsV1.ts",
       "types": "./dist/widgets/publicProfileWidgetPresetsV1.d.ts",
