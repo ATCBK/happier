@@ -3396,7 +3396,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       }
       const result = await writeUiSessionStateField({
         sessionId: sid, fieldId,
-        value: fieldId === 'display.title' ? { title: String(value), updatedAt } : value,
+        value: fieldId === 'display.title' ? { title: String(value), updatedAt, staleBehavior: 'bump-if-value-changed' } : value,
         metadataReason: `ui-${actionId}`,
         ...(opts?.sessionStateMetadataPreprocess ? { metadataPreprocess: opts.sessionStateMetadataPreprocess } : {}),
         updateSessionMetadataWithRetry: async (targetSessionId, updater) => {
@@ -3406,6 +3406,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             throwIfAborted(context.signal);
             return updater(metadata);
           }, { serverId: serverId ?? null,
+            ...(fieldId === 'display.title' ? { mutationIntent: 'rename_session' as const } : {}),
             ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
             onMetadataCommitted: (revision) => { committedRevision = revision; },
             // Field conflict detection lives in the shared registered updater.
