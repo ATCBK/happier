@@ -7,7 +7,7 @@ import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/
 import type { DiscussionAgentPublisherPrivateRequestV1 } from '@/discussions/discussionAgentPublisher';
 import { createApprovedDiscussionAgentPublisher } from '@/discussions/approvedDiscussionAgentPublisher';
 import { runTracedExternalActionStage } from '../externalActions/externalActionPhase';
-import { timeWebLatencyPhase, withWebLatencyTrace } from '../externalActions/webLatencyTrace';
+import { readWebLatencyTracePoint, timeWebLatencyPhase, withWebLatencyTrace } from '../externalActions/webLatencyTrace';
 import { resolveExistingSessionAttachContext } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
 import { readLanguageServerProcessRoots } from '@/lsp/languageServerHost';
@@ -17400,11 +17400,13 @@ export async function startDaemonSessionControlRuntime(
                   } catch (error) {
                     logger.infoFile('[mcp] Request-auth dispatch phase', { phase: 'requester_admission', status: 'failed',
                       checkpoint: requesterCheckpoint, failureCode: readMcpRequestAuthDiagnosticCode(error), sessionId,
+                      ...readWebLatencyTracePoint(),
                       durationMs: Math.round(performance.now() - requesterAdmissionStartedAt) });
                     throw error;
                   }
                 });
                 logger.infoFile('[mcp] Request-auth dispatch phase', { phase: 'requester_admission', status: 'completed', sessionId,
+                  ...readWebLatencyTracePoint(),
                   durationMs: Math.round(performance.now() - requesterAdmissionStartedAt) });
                 const activate = requester ? requester.activatePurposeBindings : params.activatePurposeBindings;
                 const established = requester ? requester.qualifiedConnectedAccountEstablishedRuntimeOwner : params.establishedConnectedAccountRuntimeOwner;

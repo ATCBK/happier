@@ -13,7 +13,7 @@ import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerSto
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { logger } from '@/ui/logger';
-import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
+import { readWebLatencyTracePoint, timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { MCP_REQUEST_AUTH_PURPOSE, readMcpRequestAuthFailureCode, type McpRequestAuthCapability, type McpRequestAuthPort } from './mcpRequestAuth';
 
 /** Captured by the authenticated daemon operation owner, never supplied by the runner. */
@@ -57,7 +57,7 @@ export async function issueMcpRequestAuthCapability(
       throw error;
     }
     finally {
-      logger.infoFile('[mcp] Request-auth issuance phase', { phase, status, ...failure,
+      logger.infoFile('[mcp] Request-auth issuance phase', { phase, status, ...failure, ...readWebLatencyTracePoint(),
         ...(context.parentSessionId ? { sessionId: context.parentSessionId } : {}),
         durationMs: Math.round(performance.now() - phaseStartedAt), elapsedMs: Math.round(performance.now() - startedAt) });
     }
