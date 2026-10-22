@@ -820,6 +820,14 @@ Tools omit outputs by default; `includeOutputSchema: true` includes their sectio
 index, and a `/outputSchema/...` section read includes outputs automatically.
 UI/API retain full, self-contained schemas and outputs by default.
 
+Native Agent descriptors and Session MCP discovery also reuse document-local
+references within each complete input schema in 0.3 development. The shared
+Zod projector owns that reuse; the native adapters preserve their existing
+JSON Schema dialect and object-root presentation. Repeated schema nodes are
+advertised once rather than copied into every occurrence. Tool availability,
+accepted operands and authoritative Action/plugin validation are unchanged;
+authored plugin JSON Schema references remain attached to their definitions.
+
 Session-bound discovery also returns `invocationContext.sessionId` and, when the
 Account scope is available, `invocationContext.widgetSurface`. Session Board
 Actions fill an omitted `sessionId` from that invoking Session. Widget Actions
