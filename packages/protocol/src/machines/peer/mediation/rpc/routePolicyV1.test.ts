@@ -411,7 +411,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     }
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.STOP_DAEMON)).toMatchObject({ sharedMachineAccess: 'manage' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET)).toMatchObject({ sharedMachineAccess: 'manage' });
-    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD)).toMatchObject({ sharedMachineAccess: 'manage' });
+    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_REGISTRIES_FETCH)).toMatchObject({ sharedMachineAccess: 'use' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_MATERIALIZE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
@@ -641,7 +641,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     }
   });
 
-  it('keeps Team credential broker reads behind the Account server route', async () => {
+  it('keeps private Team credential source reads behind the custodian Account server route', async () => {
     const protocol = await importRpcPolicy();
     if ('importError' in protocol) throw protocol.importError;
 
@@ -654,6 +654,7 @@ describe('MachineRpcRoutePolicyV1', () => {
         routeClass: 'server_required',
         serverRequiredReason: 'ambiguous',
         rpcClassification: 'internal_only',
+        sharedMachineAccess: 'custodian_only',
         commandReceiptRequired: false,
         scope: {
           accountRequired: true,
@@ -954,6 +955,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     )).toMatchObject({
       routeClass: 'server_required',
       serverRequiredReason: 'billing',
+      sharedMachineAccess: 'custodian_only',
       commandReceiptRequired: false,
       scope: expect.objectContaining({
         sessionRequired: false,
