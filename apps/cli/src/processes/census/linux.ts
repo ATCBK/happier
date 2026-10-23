@@ -139,6 +139,12 @@ export function createLinuxCensusReader(boundary: LinuxCensusBoundary) {
                             seen.add(childPid);
                             const row = await readRow(childPid);
                             if (row) { rows.push(row); observed.add(childPid); queue.push(childPid); }
+                            else if (partial.some(item => item.pid === childPid)) {
+                                // Discovery proved a child exists, but could not
+                                // observe its generation. It is not a verified
+                                // absence and must not disappear from tree proof.
+                                return { status: 'unavailable', reason: 'read_failed' };
+                            }
                         }
                     }
                 } catch (error) {

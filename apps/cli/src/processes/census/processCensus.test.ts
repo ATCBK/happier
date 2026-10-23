@@ -57,6 +57,7 @@ describe('process census', () => {
         files.set('/proc/46/status', 'Uid:\t1000\n');
         files.set('/proc/46/task/46/children', '');
         let denied = false;
+        let unreadableChildStart = false;
         const directories: string[] = [];
         const reader = createProcessCensusReader({ platform: 'linux', selfPid: 42, linuxBoundary: {
             ...boundary,
@@ -69,6 +70,7 @@ describe('process census', () => {
             },
             readFile: async path => {
                 if (denied && path.endsWith('/children')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+                if (unreadableChildStart && path === '/proc/43/stat') throw Object.assign(new Error('denied'), { code: 'EACCES' });
                 return boundary.readFile(path);
             },
         } });
@@ -76,6 +78,9 @@ describe('process census', () => {
         const snapshot = await reader(demand);
         expect(snapshot.status === 'ok' && snapshot.rows.map(row => row.pid).sort()).toEqual([42, 43, 44, 46]);
         expect(directories).toEqual(['/proc/44/task', '/proc/43/task', '/proc/46/task']);
+        unreadableChildStart = true;
+        expect(await reader(demand)).toEqual({ status: 'unavailable', reason: 'read_failed' });
+        unreadableChildStart = false;
         denied = true;
         expect(await reader(demand)).toEqual({ status: 'unavailable', reason: 'read_failed' });
         denied = false;

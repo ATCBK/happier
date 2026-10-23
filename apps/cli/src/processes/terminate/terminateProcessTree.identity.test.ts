@@ -20,14 +20,22 @@ const moduleOwner = createRequire(import.meta.url)(resolveCliRuntimeAssetPath('s
 };
 
 function fixture(rows: Map<number, { parent: number; start: number; group?: number; cgroup?: string; disappearBeforeStatus?: boolean; unreadableStatus?: boolean }>, systemBoundary: Record<string, unknown> = {}, censusUnavailable: boolean | (() => boolean) = false, observeRead?: (path: string) => void) {
+    let readUnavailable = false;
     const reader = createProcessCensusReader({ platform: 'linux', selfPid: process.pid, linuxBoundary: {
-        async readdir() { if (typeof censusUnavailable === 'function' ? censusUnavailable() : censusUnavailable) throw Object.assign(new Error('procfs unavailable'), { code: 'EIO' }); return [...rows.keys()].map(String); },
+        async readdir(path) {
+            if (readUnavailable) throw Object.assign(new Error('procfs unavailable'), { code: 'EIO' });
+            if (path.endsWith('/task')) return [path.split('/')[2]!];
+            return [...rows.keys()].map(String);
+        },
         async readlink() { return '/fixture'; },
         async readFile(path) {
+            if (path === `/proc/${process.pid}/status`) readUnavailable = typeof censusUnavailable === 'function' ? censusUnavailable() : censusUnavailable;
+            if (readUnavailable) throw Object.assign(new Error('procfs unavailable'), { code: 'EIO' });
             observeRead?.(path);
             const pid = Number(path.split('/')[2]);
             const row = rows.get(pid);
             if (!row) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            if (path.endsWith('/children')) return [...rows].filter(([, child]) => child.parent === pid).map(([child]) => child).join(' ');
             if (path.endsWith('/status')) {
                 if (row.disappearBeforeStatus) { rows.delete(pid); throw Object.assign(new Error('exited during procfs read'), { code: 'ENOENT' }); }
                 if (row.unreadableStatus) throw Object.assign(new Error('principal unreadable'), { code: 'EACCES' });
@@ -58,7 +66,7 @@ describe('process-tree generation safety', () => {
             { pid: 4100, start: { startTimeMs: 200, native: 'linux-proc:20' } },
             { pid: 4101, start: { startTimeMs: 300, native: 'linux-proc:30' } },
         ] });
-        expect(reads.filter(path => !path.endsWith('/stat') && !path.endsWith('/status'))).toEqual([]);
+        expect(reads.filter(path => !path.endsWith('/stat') && !path.endsWith('/status') && !path.endsWith('/children'))).toEqual([]);
         expect(await owner.captureTargets({ pid: 9999 })).toMatchObject({ status: 'refused' });
         expect(await owner.captureTargets({ pid: process.pid })).toMatchObject({ status: 'refused' });
         expect(await owner.captureTargets({ pid: 4100, start: { startTimeMs: 199 } }))
@@ -149,27 +157,32 @@ describe('process-tree generation safety', () => {
         expect(signals).toEqual([4101]);
         expect(result).toMatchObject({ status: 'incomplete', outcomes: expect.arrayContaining([{ pid: root, outcome: 'refused', reason: 'containment_authority_changed' }]) });
     });
-    it('revalidates a many-member tree with exact identity reads instead of enriching the machine for every signal', async () => {
+    it.each([
+        { members: 1, waitForExit: false }, { members: 20, waitForExit: false },
+        { members: 1, waitForExit: true }, { members: 20, waitForExit: true },
+    ])('revalidates $members owned members without reading a 3000-process host inventory (waitForExit=$waitForExit)', async ({ members, waitForExit }) => {
         const root = 4100;
+        const unrelatedPids = Array.from({ length: 3001 }, (_, offset) => 5000 + offset)
+            .filter(pid => pid !== process.pid).slice(0, 3000);
         const rows = new Map([[process.pid, { parent: 1, start: 10 }],
-            ...Array.from({ length: 20 }, (_, offset) => [root + offset, { parent: offset ? root : 1, start: 20 + offset }] as const),
-            ...Array.from({ length: 300 }, (_, offset) => [5000 + offset, { parent: 1, start: 100 + offset }] as const)]);
+            ...Array.from({ length: members }, (_, offset) => [root + offset, { parent: offset ? root : 1, start: 20 + offset }] as const),
+            ...unrelatedPids.map((pid, offset) => [pid, { parent: 1, start: 100 + offset }] as const)]);
         const statReads: string[] = [];
         const enrichmentReads: string[] = [];
         const signals: number[] = [];
         const owner = fixture(rows, { kill(pid: number) { signals.push(pid); rows.delete(pid); } }, false,
             path => {
                 if (path.endsWith('/stat')) statReads.push(path);
-                else if (!path.endsWith('/status') && !path.endsWith('/auxv')) enrichmentReads.push(path);
+                else if (!path.endsWith('/status') && !path.endsWith('/auxv') && !path.endsWith('/children')) enrichmentReads.push(path);
             });
-        const result = await owner.terminateTargets({ targets: [{ pid: root }], waitForExit: false });
+        const result = await owner.terminateTargets({ targets: [{ pid: root }], waitForExit });
         expect(result.status).toBe('complete');
-        expect(signals).toHaveLength(20);
+        expect(signals).toHaveLength(members);
         expect(signals.at(-1)).toBe(root);
-        console.info(`termination census work members=20 unrelated=300 statReads=${statReads.length}`);
-        // Initial discovery, round discovery and final verification may enumerate
-        // the machine; the immediate checks read only target/reader ancestry.
-        expect(statReads.length).toBeLessThan(4 * 321);
+        // Cost is owned generations plus their protection ancestry, not host size.
+        expect(statReads.length).toBeLessThan(members === 1 ? 12 : 200);
+        const unrelated = new Set(unrelatedPids);
+        expect(statReads.some(path => unrelated.has(Number(path.split('/')[2])))).toBe(false);
         expect(enrichmentReads).toHaveLength(0);
     });
     it('retains command observations when the lifecycle owner authorizes fresh snapshots', async () => {

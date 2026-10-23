@@ -9,13 +9,15 @@ import * as fs from 'node:fs/promises';
 const procfsState = vi.hoisted(() => ({
   actual: null as null | typeof import('node:fs/promises').readdir,
   readFile: null as null | typeof import('node:fs/promises').readFile,
+  open: null as null | typeof import('node:fs/promises').open,
   rejectCensus: false,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   procfsState.actual = actual.readdir;
   procfsState.readFile = actual.readFile;
-  return { ...actual, readdir: vi.fn(actual.readdir), readFile: vi.fn(actual.readFile) };
+  procfsState.open = actual.open;
+  return { ...actual, readdir: vi.fn(actual.readdir), readFile: vi.fn(actual.readFile), open: vi.fn(actual.open) };
 });
 vi.mock('@happier-dev/cli-common/process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@happier-dev/cli-common/process')>();
@@ -52,6 +54,7 @@ function denyNativeCensus() {
 afterEach(() => {
   if (procfsState.actual) vi.mocked(fs.readdir).mockImplementation(procfsState.actual);
   if (procfsState.readFile) vi.mocked(fs.readFile).mockImplementation(procfsState.readFile);
+  if (procfsState.open) vi.mocked(fs.open).mockImplementation(procfsState.open);
   procfsState.rejectCensus = false;
   restoreCensusClock?.();
   restoreCensusClock = undefined;
@@ -82,6 +85,7 @@ describe('terminateProcessTree', () => {
     const stoppedTools: boolean[] = [];
     // Keep genuine filesystem I/O outside this deterministic taskkill deadline check.
     vi.mocked(fs.readFile).mockRejectedValue(new Error('procfs unavailable'));
+    vi.mocked(fs.open).mockRejectedValue(new Error('procfs unavailable'));
     vi.mocked(fs.readdir).mockRejectedValue(new Error('procfs unavailable'));
     procfsState.rejectCensus = true;
     vi.useFakeTimers();
