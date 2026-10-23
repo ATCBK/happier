@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RouteOptions } from "fastify";
+import type { Prisma } from "@prisma/client";
 import { SessionMessagesPageV1Schema } from "@happier-dev/protocol";
 
 import {
@@ -25,6 +26,56 @@ describe("sessionRoutes v1 messages pagination", () => {
         catchupFetchesInc.mockReset();
         catchupReturnedInc.mockReset();
     });
+
+    it("acquires only the exact committed message from a long transcript through the existing page route", async () => {
+        const rows = Array.from({ length: 200 }, (_, index) => ({
+            id: `message-${index + 1}`, seq: index + 1, localId: null, sidechainId: null,
+            messageRole: "agent", content: { t: "encrypted", c: `sealed-${index + 1}` },
+            createdAt: new Date(index + 1), updatedAt: new Date(index + 1),
+        }));
+        let acquiredRows = 0;
+        // Substitute only the persistent database boundary; admission and projection remain real.
+        sessionMessageFindMany.mockImplementation(async ({ where, take }: Prisma.SessionMessageFindManyArgs) => {
+            const messageId = typeof where?.id === "string" ? where.id : undefined;
+            const selected = messageId === undefined ? rows : rows.filter(row => row.id === messageId);
+            const acquired = selected.slice(0, take ?? selected.length);
+            acquiredRows += acquired.length;
+            return acquired;
+        });
+        const app = createAuthenticatedTestApp();
+        registerSessionMessageRoutes(app);
+        await app.ready();
+        try {
+            const response = await app.inject({ method: "GET",
+                url: "/v1/sessions/s1/messages?messageId=message-7&scope=all&role=agent",
+                headers: { "x-test-user-id": "u1" } });
+            expect(response.statusCode).toBe(200);
+            const page = SessionMessagesPageV1Schema.parse(response.json());
+            expect(page.messages.map(message => message.id)).toEqual(["message-7"]);
+            expect(page).toMatchObject({ hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+            expect(acquiredRows).toBe(1);
+            expect(sessionMessageFindMany).toHaveBeenCalledWith(expect.objectContaining({
+                where: expect.objectContaining({ id: "message-7", sessionId: "s1", messageRole: "agent",
+                    session: expect.objectContaining({ AND: expect.any(Array) }) }),
+            }));
+        } finally { await app.close(); }
+    });
+
+    it.each(["beforeSeq=10", "afterSeq=0", "limit=1", "projection=turns", "projection=externalShareableV1"])(
+        "rejects exact selection combined with %s before acquiring messages", async extra => {
+            sessionMessageFindMany.mockResolvedValue([]);
+            const app = createAuthenticatedTestApp();
+            registerSessionMessageRoutes(app);
+            await app.ready();
+            try {
+                const response = await app.inject({ method: "GET",
+                    url: `/v1/sessions/s1/messages?messageId=message-7&${extra}`,
+                    headers: { "x-test-user-id": "u1" } });
+                expect(response.statusCode).toBe(400);
+                expect(sessionMessageFindMany).not.toHaveBeenCalled();
+            } finally { await app.close(); }
+        },
+    );
 
     it('states exact admitted references or null on authenticated publication HTTP pages', async () => {
         const surfaceItemReference = { v: 1, references: [{ v: 1, itemId: 'visual', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',

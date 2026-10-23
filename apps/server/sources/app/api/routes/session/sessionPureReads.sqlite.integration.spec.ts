@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { SESSION_DRAFT_ROUTE_LIST, SESSION_DRAFT_ROUTE_READ, SessionInputAdmissionReceiptV1Schema, createSessionSubagentCustodyKeyV1 } from "@happier-dev/protocol";
+import { SESSION_DRAFT_ROUTE_LIST, SESSION_DRAFT_ROUTE_READ, SessionInputAdmissionReceiptV1Schema, SessionMessagesPageV1Schema, createSessionSubagentCustodyKeyV1 } from "@happier-dev/protocol";
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -37,6 +37,47 @@ describe("authenticated Session pure reads (SQLite integration)", () => {
         });
     }, 120_000);
     afterAll(async () => { await harness.close(); });
+
+    it("reads one exact message while retaining Session access, chain, role and publication restrictions", async () => {
+        const account = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
+        const outsider = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: crypto.randomUUID(), metadata: "{}", encryptionMode: "plain", seq: 200,
+        } });
+        const messageId = `exact-${session.id}-7`;
+        await db.sessionMessage.createMany({ data: Array.from({ length: 200 }, (_, index) => ({
+            id: `exact-${session.id}-${index + 1}`, sessionId: session.id, seq: index + 1, messageRole: "agent",
+            content: { t: "plain", v: { text: `answer-${index + 1}` } },
+        })) });
+        await withAuthenticatedTestApp(registerSessionMessageRoutes, async app => {
+            const headers = { "x-test-user-id": account.id };
+            const url = `/v1/sessions/${session.id}/messages?messageId=${messageId}`;
+            const response = await app.inject({ method: "GET", url, headers });
+            expect(response.statusCode).toBe(200);
+            const page = SessionMessagesPageV1Schema.parse(response.json());
+            expect(page.messages.map(message => message.id)).toEqual([messageId]);
+            expect(page).toMatchObject({ hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+            for (const query of ["&role=user", "&scope=sidechain&sidechainId=other-chain"]) {
+                const filtered = await app.inject({ method: "GET", url: `${url}${query}`, headers });
+                expect(filtered.statusCode).toBe(200);
+                expect(SessionMessagesPageV1Schema.parse(filtered.json())).toMatchObject({
+                    messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+                });
+            }
+            const missing = await app.inject({ method: "GET", url: `/v1/sessions/${session.id}/messages?messageId=missing`, headers });
+            expect(SessionMessagesPageV1Schema.parse(missing.json())).toMatchObject({ messages: [], hasMore: false });
+            const denied = await app.inject({ method: "GET", url, headers: { "x-test-user-id": outsider.id } });
+            expect(denied.statusCode).toBe(404);
+            await db.session.update({ where: { id: session.id }, data: {
+                currentStorageState: "server_partial", acceptedThroughServerSeq: 6,
+            } });
+            const unpublished = await app.inject({ method: "GET", url, headers });
+            expect(unpublished.statusCode).toBe(200);
+            expect(SessionMessagesPageV1Schema.parse(unpublished.json())).toMatchObject({
+                messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+            });
+        });
+    });
 
     it('keeps waiting readable for released readers and preserves it for cumulative V4 readers', async () => {
         // cli-v0.2.16 / cli-v0.2.16-preview.1, b8d1c449c46ab4dfa8637db36b66f643d149e66d,

@@ -73,6 +73,7 @@ const SessionTranscriptStoredContentUnavailableResponseSchema = z.strictObject({
 });
 
 type SessionListPreviewQuery = Readonly<{
+    messageId?: string;
     scope?: unknown;
     sidechainId?: unknown;
     limit?: number;
@@ -108,6 +109,7 @@ function isAdmittedSessionListPreviewRequest(input: Readonly<{
         && query.scope === "main"
         && query.roles === "user,agent"
         && query.sidechainId === undefined
+        && query.messageId === undefined
         && query.beforeSeq === undefined
         && query.afterSeq === undefined
         && query.role === undefined
@@ -313,7 +315,10 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
         catchupFollowupFetchesCounter.inc({ type: 'session-messages-afterSeq' });
     }
 
-    const where: Prisma.SessionMessageWhereInput = { sessionId };
+    const where: Prisma.SessionMessageWhereInput = {
+        sessionId,
+        ...(query?.messageId === undefined ? {} : { id: query.messageId }),
+    };
     if (scope === "main") where.sidechainId = null;
     if (scope === "sidechain") where.sidechainId = sidechainId;
     const roleWhere = buildRequestedMessageRoleWhere(roles);
@@ -926,6 +931,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 sessionId: z.string()
             }),
             querystring: z.optional(z.object({
+                messageId: z.optional(z.string().check(z.minLength(1))),
                 scope: z.optional(z.enum(["main", "sidechain", "all"])),
                 sidechainId: z.optional(z.string().check(z.minLength(1))),
                 limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1))),
@@ -935,6 +941,13 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 roles: z.optional(z.string()),
                 projection: z.optional(z.enum(["externalShareableV1", "turns"])),
             }).check(z.superRefine((value, ctx) => {
+                if (value.messageId !== undefined && (value.beforeSeq !== undefined
+                    || value.afterSeq !== undefined || value.limit !== undefined || value.projection !== undefined)) {
+                    ctx.addIssue({
+                        code: "custom",
+                        message: "Exact message selection and history paging or projection are mutually exclusive",
+                    });
+                }
                 if (value.beforeSeq !== undefined && value.afterSeq !== undefined) {
                     ctx.addIssue({
                         code: "custom",
