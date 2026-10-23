@@ -4,7 +4,7 @@ import { createCliActionExecutorHarness } from './createCliActionExecutorHarness
 import {
   DEFAULT_SESSION_TRANSCRIPT_FOLLOW_LEASE_IDLE_TTL_MS,
   createSessionTranscriptFollowLeaseRegistry,
-} from '@/api/session/transcriptQueries';
+} from '@/api/session/followSessionTranscript';
 import {
   executeCliTranscriptAction,
   type CliTranscriptActionExecutorOptions,
@@ -29,7 +29,7 @@ import { createCliPersonalSavedSecretActionExecute } from '@/settings/secrets/pe
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
-import { createSpawnConnectedServicesTeamResourceCatalogResolver } from '@/session/services/spawnConnectedServicesDefaults';
+import type { ResolveSpawnConnectedServicesTeamResourceCatalog } from '@/session/services/spawnConnectedServicesDefaults';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { isFilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
@@ -42,7 +42,6 @@ import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/m
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
-import { executeAccountPluginAction } from './executeAccountPluginAction';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>[0]
   & CliTranscriptActionExecutorOptions
@@ -143,13 +142,22 @@ export function createCliActionExecutor(
       idleTtlMs: DEFAULT_SESSION_TRANSCRIPT_FOLLOW_LEASE_IDLE_TTL_MS,
     });
   const resolveTeamCredentialResourceCatalog = params.resolveTeamCredentialResourceCatalog
-    ?? (runtimeAccountId && params.accountServerActionDeps?.homeDomainAction
-      ? createSpawnConnectedServicesTeamResourceCatalogResolver({
-          homeDomainAction: params.accountServerActionDeps.homeDomainAction,
-          serverId: params.serverId ?? configuration.activeServerId,
-          accountId: runtimeAccountId,
-        })
-      : undefined);
+    ?? (() => {
+      if (!runtimeAccountId || !params.accountServerActionDeps?.homeDomainAction) return undefined;
+      // Preserve constructor-time Home/Account binding while loading the spawn
+      // catalog only when a spawn actually asks for its Team resources.
+      const binding = {
+        homeDomainAction: params.accountServerActionDeps.homeDomainAction,
+        serverId: params.serverId ?? configuration.activeServerId,
+        accountId: runtimeAccountId,
+      };
+      return async (request: Parameters<ResolveSpawnConnectedServicesTeamResourceCatalog>[0]) => {
+        const { createSpawnConnectedServicesTeamResourceCatalogResolver } = await import(
+          '@/session/services/spawnConnectedServicesDefaults'
+        );
+        return await createSpawnConnectedServicesTeamResourceCatalogResolver(binding)(request);
+      };
+    })();
   // The exact Home pair travels to its owners as one value; spreading the two
   // fields separately loses the binding the params type already guarantees.
   const exactHome: CliActionExactHomeTarget =
@@ -269,8 +277,11 @@ export function createCliActionExecutor(
   );
   const base = harness.executor;
   const executeInCurrentProcess: NonNullable<Parameters<typeof createDaemonPluginActionExecutor>[0]['executeInCurrentProcess']> =
-    (actionId, input, context) => executeAccountPluginAction({ host: params, deps: harness.deps,
-      actionId, input, ...(context ? { context } : {}) });
+    async (actionId, input, context) => {
+      const { executeAccountPluginAction } = await import('./executeAccountPluginAction');
+      return await executeAccountPluginAction({ host: params, deps: harness.deps,
+        actionId, input, ...(context ? { context } : {}) });
+    };
   const pluginExecutor = params.pluginActionExecutionOwner === 'current_process'
     ? params.accountPluginActions ? createPluginActionExecutor({ base, executeInCurrentProcess }) : null
     : createDaemonPluginActionExecutor({ base, executeInCurrentProcess });

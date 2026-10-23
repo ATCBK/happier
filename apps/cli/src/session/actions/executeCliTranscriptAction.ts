@@ -4,12 +4,12 @@ import type { ActionExecuteResult, ActionExecutorContext, ActionId } from '@happ
 import { SessionMessageContentSchema } from '@/api/types';
 import {
     followSessionTranscript,
-    importSessionTranscript,
-    pageSessionTranscript,
-    readSessionTranscriptAfter,
-    searchSessionTranscript,
     type SessionTranscriptFollowLeaseRegistry,
-} from '@/api/session/transcriptQueries';
+} from '@/api/session/followSessionTranscript';
+import { importSessionTranscript } from '@/api/session/importSessionTranscript';
+import { pageSessionTranscript } from '@/api/session/pageSessionTranscript';
+import { readSessionTranscriptAfter } from '@/api/session/readSessionTranscriptAfter';
+import { searchSessionTranscript } from '@/api/session/searchSessionTranscript';
 import type {
     FileBackedTranscriptSessionStore,
 } from '@/api/session/fileBackedTranscripts/store';
