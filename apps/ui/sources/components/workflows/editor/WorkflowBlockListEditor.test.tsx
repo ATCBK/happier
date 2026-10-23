@@ -19,7 +19,7 @@ vi.mock('react-native', async () => {
     const React = await import('react');
     const { createRenderCommitCounter, useRenderCommitCounter } = await import('@/dev/testkit/performance/counts');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    const native = createReactNativeWebMock();
+    const native = await createReactNativeWebMock();
     // Count mounted Wait prompt content at the native boundary; the editor,
     // immutable draft updates and the real composer remain unmocked.
     const View = React.forwardRef<React.ComponentRef<typeof native.View>, React.ComponentProps<typeof native.View>>((props, ref) => {
@@ -262,9 +262,13 @@ it.each([8, 500])('keeps unaffected prompt content quiet for one keystroke in a 
     await flushHookEffects();
     expect(promptCosts.size).toBe(count);
     for (const counter of promptCosts.values()) counter.reset();
+    const prompt = screen.findHostByTestId('workflow-editor-wait-cost-0-prompt');
+    const input = prompt?.findAll(node => node.props.testID === 'new-session-composer-input'
+        && typeof node.props.onChange === 'function').at(-1);
+    expect(input).toBeDefined();
     await act(async () => {
-        screen.findByTestId('new-session-composer-input')?.props.onChange({ nativeEvent: {
-            text: 'Reviewx', selection: { start: 7, end: 7 }, eventCount: 1,
+        input!.props.onChange({ nativeEvent: {
+            text: 'Reviewx', selection: { start: 7, end: 7 }, eventCount: 1, references: [],
         } });
     });
     await flushHookEffects();

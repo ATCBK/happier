@@ -213,9 +213,11 @@ it('does no Map-only projection work for a 500-item Run while Activity is shown,
   const definition = createWorkflowDefinitionFixture({ blocks: Array.from({ length: 500 }, (_, index) => ({
     kind: 'wait', id: `wait-${index}`, document: { text: 'Review', references: [], attachments: [] },
   })) });
-  const invocations = Array.from({ length: 500 }, (_, index) => createWorkflowInvocationIndexFixture({
-    id: `item-${index}`, sequence: String(index), memberOrdinal: String(index),
-  }));
+  const root = createWorkflowInvocationIndexFixture({ id: 'cost-root' });
+  const invocations = [root, ...Array.from({ length: 500 }, (_, index) => createWorkflowInvocationIndexFixture({
+    id: `item-${index}`, parentRecordId: root.id, sequence: String(index + 1), memberOrdinal: String(index),
+    lifecycle: index === 499 ? 'waiting_for_review' : 'completed',
+  }))];
   const props: ContentProps = {
     active: false, run: createWorkflowRunSummaryFixture(), definition, invocations,
     invocationsLoaded: true, invocationHistoryComplete: true, firstFailedInvocationId: null,
@@ -225,12 +227,19 @@ it('does no Map-only projection work for a 500-item Run while Activity is shown,
   try {
     const screen = await renderContent(props);
     expect(mapProjection).toHaveBeenCalledTimes(0);
-    const changed = invocations.map((row, index) => index === 250 ? { ...row, lifecycle: 'succeeded' as const } : row);
+    const changed = invocations.map(row => row.id === 'item-499'
+      ? createWorkflowInvocationIndexFixture({ ...row, lifecycle: 'completed' }) : row);
     await screen.update(<WorkflowRunContent {...props} invocations={changed} />);
     expect(mapProjection).toHaveBeenCalledTimes(0);
     await screen.update(<WorkflowRunContent {...props} invocations={changed} view="flow" />);
     expect(mapProjection).toHaveBeenCalledTimes(1);
-    expect(mapProjection.mock.calls[0]?.[0].invocations[250]?.lifecycle).toBe('succeeded');
+    const states = mapProjection.mock.results[0]?.value;
+    expect(states?.get(resolveWorkflowFlowScopedNodeId('wait-499', []))).toMatchObject([
+      { invocationId: 'item-499', lifecycle: 'completed' },
+    ]);
+    expect(states?.get(resolveWorkflowFlowScopedNodeId('wait-498', []))).toMatchObject([
+      { invocationId: 'item-498', lifecycle: 'completed' },
+    ]);
   } finally { mapProjection.mockRestore(); }
 });
 
