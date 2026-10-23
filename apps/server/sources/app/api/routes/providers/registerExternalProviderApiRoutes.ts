@@ -179,8 +179,8 @@ export function registerExternalProviderApiRoutes(
         if (!availability.available) return reply.code(404).send({ error: "not_found" });
     };
     const rateLimit = resolveApiHotEndpointRateLimit(env, "providerBroker.externalApi");
-    const readCurrentBrokerPresence = dependencies.readCurrentBrokerPresence ?? ((custodianAccountId) => (
-        getMachineDaemonPresenceInventory({ accountId: custodianAccountId, io: app.machineDaemonPresence })
+    const readCurrentBrokerPresence = dependencies.readCurrentBrokerPresence ?? ((custodianAccountId, machineIds) => (
+        getMachineDaemonPresenceInventory({ accountId: custodianAccountId, io: app.machineDaemonPresence, machineIds })
     ));
     const canonicalPoolSourceEligibility = createTeamCredentialPoolSourceEligibilityReader(
         (params) => app.forwardRpcForUser(params),

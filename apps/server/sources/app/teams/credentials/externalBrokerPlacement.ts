@@ -6,6 +6,7 @@ import { inTx, type Tx } from "@/storage/inTx";
 import { resolveCurrentTeamCredentialExternalApiKeyAuthorityInTx } from "./externalApiKey";
 import {
     resolveTeamCredentialBrokerPlacementInTx,
+    readTeamCredentialBrokerPresenceDemand,
     resolveTeamCredentialBrokerPlacementFingerprint,
     type TeamCredentialBrokerPlacementResource,
 } from "./brokerPlacementResolver";
@@ -107,7 +108,7 @@ export async function resolveTeamCredentialExternalBrokerPlacement(input: Readon
     observedAt: Date;
     catalogOnly?: boolean;
     signal: AbortSignal;
-    readCurrentPresence: (custodianAccountId: string) => Promise<MachineDaemonPresenceInventory>;
+    readCurrentPresence: (custodianAccountId: string, machineIds?: readonly string[]) => Promise<MachineDaemonPresenceInventory>;
     readPoolSourceEligibility: ExternalBrokerPoolSourceEligibilityReader;
 }>): Promise<ExternalBrokerPlacementResult> {
     const initial = await inTx(async (tx) => {
@@ -131,7 +132,10 @@ export async function resolveTeamCredentialExternalBrokerPlacement(input: Readon
 
     let initialPresence: MachineDaemonPresenceInventory;
     try {
-        initialPresence = await input.readCurrentPresence(authority.custodianAccountId);
+        const machineIds = await readTeamCredentialBrokerPresenceDemand({
+            resource, pinnedMachineId: established?.brokerMachineId,
+        });
+        initialPresence = await input.readCurrentPresence(authority.custodianAccountId, machineIds);
     } catch {
         return { ok: false, error: "broker_unavailable" };
     }
@@ -165,7 +169,11 @@ export async function resolveTeamCredentialExternalBrokerPlacement(input: Readon
         if (!candidateEligibility?.has(candidateMachineId)) return { ok: false, error: "broker_unavailable" };
         let currentPresence: MachineDaemonPresenceInventory;
         try {
-            currentPresence = await input.readCurrentPresence(authority.custodianAccountId);
+            // An unestablished Pool operation can acquire another request's concurrent
+            // winner, even after that Machine leaves the Pool. Its target is not yet
+            // known here; retain the complete census for that existing adoption path.
+            currentPresence = await input.readCurrentPresence(authority.custodianAccountId,
+                established || authority.brokerMachineId !== null ? [candidateMachineId] : undefined);
         } catch {
             return { ok: false, error: "broker_unavailable" };
         }

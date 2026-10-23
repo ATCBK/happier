@@ -321,9 +321,10 @@ export function registerEphemeralRunnerRoutes(rawApp: Fastify, env: NodeJS.Proce
             request: request.body,
             authentication: readSessionAccessAuthenticationFromRequest(request),
             signal: eligibilityAbort.signal,
-            readCurrentPresence: async custodianAccountId => await getMachineDaemonPresenceInventory({
+            readCurrentPresence: async (custodianAccountId, machineIds) => await getMachineDaemonPresenceInventory({
                 accountId: custodianAccountId,
                 io: app.machineDaemonPresence,
+                machineIds,
             }),
             readPoolSourceEligibility: createTeamCredentialPoolSourceEligibilityReader(app.forwardRpcForUser),
             readProviderProjection: async ({ custodianAccountId, brokerMachineId, source, request: selectionRequest }) => {

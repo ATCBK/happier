@@ -2,12 +2,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { getMachineSocketRoom, getUserMachinesSocketRoom } from '@/app/api/socketRooms';
 import type { MachineDaemonPresenceSocketServer } from "../machineDaemonPresence";
 import type { MachinePoolCreateInputV1 } from "@happier-dev/protocol";
 import {
     createMachinePool,
     deleteMachinePool,
     getMachinePool,
+    getMachinePoolCandidateSnapshot,
+    getMachinePoolCandidateSnapshots,
     listMachinePools,
     resolveMachinePool,
     updateMachinePool,
@@ -396,6 +399,109 @@ describe("machinePoolService (SQLite integration)", () => {
             ok: true,
             value: { kind: "resolved", poolId, machineId: "m-slow", priorityTier: 7 },
         });
+    });
+
+    it('rereads Pool policy after the conditional census and keeps newly added members unknown', async () => {
+        await seed();
+        await createMachinePool({ accountId: ownerId, input: { poolId, name: 'Moving twice',
+            members: [{ machineId: 'm-fast', priorityTier: 0, enabled: true }] }, io: io() });
+        let firstStarted!: () => void;
+        let secondStarted!: () => void;
+        const firstStart = new Promise<void>(resolve => { firstStarted = resolve; });
+        const secondStart = new Promise<void>(resolve => { secondStarted = resolve; });
+        let releaseFirst!: () => void;
+        let releaseSecond!: () => void;
+        const first = new Promise<void>(resolve => { releaseFirst = resolve; });
+        const second = new Promise<void>(resolve => { releaseSecond = resolve; });
+        const queriedRooms: (string | string[])[] = [];
+        const pending = getMachinePoolCandidateSnapshot({ accountId: ownerId, poolId, io: {
+            in: room => ({ fetchSockets: async () => {
+                queriedRooms.push(room);
+                const machineId = queriedRooms.length === 1 ? 'm-fast' : 'm-slow';
+                if (queriedRooms.length === 1) { firstStarted(); await first; }
+                else if (queriedRooms.length === 2) { secondStarted(); await second; }
+                else throw new Error('A changed Pool must settle without a discovery loop');
+                return [{ data: { userId: ownerId, clientType: 'machine-scoped', machineId } }];
+            } }),
+        } });
+        await firstStart;
+        await updateMachinePool({ accountId: ownerId, input: { poolId, expectedRevision: 0, name: 'Moving twice',
+            members: [{ machineId: 'm-slow', priorityTier: 7, enabled: true }] }, io: io() });
+        releaseFirst();
+        await secondStart;
+        await updateMachinePool({ accountId: ownerId, input: { poolId, expectedRevision: 1, name: 'Moving twice',
+            members: [{ machineId: 'm-fast', priorityTier: 9, enabled: true }] }, io: io() });
+        releaseSecond();
+        expect(await pending).toMatchObject({ ok: true, value: {
+            revision: 2,
+            members: [{ machineId: 'm-fast', priorityTier: 9, enabled: true }],
+            presenceState: 'partial', availableMachineIds: new Set(),
+        } });
+        expect(queriedRooms).toEqual([`machine:m-fast:${ownerId}`, `machine:m-slow:${ownerId}`]);
+    });
+
+    it('shares one exact enabled-member union across many requested Pools and never widens empty demand', async () => {
+        await seed();
+        const ids = Array.from({ length: 12 }, () => crypto.randomUUID());
+        await db.machinePool.createMany({ data: ids.map(id => ({ id, accountId: ownerId, name: 'Bulk snapshot' })) });
+        await db.machinePoolMember.createMany({ data: ids.flatMap(poolId => ['m-fast', 'm-slow'].map(machineId => ({
+            poolId, machineId, enabled: true, priorityTier: 0,
+        }))) });
+        const foreign = await db.machinePool.create({ data: { id: crypto.randomUUID(), accountId: otherId, name: 'Foreign' } });
+        const rooms: string[][] = [];
+        let transportedIdentities = 0;
+        const transport: MachineDaemonPresenceSocketServer = { in: room => ({ fetchSockets: async () => {
+            const selected = typeof room === 'string' ? [room] : room;
+            rooms.push(selected);
+            const candidates = ['m-fast', 'm-slow', ...Array.from({ length: 1000 }, (_, index) => `unrelated-${index}`)];
+            const matching = candidates.filter(machineId => selected.includes(getUserMachinesSocketRoom(ownerId))
+                || selected.includes(getMachineSocketRoom(ownerId, machineId)));
+            transportedIdentities += matching.length;
+            return matching.map(machineId => ({ data: { clientType: 'machine-scoped', userId: ownerId, machineId } }));
+        } }) };
+        const snapshots = await getMachinePoolCandidateSnapshots({ accountId: ownerId, poolIds: [...ids, foreign.id], io: transport });
+        expect(snapshots.size).toBe(ids.length);
+        expect(snapshots.has(foreign.id)).toBe(false);
+        for (const snapshot of snapshots.values()) expect(snapshot).toMatchObject({ presenceState: 'known', availableMachineIds: new Set(['m-fast', 'm-slow']) });
+        expect(rooms.map(scope => scope.slice().sort())).toEqual([['m-fast', 'm-slow'].map(id => getMachineSocketRoom(ownerId, id)).sort()]);
+        expect(transportedIdentities).toBe(2);
+        rooms.length = 0;
+        await db.machinePoolMember.updateMany({ where: { poolId: { in: ids } }, data: { enabled: false } });
+        const disabled = await getMachinePoolCandidateSnapshots({ accountId: ownerId, poolIds: ids, io: transport });
+        expect(disabled.size).toBe(ids.length);
+        expect([...disabled.values()].every(snapshot => snapshot.availableMachineIds.size === 0 && snapshot.presenceState === 'known')).toBe(true);
+        expect(await getMachinePoolCandidateSnapshots({ accountId: ownerId, poolIds: [], io: transport })).toEqual(new Map());
+        expect(rooms).toEqual([]);
+    });
+
+    it('reads final bulk Pool definitions after a second exact census without looping for newly added members', async () => {
+        await seed();
+        const secondPoolId = crypto.randomUUID();
+        await db.machine.create({ data: { id: 'm-final', accountId: ownerId, metadata: '{}' } });
+        for (const id of [poolId, secondPoolId]) await db.machinePool.create({ data: {
+            id, accountId: ownerId, name: 'Moving bulk Pool', members: { create: { machineId: 'm-fast', priorityTier: 0, enabled: true } },
+        } });
+        const rooms: string[][] = [];
+        const transport: MachineDaemonPresenceSocketServer = { in: room => ({ fetchSockets: async () => {
+            rooms.push(typeof room === 'string' ? [room] : room);
+            if (rooms.length === 1) {
+                await db.machinePoolMember.deleteMany({ where: { poolId: { in: [poolId, secondPoolId] } } });
+                await db.machinePoolMember.createMany({ data: [poolId, secondPoolId].map(id => ({ poolId: id, machineId: 'm-slow', priorityTier: 7, enabled: true })) });
+                await db.machinePool.updateMany({ where: { id: { in: [poolId, secondPoolId] } }, data: { revision: 1 } });
+                return [{ data: { clientType: 'machine-scoped', userId: ownerId, machineId: 'm-fast' } }];
+            }
+            if (rooms.length !== 2) throw new Error('Bulk Pool discovery must settle without a retry loop');
+            await db.machinePoolMember.deleteMany({ where: { poolId } });
+            await db.machinePoolMember.create({ data: { poolId, machineId: 'm-final', priorityTier: 9, enabled: true } });
+            await db.machinePool.update({ where: { id: poolId }, data: { revision: 2 } });
+            return [{ data: { clientType: 'machine-scoped', userId: ownerId, machineId: 'm-slow' } }];
+        } }) };
+        const snapshots = await getMachinePoolCandidateSnapshots({ accountId: ownerId, poolIds: [poolId, secondPoolId], io: transport });
+        expect(rooms).toEqual([[getMachineSocketRoom(ownerId, 'm-fast')], [getMachineSocketRoom(ownerId, 'm-slow')]]);
+        expect(snapshots.get(poolId)).toMatchObject({ revision: 2, presenceState: 'partial', availableMachineIds: new Set(),
+            members: [{ machineId: 'm-final', priorityTier: 9, enabled: true }] });
+        expect(snapshots.get(secondPoolId)).toMatchObject({ revision: 1, presenceState: 'known', availableMachineIds: new Set(['m-slow']),
+            members: [{ machineId: 'm-slow', priorityTier: 7, enabled: true }] });
     });
 
     it("resolves empty and all-disabled pools as empty without consulting presence", async () => {

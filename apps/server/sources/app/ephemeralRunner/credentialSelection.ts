@@ -13,6 +13,7 @@ import type { SessionAccessAuthentication } from "@/app/session/access/sessionAc
 import { projectTeamCredentialProviderModels } from "@/app/teams/credentials/providerModelProjection";
 import {
     readTeamCredentialBrokerPlacement,
+    readTeamCredentialBrokerPresenceDemand,
     resolveTeamCredentialBrokerPlacementInTx,
 } from "@/app/teams/credentials/brokerPlacementResolver";
 import type {
@@ -268,7 +269,7 @@ async function freezeSelection(input: Readonly<{
 }
 
 export type RunnerBrokerPresenceReader =
-    (custodianAccountId: string) => Promise<MachineDaemonPresenceInventory>;
+    (custodianAccountId: string, machineIds: readonly string[]) => Promise<MachineDaemonPresenceInventory>;
 
 type RunnerBrokerMachineSelection =
     | Readonly<{ ok: true; brokerMachineId: string | null }>
@@ -324,7 +325,8 @@ async function selectRunnerBrokerMachine(input: Readonly<{
 
     let presence: MachineDaemonPresenceInventory;
     try {
-        presence = await input.readCurrentPresence(resource.custodianAccountId);
+        const machineIds = await readTeamCredentialBrokerPresenceDemand({ resource });
+        presence = await input.readCurrentPresence(resource.custodianAccountId, machineIds);
     } catch {
         return { ok: false, reason: "broker_unavailable" };
     }

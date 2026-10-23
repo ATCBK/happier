@@ -236,19 +236,20 @@ export async function resolveTeamCredentialRequestPolicySupport(
     app: Fastify,
     prepared: Extract<TeamCredentialRequestPolicySupportPreparation, { ok: true }>,
 ): Promise<TeamCredentialRequestPolicySupportOutputV1> {
-    const presence = await getMachineDaemonPresenceInventory({
+    const presence = prepared.brokerPlacement.kind === 'machine' ? await getMachineDaemonPresenceInventory({
         accountId: prepared.custodianAccountId,
         io: app.machineDaemonPresence,
-    });
+        machineIds: [prepared.brokerPlacement.machineId],
+    }) : null;
     const poolSnapshot = prepared.brokerPlacement.kind === "machine_pool"
         ? await getMachinePoolCandidateSnapshot({
             accountId: prepared.custodianAccountId,
             poolId: prepared.brokerPlacement.poolId,
-            presence,
+            io: app.machineDaemonPresence,
         })
         : null;
     const machineIds = prepared.brokerPlacement.kind === "machine"
-        ? classifyMachineDaemonPresence(presence, prepared.brokerPlacement.machineId) === "connected"
+        ? presence && classifyMachineDaemonPresence(presence, prepared.brokerPlacement.machineId) === "connected"
             ? [prepared.brokerPlacement.machineId]
             : []
         : poolSnapshot?.ok

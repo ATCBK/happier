@@ -45,6 +45,7 @@ import {
 } from "./externalApiKey";
 import { authorizeRunnerBrokerReadiness } from "./runnerBrokerReadinessAuthorization";
 import { registerTeamCredentialProviderBrokerRoutes } from "./providerBrokerRoutes";
+import { readTeamCredentialBrokerPresenceDemand } from './brokerPlacementResolver';
 import {
     prepareTeamCredentialRecipientMaterialInTx,
     readTeamCredentialDirectMaterialCensusInTx,
@@ -957,6 +958,7 @@ export function registerTeamCredentialResourceRoutes(
         const brokerPresence = await getMachineDaemonPresenceInventory({
             accountId: authorized.authorization.custodianAccountId,
             io: app.machineDaemonPresence,
+            machineIds: await readTeamCredentialBrokerPresenceDemand({ resource: authorized.authorization }),
         });
         const prepared = await inTx(tx => resolveAuthorizedTeamCredentialResourceTestPlacementInTx(tx, {
             authorization: authorized.authorization,
@@ -996,6 +998,7 @@ export function registerTeamCredentialResourceRoutes(
             const currentPresence = await getMachineDaemonPresenceInventory({
                 accountId: snapshot.custodianAccountId,
                 io: app.machineDaemonPresence,
+                machineIds: snapshot.candidateMachineIds,
             });
             const selection = await inTx(tx => selectAuthorizedTeamCredentialResourceTestBrokerInTx(tx, {
                 authorization: authorized.authorization,
@@ -1127,16 +1130,29 @@ export function registerTeamCredentialResourceRoutes(
         if (!result.ok) return fail(reply, result.error);
         if (!body.data.application || result.projectionRequests.length === 0) return reply.send(result.page);
         const resourcesById = new Map(result.page.resources.map(resource => [resource.id, resource] as const));
+        const directAccountIds = new Set<string>();
+        const poolIdsByAccount = new Map<string, Set<string>>();
+        for (const projectionRequest of result.projectionRequests) {
+            if (!resourcesById.has(projectionRequest.resourceId)) continue;
+            if (projectionRequest.deliveryMode === 'direct') directAccountIds.add(projectionRequest.custodianAccountId);
+            if (projectionRequest.deliveryMode === 'brokered' && projectionRequest.brokerPoolId) {
+                const poolIds = poolIdsByAccount.get(projectionRequest.custodianAccountId) ?? new Set<string>();
+                poolIds.add(projectionRequest.brokerPoolId);
+                poolIdsByAccount.set(projectionRequest.custodianAccountId, poolIds);
+            }
+        }
         const presenceByAccount = new Map<string, ReturnType<typeof getMachineDaemonPresenceInventory>>();
-        const getPresence = (accountId: string) => {
-            const current = presenceByAccount.get(accountId);
-            if (current) return current;
-            const created = getMachineDaemonPresenceInventory({ accountId, io: app.machineDaemonPresence });
-            presenceByAccount.set(accountId, created);
-            return created;
-        };
+        for (const accountId of directAccountIds) {
+            presenceByAccount.set(accountId, getMachineDaemonPresenceInventory({ accountId, io: app.machineDaemonPresence }));
+        }
+        const poolSnapshotsByAccount = new Map<string, ReturnType<typeof getMachinePoolCandidateSnapshots>>();
+        for (const [accountId, poolIds] of poolIdsByAccount) {
+            const directPresence = presenceByAccount.get(accountId);
+            poolSnapshotsByAccount.set(accountId, directPresence
+                ? directPresence.then(presence => getMachinePoolCandidateSnapshots({ accountId, poolIds: [...poolIds], presence }))
+                : getMachinePoolCandidateSnapshots({ accountId, poolIds: [...poolIds], io: app.machineDaemonPresence }));
+        }
         const projectionRpcByKey = new Map<string, ReturnType<typeof app.forwardRpcForUser>>();
-        const poolSnapshotByKey = new Map<string, ReturnType<typeof getMachinePoolCandidateSnapshot>>();
         type ProjectionFailureReason = 'projection_unavailable' | 'response_invalid' | 'not_granted' | 'incompatible' | 'catalog_empty';
         const projectionFailuresByResourceId = new Map<string, ProjectionFailureReason[]>();
         await Promise.all(result.projectionRequests.map(async projectionRequest => {
@@ -1144,22 +1160,14 @@ export function registerTeamCredentialResourceRoutes(
             if (!resource) return;
             const poolSnapshot = projectionRequest.deliveryMode === 'brokered' && projectionRequest.brokerPoolId
                 ? await (async () => {
-                    const presence = await getPresence(projectionRequest.custodianAccountId);
-                    const key = `${projectionRequest.custodianAccountId}\u0000${projectionRequest.brokerPoolId}`;
-                    const current = poolSnapshotByKey.get(key);
-                    if (current) return await current;
-                    const created = getMachinePoolCandidateSnapshot({
-                        accountId: projectionRequest.custodianAccountId,
-                        poolId: projectionRequest.brokerPoolId!,
-                        presence,
-                    });
-                    poolSnapshotByKey.set(key, created);
-                    return await created;
+                    const snapshots = await poolSnapshotsByAccount.get(projectionRequest.custodianAccountId);
+                    const snapshot = snapshots?.get(projectionRequest.brokerPoolId!);
+                    return snapshot ? { ok: true as const, value: snapshot } : null;
                 })()
                 : null;
             const machineIds = projectionRequest.deliveryMode === 'direct'
                 ? await (async () => {
-                    const presence = await getPresence(projectionRequest.custodianAccountId);
+                    const presence = await presenceByAccount.get(projectionRequest.custodianAccountId)!;
                     return presence.state !== 'unavailable' ? [...presence.machineIds] : [];
                 })()
                 : projectionRequest.brokerMachineId

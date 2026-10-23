@@ -24,7 +24,7 @@ import { TeamCredentialResourceCatalogEntryV1Schema } from "@happier-dev/protoco
 
 import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountIdentityDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
-import { getSocketRooms, getUserMachinesSocketRoom } from "@/app/api/socketRooms";
+import { getMachineSocketRoom, getSocketRooms, getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
@@ -2532,18 +2532,25 @@ describe("Team credential resource routes (SQLite integration)", () => {
             brokerPoolId: pool.id,
             memberGrants: { create: { teamMembershipId: recipientMembership.id, deliveryMode: "brokered" } },
         } });
+        const daemonOwners = new Map([machineA, machineB].map(machine => [machine.id, custodian.id]));
+        const presenceRequests: string[][] = [];
+        let transportedIdentities = 0;
         app.machineDaemonPresence = {
-            in: (room: string) => ({
-                fetchSockets: async () => room === getUserMachinesSocketRoom(custodian.id)
-                    ? [machineA, machineB].map(machine => ({
-                        data: { clientType: "machine-scoped", userId: custodian.id, machineId: machine.id },
-                    }))
-                    : [],
-            }),
+            in: (room: string | string[]) => ({ fetchSockets: async () => {
+                const rooms = typeof room === 'string' ? [room] : room;
+                presenceRequests.push(rooms);
+                const sockets = [...daemonOwners].flatMap(([machineId, accountId]) =>
+                    rooms.includes(getUserMachinesSocketRoom(accountId)) || rooms.includes(getMachineSocketRoom(accountId, machineId))
+                        ? [{ data: { clientType: 'machine-scoped', userId: accountId, machineId } }] : []);
+                transportedIdentities += sockets.length;
+                return sockets;
+            } }),
         };
+        const projectionMachineIds = new Set([machineA.id, machineB.id]);
         const eligibilityOverrides = new Map<string, unknown>();
         const forwardRpcForUser = vi.fn(async (input: Readonly<{ method: string; params: unknown }>) => {
             const machineId = input.method.split(":", 1)[0]!;
+            if (!projectionMachineIds.has(machineId)) return { ok: false as const, error: 'machine_offline' };
             if (input.method.endsWith("daemon.providers.teamCredentialResourceTest.candidate")) {
                 return machineId === machineB.id
                     ? { ok: true as const, result: {
@@ -2698,6 +2705,22 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(directResources.json().resources).toEqual([]);
         expect(forwardRpcForUser).not.toHaveBeenCalled();
 
+        // Many known Pools share two candidates; unrelated authenticated daemons
+        // must be excluded before transport, not filtered after a full census.
+        const additionalPoolIds = Array.from({ length: 11 }, () => crypto.randomUUID());
+        await db.machinePool.createMany({ data: additionalPoolIds.map(id => ({ id, accountId: custodian.id, name: 'Shared catalog Pool' })) });
+        await db.machinePoolMember.createMany({ data: additionalPoolIds.flatMap(poolId => [machineA, machineB].map((machine, priorityTier) => ({
+            poolId, machineId: machine.id, priorityTier, enabled: true,
+        }))) });
+        for (const brokerPoolId of additionalPoolIds) await db.teamCredentialResource.create({ data: {
+            teamId: team.id, custodianAccountId: custodian.id, displayName: `Pool provider ${brokerPoolId}`,
+            disclosureCeiling: 'brokered_only', sessionUsePolicy: 'personal_allowed', sourceBindingJson: JSON.stringify(source), brokerPoolId,
+            memberGrants: { create: { teamMembershipId: recipientMembership.id, deliveryMode: 'brokered' } },
+        } });
+        for (let index = 0; index < 1000; index++) daemonOwners.set(`unrelated-catalog-daemon-${index}`, custodian.id);
+        presenceRequests.length = 0;
+        transportedIdentities = 0;
+
         const catalog = await post("/v1/teams/credential-resources/entitled/list", recipient.id, {
             teamId: team.id,
             application,
@@ -2720,6 +2743,11 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(projectionCalls.every(([input]) => (
             (input.params as { refreshPolicy?: string }).refreshPolicy === "current_only"
         ))).toBe(true);
+        expect(catalog.json().resources).toHaveLength(12);
+        expect(catalog.json().resources.every((entry: { providerModels: unknown[] }) => entry.providerModels.length === 1)).toBe(true);
+        expect.soft(presenceRequests).toHaveLength(1);
+        expect.soft(presenceRequests[0]?.slice().sort()).toEqual([machineA, machineB].map(machine => getMachineSocketRoom(custodian.id, machine.id)).sort());
+        expect.soft(transportedIdentities).toBe(2);
 
         const test = await post("/v1/teams/credential-resources/test", custodian.id, {
             teamId: team.id,
@@ -2760,6 +2788,47 @@ describe("Team credential resource routes (SQLite integration)", () => {
             expect(unavailable.body).not.toContain(machineB.id);
             expect(unavailable.body).not.toContain(pool.id);
         }
+
+        // A real direct-mode projection on this same Account legitimately needs
+        // its full inventory. A second pool-only custodian must stay exact.
+        const directResource = await db.teamCredentialResource.create({ data: {
+            teamId: team.id, custodianAccountId: custodian.id, displayName: 'Direct catalog neighbor',
+            disclosureCeiling: 'direct_allowed', sessionUsePolicy: 'personal_allowed', sourceBindingJson: JSON.stringify(source),
+            memberGrants: { create: { teamMembershipId: recipientMembership.id, deliveryMode: 'direct' } },
+        } });
+        const otherCustodian = await createAccount();
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: otherCustodian.id, role: 'member' } });
+        const otherMachine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: otherCustodian.id,
+            metadata: '{}', operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1 } });
+        const otherPool = await db.machinePool.create({ data: { id: crypto.randomUUID(), accountId: otherCustodian.id, name: 'Other custodian Pool',
+            members: { create: { machineId: otherMachine.id, priorityTier: 0, enabled: true } } } });
+        const otherResource = await db.teamCredentialResource.create({ data: {
+            teamId: team.id, custodianAccountId: otherCustodian.id, displayName: 'Other custodian catalog',
+            disclosureCeiling: 'brokered_only', sessionUsePolicy: 'personal_allowed', sourceBindingJson: JSON.stringify(source), brokerPoolId: otherPool.id,
+            memberGrants: { create: { teamMembershipId: recipientMembership.id, deliveryMode: 'brokered' } },
+        } });
+        daemonOwners.set(otherMachine.id, otherCustodian.id);
+        projectionMachineIds.add(otherMachine.id);
+        presenceRequests.length = 0;
+        transportedIdentities = 0;
+        forwardRpcForUser.mockClear();
+        const mixedCatalog = await post('/v1/teams/credential-resources/entitled/list', recipient.id, { teamId: team.id, application });
+        expect(mixedCatalog.statusCode, mixedCatalog.body).toBe(200);
+        expect(mixedCatalog.json().resources.find((entry: { id: string }) => entry.id === otherResource.id).providerModels).toHaveLength(1);
+        expect(forwardRpcForUser.mock.calls.some(([input]) => input.method.startsWith('unrelated-catalog-daemon-'))).toBe(true);
+        expect.soft(presenceRequests).toHaveLength(2);
+        expect.soft(presenceRequests).toEqual(expect.arrayContaining([
+            [getUserMachinesSocketRoom(custodian.id)], [getMachineSocketRoom(otherCustodian.id, otherMachine.id)],
+        ]));
+        expect.soft(transportedIdentities).toBe(1003);
+        await db.teamCredentialResource.delete({ where: { id: directResource.id } });
+        await db.machinePoolMember.updateMany({ where: { poolId: { in: [pool.id, ...additionalPoolIds, otherPool.id] } }, data: { enabled: false } });
+        presenceRequests.length = 0;
+        forwardRpcForUser.mockClear();
+        const emptyCatalog = await post('/v1/teams/credential-resources/entitled/list', recipient.id, { teamId: team.id, application });
+        expect(emptyCatalog.statusCode, emptyCatalog.body).toBe(200);
+        expect.soft(presenceRequests).toEqual([]);
+        expect.soft(forwardRpcForUser).not.toHaveBeenCalled();
     });
 
     it("qualifies restricted-Team activity reads and limit mutations before effects", async () => {

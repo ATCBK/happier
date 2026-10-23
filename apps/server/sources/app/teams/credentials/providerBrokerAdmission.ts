@@ -14,13 +14,14 @@ import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/proto
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
+import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { resolveTeamCredentialBrokerMachineForOpenInTx } from './brokerMachineEligibility';
-import { resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
+import { readTeamCredentialBrokerPresenceDemand, resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
 import { resolveTeamCredentialEntitlementInTx } from './resourceAccess';
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
 import { admitTeamCredentialOperationBindingInTx, type TeamCredentialOperationConsumer } from './sessionBinding';
@@ -59,7 +60,9 @@ type PoolSourceEligibilityReader = (input: Readonly<{
 
 type BrokerOpenPresenceReader = (input: Readonly<{
     initiatorAccountId: string;
+    initiatorMachineId: string;
     brokerAccountId: string;
+    brokerMachineIds: readonly string[];
 }>) => Promise<Readonly<{
     initiatorPresence: MachineDaemonPresenceInventory;
     brokerPresence: MachineDaemonPresenceInventory;
@@ -259,6 +262,7 @@ async function authorizeCurrentBrokerOperationInTx(
     const initiatorEndpoint = await readCurrentInitiatorEndpointInTx(tx, {
         accountId: grant.initiator.accountId,
         machineId: grant.initiator.machineId,
+        sessionId,
     });
     if (!initiatorEndpoint || initiatorEndpoint.endpointId !== grant.initiator.endpointId) {
         return failure('operation_not_current');
@@ -443,12 +447,12 @@ export async function authorizeTeamCredentialProviderModelCatalog(
 
 async function readCurrentInitiatorEndpointInTx(
     tx: Tx,
-    input: Readonly<{ accountId: string; machineId: string; presence?: MachineDaemonPresenceInventory }>,
+    input: Readonly<{ accountId: string; machineId: string; sessionId: string | null }>,
 ) {
-    if (input.presence && classifyMachineDaemonPresence(input.presence, input.machineId) !== 'connected') return null;
-    const machine = await tx.machine.findFirst({
-        where: { id: input.machineId, accountId: input.accountId },
+    const machine = await tx.machine.findUnique({
+        where: { id: input.machineId },
         select: {
+            accountId: true,
             kind: true,
             revokedAt: true,
             replacedByMachineId: true,
@@ -457,11 +461,21 @@ async function readCurrentInitiatorEndpointInTx(
         },
     });
     if (!machine || classifyMachineAvailabilityState(machine) !== 'available') return null;
+    // The signed Account is the requester, while this endpoint and its
+    // presence belong to the Machine custodian. Session-bound consumers prove
+    // current Machine Use through their exact AccessKey at consumer admission;
+    // a sessionless Run must obtain that admission here instead.
+    if (machine.accountId !== input.accountId && input.sessionId === null) {
+        const admission = await resolveMachineAdmissionInTx(tx, {
+            actorAccountId: input.accountId, machineId: input.machineId,
+        });
+        if (admission.kind !== 'admitted') return null;
+    }
     const endpoint = readMachineIrohEndpointAuthorityV1({
         capabilities: machine.operationProtocolCapabilities,
         revision: machine.operationProtocolCapabilitiesRevision,
     });
-    return endpoint ? { ...endpoint, machineKind: machine.kind } : null;
+    return endpoint ? { ...endpoint, machineKind: machine.kind, custodianAccountId: machine.accountId } : null;
 }
 
 type CurrentExecutionRun = Extract<
@@ -484,7 +498,7 @@ type BrokerOpenPreparation = Readonly<{
     }>;
     source: TeamCredentialSourceBindingV1;
     allowedModelIds: readonly string[] | null;
-    initiatorEndpoint: Readonly<{ endpointId: string; revision: number; machineKind: string }>;
+    initiatorEndpoint: Readonly<{ endpointId: string; revision: number; machineKind: string; custodianAccountId: string }>;
     poolSnapshot: MachinePoolCandidateSnapshot | null;
     poolCandidateMachineIds: readonly string[];
     broker: Readonly<{
@@ -500,6 +514,7 @@ type BrokerOpenDurableAuthorization = Readonly<{
     resource: BrokerOpenPreparation['resource'];
     source: TeamCredentialSourceBindingV1;
     allowedModelIds: readonly string[] | null;
+    initiatorEndpoint: BrokerOpenPreparation['initiatorEndpoint'];
     pinnedMachineId: string | null;
 }>;
 
@@ -558,7 +573,8 @@ function preparationChangeFailure(
         || left.broker.endpointAuthority.endpointId !== right.broker.endpointAuthority.endpointId
         || left.broker.endpointAuthority.revision !== right.broker.endpointAuthority.revision
     );
-    if (left.initiatorEndpoint.endpointId !== right.initiatorEndpoint.endpointId
+    if (left.initiatorEndpoint.custodianAccountId !== right.initiatorEndpoint.custodianAccountId
+        || left.initiatorEndpoint.endpointId !== right.initiatorEndpoint.endpointId
         || left.initiatorEndpoint.revision !== right.initiatorEndpoint.revision
         || exactBrokerChanged) {
         return failure('broker_unavailable');
@@ -734,6 +750,10 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         refreshAuthority.payload.teamId !== resource.teamId
         || refreshAuthority.payload.target.custodianAccountId !== resource.custodianAccountId
     )) return failure('invalid_request');
+    // Team brokerage serves a different Account. Refuse self-custody before
+    // presence/projection work or strict route signing; co-hosted daemons with
+    // distinct Account/Machine/endpoint identities still use the normal path.
+    if (resource.custodianAccountId === input.actorAccountId) return failure('resource_unavailable');
     let rawSource: unknown;
     let rawPolicy: unknown = null;
     try {
@@ -754,6 +774,12 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         || !pluginJsonValuesEqual(runnerSelection.application, request.application)
         || runnerSelection.sourceRevision !== request.sourceRevision
     )) return failure('resource_changed');
+    const initiatorEndpoint = await readCurrentInitiatorEndpointInTx(tx, {
+        accountId: input.actorAccountId,
+        machineId: request.initiatorMachineId,
+        sessionId,
+    });
+    if (!initiatorEndpoint) return failure('broker_unavailable');
     return {
         request,
         sessionId,
@@ -761,6 +787,7 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         resource,
         source: source.data,
         allowedModelIds: policy.data?.allowedModelIds ?? null,
+        initiatorEndpoint,
         pinnedMachineId: establishedBrokerMachineId,
     };
 }
@@ -788,12 +815,10 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
     );
     if (isFailure(authorized)) return authorized;
     const { request: parsedRequest, resource, pinnedMachineId } = authorized;
-    const initiatorEndpoint = await readCurrentInitiatorEndpointInTx(tx, {
-        accountId: input.actorAccountId,
-        machineId: parsedRequest.initiatorMachineId,
-        presence: input.initiatorPresence,
-    });
-    if (!initiatorEndpoint) return failure('broker_unavailable');
+    const initiatorEndpoint = authorized.initiatorEndpoint;
+    if (classifyMachineDaemonPresence(input.initiatorPresence, parsedRequest.initiatorMachineId) !== 'connected') {
+        return failure('broker_unavailable');
+    }
     const placement = await resolveTeamCredentialBrokerPlacementInTx(tx, {
         resource: {
             id: parsedRequest.resourceId,
@@ -976,9 +1001,14 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
     if (isFailure(preauthorized)) return preauthorized;
     let initialPresence: Awaited<ReturnType<BrokerOpenPresenceReader>>;
     try {
+        const brokerMachineIds = await readTeamCredentialBrokerPresenceDemand({
+            resource: preauthorized.authorization.resource, pinnedMachineId: preauthorized.authorization.pinnedMachineId,
+        });
         initialPresence = await input.readCurrentPresence({
-            initiatorAccountId: input.actorAccountId,
+            initiatorAccountId: preauthorized.authorization.initiatorEndpoint.custodianAccountId,
+            initiatorMachineId: parsed.data.initiatorMachineId,
             brokerAccountId: preauthorized.authorization.resource.custodianAccountId,
+            brokerMachineIds,
         });
     } catch {
         return failure('broker_unavailable');
@@ -1057,8 +1087,10 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
     let currentPresence: Awaited<ReturnType<BrokerOpenPresenceReader>>;
     try {
         currentPresence = await input.readCurrentPresence({
-            initiatorAccountId: input.actorAccountId,
+            initiatorAccountId: preProjection.initiatorEndpoint.custodianAccountId,
+            initiatorMachineId: parsed.data.initiatorMachineId,
             brokerAccountId: preProjection.resource.custodianAccountId,
+            brokerMachineIds: selectedPoolMachineId ? [selectedPoolMachineId] : [],
         });
     } catch {
         return failure('broker_unavailable');

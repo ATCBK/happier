@@ -54,6 +54,8 @@ import { openAccountConnectionProviderBroker, admitAccountConnectionProviderBrok
 import { verifyProviderBrokerRouteGrantSignatureV1, verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
+import { setMachineAccessGrantInTx, removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
+import { getMachineSocketRoom } from '@/app/api/socketRooms';
 import {
     createServiceAccountTokenIdentityFields,
     createQualifiedConnectedAccountGroupDigest,
@@ -179,23 +181,28 @@ function fixtureProviderProjection(connectionId: string, modelIds: readonly stri
  */
 async function createBrokerFixture(
     label: string,
-    options: Readonly<{ requesterPublicKeyHex?: string }> = {},
+    options: Readonly<{ requesterPublicKeyHex?: string; custodianOnWorker?: boolean }> = {},
 ) {
     const requester = await db.account.create({ data: options.requesterPublicKeyHex
         ? { encryptionMode: 'e2ee', publicKey: options.requesterPublicKeyHex }
         : { encryptionMode: 'plain' } });
-    const custodian = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const custodian = options.custodianOnWorker ? requester : await db.account.create({ data: { encryptionMode: 'plain' } });
     const team = await db.team.create({ data: { name: `Broker ${label} ${crypto.randomUUID()}` } });
     const requesterMembership = await db.teamMembership.create({
-        data: { teamId: team.id, accountId: requester.id, role: 'member' },
+        data: { teamId: team.id, accountId: requester.id, role: options.custodianOnWorker ? 'owner' : 'member' },
     });
-    await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: 'owner' } });
+    if (!options.custodianOnWorker) {
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: 'owner' } });
+    }
     const worker = await db.machine.create({ data: {
         id: `worker-${label}-${requester.id}`, accountId: requester.id, metadata: '{}', kind: 'persistent', active: true,
-        operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) } },
+        operationProtocolCapabilities: {
+            irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) },
+            ...(options.custodianOnWorker ? { providerBrokerIngress: { protocolVersions: [1] } } : {}),
+        },
         operationProtocolCapabilitiesRevision: 1,
     } });
-    const broker = await db.machine.create({ data: {
+    const broker = options.custodianOnWorker ? worker : await db.machine.create({ data: {
         id: `broker-${label}-${custodian.id}`, accountId: custodian.id, metadata: '{}', kind: 'persistent', active: true,
         operationProtocolCapabilities: {
             providerBrokerIngress: { protocolVersions: [1] },
@@ -535,6 +542,173 @@ describe('Team credential Provider broker admission', () => {
             authority: { payload: { target: { endpointId: endpoint.endpointId } } },
             target: { endpointId: endpoint.endpointId, endpointRevision: 7, endpoint },
         });
+    });
+
+    it('refuses a custodian opening its own Team source without a signing error or daemon work', async () => {
+        const fixture = await createBrokerFixture('self-broker', { custodianOnWorker: true });
+        const resource = await fixture.createResource('connection-self-broker');
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const token = await auth.createToken(fixture.requester.id, undefined, {
+            kind: 'terminal', authority: 'account_automation',
+        });
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        let projectionRequests = 0;
+        // Daemon RPC and socket presence are transport boundaries; the real
+        // HTTP authentication, persisted selection and broker admission run.
+        app.decorate('forwardRpcForUser', async () => {
+            projectionRequests += 1;
+            return { ok: true, result: fixtureProviderProjection('connection-self-broker') };
+        });
+        app.decorate('machineDaemonPresence', { in: () => ({ fetchSockets: async () => [
+            { data: { clientType: 'machine-scoped', userId: fixture.requester.id, machineId: fixture.worker.id } },
+        ] }) });
+        registerTeamCredentialProviderBrokerRoutes(app);
+        try {
+            const response = await app.inject({
+                method: 'POST', url: '/v1/teams/credential-resources/broker/open',
+                headers: { authorization: `Bearer ${token}` }, payload: {
+                    v: 1, resourceId: resource.id, expectedResourceRevision: resource.revision,
+                    modelId: 'model-1', sourceRevision: 'source-revision-1', initiatorMachineId: fixture.worker.id,
+                    consumer: { kind: 'session', sessionId: session.id }, application: FIXTURE_APPLICATION,
+                },
+            });
+            expect({ status: response.statusCode, body: response.json(), projectionRequests }).toEqual({
+                status: 200, body: { ok: false, reasonCode: 'resource_unavailable' }, projectionRequests: 0,
+            });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('admits a view-granted foreign initiator using custodian presence and rechecks Machine grant revocation', async () => {
+        const fixture = await createBrokerFixture('foreign-initiator');
+        const resource = await fixture.createResource('connection-foreign-initiator');
+        const session = await fixture.createSession();
+        await db.machine.update({ where: { id: fixture.worker.id }, data: {
+            accountId: fixture.custodian.id,
+            installationId: `installation-${fixture.worker.id}`,
+            metadata: encodePlainMachineStoredContent({ host: 'worker', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: new Uint8Array(Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+        } });
+        await expect(inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+            principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+        }))).resolves.toMatchObject({ kind: 'saved', readiness: 'ready', grant: { level: 'view' } });
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const token = await auth.createToken(fixture.requester.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        let projectionReads = 0;
+        let revokeDuringProjection = false;
+        app.decorate('forwardRpcForUser', async () => {
+            projectionReads += 1;
+            if (revokeDuringProjection) await inTx(tx => removeMachineAccessGrantInTx(tx, {
+                actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                principal: { kind: 'account', accountId: fixture.requester.id },
+            }));
+            return { ok: true, result: fixtureProviderProjection('connection-foreign-initiator') };
+        });
+        const presenceRooms: string[] = [];
+        const sockets = [fixture.worker, fixture.broker, ...Array.from({ length: 1_000 }, (_, index) => ({
+            id: `unrelated-${index}`,
+        }))].map(machine => ({ data: {
+            clientType: 'machine-scoped', userId: fixture.custodian.id, machineId: machine.id,
+        } }));
+        app.decorate('machineDaemonPresence', { in: (rooms: string | string[]) => ({ fetchSockets: async () => {
+            const demanded = typeof rooms === 'string' ? [rooms] : rooms;
+            presenceRooms.push(...demanded);
+            return sockets.filter(socket => demanded.includes(getMachineSocketRoom(socket.data.userId, socket.data.machineId)));
+        } }) });
+        registerTeamCredentialProviderBrokerRoutes(app);
+        const payload = {
+            v: 1, resourceId: resource.id, expectedResourceRevision: resource.revision,
+            modelId: 'model-1', sourceRevision: 'source-revision-1', initiatorMachineId: fixture.worker.id,
+            consumer: { kind: 'session', sessionId: session.id }, application: FIXTURE_APPLICATION,
+        };
+        const open = (refreshAuthority?: SignedProviderBrokerRouteGrantV1) => app.inject({
+            method: 'POST', url: '/v1/teams/credential-resources/broker/open',
+            headers: { authorization: `Bearer ${token}` }, payload: { ...payload, ...(refreshAuthority ? { refreshAuthority } : {}) },
+        });
+        try {
+            const response = await open();
+            expect({ status: response.statusCode, body: response.json(), presenceRooms }).toMatchObject({
+                status: 200, body: { ok: true }, presenceRooms: [
+                    getMachineSocketRoom(fixture.custodian.id, fixture.worker.id),
+                    getMachineSocketRoom(fixture.custodian.id, fixture.broker.id),
+                    getMachineSocketRoom(fixture.custodian.id, fixture.worker.id),
+                    getMachineSocketRoom(fixture.custodian.id, fixture.broker.id),
+                ],
+            });
+            const opened = response.json<Extract<import('@happier-dev/protocol').ProviderBrokerOpenResponseV1, { ok: true }>>();
+            expect(opened.authority.payload).toMatchObject({
+                initiator: { accountId: fixture.requester.id, machineId: fixture.worker.id, endpointId: '1'.repeat(64) },
+                target: { custodianAccountId: fixture.custodian.id, machineId: fixture.broker.id, endpointId: '2'.repeat(64) },
+            });
+            expect(await fixture.catalog({ resource, authority: opened.authority })).toEqual({ ok: true });
+            expect(await fixture.admit({ resource, authority: opened.authority, requestId: 'granted' })).toMatchObject({ ok: true });
+            expect((await open(opened.authority)).json()).toMatchObject({ ok: true });
+            await inTx(tx => removeMachineAccessGrantInTx(tx, {
+                actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                principal: { kind: 'account', accountId: fixture.requester.id },
+            }));
+            expect(await fixture.catalog({ resource, authority: opened.authority })).toMatchObject({ ok: false });
+            expect(await fixture.admit({ resource, authority: opened.authority, requestId: 'revoked' })).toMatchObject({ ok: false });
+            const readsBeforeRefusal = { projectionReads, presenceReads: presenceRooms.length };
+            expect((await open()).json()).toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+            expect((await open(opened.authority)).json()).toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+            expect({ projectionReads, presenceReads: presenceRooms.length }).toEqual(readsBeforeRefusal);
+            await inTx(tx => setMachineAccessGrantInTx(tx, {
+                actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+            }));
+            revokeDuringProjection = true;
+            expect((await open()).json()).toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('admits a different Account on the broker host through its distinct Machine endpoint and rechecks revocation', async () => {
+        const fixture = await createBrokerFixture('cohosted-recipient');
+        const resource = await fixture.createResource('connection-cohosted-recipient');
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        // Co-hosted daemons retain their own Account-scoped Machine and Iroh
+        // identities. A shared host address must not become an auth decision.
+        for (const [machine, port] of [[fixture.worker, 17117], [fixture.broker, 17118]] as const) {
+            await db.machine.update({ where: { id: machine.id }, data: {
+                operationProtocolCapabilities: {
+                    providerBrokerIngress: { protocolVersions: [1] },
+                    irohMachineEndpoint: {
+                        protocolVersions: [1],
+                        endpointId: machine.id === fixture.worker.id ? '1'.repeat(64) : '2'.repeat(64),
+                        directAddresses: [`127.0.0.1:${port}`],
+                    },
+                },
+                operationProtocolCapabilitiesRevision: 2,
+            } });
+        }
+        const opened = await fixture.open({ resource, sessionId: session.id, authentication: TEST_AUTHENTICATION });
+        if (!opened.ok) throw new Error(`expected co-hosted recipient admission: ${opened.reasonCode}`);
+        expect(opened.authority.payload).toMatchObject({
+            initiator: { accountId: fixture.requester.id, machineId: fixture.worker.id, endpointId: '1'.repeat(64) },
+            target: { custodianAccountId: fixture.custodian.id, machineId: fixture.broker.id, endpointId: '2'.repeat(64) },
+        });
+        await expect(fixture.admit({ authority: opened.authority, resource, requestId: 'before-revocation' }))
+            .resolves.toMatchObject({ ok: true, brokerMachineId: fixture.broker.id });
+        await db.teamMembership.update({
+            where: { teamId_accountId: { teamId: fixture.team.id, accountId: fixture.requester.id } },
+            data: { status: 'suspended' },
+        });
+        await expect(fixture.admit({ authority: opened.authority, resource, requestId: 'after-revocation' }))
+            .resolves.toMatchObject({ ok: false });
     });
 
     it.each(['account', 'terminal'] as const)('ends broker authority when its exact %s credential is revoked', async kind => {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { TeamCredentialBrokerPlacementV1Schema, type TeamCredentialBrokerPlacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
-import type { Tx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import type { MachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import {
@@ -46,6 +46,23 @@ export function readTeamCredentialBrokerPlacement(row: TeamCredentialBrokerPlace
         ? { kind: "machine", machineId: row.brokerMachineId }
         : { kind: "machine_pool", poolId: row.brokerPoolId });
     return parsed.success ? { ok: true, placement: parsed.data } : { ok: false, error: "resource_corrupt" };
+}
+
+/** Captures presence demand only; the placement resolver still owns fresh admission and selection. */
+export async function readTeamCredentialBrokerPresenceDemand(input: Readonly<{
+    resource: TeamCredentialBrokerPlacementRow & Readonly<{ custodianAccountId: string }>;
+    pinnedMachineId?: string | null;
+}>): Promise<readonly string[]> {
+    const read = readTeamCredentialBrokerPlacement(input.resource);
+    if (!read.ok || read.placement === null) return [];
+    if (input.pinnedMachineId) return [input.pinnedMachineId];
+    if (read.placement.kind === 'machine') return [read.placement.machineId];
+    const poolId = read.placement.poolId;
+    const snapshot = await inTx(tx => getMachinePoolCandidateSnapshotInTx(tx, {
+        accountId: input.resource.custodianAccountId, poolId,
+        presence: { state: 'unavailable' },
+    }));
+    return snapshot.ok ? snapshot.value.members.filter(member => member.enabled).map(member => member.machineId) : [];
 }
 
 /** Opaque original resource location; revisions, policy and Pool membership are not identity. */
