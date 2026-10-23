@@ -1839,6 +1839,10 @@ table, index family or schema migration. The wire's coarse projection stays
 coarse; exact selection is an additive `kinds` set at the same list owner and
 occurs before pagination. A hint is only a candidate selector: opened headers
 and bodies still establish the actual domain type and current facts.
+The existing column's 191-codepoint boundary limits only this optional hint,
+not the private header's type string. Shared extraction omits an unrepresentable
+hint without rejecting or truncating valid private content; a legacy row then
+remains unclassified. Explicit malformed wire hints are still refused.
 
 UI and CLI writers share the Protocol extraction. Their existing metadata-only
 update checks the observed header version and changes neither header/body bytes,
@@ -1849,21 +1853,45 @@ Repeated equal hints are no-ops. Needed labels use the same writer through
 payloads; HTTP-byte framing reuses the existing request budget. Each item retains
 the canonical update's transaction, authorization and CAS, rather than creating
 a cross-Artifact transaction. **Inventory and selective reads never write
-classification.** An unknown-membership witness means explicitly incomplete
-results, not permission for the UI to open or relabel the Account inventory.
-There is no full-inventory fallback. Exact kinds use `unclassified=true`
-(null/legacy coarse rows); coarse-only classification discovery uses
-`unclassified=coarse` (null rows only).
+classification.** The prior automatic read-side repair was withdrawn after a
+live inventory-sized write burst.
 
-The owning daemon, not a UI reader, labels its existing notices, and only the
-notice kinds with a current consumer. New writes carry their hints at create.
-The previous automatic read-side repair proposal was withdrawn after its
-inventory-sized write burst reproduced a live regression. The bounded daemon
-backfill operation and typed terminal refusal state are being revised before
-re-landing; they must not retry on every inventory fetch. Opaque predecessor
-writes remain accepted and unknown rows remain honestly incomplete until their
-owner labels them. Implementation and loaded-runtime verification remain
-tracked in the performance program.
+The approved replacement is one pass at the native daemon's Account bootstrap
+lifetime. In that same header-only pass it labels every openable owner legacy
+Artifact, across all type families, not only notices. Explicit paging through
+`unclassified=true&ownerAccountId=<actor>` covers owned null and old coarse
+values beyond the first page. The optional owner selector intersects existing
+authorization; it never grants access. Without it, discovery includes all
+currently authorized owner and shared rows.
+Only metadata write items survive header processing; they share the existing
+HTTP-byte batch budget across read pages. New writes carry hints at create.
+The daemon first requires the canonical `artifacts.queryHints` server enabled
+bit; absent or malformed support is typed `unsupported`, not permission to send
+new hints to a retained strict server.
+
+Completion is derived, never persisted. An exact list counts unclassified rows
+in its currently authorized inventory and returns either complete with count0,
+or partial with the count and reason `unclassified_legacy_rows`. An explicitly
+classified row without an exact kind is not legacy unknown. Owner discovery
+counts only owner rows; unavailable shared rows cannot silently disappear from
+the broader exact-query coverage. Even an empty exact-kind set reports the
+actual scoped count, not fabricated completeness. Unopenable, unrepresentable
+or refused rows stay unclassified.
+While coverage is partial, the same canonical reader may resolve legacy headers
+through its existing coarse/unclassified path, fetching bodies only for selected
+matching ids. That transition path stops running when the count reaches0.
+Keyholding adapters expose this index state as `kindCoverage`, separately from
+their existing content/read `coverage`. Successfully resolving the legacy path
+can provide a complete readable answer while classification remains partial;
+unreadable headers or required bodies still make the answer incomplete. Index
+backfill progress alone must not turn a resolved Role source into a refusal.
+
+The bootstrap retains one typed terminal result, including partial, unavailable,
+unsupported or retirement. Failures do not retry on inventory fetches,
+notifications or a timer; the next attempt is the next daemon bootstrap. No
+completion ledger, cache, second reader or operator backfill is introduced.
+Implementation and loaded-runtime verification remain tracked in the performance
+program; this is a development contract, not a released availability claim.
 
 Later state/id/time selectors use the same allowlisted extraction and mutation
 authority principle at their actual resource owner; this kind-only vertical does

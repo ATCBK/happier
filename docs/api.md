@@ -2488,12 +2488,24 @@ Artifact bytes and grants. See the
   `hasUnclassified` covers accessible null-kind rows for coarse selection and
   null/old-coarse rows for exact selection, independently of the current page.
   Page and witness share one read snapshot and final access readmission.
-  A witness reports incomplete classification; it does not trigger UI or
-  shared-reader writes. `unclassified=coarse` pages owner null rows;
-  `unclassified=true` pages owner null/old-coarse rows. These discovery selectors
-  cannot be combined with a coarse or exact filter. The owning daemon's bounded
-  notice backfill is being revised before re-landing; the former automatic
-  read-side repair was withdrawn. There is no full-inventory read fallback.
+  Derived `coverage` is `{status:'complete',unclassifiedCount:0}` or
+  `{status:'partial',unclassifiedCount:N,reason:'unclassified_legacy_rows'}`,
+  counted in the current authorized inventory snapshot. Canonical classified
+  absence of an exact kind is not an unknown legacy row. Coverage does not
+  trigger UI or shared-reader writes. `unclassified=coarse` pages authorized null
+  rows; `unclassified=true` pages authorized null/old-coarse rows, including shared
+  rows. Optional `ownerAccountId` intersects authorization and scopes both rows
+  and the count; the daemon supplies its own Account id. An empty exact-kind set
+  returns no rows but still reports the actual scoped classification count.
+  Discovery selectors cannot be combined with a coarse or exact filter. One native daemon bootstrap
+  pass labels all openable owner legacy headers; the former automatic read-side
+  repair was withdrawn. Only while coverage is partial may the canonical reader
+  resolve legacy headers through the incumbent coarse/unclassified path; it
+  stops executing when coverage is complete. Bodies remain selected-id only.
+  Keyholding host results call the classification state `kindCoverage`; their
+  separate string `coverage` describes actual readable completeness. A completed
+  legacy fallback can therefore return `coverage:'complete'` together with
+  partial `kindCoverage`, without hiding a genuinely unreadable source.
   An already-complete exact list needs one header query and no repair request.
   Omitting selectors preserves the array response.
   Rows expose coarse nullable `kind` and, when canonically classified,
@@ -2557,9 +2569,13 @@ Artifact bytes and grants. See the
 The development kind-filtering extension accepts optional `kind` on
 Artifact JSON create/update and restore writes (`artifactKind` in the framed binary
 upload metadata, whose `kind` already identifies create/update). Writers use
-Protocol's `deriveArtifactStoredKindV1` to encode the existing family and exact
-header type as `v1:<coarse>:<exact-or-empty>`, without a feature gate. The existing
-MySQL column's 191-character boundary is validated without truncation. Older
+Protocol's `tryDeriveArtifactStoredKindV1` to encode the existing family and exact
+header type as `v1:<coarse>:<exact-or-empty>`. Daemon writers negotiate
+`artifacts.queryHints`; unsupported servers receive ordinary content without the
+optional hint. The existing MySQL column's 191-codepoint boundary applies only
+to the optional hint: an unrepresentable private type string omits that hint,
+without rejecting or truncating private content. Explicit malformed wire hints
+remain invalid. Older
 coarse/absent-hint writers remain valid; an opaque header write without kind
 clears the previous hint. The existing update
 route also accepts `{kind, expectedHeaderVersion}` alone for owner backfill.
@@ -2576,7 +2592,13 @@ new item-count cap. The two-segment route preserves retained arbitrary Artifact
 ids at the existing single-id update route. Hint-only admission, conflict handling and
 recipient projection do not select/open body bytes. Equal hints are no-ops.
 These changes are development-only: they reuse the existing kind column/index
-and add no schema migration. Load the matching server before changed clients.
+and add no schema migration. The daemon requires the canonical server enabled
+bit `artifacts.queryHints` before new hint writes; missing/malformed support is
+typed `unsupported`. It gathers write items across explicitly paged headers and
+frames them by the existing HTTP-byte boundary, not the read page size. A batch
+failure settles for that bootstrap; it does not retry on reads or timers. The
+next attempt is the next bootstrap. Load the matching server before changed
+clients; general older-Home compatibility is not implied by this operation gate.
 
 The in-progress 0.3 ordinary binary extension uses a strict body reference
 `{blobId,mime,sizeBytes,sha256}` within the normal plain/E2EE body envelope.
