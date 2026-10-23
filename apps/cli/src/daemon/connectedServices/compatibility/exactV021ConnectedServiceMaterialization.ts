@@ -143,6 +143,7 @@ export async function materializeExactV021ConnectedServiceCredential(input: Read
   account: QualifiedConnectedAccountRef;
   record: ConnectedServiceCredentialRecordV1;
   request: ConnectedAccountMaterializationRequest;
+  existingFiles?: Readonly<Record<string, Uint8Array>>;
   signal?: AbortSignal;
 }>): Promise<ConnectedAccountMaterialization> {
   input.signal?.throwIfAborted();
@@ -229,6 +230,7 @@ export async function materializeExactV021ConnectedServiceCredential(input: Read
     operation: Object.freeze({
       kind: 'materialize',
       request: input.request,
+      ...(input.existingFiles ? { existingFiles: input.existingFiles } : {}),
     }),
     context: Object.freeze({
       account: input.account,
@@ -341,6 +343,7 @@ export function createExactV021ConnectedServiceMaterializationOwner(input: Reado
         account,
         record,
         request: params.request,
+        ...(params.existingFiles ? { existingFiles: params.existingFiles } : {}),
         signal: params.signal,
       });
     },

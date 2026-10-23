@@ -8249,6 +8249,33 @@ describe('native Agent session host adapter', () => {
         }
     });
 
+    it('reads external Action tools from the daemon owner for the native bridge', async () => {
+        const baseOwners = createSessionHostServiceOwners();
+        const readPluginToolCatalog = vi.fn(async () => Object.freeze([{
+            toolId: 'acme.external/inspect',
+            actionId: 'acme.external/actions/inspect',
+            name: 'acme_external_inspect',
+            title: 'Inspect external state',
+            description: 'Inspect external state through the daemon Action owner.',
+            inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+            surfaces: ['agent' as const],
+        }]));
+        const services = createNativeAgentSessionHostServices({
+            owners: Object.freeze({ ...baseOwners,
+                happierTools: Object.freeze({ readPluginToolCatalog }) }),
+            agentId: 'acme-tools-agent', sessionId: 'embed-created-session', directory: '/tmp/acme-tools-agent',
+            signal: new AbortController().signal, isCurrent: () => true,
+            session: { sessionId: 'embed-created-session', updateMetadata: async () => undefined,
+                enqueueAgentMessageCommitted: async () => undefined } as never,
+            publications: { models: Object.freeze({}), activeInput: Object.freeze({}) } as never,
+            readToolExecutionCapability: () => null, toolsDelivery: 'shell_bridge', accountSettings: {},
+        });
+
+        const bridge = await services.happierTools?.resolveNativeBridge({ systemPrompt: '' });
+        expect(bridge?.tools.map((tool) => tool.name)).toContain('acme_external_inspect');
+        expect(readPluginToolCatalog).toHaveBeenCalledOnce();
+    });
+
     it('refreshes memory write exposure from the live host Session metadata', async () => {
         const session = createMutableApiSessionClientFixture({ sessionId: 'tools-memory-session',
             metadata: createTestMetadata({ work: { memoryEnabled: true } }) });

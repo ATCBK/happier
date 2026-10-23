@@ -727,8 +727,19 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     };
     files[CLAUDE_CREDENTIAL_FILE_ID] = new TextEncoder().encode(JSON.stringify(payload));
     if (request.fileIds.includes('.claude.json')) {
+      let rootConfig: unknown = null;
+      const existingConfig = options?.existingFiles?.['.claude.json'];
+      if (existingConfig !== undefined) {
+        try {
+          rootConfig = JSON.parse(new TextDecoder().decode(existingConfig));
+        } catch {
+          throw new PluginError({ code: 'claude_subscription_native_config_invalid',
+            message: 'Claude native account configuration is invalid.' });
+        }
+      }
       files['.claude.json'] = new TextEncoder().encode(JSON.stringify(reconcileClaudeNativeAccountConfig({
-        rootConfig: null, providerAccountId: providerAccountId || null, providerEmail: providerEmail || null,
+        rootConfig,
+        providerAccountId: providerAccountId || null, providerEmail: providerEmail || null,
         providerOrganizationId: organizationUuid || null,
       })));
     }

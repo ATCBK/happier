@@ -74,6 +74,37 @@ function readContext(
 }
 
 describe('Claude Subscription Connected Account', () => {
+  it('updates account context while retaining workspace approvals and private native preferences', async () => {
+    const context = readContext('oauth', new Map([
+      ['accessToken', 'replacement-access'], ['providerAccountId', 'replacement-account'],
+      ['providerEmail', 'replacement@example.test'], ['organizationUuid', 'replacement-org'],
+    ]));
+    const retainedConfig = {
+      projects: { '/workspace': { hasTrustDialogAccepted: true, allowedTools: ['Read'] } },
+      approvalMarker: 'retain-native-approval', privatePreference: { theme: 'dark' },
+      oauthAccount: { accountUuid: 'previous-account', emailAddress: 'previous@example.test', organizationUuid: 'previous-org' },
+      modelAccessCache: { stale: true }, additionalModelOptionsCache: { stale: true }, cachedExtraUsageDisabledReason: 'stale',
+    };
+    const result = await activateConnectedAccountRuntime().materialize(
+      { kind: 'files', fileIds: ['.credentials.json', '.claude.json'] }, context,
+      { existingFiles: { '.claude.json': new TextEncoder().encode(JSON.stringify(retainedConfig)) } },
+    );
+    if (result.kind !== 'files') throw new Error('Expected native credential materialization');
+    expect(JSON.parse(new TextDecoder().decode(result.files['.claude.json']))).toEqual({
+      projects: retainedConfig.projects, approvalMarker: retainedConfig.approvalMarker,
+      privatePreference: retainedConfig.privatePreference, hasCompletedOnboarding: true,
+      oauthAccount: { accountUuid: 'replacement-account', emailAddress: 'replacement@example.test', organizationUuid: 'replacement-org' },
+    });
+  });
+
+  it('refuses malformed retained config instead of returning files that discard private state', async () => {
+    await expect(activateConnectedAccountRuntime().materialize(
+      { kind: 'files', fileIds: ['.credentials.json', '.claude.json'] },
+      readContext('oauth', new Map([['accessToken', 'replacement-access']])),
+      { existingFiles: { '.claude.json': new TextEncoder().encode('{malformed') } },
+    )).rejects.toMatchObject({ code: 'claude_subscription_native_config_invalid' });
+  });
+
   it.each(['oauth', 'native-import'] as const)('materializes %s files within one round of independent credential reads', async mode => {
     const values = new Map([
       ['accessToken', 'claude-access'], ['expiresAtMs', '2000000000000'],

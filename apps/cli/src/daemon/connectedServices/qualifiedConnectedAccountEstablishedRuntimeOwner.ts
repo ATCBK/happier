@@ -83,7 +83,28 @@ export type QualifiedConnectedAccountMaterialSnapshot = Readonly<{
   isCurrent(): Promise<boolean>;
 }>;
 
+export type QualifiedConnectedAccountScheduledOperationOptions = Readonly<{
+  expectedCredentialRevision?: ConnectedServiceCredentialRevisionV1;
+  expectedConfigurationRevision?: string | null;
+  beforeInvoke?: (basis: Pick<QualifiedConnectedAccountEstablishedInvocationBasis,
+    'credentialRevision' | 'credentialConfigurationRevision' | 'isCurrent'>) => MaybePromise<void>;
+  signal?: AbortSignal;
+}>;
+export type QualifiedConnectedAccountScheduledReceipt<K extends 'status' | 'quota'> = Readonly<{
+  result: ConnectedAccountRuntimeEstablishedResult<Extract<ConnectedAccountRuntimeEstablishedOperation, { kind: K }>>;
+  basis: QualifiedConnectedAccountEstablishedInvocationBasis;
+}>;
+
 export type QualifiedConnectedAccountEstablishedRuntimeOwner = Readonly<{
+  /** One due-account preparation; each operation retains its independent effect guards. */
+  invokeScheduledWithReceipts(input: Readonly<{
+    account: QualifiedConnectedAccountRef;
+    status?: QualifiedConnectedAccountScheduledOperationOptions;
+    quota?: QualifiedConnectedAccountScheduledOperationOptions;
+  }>): Promise<Readonly<{
+    status?: PromiseSettledResult<QualifiedConnectedAccountScheduledReceipt<'status'>>;
+    quota?: PromiseSettledResult<QualifiedConnectedAccountScheduledReceipt<'quota'>>;
+  }>>;
   /** MCP challenges update the grant's configuration through its incumbent CAS owner, never its tokens. */
   recordScopeChallenge(input: Readonly<{
     account: QualifiedConnectedAccountRef;
@@ -742,6 +763,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
         'credentialRevision' | 'credentialConfigurationRevision' | 'isCurrent'>) => MaybePromise<void>;
       signal?: AbortSignal;
     }>,
+    scheduledInitial?: ReturnType<typeof readExactSnapshots>,
   ): Promise<Readonly<{
     result: ConnectedAccountRuntimeEstablishedResult<TOperation>;
     basis: QualifiedConnectedAccountEstablishedInvocationBasis;
@@ -752,7 +774,8 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       if (accountMode === 'unknown') {
         throw new Error('Connected-account account encryption mode is unavailable');
       }
-      const initial = await observeMaterializationPhase('established_snapshots', () => readExactSnapshots(input.account, input.signal));
+      const initial = await (scheduledInitial
+        ?? observeMaterializationPhase('established_snapshots', () => readExactSnapshots(input.account, input.signal)));
       if (input.expectedConfigurationRevision !== undefined
         && initial.credential.configurationRevision !== input.expectedConfigurationRevision) {
         throw new Error('Connected-account configuration revision is no longer current');
@@ -1353,6 +1376,23 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   }
 
   const owner: QualifiedConnectedAccountEstablishedRuntimeOwner = {
+    async invokeScheduledWithReceipts(input) {
+      if (!input.status && !input.quota) return {};
+      // This pair belongs only to this call. It is not retained by the owner or
+      // reused at any subsequent operation's currentness/effect checkpoint.
+      const initial = runIndependentAccountRead(() => observeMaterializationPhase(
+        'established_snapshots', () => readExactSnapshots(input.account)));
+      void initial.catch(() => {}); // Both independently cancelled operations may reject before awaiting it.
+      const settled = <T>(work: Promise<T>): Promise<PromiseSettledResult<T>> => work.then(
+        value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }));
+      const [status, quota] = await Promise.all([
+        input.status ? settled(runMaterialization(() => invokeWithReceipt({ account: input.account,
+          operation: { kind: 'status' as const }, ...input.status }, initial), input.status.signal)) : undefined,
+        input.quota ? settled(runIndependentAccountRead(() => invokeWithReceipt({ account: input.account,
+          operation: { kind: 'quota' as const }, ...input.quota }, initial))) : undefined,
+      ]);
+      return { status, quota };
+    },
     recordScopeChallenge: input => runIndependentAccountRead(() => recordScopeChallenge(input)),
     readCredentialConfigurationRevision: (input) => runIndependentAccountRead(() => readCredentialConfigurationRevision(input)),
     readCredentialRevision: (input) => runIndependentAccountRead(() => readCredentialRevision(input)),

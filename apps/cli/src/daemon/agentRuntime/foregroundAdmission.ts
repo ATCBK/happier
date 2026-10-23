@@ -24,7 +24,7 @@ import type {
 } from '@/daemon/types';
 import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
-import type { AgentCliSessionCommandBuildInputV1 } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentCliSessionCommandBuildInputV1, AgentSessionConnectedAccountSelection } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ProviderSessionRuntimePreferences } from '@/agent/catalog/types';
 import { normalizeAgentCliSessionCommandOptions } from '@/plugins/projection/registry/agentCatalogEntryHooks';
 import { runnerPinnedBundledCustodyCanSupersedeBootstrap } from '@/plugins/runtime/retainedPluginSourceAttestation';
@@ -57,6 +57,7 @@ export type PreparedForegroundAgentRuntimeAdmission = Readonly<{
     | Readonly<{
         ok: true;
         environment: Readonly<Record<string, string>>;
+        sessionConnectedAccounts?: readonly AgentSessionConnectedAccountSelection[];
         unsetEnvironmentVariableNames: readonly string[];
         sensitiveEnvironmentVariableNames: readonly string[];
         invocationContext: RunnerAgentInvocationContext;
@@ -640,6 +641,9 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
         return {
           ok: true,
           environment: { ...claimed.environment },
+          ...(claimed.sessionConnectedAccounts
+            ? { sessionConnectedAccounts: [...claimed.sessionConnectedAccounts] }
+            : {}),
           unsetEnvironmentVariableNames: [
             ...claimed.unsetEnvironmentVariableNames,
           ],

@@ -1,3 +1,5 @@
+import { constants } from 'node:fs';
+import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { writeProtectedLocalStateFileAtomic } from '@/utils/fs/protectedLocalState';
@@ -13,6 +15,54 @@ function isCanonicalRelativeCredentialPath(path: string): boolean {
     ));
 }
 
+function declaredNativeHomeFiles(input: Readonly<{ targetRoot: string; declaredSecretEntries: readonly string[] }>) {
+  const paths = new Map<string, string>();
+  for (const entry of input.declaredSecretEntries) {
+    if (!isCanonicalRelativeCredentialPath(entry) || paths.has(entry)) {
+      throw new Error('connected_service_native_home_secret_entry_invalid');
+    }
+    paths.set(entry, resolve(input.targetRoot, entry));
+  }
+  return paths;
+}
+
+/** Snapshot only this prepared home's declared files; no source-home or arbitrary-path reads. */
+export async function readConnectedServiceNativeHomeCredentialFiles(input: Readonly<{
+  targetRoot: string;
+  declaredSecretEntries: readonly string[];
+}>): Promise<Readonly<Record<string, Uint8Array>>> {
+  const files: Record<string, Uint8Array> = Object.create(null);
+  for (const [fileId, path] of declaredNativeHomeFiles(input)) {
+    try {
+      let parent = input.targetRoot;
+      for (const segment of fileId.split('/').slice(0, -1)) {
+        parent = join(parent, segment);
+        const stats = await lstat(parent);
+        if (stats.isSymbolicLink() || !stats.isDirectory()) {
+          throw new Error('connected_service_native_home_credential_path_unsafe');
+        }
+      }
+      const stats = await lstat(path);
+      if (stats.isSymbolicLink()) {
+        throw new Error('connected_service_native_home_credential_path_unsafe');
+      }
+      // Secret declarations can also name credential-store directories (e.g. Codex accounts).
+      // Only declared files are callback inputs; never traverse credential directories.
+      if (stats.isDirectory()) continue;
+      if (!stats.isFile()) throw new Error('connected_service_native_home_credential_path_unsafe');
+      const file = await open(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW));
+      try {
+        files[fileId] = await file.readFile();
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return Object.freeze(files);
+}
+
 /**
  * Publishes producer-returned opaque credential bytes at their declared native-home paths.
  * The caller owns the already-private, lifecycle-scoped root and its exact cleanup.
@@ -23,13 +73,7 @@ export async function materializeConnectedServiceNativeHomeCredentials(input: Re
   files: Readonly<Record<string, Uint8Array>>;
 }>): Promise<void> {
   const targetRoot = resolve(input.targetRoot);
-  const declaredEntries = new Set<string>();
-  for (const entry of input.declaredSecretEntries) {
-    if (!isCanonicalRelativeCredentialPath(entry) || declaredEntries.has(entry)) {
-      throw new Error('connected_service_native_home_secret_entry_invalid');
-    }
-    declaredEntries.add(entry);
-  }
+  const declaredEntries = declaredNativeHomeFiles(input);
 
   for (const [fileId, contents] of Object.entries(input.files)) {
     if (!declaredEntries.has(fileId) || !isCanonicalRelativeCredentialPath(fileId)) {

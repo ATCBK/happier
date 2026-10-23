@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
-import type { AgentExecutionRunConversationRuntimeV1, AgentExecutionRunRuntimeContextV1, AgentSessionConfigurationSnapshot, AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentExecutionRunConversationRuntimeV1, AgentExecutionRunRuntimeContextV1, AgentSessionConfigurationSnapshot, AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { buildCodexAppServerArgs, createCodexNativeAppServerClient } from './client.js';
 import { createCodexAppServerRuntime, startCodexAppServerRuntime, type CodexAppServerRuntimeHost } from './runtime.js';
@@ -41,8 +41,11 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   modelListResponse?: unknown;
   accountRead?: () => unknown | Promise<unknown>;
   connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
+  sessionConnectedAccounts?: AgentSessionOpenRequest['connectedAccounts'];
   pluginListResponse?: unknown;
   skillListResponse?: unknown;
+  skillListResponseForRoots?: (extraRoots: readonly string[]) => unknown;
+  sessionFactory?: Pick<AgentSessionRuntimeFactory, 'open'>;
   skillListFailure?: Readonly<{ code: number; message: string }>;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
@@ -71,6 +74,12 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
 } = {}) {
   // Unix IPC fixtures need short paths; TMPDIR is a genuine OS/environment boundary.
   const root = await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'ca-'));
+  const configuredLaunchEnvironment = {
+    values: { CODEX_HOME: root, ...Object.fromEntries(Object.entries(options.processEnv ?? {})
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) },
+    unset: ['CODEX_SQLITE_HOME',
+      ...(options.processEnv?.HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON ? [] : ['HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'])],
+  } satisfies NonNullable<AgentSessionOpenRequest['launchEnvironment']>;
   const priorTmpdir = process.env.TMPDIR;
   const nativeTmpdir = options.longTemporaryDirectory ? join(root, 't'.repeat(100)) : root;
   await mkdir(nativeTmpdir, { recursive: true });
@@ -108,99 +117,104 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       for (const socket of webSockets.clients) socket.send(JSON.stringify({ method, params }));
     }
   };
-  const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => socket.on('message', async (payload) => {
-    const message = JSON.parse(payload.toString()) as {
-      id?: number; method: string; params?: Record<string, unknown>;
-    };
-    if (message.id === undefined || typeof message.method !== 'string') return;
-    const params = message.params ?? {};
-    requests.push({ method: message.method, params });
-    options.observer?.recordAppServerRequest(message.method, params);
-    if (message.method === 'skills/extraRoots/set') {
-      await options.beforeExtraRootsSetResponse?.({ occurrence: ++extraRootsSetOccurrence, params });
-    }
-    let result: unknown = {};
-    let error: unknown;
-    if (message.method === 'turn/start') turnStartOccurrence += 1;
-    const turnId = message.method === 'turn/start'
-      ? options.turnIdForStart?.(turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
-    if (message.method === 'initialize') {
-      result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
-    } else if (message.method === 'config/read') {
-      result = { config: { mcp_servers: options.nativeMcpServers ?? (options.mcpServers ? { happier__wilson: { enabled: true } } : {}), features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
-    } else if (message.method === 'account/read') {
-      try { result = await options.accountRead?.() ?? {}; }
-      catch { error = { code: -32000, message: 'Account read unavailable' }; }
-    } else if (message.method === 'thread/start') {
-      result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
-    } else if (message.method.startsWith('thread/goal/')) {
-      // An independent native control process can find only a persisted rollout.
-      if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
-      else if (message.method === 'thread/goal/set') {
-        goal = { ...goal, ...params, status: params.status ?? goal?.status ?? 'active',
-          createdAt: 1_776_272_400, updatedAt: 1_776_272_460 };
-        result = { goal };
-      } else if (message.method === 'thread/goal/clear') {
-        goal = null;
-        result = { cleared: true };
-      } else result = { goal };
-    } else if (message.method === 'turn/start') {
-      const turn = { id: turnId, status: 'inProgress' };
-      turns.push(turn);
-      materialized = true;
-      result = { turn: { ...turn, items: [] } };
-    } else if (message.method === 'thread/name/set') {
-      named = true;
-    } else if (message.method === 'thread/read') {
-      if (rejectRead) error = { code: -32000, message: 'rollout persistence failed' };
-      else {
-        materialized ||= named && params.includeTurns === true;
-        result = { thread: { id: params.threadId, turns } };
+  const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => {
+    // Independent Codex 0.162.1 control processes do not inherit the runtime's extra roots.
+    let extraRoots: readonly string[] = [];
+    socket.on('message', async (payload) => {
+      const message = JSON.parse(payload.toString()) as {
+        id?: number; method: string; params?: Record<string, unknown>;
+      };
+      if (message.id === undefined || typeof message.method !== 'string') return;
+      const params = message.params ?? {};
+      requests.push({ method: message.method, params });
+      options.observer?.recordAppServerRequest(message.method, params);
+      if (message.method === 'skills/extraRoots/set') {
+        await options.beforeExtraRootsSetResponse?.({ occurrence: ++extraRootsSetOccurrence, params });
       }
-    } else if (message.method === 'thread/resume') {
-      if (resumeFailure) error = { code: -32000, message: resumeFailure };
-      else if (params.threadId === 'fresh-thread' && !materialized) error = { code: -32000, message: 'no rollout found' };
-      else result = { thread: { id: params.threadId, turns }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
-    } else if (message.method === 'turn/interrupt') {
-      const turn = turns.find((entry) => entry.id === params.turnId);
-      if (!turn) throw new Error('Cannot interrupt an unknown fixture turn');
-      turn.status = 'interrupted';
-    } else if (message.method === 'thread/revert') {
-      if (revertFailure === 'methodNotFound') error = { code: -32601, message: 'Method not found' };
-      else if (revertFailure) error = { code: -32000, message: 'Rollback reply lost' };
-      if (!revertFailure || revertFailure === 'applied') {
-        const index = turns.findIndex((turn) => turn.id === params.beforeTurnId);
-        if (index >= 0) turns.splice(index);
+      let result: unknown = {};
+      let error: unknown;
+      if (message.method === 'turn/start') turnStartOccurrence += 1;
+      const turnId = message.method === 'turn/start'
+        ? options.turnIdForStart?.(turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
+      if (message.method === 'initialize') {
+        result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
+      } else if (message.method === 'config/read') {
+        result = { config: { mcp_servers: options.nativeMcpServers ?? (options.mcpServers ? { happier__wilson: { enabled: true } } : {}), features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+      } else if (message.method === 'account/read') {
+        try { result = await options.accountRead?.() ?? {}; }
+        catch { error = { code: -32000, message: 'Account read unavailable' }; }
+      } else if (message.method === 'thread/start') {
+        result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+      } else if (message.method.startsWith('thread/goal/')) {
+        // An independent native control process can find only a persisted rollout.
+        if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
+        else if (message.method === 'thread/goal/set') {
+          goal = { ...goal, ...params, status: params.status ?? goal?.status ?? 'active',
+            createdAt: 1_776_272_400, updatedAt: 1_776_272_460 };
+          result = { goal };
+        } else if (message.method === 'thread/goal/clear') {
+          goal = null;
+          result = { cleared: true };
+        } else result = { goal };
+      } else if (message.method === 'turn/start') {
+        const turn = { id: turnId, status: 'inProgress' };
+        turns.push(turn);
+        materialized = true;
+        result = { turn: { ...turn, items: [] } };
+      } else if (message.method === 'thread/name/set') {
+        named = true;
+      } else if (message.method === 'thread/read') {
+        if (rejectRead) error = { code: -32000, message: 'rollout persistence failed' };
+        else {
+          materialized ||= named && params.includeTurns === true;
+          result = { thread: { id: params.threadId, turns } };
+        }
+      } else if (message.method === 'thread/resume') {
+        if (resumeFailure) error = { code: -32000, message: resumeFailure };
+        else if (params.threadId === 'fresh-thread' && !materialized) error = { code: -32000, message: 'no rollout found' };
+        else result = { thread: { id: params.threadId, turns }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+      } else if (message.method === 'turn/interrupt') {
+        const turn = turns.find((entry) => entry.id === params.turnId);
+        if (!turn) throw new Error('Cannot interrupt an unknown fixture turn');
+        turn.status = 'interrupted';
+      } else if (message.method === 'thread/revert') {
+        if (revertFailure === 'methodNotFound') error = { code: -32601, message: 'Method not found' };
+        else if (revertFailure) error = { code: -32000, message: 'Rollback reply lost' };
+        if (!revertFailure || revertFailure === 'applied') {
+          const index = turns.findIndex((turn) => turn.id === params.beforeTurnId);
+          if (index >= 0) turns.splice(index);
+        }
+        revertFailure = null;
+      } else if (message.method === 'thread/rollback') {
+        turns.splice(-Number(params.numTurns));
+      } else if (message.method === 'thread/turns/list') {
+        result = { data: turns, nextCursor: null };
+      } else if (message.method === 'experimentalFeature/list') {
+        result = { data: [{ name: 'realtime_conversation', enabled: true }], nextCursor: null };
+      } else if (message.method === 'model/list') {
+        result = options.modelListResponse ?? { data: [{ id: 'fixture-model', model: 'fixture-model', displayName: 'Fixture Model', isDefault: true }], nextCursor: null };
+      } else if (message.method === 'plugin/list') {
+        result = options.pluginListResponse ?? { marketplaces: [] };
+      } else if (message.method === 'skills/list') {
+        result = options.skillListResponseForRoots?.(extraRoots) ?? options.skillListResponse ?? { data: [] };
+        error = options.skillListFailure;
+      } else if (message.method === 'skills/extraRoots/set') {
+        if (options.rejectExtraRootsSet) error = { code: -32601, message: 'Method not found' };
+        else extraRoots = Array.isArray(params.extraRoots) ? params.extraRoots.filter((root): root is string => typeof root === 'string') : [];
       }
-      revertFailure = null;
-    } else if (message.method === 'thread/rollback') {
-      turns.splice(-Number(params.numTurns));
-    } else if (message.method === 'thread/turns/list') {
-      result = { data: turns, nextCursor: null };
-    } else if (message.method === 'experimentalFeature/list') {
-      result = { data: [{ name: 'realtime_conversation', enabled: true }], nextCursor: null };
-    } else if (message.method === 'model/list') {
-      result = options.modelListResponse ?? { data: [{ id: 'fixture-model', model: 'fixture-model', displayName: 'Fixture Model', isDefault: true }], nextCursor: null };
-    } else if (message.method === 'plugin/list') {
-      result = options.pluginListResponse ?? { marketplaces: [] };
-    } else if (message.method === 'skills/list') {
-      result = options.skillListResponse ?? { data: [] };
-      error = options.skillListFailure;
-    } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
-      error = { code: -32601, message: 'Method not found' };
-    }
-    if (message.method === 'thread/resume') await options.beforeThreadResumeResponse?.({ socket, params });
-    if (message.method === 'turn/start') await options.beforeTurnStartResponse?.();
-    socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
-    if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });
-    if (message.method === 'turn/interrupt') {
-      emitNotification('turn/completed', { threadId: params.threadId, turn: { id: params.turnId, status: 'interrupted' } });
-    }
-    if (message.method === 'thread/realtime/start') {
-      socket.send(JSON.stringify({ method: 'thread/realtime/started', params: { threadId: 'fresh-thread', realtimeSessionId: null, version: 'v3' } }));
-      socket.send(JSON.stringify({ method: 'thread/realtime/sdp', params: { threadId: 'fresh-thread', sdp: 'answer' } }));
-    }
-  }));
+      if (message.method === 'thread/resume') await options.beforeThreadResumeResponse?.({ socket, params });
+      if (message.method === 'turn/start') await options.beforeTurnStartResponse?.();
+      socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
+      if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });
+      if (message.method === 'turn/interrupt') {
+        emitNotification('turn/completed', { threadId: params.threadId, turn: { id: params.turnId, status: 'interrupted' } });
+      }
+      if (message.method === 'thread/realtime/start') {
+        socket.send(JSON.stringify({ method: 'thread/realtime/started', params: { threadId: 'fresh-thread', realtimeSessionId: null, version: 'v3' } }));
+        socket.send(JSON.stringify({ method: 'thread/realtime/sdp', params: { threadId: 'fresh-thread', sdp: 'answer' } }));
+      }
+    });
+  });
   bindServer(ws);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -305,13 +319,18 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         signal: new AbortController().signal,
         services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} }, sessions: {},
           ...(options.connectedAccounts ? { connectedAccounts: options.connectedAccounts } : {}) },
-        session: { id: 'actual-happier-session', services: { models: options.models } },
+        session: { id: 'actual-happier-session', services: { models: options.models,
+          ...(options.runtimeAuthHost?.nativeHome ? { nativeHome: options.runtimeAuthHost.nativeHome } : {}),
+        } },
+        workState: { publisher: () => ({ publish: async () => ({ status: 'applied', revision: 'fixture-goal' }) }) },
         ui: { title: { set: async () => undefined } },
       } as unknown as AgentSessionRuntimeContext;
-      opened.session = await openCodexNativeAppServerSession({
+      const openSession = options.sessionFactory?.open ?? openCodexNativeAppServerSession;
+      opened.session = await openSession({
         ...(providerSessionId ? { kind: 'resume' as const, providerSessionId } : { kind: 'create' as const }),
         sessionId: 'actual-happier-session', cwd: root,
-        launchEnvironment: { values: { CODEX_HOME: root }, unset: ['CODEX_SQLITE_HOME', 'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'] },
+        ...(options.sessionConnectedAccounts ? { connectedAccounts: options.sessionConnectedAccounts } : {}),
+        launchEnvironment: configuredLaunchEnvironment,
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 },
@@ -341,8 +360,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         kind: 'create', runId: 'skills-run-1', cwd: root,
         profile: { pluginId: 'happier.agent.codex', localId: 'codex' },
         input: { text: 'Use the review skill.' },
-        launchEnvironment: { values: { CODEX_HOME: root, ...options.processEnv }, unset: ['CODEX_SQLITE_HOME',
-          ...(options.processEnv?.HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON ? [] : ['HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'])] },
+        launchEnvironment: configuredLaunchEnvironment,
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 }, options: {},

@@ -552,7 +552,13 @@ export interface ConnectedAccountRuntime {
     materialize(
         request: ConnectedAccountMaterializationRequest,
         context: PluginConnectedAccountReadContext,
-        options?: Readonly<{ signal?: AbortSignal }>,
+        options?: Readonly<{
+            signal?: AbortSignal;
+            /** Host snapshot of declared files in this materialization's selected native home.
+             * Absent outside native-home materialization; missing files have no entry.
+             * Reconcile integration-owned fields without discarding retained private state. */
+            existingFiles?: Readonly<Record<string, Uint8Array>>;
+        }>,
     ): Promise<ConnectedAccountMaterialization>;
     readonly authentication: Readonly<{
         modes: Readonly<Record<string, PluginConnectedAccountAuthenticationModeRuntime>>;

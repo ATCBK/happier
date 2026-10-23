@@ -1269,6 +1269,9 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
                     typeof entry[1] === 'string'
                 )),
             );
+            const pluginToolCatalog = await params.owners.happierTools.readPluginToolCatalog(signal);
+            assertSessionScopeAvailable('happier-tools');
+            signal.throwIfAborted();
             return Object.freeze({
                 v: 1 as const,
                 sessionId: params.sessionId,
@@ -1284,6 +1287,7 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
                     memoryRecallGuidanceEnabled: params.memoryRecallGuidanceEnabled === true,
                     sessionMemoryEnabled: readSessionMemoryEnabledV1(params.session.getMetadataSnapshot?.()),
                     isServerFeatureEnabled: params.owners.features.isEnabled,
+                    pluginToolCatalog,
                 }),
                 launch: Object.freeze({
                     executablePath: launch.filePath,

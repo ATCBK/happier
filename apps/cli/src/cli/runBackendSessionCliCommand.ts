@@ -61,6 +61,7 @@ import {
   stripUnsetEnvironmentVariables,
 } from '@/utils/processEnv/buildScopedProcessEnv';
 import {
+  reconcileAgentSessionScopedEnvironment,
   stripSessionControlEnvOverrides,
   stripSessionControlUnsetEnvKeys,
 } from '@/session/runtime/control/sessionControlEnvironment';
@@ -81,6 +82,7 @@ import {
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { reportSessionRunnerFailure } from './resolveSessionRunnerFailureExitCode';
 import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
+import type { HostPrivateLateSessionEnvironmentResolver } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 
 type CommonBackendRunOptions = ParsedSessionStartArgs & {
   credentials: StoredCredentials;
@@ -708,7 +710,10 @@ Provider CLI Options:
         params.context.scopedEnvironment?.env,
       );
       const scopedEnvironmentVariables = scopedEnvironmentVariablesRaw
-        ? stripSessionControlEnvOverrides(scopedEnvironmentVariablesRaw)
+        ? reconcileAgentSessionScopedEnvironment({
+            environment: scopedEnvironmentVariablesRaw,
+            trustedDaemonTransport: startedBy === 'daemon' && bootstrap !== null,
+          })
         : undefined;
       const baseMergedEnvironmentVariables: Record<string, string> = {
         ...(providerEnvironmentVariables ?? {}),
@@ -803,11 +808,7 @@ Provider CLI Options:
             Object.freeze({}),
             Object.freeze([]),
           );
-      let resolveLateEnvironment:
-        | ((input: Readonly<{
-            sessionId: string;
-          }>) => Promise<ReturnType<typeof finalizeEnvironment>>)
-        | undefined;
+      let resolveLateEnvironment: HostPrivateLateSessionEnvironmentResolver | undefined;
       if (foregroundAdmissionClaim) {
         for (const reservedName of foregroundReservedEnvironmentVariableNames) {
           const identity = reservedName.toLowerCase();
@@ -960,10 +961,24 @@ Provider CLI Options:
           );
           return Object.freeze({
             ...finalized,
+            ...(claimed.sessionConnectedAccounts
+              ? { sessionConnectedAccounts: claimed.sessionConnectedAccounts }
+              : {}),
             sensitiveEnvironmentVariableNames:
               claimed.sensitiveEnvironmentVariableNames,
           });
         };
+      }
+      const runnerSessionConnectedAccounts = bootstrap?.launch?.sessionConnectedAccounts;
+      if (startedBy === 'daemon' && runnerSessionConnectedAccounts) {
+        // The protected daemon carrier contains refs admitted by its Account
+        // materializer; environment selection bytes are never ref authority.
+        resolveLateEnvironment = async () => Object.freeze({
+          ...initialEnvironment,
+          // No additional environment is materialized by this data-only read.
+          sensitiveEnvironmentVariableNames: Object.freeze([]),
+          sessionConnectedAccounts: runnerSessionConnectedAccounts,
+        });
       }
 
       const sessionRuntimeParams = {

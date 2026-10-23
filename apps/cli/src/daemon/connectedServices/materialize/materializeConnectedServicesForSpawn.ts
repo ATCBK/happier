@@ -14,6 +14,7 @@ import {
 import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
 } from '@happier-dev/plugin-sdk/connected-accounts';
+import type { AgentSessionConnectedAccountSelection } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { logger } from '@/utils/logger';
@@ -29,7 +30,7 @@ import {
   applyConnectedServiceStateSharingDescriptor,
   resolveConnectedServiceNativeHomeRoot,
 } from '@/daemon/connectedServices/stateSharing/applyConnectedServiceStateSharingDescriptor';
-import { materializeConnectedServiceNativeHomeCredentials } from '@/daemon/connectedServices/stateSharing/materializeConnectedServiceNativeHomeCredentials';
+import { materializeConnectedServiceNativeHomeCredentials, readConnectedServiceNativeHomeCredentialFiles } from '@/daemon/connectedServices/stateSharing/materializeConnectedServiceNativeHomeCredentials';
 import type {
   ConnectedServiceResolvedSelection,
   ConnectedServiceMaterializedStateObservationBinding,
@@ -281,6 +282,21 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
     if (!connectedAccountsOwner && !params.nativeHomeOnly) {
       throw new Error('Connected Account launch authority is unavailable');
     }
+    const materializedAccountsByPurposeKey = new Map<string, AgentSessionConnectedAccountSelection>();
+    const materializeAccount: StablePluginConnectedAccountsOwner['materialize'] = async input => {
+      if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
+      const materialization = await connectedAccountsOwner.materialize(input);
+      // The purpose owner verifies this exact Account before and after producing
+      // credentials. A declared target or a native home alone is not such proof.
+      if (!params.legacyV021 && input.expectedAccount) {
+        materializedAccountsByPurposeKey.set(qualifiedPurposeKey(input.purpose), Object.freeze({
+          purpose: input.purpose.purpose,
+          account: Object.freeze({ service: Object.freeze({ ...input.expectedAccount.service }),
+            accountId: input.expectedAccount.accountId }),
+        }));
+      }
+      return materialization;
+    };
     const identity = contribution?.identity;
     const currentRuntime = identity
       ? lease.registry.pluginFinalPolicyCurrentRuntimesById?.get(identity.pluginId)
@@ -335,7 +351,10 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
     }
     const launchEnvironment = snapshot && connectedAccountsOwner && !projectionOnlyGeminiOauth
       ? await observeConnectedServiceMaterializationPhase(params, 'launch_credentials', () => materializeQualifiedConnectedAccountLaunchUses({
-        connectedAccountsOwner,
+        connectedAccountsOwner: {
+          getBinding: input => connectedAccountsOwner.getBinding(input),
+          materialize: materializeAccount,
+        },
         credentialFileOwner,
         snapshot,
         ...(params.exactPurposeBindingSubjectId
@@ -640,7 +659,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           const materialization = await observeConnectedServiceMaterializationPhase({
             agentId: params.agentId, materializationKey: params.materializationKey,
             service: expectedAccount.service,
-          }, 'native_home_credentials', () => connectedAccountsOwner.materialize({
+          }, 'native_home_credentials', async () => materializeAccount({
             purpose: scope.purpose,
             serviceRefs: scope.serviceRefs,
             ...(params.exactPurposeBindingSubjectId
@@ -650,6 +669,10 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
               ? { sessionId: params.purposeBindingSessionId }
               : {}),
             expectedAccount,
+            existingFiles: await readConnectedServiceNativeHomeCredentialFiles({
+              targetRoot: nativeRoot,
+              declaredSecretEntries: stateSharingDescriptor.authIsolation.secretEntries,
+            }),
             request: Object.freeze({
               kind: 'files' as const,
               fileIds: Object.freeze([
@@ -712,6 +735,9 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
       && pluginSourceCustodyV1Equal(currentRuntime.sourceCustody, sourceCustody);
     return {
       env,
+      ...(materializedAccountsByPurposeKey.size > 0
+        ? { sessionConnectedAccounts: Object.freeze([...materializedAccountsByPurposeKey.values()]) }
+        : {}),
       ...(launchEnvironment.unsetEnvKeys.length > 0 ? { unsetEnvKeys: launchEnvironment.unsetEnvKeys } : {}),
       targetMaterializedRoot,
       requestAuthMaterializedRoot:

@@ -8,12 +8,17 @@ import { performance } from 'node:perf_hooks';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { AccountSettingsSchema, buildConnectedServiceCredentialRecord, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
+import * as nativeFilesystem from '@happier-dev/plugin-sdk/fs';
+import { resolveCodexRuntimeHomeEnvironment } from '../../../../../../packages/plugins/codex/src/agent/auth/services/state/sharing/files';
 import { ApiClient } from '@/api/api';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { reloadConfiguration } from '@/configuration';
 import { logger } from '@/utils/logger';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
 import { prepareDaemonConnectedServices } from '@/daemon/spawn/prepareDaemonConnectedServices';
+import { resolveRunnerAgentSessionDescriptorForLease } from '@/daemon/spawn/prepareAgentRuntimeSessionBridge';
+import { createRunnerAgentSessionBootstrapAuthorization } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { readRunnerAgentSessionBootstrap } from '@/agent/runtime/session/process/runnerAgentSessionBootstrap';
 import { resolveExecutionRunConnectedServicesEnv } from '@/agent/runtime/bridges/executionRun/runtime/connectedServicesEnv';
 import { resolveRequesterSessionRuntimeDirectories } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
 import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
@@ -74,6 +79,7 @@ it('prepares an isolated requester Agent home without a Connected Account for Pr
     });
     expect(materialized?.env.CODEX_HOME).toBe(materialized?.targetMaterializedRoot);
     expect(materialized?.env.CODEX_HOME).toBeTruthy();
+    expect(materialized?.sessionConnectedAccounts).toBeUndefined();
     expect(existsSync(join(materialized!.env.CODEX_HOME!, 'auth.json'))).toBe(false);
     expect(await readFile(join(aliceHome, 'auth.json'), 'utf8')).toContain('alice-login');
     // Staging, native-home preparation, native credential publication (empty
@@ -194,6 +200,161 @@ const LEGACY_UNFENCED_ONE_SHOT_MATERIALIZATION_AUTHORITY = {
 } as const satisfies MaterializeParams['connectedAccountMaterializationAuthority'];
 
 describe('materializeConnectedServicesForSpawn', () => {
+  it('does not project a selected account without a materialized credential use', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-unmaterialized-account-'));
+    const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
+      agentId: 'codex', contributions: runtimeFixture!.registry.contributes,
+    })!;
+    const scope = declaration.fileMaterializationPurposes[0]!;
+    const binding = { purpose: scope.purpose, target: { kind: 'account' as const,
+      account: { service: scope.serviceRefs[0]!, accountId: 'selected-but-unused' } } };
+    const unexpected = async (): Promise<never> => { throw new Error('Unused credential must not be materialized'); };
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store: { read: unexpected, update: unexpected, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unexpected, resolveTarget: unexpected, projectTargetAccounts: unexpected,
+      assertTargetAccountMaterializable: unexpected, materializeAccount: unexpected,
+    });
+    const lease = owner.activateSessionPurposeBindings({ sessionId: 'unused-account', purposes: declaration.purposes, bindings: [binding] });
+    let result: Awaited<ReturnType<typeof materializeConnectedServicesForSpawnProduction>> = null;
+    try {
+      result = await materializeConnectedServicesForSpawnProduction({
+        agentId: 'codex', materializationKey: 'unused-account', purposeBindingSessionId: 'unused-account',
+        activeServerDir: join(root, 'server'), baseDir: join(root, 'materialized'), recordsByServiceId: new Map(),
+        connectedAccountsOwner: owner, processEnv: { CODEX_HOME: join(root, 'native') },
+        connectedAccountMaterializationAuthority: { kind: 'qualified', purposeBindings: [binding], requestAuthPurposeBindings: [] },
+        qualifiedPurposeBindingSnapshot: { ...declaration, bindings: [binding], fileMaterializationPurposes: [],
+          environmentUses: [], fileEnvironmentUses: [] },
+      });
+      expect(result).not.toBeNull();
+      expect(result?.sessionConnectedAccounts).toBeUndefined();
+    } finally {
+      await result?.cleanupOnExit?.();
+      lease.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('shares native Codex SQLite across pool homes while isolating credentials (explicit SQLite root: %s)', async explicitSqliteRoot => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-shared-sqlite-'));
+    const materialized: Array<NonNullable<Awaited<ReturnType<typeof materializeConnectedServicesForSpawn>>>> = [];
+    const leases: Array<{ dispose(): void }> = [];
+    try {
+      const descriptor = await resolveRunnerAgentSessionDescriptorForLease({
+        target: { kind: 'backend', backendId: 'codex' }, lease: runtimeFixture!.lease,
+      });
+      if (!descriptor) throw new Error('Admitted Codex runner descriptor unavailable');
+      const nativeHome = join(root, 'native');
+      const sqliteHome = explicitSqliteRoot ? join(root, 'native-sqlite') : nativeHome;
+      const sourceEnvironment = { CODEX_HOME: nativeHome, ...(explicitSqliteRoot ? { CODEX_SQLITE_HOME: 'native-sqlite' } : {}) };
+      const reopen = async (codexHome: string) => await resolveCodexRuntimeHomeEnvironment({
+        env: sourceEnvironment, codexHome, cwd: root, expandHomePath: path => path,
+      });
+      await mkdir(sqliteHome, { recursive: true });
+      for (const entry of ['sessions', 'archived_sessions']) {
+        await mkdir(join(nativeHome, entry), { recursive: true });
+        await writeFile(join(nativeHome, entry, 'rollout.jsonl'), `${entry}-history`);
+      }
+      await writeFile(join(nativeHome, 'auth.json'), 'native-account-credential');
+      const databases = ['state_5.sqlite', 'logs_2.sqlite', 'queue_1.sqlite'];
+      for (const database of databases) {
+        for (const suffix of ['', '-wal', '-shm']) await writeFile(join(sqliteHome, `${database}${suffix}`), 'native-db');
+      }
+      const launch = async (pool: string, stateMode: 'shared' | 'isolated', probePurpose?: 'probe') => {
+        const record = buildConnectedServiceCredentialRecord({
+          now: 10, serviceId: 'openai-codex', profileId: pool, kind: 'oauth', expiresAt: null,
+          oauth: { accessToken: `access-${pool}`, refreshToken: `refresh-${pool}`, idToken: null,
+            scope: null, tokenType: null, providerAccountId: pool, providerEmail: null },
+        });
+        const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
+          agentId: 'codex', contributions: runtimeFixture!.registry.contributes,
+        })!;
+        const scope = declaration.fileMaterializationPurposes[0]!;
+        const account = { service: scope.serviceRefs[0]!, accountId: pool };
+        const binding = { purpose: scope.purpose, target: { kind: 'group' as const, service: account.service, groupId: `group-${pool}` } };
+        const unusedAccountBoundary = async (): Promise<never> => { throw new Error('Unexpected account inventory I/O'); };
+        const owner = createConnectedAccountPurposeBindingOwner({
+          store: { read: unusedAccountBoundary, update: unusedAccountBoundary, subscribe: () => ({ dispose() {} }) },
+          selectTarget: unusedAccountBoundary, resolveTarget: async () => ({ displayName: pool, account }),
+          projectTargetAccounts: unusedAccountBoundary, assertTargetAccountMaterializable: unusedAccountBoundary,
+          materializeAccount: async input => await materializeExactV021ConnectedServiceCredential({
+            registry: runtimeFixture!.registry, serviceId: 'openai-codex', account: input.account,
+            record, request: input.request, signal: input.signal,
+          }),
+        });
+        const sessionId = `${pool}-${stateMode}-${probePurpose ?? 'session'}`;
+        leases.push(owner.activateSessionPurposeBindings({ sessionId, purposes: declaration.purposes, bindings: [binding] }));
+        const result = await materializeConnectedServicesForSpawnProduction({
+          agentId: 'codex', materializationKey: sessionId, purposeBindingSessionId: sessionId,
+          activeServerDir: join(root, 'server'), baseDir: join(root, 'materialized'),
+          recordsByServiceId: new Map(), connectedAccountsOwner: owner,
+          connectedAccountMaterializationAuthority: { kind: 'qualified', purposeBindings: [binding], requestAuthPurposeBindings: [] },
+          qualifiedPurposeBindingSnapshot: { ...declaration, bindings: [binding] },
+          processEnv: sourceEnvironment,
+          sessionDirectory: root,
+          ...(probePurpose ? { probePurpose } : {}),
+          accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+            v: 1, defaults: { configMode: 'isolated', stateMode }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+          } },
+        });
+        expect(result).not.toBeNull();
+        expect(result?.sessionConnectedAccounts).toEqual([{ purpose: scope.purpose.purpose, account }]);
+        materialized.push(result!);
+        const launch = { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: {} },
+          ...(result!.sessionConnectedAccounts ? { sessionConnectedAccounts: [...result!.sessionConnectedAccounts] } : {}) };
+        const bootstrap = await createRunnerAgentSessionBootstrapAuthorization({
+          happyHomeDir: root, publicReleaseRing: 'stable', descriptor, launch,
+        });
+        try {
+          expect((await readRunnerAgentSessionBootstrap(bootstrap.authorization.bootstrapFilePath)).launch)
+            .toMatchObject({ sessionConnectedAccounts: result!.sessionConnectedAccounts });
+        } finally { await bootstrap.cleanupBootstrapFile(); }
+        return result!;
+      };
+      const first = await launch('pool-a', 'shared');
+      const second = await launch('pool-b', 'shared');
+      expect(first.env.CODEX_HOME).not.toBe(second.env.CODEX_HOME);
+      for (const [index, result] of [first, second].entries()) {
+        expect(result.env.CODEX_SQLITE_HOME).toBe(sqliteHome);
+        const home = result.env.CODEX_HOME!;
+        expect((await reopen(home)).CODEX_SQLITE_HOME).toBe(sqliteHome);
+        expect(home).not.toBe(nativeHome);
+        expect(await readFile(join(home, 'auth.json'), 'utf8')).toContain(`access-pool-${index === 0 ? 'a' : 'b'}`);
+        for (const entry of ['sessions', 'archived_sessions']) {
+          expect(await realpath(join(home, entry))).toBe(await realpath(join(nativeHome, entry)));
+          expect(await readFile(join(home, entry, 'rollout.jsonl'), 'utf8')).toBe(`${entry}-history`);
+        }
+        for (const database of databases) {
+          for (const suffix of ['', '-wal', '-shm']) expect(existsSync(join(home, `${database}${suffix}`))).toBe(false);
+        }
+      }
+      const isolated = await launch('pool-isolated', 'isolated');
+      const probe = await launch('pool-probe', 'shared', 'probe');
+      for (const result of [isolated, probe]) {
+        expect(result.env.CODEX_SQLITE_HOME).toBe(result.env.CODEX_HOME);
+        expect((await reopen(result.env.CODEX_HOME!)).CODEX_SQLITE_HOME).toBe(result.env.CODEX_HOME);
+        expect(existsSync(join(result.env.CODEX_HOME!, 'sessions', 'rollout.jsonl'))).toBe(false);
+      }
+      // This SDK adapter only calls the OS symlink API. Keep the sharing policy,
+      // preflight, degradation and materializer real when the OS refuses links.
+      const symlinkFailure = vi.spyOn(nativeFilesystem, 'createAbsolutePathSymlink')
+        .mockRejectedValue(Object.assign(new Error('Fixture symlinks unavailable'), { code: 'EPERM' }));
+      try {
+        const degraded = await launch('pool-degraded', 'shared');
+        expect(degraded.diagnostics).toEqual(expect.arrayContaining([
+          expect.objectContaining({ code: 'state_symlink_unavailable', effectiveStateMode: 'isolated' }),
+        ]));
+        expect(degraded.env.CODEX_SQLITE_HOME).toBe(degraded.env.CODEX_HOME);
+        expect((await reopen(degraded.env.CODEX_HOME!)).CODEX_SQLITE_HOME).toBe(degraded.env.CODEX_HOME);
+        expect(existsSync(join(degraded.env.CODEX_HOME!, 'sessions', 'rollout.jsonl'))).toBe(false);
+      } finally { symlinkFailure.mockRestore(); }
+      expect(await readFile(join(nativeHome, 'auth.json'), 'utf8')).toBe('native-account-credential');
+    } finally {
+      for (const result of materialized) await result.cleanupOnExit?.();
+      for (const lease of leases) lease.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps qualified account native state separate from each Session request-auth capability root', async () => {
     // File logging is the diagnostic boundary; binding, plugin serialization, queues and disk stay real.
     const log = vi.spyOn(logger, 'infoFile');
@@ -248,6 +409,8 @@ describe('materializeConnectedServicesForSpawn', () => {
       const second = await materializeConnectedServicesForSpawnProduction({
         ...params, materializationKey: 'qualified-second', purposeBindingSessionId: 'qualified-second',
       });
+      expect(first?.sessionConnectedAccounts).toEqual([{ purpose: scope.purpose.purpose, account }]);
+      expect(second?.sessionConnectedAccounts).toEqual(first?.sessionConnectedAccounts);
       expect(first!.env.CODEX_HOME).toBe(second!.env.CODEX_HOME);
       expect(first!.requestAuthMaterializedRoot).not.toBe(first!.targetMaterializedRoot);
       expect(first!.requestAuthMaterializedRoot).not.toBe(second!.requestAuthMaterializedRoot);
@@ -393,7 +556,13 @@ describe('materializeConnectedServicesForSpawn', () => {
       if (agentId === 'claude' && record.kind === 'oauth') {
         const approvalConfig = join(home, '.claude.json');
         const privateMemory = join(home, stateEntry, 'memory', 'private.md');
-        await writeFile(approvalConfig, '{"approvalMarker":"retain-native-approval"}');
+        const retainedConfig = {
+          approvalMarker: 'retain-native-approval',
+          projects: { '/workspace': { hasTrustDialogAccepted: true, allowedTools: ['Read'] } },
+          privatePreference: { theme: 'dark' },
+          oauthAccount: { accountUuid: 'fixture-account', emailAddress: 'previous@example.test' },
+        };
+        await writeFile(approvalConfig, JSON.stringify(retainedConfig));
         await mkdir(join(home, stateEntry, 'memory'), { recursive: true });
         await writeFile(privateMemory, 'retain-native-memory');
         const refreshed = await materializeConnectedServicesForSpawn({
@@ -408,6 +577,21 @@ describe('materializeConnectedServicesForSpawn', () => {
         expect(await readFile(privateMemory, 'utf8')).toBe('retain-native-memory');
         expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
         await refreshed!.cleanupOnExit!();
+        const changedAccount = await materializeConnectedServicesForSpawn({
+          ...params, materializationKey: 'changed-account-session',
+          recordsByServiceId: new Map([[serviceId, {
+            ...record, oauth: { ...record.oauth, accessToken: 'fixture-replacement-access',
+              providerAccountId: 'replacement-account', providerEmail: 'replacement@example.test' },
+          }]]),
+        });
+        expect(changedAccount!.env[environmentKey]).toBe(home);
+        expect(JSON.parse(await readFile(approvalConfig, 'utf8'))).toMatchObject({
+          ...retainedConfig,
+          oauthAccount: { accountUuid: 'replacement-account', emailAddress: 'replacement@example.test' },
+        });
+        expect(await readFile(privateMemory, 'utf8')).toBe('retain-native-memory');
+        expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+        await changedAccount!.cleanupOnExit!();
       }
       const sharedSource = join(root, 'native');
       await mkdir(join(sharedSource, stateEntry), { recursive: true });
@@ -845,6 +1029,9 @@ describe('materializeConnectedServicesForSpawn', () => {
         } else {
           expect(fresh).toMatchObject({ ok: true, auth: { env: { CODEX_HOME: home } } });
           if (!fresh.ok) throw new Error('Ordinary Session preparation refused');
+          expect(fresh.sessionConnectedAccounts).toEqual([{
+            purpose: 'primary', account: { service, accountId: record.profileId },
+          }]);
           expect(existsSync(join(home, 'sessions', 'unrelated-session.jsonl'))).toBe(false);
           expect(existsSync(join(home, 'sessions', 'rollout-2026-09-07T12-00-00-019fea40-8040-7d00-9b7e-9b8f3b5cfcb0.jsonl'))).toBe(false);
           await fresh.auth?.cleanupOnExit?.();

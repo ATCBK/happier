@@ -19,6 +19,9 @@ import { writeSessionMarker } from '../sessionRegistry';
 
 import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { spawnTestProcess, waitForProcessExit } from '@/testkit/process/spawn';
+import { HAPPIER_FOREGROUND_AGENT_RUNTIME_ADMISSION_FILE_ENV_KEY } from './foregroundAdmissionContract';
+import { claimDaemonForegroundAgentRuntimeEnvironment } from '@/agent/runtime/session/process/foregroundAgentRuntimeAdmissionClient';
+import { writeDaemonState } from '@/persistence';
 
 const claimInput = {
   canonicalSessionId: 'canonical-session-codex', httpPort: 40123,
@@ -116,6 +119,25 @@ describe('foreground Codex Connected Account lifecycle through real materializat
             foregroundSatisfiedProfileSecretRequirementNames: [] });
           expect(claimed.ok, claimed.ok ? undefined : claimed.error.code).toBe(true);
           if (!claimed.ok) throw new Error(claimed.error.code);
+          // Real materialization and the foreground claim must carry the same
+          // admitted Account into native open, not only credential-bearing env.
+          writeDaemonState({ pid: foregroundPid, httpPort: 40123, controlToken: 'synthetic-control',
+            startedAt: Date.now(), startedWithCliVersion: 'fixture' });
+          // Only the daemon HTTP response is replaced: the real private handoff,
+          // control client and foreground startup reader consume the owner result.
+          const transport = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(claimed), { status: 200 }));
+          try {
+            expect(await claimDaemonForegroundAgentRuntimeEnvironment({
+              env: { [HAPPIER_FOREGROUND_AGENT_RUNTIME_ADMISSION_FILE_ENV_KEY]: admitted.capability.admissionFilePath },
+              provisionalSessionId, canonicalSessionId: sessionId, attemptId, foregroundPid,
+              foregroundSatisfiedProfileSecretRequirementNames: [],
+              ...(admitted.launchPolicy.nativeHomeSourceEnvironmentKey
+                ? { nativeHomeSourceEnvironmentValue: process.env[admitted.launchPolicy.nativeHomeSourceEnvironmentKey] ?? null }
+                : {}),
+            })).toMatchObject({ sessionConnectedAccounts: [{ purpose: 'primary', account: account.account }] });
+          } finally {
+            transport.mockRestore();
+          }
           return claimed;
         };
         const provisionalSessionId = 'provisional-session-codex';

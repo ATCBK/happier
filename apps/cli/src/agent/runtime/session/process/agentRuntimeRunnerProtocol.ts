@@ -424,11 +424,14 @@ export const AgentRuntimeDaemonSessionDescriptorV1Schema = lazyZodSchema(() => z
 export type AgentRuntimeDaemonSessionDescriptorV1 =
   z.infer<typeof AgentRuntimeDaemonSessionDescriptorV1Schema>;
 
-/** Non-authoritative launch intent, separate from the admitted Agent identity. */
+/** Private launch inputs, separate from Agent identity and daemon operation authority. */
 export const AgentRuntimeRunnerBootstrapV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   descriptor: AgentRuntimeDaemonSessionDescriptorV1Schema,
-  launch: z.optional(z.strictObject({ runtimeDescriptorV1: RuntimeDescriptorV1Schema })),
+  launch: z.optional(z.strictObject({
+    runtimeDescriptorV1: RuntimeDescriptorV1Schema,
+    sessionConnectedAccounts: z.optional(AgentSessionConnectedAccountsV1Schema),
+  })),
 }));
 
 export type AgentRuntimeRunnerBootstrapLaunchV1 =
@@ -476,6 +479,9 @@ const ConnectedAccountSchema = lazyZodSchema(() => z.strictObject({
   }),
 }));
 
+export const AgentSessionConnectedAccountsV1Schema = lazyZodSchema(() =>
+  z.array(ConnectedAccountSchema).check(z.maxLength(256)));
+
 const AgentSessionOpenBaseSchema = lazyZodSchema(() => z.object({
   sessionId: asHostProtocolZod(SessionIdSchema),
   cwd: BoundedPathSchema,
@@ -483,7 +489,7 @@ const AgentSessionOpenBaseSchema = lazyZodSchema(() => z.object({
   launchEnvironment: z.optional(AgentLaunchEnvironmentV1Schema),
   runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
   configuration: z.optional(AgentSessionConfigurationSnapshotV1Schema),
-  connectedAccounts: z.optional(z.array(ConnectedAccountSchema).check(z.maxLength(256))),
+  connectedAccounts: z.optional(AgentSessionConnectedAccountsV1Schema),
   mcpServers:
     z.optional(z.record(BoundedIdSchema, McpLaunchConfigSchema)),
   mcpToolPolicy: z.optional(McpToolLaunchPoliciesV1Schema),

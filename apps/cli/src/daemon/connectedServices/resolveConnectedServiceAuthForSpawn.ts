@@ -1236,6 +1236,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
 }>): Promise<Readonly<{
   env: Record<string, string>;
   unsetEnvKeys?: readonly string[];
+  sessionConnectedAccounts?: ConnectedServicesMaterialization['sessionConnectedAccounts'];
   cleanupOnFailure: (() => void | Promise<void>) | null;
   cleanupOnExit: (() => void | Promise<void>) | null;
   connectedServicesBindings: ConnectedServicesBindingsV2;

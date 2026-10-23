@@ -17,7 +17,7 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
-import { AgentRuntimeDaemonSessionDescriptorV1Schema } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
+import { AgentRuntimeDaemonSessionDescriptorV1Schema, AgentSessionConnectedAccountsV1Schema } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { ConnectedServicesBindingsIngressSchema } from '@/daemon/connectedServices/parseConnectedServicesBindings';
 import { ProjectSetupReviewV1Schema } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 
@@ -199,6 +199,7 @@ export const ForegroundAgentRuntimeClaimResponseV1Schema =
     z.strictObject({
       ok: z.literal(true),
       environment: z.record(z.string(), z.string()),
+      sessionConnectedAccounts: z.optional(AgentSessionConnectedAccountsV1Schema),
       unsetEnvironmentVariableNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
       sensitiveEnvironmentVariableNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
     }),

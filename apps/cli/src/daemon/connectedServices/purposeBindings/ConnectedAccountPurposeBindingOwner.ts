@@ -128,6 +128,7 @@ export type ConnectedAccountPurposeBindingOwnerDependencies = Readonly<{
     expectedConfigurationRevision?: string | null;
     credentialRevisionBasis?: ConnectedAccountMaterializationCredentialRevisionBasis;
     request: ConnectedAccountMaterializationRequest;
+    existingFiles?: Readonly<Record<string, Uint8Array>>;
     signal: AbortSignal;
   }>): Promise<PluginConnectedAccountMaterialization>;
   /** Machine-owned native credential boundary; material is never written to the binding store. */
@@ -145,6 +146,7 @@ export type ConnectedAccountPurposeBindingOwnerDependencies = Readonly<{
     account: QualifiedConnectedAccountRef;
     credentialRevisionBasis?: ConnectedAccountMaterializationCredentialRevisionBasis;
     request: ConnectedAccountMaterializationRequest;
+    existingFiles?: Readonly<Record<string, Uint8Array>>;
     signal: AbortSignal;
     captureAdmittedResource?(resource: Readonly<{ teamId: string; displayName: string | null; resourceRevision: number }>): void;
   }>): Promise<PluginConnectedAccountMaterialization>;
@@ -1478,6 +1480,7 @@ export function createConnectedAccountPurposeBindingOwner(
             account: resolved.resolved.account,
             ...(credentialRevisionBasis ? { credentialRevisionBasis } : {}),
             request: input.request,
+            ...(input.existingFiles ? { existingFiles: input.existingFiles } : {}),
             signal: input.signal,
             captureAdmittedResource(resource) { admittedTeamResource = resource; },
           });
@@ -1487,6 +1490,7 @@ export function createConnectedAccountPurposeBindingOwner(
           ...retainedConfigurationBasis(input.exactPurposeBindingSubjectId, resolved.resolved.account),
           ...(credentialRevisionBasis ? { credentialRevisionBasis } : {}),
           request: input.request,
+          ...(input.existingFiles ? { existingFiles: input.existingFiles } : {}),
           signal: input.signal,
         }));
     input.signal.throwIfAborted();

@@ -108,6 +108,7 @@ export function buildConnectedServiceQuotaPreflightIncompleteSpawnErrorResult():
 export type PreparedDaemonConnectedServices = Readonly<{
     ok: true;
     auth: ConnectedServiceAuth;
+    sessionConnectedAccounts?: NonNullable<ConnectedServiceAuth>['sessionConnectedAccounts'];
     materializationIdentity: ConnectedServiceMaterializationIdentityV1 | null;
     options: SpawnSessionOptions;
     effectiveBindings: SpawnSessionOptions['connectedServices'];
@@ -452,6 +453,7 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
     return {
         ok: true,
         auth,
+        ...(auth?.sessionConnectedAccounts ? { sessionConnectedAccounts: auth.sessionConnectedAccounts } : {}),
         materializationIdentity,
         options: {
             ...options,

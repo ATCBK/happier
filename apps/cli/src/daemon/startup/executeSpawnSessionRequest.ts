@@ -75,8 +75,9 @@ import { bindAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliL
 import { AgentCliNotFoundError } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { SessionSpawnLaunchErrorV1Schema } from '@happier-dev/protocol/spawnSession';
 import {
-    prepareRunnerAgentSessionBootstrapForLease,
+    resolveRunnerAgentSessionDescriptorForLease,
 } from '../spawn/prepareAgentRuntimeSessionBridge';
+import { createRunnerAgentSessionBootstrapAuthorization } from '../agentRuntime/sessionBridgeAuthorization';
 import { buildProviderSpawnErrorResult } from '../spawn/buildProviderSpawnErrorResult';
 import type {
     ConnectedAccountRequestAuthSubjectRegistry,
@@ -116,6 +117,7 @@ import {
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
+import { readRequesterAgentStartPolicyV1 } from '../sessionEncryption/requesterAgentStartPolicy';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -247,13 +249,14 @@ export async function executeSpawnSessionRequest(
                 errorMessage: 'Takeover admission attempt is unavailable',
             };
         }
-        // A profile id is stable Account intent. Refresh before resolving it so
-        // the daemon, rather than an Action/UI caller, owns the profile overlay.
+        // Start policy belongs to the admitted Account. A literal launch does
+        // not need the unrelated Account Launch Profile catalog.
         if (requesterRuntime) {
             // Retry only Account preparation under the original accepted
             // startup's cancellation lifetime. Native launch is never replayed.
             const settingsCurrent = await readRequesterHomeWithinActionLifetime(
-                () => requesterRuntime.refreshAccountSettings(options.accountSettingsVersionHint, preparationSignal), preparationSignal);
+                () => readRequesterAgentStartPolicyV1({ runtime: requesterRuntime,
+                    minSettingsVersion: options.accountSettingsVersionHint, signal: preparationSignal }), preparationSignal);
             preparationSignal?.throwIfAborted();
             if (!settingsCurrent) return {
                 type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
@@ -265,6 +268,13 @@ export async function executeSpawnSessionRequest(
         let profilesSnapshot: Awaited<ReturnType<typeof readAccountLaunchProfiles>> | undefined;
         if (options.profileId) {
             try {
+                // The daemon resolves a selected stable Launch Profile id from
+                // its current catalog; callers never supply the profile overlay.
+                if (requesterRuntime && !await readRequesterHomeWithinActionLifetime(
+                    () => requesterRuntime.refreshAccountSettings(options.accountSettingsVersionHint, preparationSignal), preparationSignal)) {
+                    return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                        errorMessage: 'Requester Account settings unavailable' };
+                }
                 profilesSnapshot = requesterRuntime ? await requesterRuntime.readAccountLaunchProfiles()
                     : await readAccountLaunchProfiles(activeAccountSettingsSnapshot?.settings, params.credentials);
             } catch (error) {
@@ -768,18 +778,11 @@ export async function executeSpawnSessionRequest(
             // state the host Session metadata producer uses for a fresh Agent.
             const startupRuntimeDescriptorV1 = terminalPresentation.runtimeDescriptorV1 ?? options.runtimeDescriptorV1
                 ?? (catalogAgentId ? { v: 1 as const, agentId: catalogAgentId, agent: {} } : undefined);
-            const runnerAgentSessionBootstrap =
-                await prepareRunnerAgentSessionBootstrapForLease({
+            const runnerAgentSessionDescriptor =
+                await resolveRunnerAgentSessionDescriptorForLease({
                     target: effectiveBackendTargetV2,
                     lease: appliedPluginRuntimeLease,
-                    ...(startupRuntimeDescriptorV1 ? { launch: { runtimeDescriptorV1: startupRuntimeDescriptorV1 } } : {}),
                 });
-            recordPreparationPhase('runner_bootstrap');
-            if (runnerAgentSessionBootstrap) {
-                launchResourceScope.register(
-                    runnerAgentSessionBootstrap.cleanupBootstrapFile,
-                );
-            }
             const optionsWithProviderIsolation = {
                 ...daemonProviderLaunch.options, directory,
                 ...(startupRuntimeDescriptorV1 ? { runtimeDescriptorV1: startupRuntimeDescriptorV1 } : {}),
@@ -801,7 +804,7 @@ export async function executeSpawnSessionRequest(
                 : null;
             if (
                 managedProviderBindingAttempt
-                && !runnerAgentSessionBootstrap
+                && !runnerAgentSessionDescriptor
             ) {
                 return await refuseSpawn(buildProviderSpawnErrorResult(
                     createProviderErrorV1('provider_endpoint_unavailable', {
@@ -1180,6 +1183,25 @@ export async function executeSpawnSessionRequest(
             recordPreparationPhase('child_environment');
             if (!childEnvironment.ok) {
                 return await refuseSpawn(childEnvironment.result);
+            }
+            // Resolve/validate the Agent early, but write its private launch
+            // carrier only after the Account owner has materialized exact refs.
+            const runnerAgentSessionBootstrap = runnerAgentSessionDescriptor
+                ? await createRunnerAgentSessionBootstrapAuthorization({
+                    happyHomeDir: configuration.happyHomeDir,
+                    publicReleaseRing: configuration.publicReleaseRing,
+                    descriptor: runnerAgentSessionDescriptor,
+                    ...(startupRuntimeDescriptorV1 ? { launch: {
+                        runtimeDescriptorV1: startupRuntimeDescriptorV1,
+                        ...(connectedServices.sessionConnectedAccounts ? {
+                            sessionConnectedAccounts: [...connectedServices.sessionConnectedAccounts],
+                        } : {}),
+                    } } : {}),
+                })
+                : null;
+            recordPreparationPhase('runner_bootstrap');
+            if (runnerAgentSessionBootstrap) {
+                launchResourceScope.register(runnerAgentSessionBootstrap.cleanupBootstrapFile);
             }
             const { spawnEnvironment, extraEnv, extraEnvForChild, trackedSpawnOptions, terminalRequest } = childEnvironment;
             const runnerAgentInvocationContext =

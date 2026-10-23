@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ensurePrivateConnectedServiceMaterializedRoot } from '../materialize/privateMaterializedRoot';
-import { materializeConnectedServiceNativeHomeCredentials } from './materializeConnectedServiceNativeHomeCredentials';
+import { materializeConnectedServiceNativeHomeCredentials, readConnectedServiceNativeHomeCredentialFiles } from './materializeConnectedServiceNativeHomeCredentials';
 
 const roots: string[] = [];
 
@@ -22,6 +22,34 @@ async function createRoot(): Promise<string> {
 }
 
 describe('materializeConnectedServiceNativeHomeCredentials', () => {
+  it('snapshots only declared existing files as opaque bytes and refuses redirected reads', async () => {
+    const root = await createRoot();
+    const targetRoot = join(root, 'account-home');
+    await ensurePrivateConnectedServiceMaterializedRoot(targetRoot);
+    const contents = Buffer.from([0, 255, 42]);
+    await writeFile(join(targetRoot, 'config.json'), contents);
+    await writeFile(join(targetRoot, 'private.json'), 'unrequested');
+    await mkdir(join(targetRoot, 'credential-store'));
+    await writeFile(join(targetRoot, 'credential-store', 'private.json'), 'unrequested');
+    await expect(readConnectedServiceNativeHomeCredentialFiles({ targetRoot,
+      declaredSecretEntries: ['config.json', 'missing.json', 'credential-store'],
+    })).resolves.toEqual({ 'config.json': contents });
+    await expect(readConnectedServiceNativeHomeCredentialFiles({ targetRoot,
+      declaredSecretEntries: ['../private.json'],
+    })).rejects.toThrow('connected_service_native_home_secret_entry_invalid');
+    const outside = join(root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'config.json'), 'outside');
+    await symlink(outside, join(targetRoot, 'linked'));
+    await expect(readConnectedServiceNativeHomeCredentialFiles({ targetRoot,
+      declaredSecretEntries: ['linked/config.json'],
+    })).rejects.toThrow('connected_service_native_home_credential_path_unsafe');
+    await symlink(join(outside, 'config.json'), join(targetRoot, 'alias.json'));
+    await expect(readConnectedServiceNativeHomeCredentialFiles({ targetRoot,
+      declaredSecretEntries: ['alias.json'],
+    })).rejects.toThrow('connected_service_native_home_credential_path_unsafe');
+  });
+
   it('publishes opaque bytes at the declared isolated-home path without mutating the persistent source home', async () => {
     const root = await createRoot();
     const sourceRoot = join(root, 'persistent-codex-home');

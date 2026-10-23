@@ -1827,9 +1827,17 @@ export async function prepareForegroundAgentRuntimeAdmission(
               );
             }
             connectedServiceClaimSucceeded = true;
+            const sessionConnectedAccounts = (sessionPurposeBindingSnapshot?.authorizedPurposes ?? [])
+              .flatMap(({ purpose }) => {
+                const account = expectedConnectedAccountByPurposeKey.get(qualifiedPurposeKey(purpose));
+                return account ? [{ purpose: purpose.purpose, account }] : [];
+              });
             return {
               ok: true as const,
               environment: mergedEnvironment.environment,
+              ...(sessionConnectedAccounts.length > 0
+                ? { sessionConnectedAccounts: Object.freeze(sessionConnectedAccounts) }
+                : {}),
               unsetEnvironmentVariableNames:
                 mergedEnvironment.unsetEnvironmentVariableNames,
               sensitiveEnvironmentVariableNames,

@@ -1,4 +1,5 @@
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import type { RequesterConnectedAccountObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { ConnectedAccountHttpHeadersRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import { MAX_INTERACTION_TRANSIENT_CHOICES_V1 } from '@happier-dev/protocol/plugins/interactions/transientV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -145,8 +146,8 @@ export type DaemonConnectedAccountPurposeBindingRuntime = Readonly<{
     publish(): void;
   }>): Promise<void>;
   bindSessionRestartOwner(owner: DaemonConnectedAccountPurposeSessionRestartOwner): void;
-  subscribeInvalidations(listener: () => void): () => void;
-  invalidate(): void;
+  subscribeInvalidations(listener: (event?: RequesterConnectedAccountObservation) => void): () => void;
+  invalidate(event?: RequesterConnectedAccountObservation): void;
 }>;
 
 export type DaemonConnectedAccountPurposeSessionRestartOwner = (
@@ -474,7 +475,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   }
   const runtimeRegistry = params.runtimeRegistry
     ?? createRuntimeRegistryAccess(params.reloadController!);
-  const invalidationListeners = new Set<() => void>();
+  const invalidationListeners = new Set<(event?: RequesterConnectedAccountObservation) => void>();
   type CoordinatorInventoryRead = {
     valid: boolean;
     pending: boolean;
@@ -1068,6 +1069,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
     expectedConfigurationRevision?: string | null;
     credentialRevisionBasis?: ConnectedAccountMaterializationCredentialRevisionBasis;
     request: ConnectedAccountMaterializationRequest;
+    existingFiles?: Readonly<Record<string, Uint8Array>>;
     signal: AbortSignal;
   }>): Promise<PluginConnectedAccountMaterialization> => {
     input.signal.throwIfAborted();
@@ -1077,6 +1079,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       operation: Object.freeze({
         kind: 'materialize',
         request: input.request,
+        ...(input.existingFiles ? { existingFiles: input.existingFiles } : {}),
       }),
       ...(input.credentialRevisionBasis?.expectedCredentialRevision
         ? {
@@ -1168,7 +1171,8 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
         account: input.account,
         sourceVersion: opened.payload.sourceVersion,
         material: opened.payload.material,
-        operation: Object.freeze({ kind: 'materialize', request: input.request }),
+        operation: Object.freeze({ kind: 'materialize', request: input.request,
+          ...(input.existingFiles ? { existingFiles: input.existingFiles } : {}) }),
         isCurrent: async () => {
           const current = await open();
           if (!current.ok) {
@@ -1372,10 +1376,10 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
         invalidationListeners.delete(listener);
       };
     },
-    invalidate() {
+    invalidate(event) {
       for (const read of coordinatorInventories.values()) read.valid = false;
       coordinatorInventories.clear();
-      for (const listener of invalidationListeners) listener();
+      for (const listener of invalidationListeners) listener(event);
     },
   });
 }

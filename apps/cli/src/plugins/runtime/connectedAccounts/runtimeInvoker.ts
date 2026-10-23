@@ -92,13 +92,24 @@ type EstablishedInvocationContext =
  * is pending wins over that stale producer result just as every other host
  * currentness boundary does.
  */
+async function invokeCurrentConnectedAccountCallback<TResult, TOutput>(
+    assertCurrent: (phase: ConnectedAccountCallbackCurrentnessPhase) => Promise<void>,
+    callback: () => MaybePromise<TResult>,
+    snapshotResult: (result: TResult) => TOutput,
+): Promise<TOutput>;
 async function invokeCurrentConnectedAccountCallback<TResult>(
     assertCurrent: (phase: ConnectedAccountCallbackCurrentnessPhase) => Promise<void>,
     callback: () => MaybePromise<TResult>,
-): Promise<TResult> {
+): Promise<TResult>;
+async function invokeCurrentConnectedAccountCallback(
+    assertCurrent: (phase: ConnectedAccountCallbackCurrentnessPhase) => Promise<void>,
+    callback: () => MaybePromise<unknown>,
+    snapshotResult?: (result: unknown) => unknown,
+): Promise<unknown> {
     await observeMaterializationPhase('runtime_callback_before', () => assertCurrent('beforeCallback'));
     try {
-        return await observeMaterializationPhase('runtime_callback', callback);
+        const result = await observeMaterializationPhase('runtime_callback', callback);
+        return snapshotResult ? snapshotResult(result) : result;
     } finally {
         await observeMaterializationPhase('runtime_callback_after', () => assertCurrent('afterCallback'));
     }
@@ -145,6 +156,7 @@ export type ConnectedAccountRuntimeEstablishedOperation =
     | Readonly<{
         kind: 'materialize';
         request: ConnectedAccountMaterializationRequest;
+        existingFiles?: Readonly<Record<string, Uint8Array>>;
     }>;
 
 export type ConnectedAccountRuntimeEstablishedInvocation<
@@ -838,17 +850,27 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
         return result;
     }
 
-    async function invokeEstablishedRuntime<Context extends object>(
+    async function invokeEstablishedRuntime<Context extends object, TOperation extends ConnectedAccountRuntimeEstablishedOperation>(
         runtime: ConnectedAccountEstablishedRuntimeFor<Context>,
         descriptor: ConnectedAccountRuntimeLease['descriptor'],
         context: Context,
-        input: ConnectedAccountRuntimeEstablishedInvocation,
+        input: ConnectedAccountRuntimeEstablishedInvocation<TOperation>,
         registerRawForRedaction: (value: string) => void,
         assertCurrent: () => Promise<void>,
         assertFieldReadCurrent: () => Promise<void>,
+        redactDiagnosticText?: (value: string) => string,
     ) {
         const options = input.signal ? { signal: input.signal } : undefined;
         const operation = input.operation;
+        // Copy a terminal producer result before its final fresh qualification.
+        // There is no authority-consuming step between callback settlement and
+        // this copy; computed fields still cannot publish after revocation.
+        const settleCallback = (callback: () => MaybePromise<unknown>, quotaLeafUnavailable = false) =>
+            invokeCurrentConnectedAccountCallback(assertCurrent, callback, result =>
+                snapshotConnectedAccountEstablishedResult(operation, result, {
+                    quotaLeafUnavailable,
+                    ...(redactDiagnosticText ? { redactDiagnosticText } : {}),
+                }));
         let result: unknown;
         let quotaLeafUnavailable = false;
         switch (operation.kind) {
@@ -858,7 +880,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                     ? runtime.recoveryCredits
                     : undefined;
                 quotaLeafUnavailable = !facet;
-                result = await invokeCurrentConnectedAccountCallback(assertCurrent, async () => {
+                return await settleCallback(async () => {
                     if (!facet) return null;
                     if (operation.kind === 'recoveryCredits.read') return await facet.read(context, options);
                     if (!operation.request.idempotencyKey.trim()) throw new Error('Recovery credit idempotency key is required');
@@ -869,13 +891,11 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                             ? { providerCreditId: operation.request.providerCreditId.trim() }
                             : {}),
                     }), context, options);
-                });
-                break;
+                }, quotaLeafUnavailable);
             }
             case 'refresh':
             case 'enrichCredentialContext':
-                result = await invokeCurrentConnectedAccountCallback(
-                    assertCurrent,
+                return await settleCallback(
                     async () => {
                         if (operation.kind === 'enrichCredentialContext' && !runtime.enrichCredentialContext) {
                             return { status: 'outcomeUnknown', diagnostic: {
@@ -901,13 +921,10 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                             : await runtime.enrichCredentialContext!(mutationContext, options);
                     },
                 );
-                break;
             case 'status':
-                result = await invokeCurrentConnectedAccountCallback(
-                    assertCurrent,
+                return await settleCallback(
                     () => runtime.status(context, options),
                 );
-                break;
             case 'quota':
                 if (runtime.quota) {
                     const quota = await invokeCurrentConnectedAccountCallback(
@@ -960,24 +977,25 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 }
                 break;
             case 'revoke':
-                result = await invokeCurrentConnectedAccountCallback(
-                    assertCurrent,
+                return await settleCallback(
                     () => runtime.revoke(context, options),
                 );
-                break;
             case 'materialize':
-                result = await invokeCurrentConnectedAccountCallback(
-                    assertCurrent,
+                return await settleCallback(
                     () => runtime.materialize(
                         operation.request,
                         context,
-                        options,
+                        { ...options, ...(operation.existingFiles ? { existingFiles: operation.existingFiles } : {}) },
                     ),
                 );
-                break;
         }
 
-        return { result, quotaLeafUnavailable };
+        const snapshot = snapshotConnectedAccountEstablishedResult(operation, result, {
+            quotaLeafUnavailable,
+            ...(redactDiagnosticText ? { redactDiagnosticText } : {}),
+        });
+        await assertCurrent();
+        return snapshot;
     }
 
     return Object.freeze({
@@ -1014,23 +1032,19 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
         ): Promise<ConnectedAccountRuntimeEstablishedResult<TOperation>> {
             const invocation = await createEstablishedContext(input);
             try {
-                const { result, quotaLeafUnavailable } = invocation.owner === 'host'
+                return invocation.owner === 'host'
                     ? await invokeEstablishedRuntime(
                         invocation.lease.runtime, invocation.lease.descriptor, invocation.context,
                         input, invocation.registerRawForRedaction, invocation.assertCurrent,
                         invocation.assertFieldReadCurrent,
+                        invocation.redactDiagnosticText,
                     )
                     : await invokeEstablishedRuntime(
                         invocation.lease.runtime, invocation.lease.descriptor, invocation.context,
                         input, invocation.registerRawForRedaction, invocation.assertCurrent,
                         invocation.assertFieldReadCurrent,
+                        invocation.redactDiagnosticText,
                     );
-                const snapshot = snapshotConnectedAccountEstablishedResult(input.operation, result, {
-                    quotaLeafUnavailable,
-                    ...(invocation.redactDiagnosticText ? { redactDiagnosticText: invocation.redactDiagnosticText } : {}),
-                });
-                await invocation.assertCurrent();
-                return snapshot;
             } finally {
                 await invocation.lifetime.complete();
             }

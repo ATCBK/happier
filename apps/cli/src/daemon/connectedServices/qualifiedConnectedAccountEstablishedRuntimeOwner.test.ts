@@ -172,6 +172,10 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
         cancelStatus?.abort();
         return { status: 'connected' as const };
       },
+      quota: async (context: Pick<Parameters<NonNullable<ConnectedAccountRuntime['quota']>>[0], 'credentials'>) => {
+        if (await context.credentials.get('token0') !== 'native-token') throw new Error('Quota credential unavailable');
+        return { observedAtMs: 1_000_000, limits: [{ id: 'window', used: 1, remaining: 9 }] };
+      },
       async materialize(_request: unknown, context: Pick<Parameters<ConnectedAccountRuntime['materialize']>[1], 'credentials'>) {
         nativeEntered = true;
         const fields = await Promise.all(Array.from({ length: 5 }, (_, index) => context.credentials.get(`token${index}`)));
@@ -337,6 +341,50 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     await expect(owner.invoke({ account: target, operation: { kind: 'status' } }))
       .resolves.toMatchObject({ status: 'connected' });
     expect(accountCurrentnessChecks - beforeNextStatus).toBe(2);
+    const beforeConcurrentRead = credentialReads;
+    let preparedConsumers = 0;
+    let releaseConsumers!: () => void;
+    const consumersReady = new Promise<void>(resolve => { releaseConsumers = resolve; });
+    const beforeInvoke = async () => { preparedConsumers += 1; await consumersReady; };
+    const concurrent = owner.invokeScheduledWithReceipts({ account: target,
+      status: { beforeInvoke }, quota: { beforeInvoke } });
+    try {
+      await vi.waitFor(() => expect(preparedConsumers).toBe(2));
+      // Two due operations share only this invocation's initial pair.
+      // Their callback/result currentness fences below still acquire fresh authority.
+      expect(credentialReads - beforeConcurrentRead).toBe(1);
+    } finally {
+      releaseConsumers();
+      await expect(concurrent).resolves.toMatchObject({ status: { status: 'fulfilled', value: { result: { status: 'connected' } } },
+        quota: { status: 'fulfilled', value: { result: { limits: [{ id: 'window' }] } } } });
+    }
+    expect(credentialReads - beforeConcurrentRead).toBeGreaterThan(1);
+    const beforeLaterPhase = credentialReads;
+    await expect(owner.invokeScheduledWithReceipts({ account: target, status: {
+      beforeInvoke: () => { expect(credentialReads - beforeLaterPhase).toBe(1); },
+    } })).resolves.toMatchObject({ status: { status: 'fulfilled' } });
+    for (const failed of ['status', 'quota'] as const) {
+      const failure = new Error('Independent scheduled operation failure');
+      const receipts = await owner.invokeScheduledWithReceipts({ account: target,
+        status: failed === 'status' ? { beforeInvoke: () => { throw failure; } } : {},
+        quota: failed === 'quota' ? { beforeInvoke: () => { throw failure; } } : {},
+      });
+      expect(receipts[failed]).toMatchObject({ status: 'rejected', reason: failure });
+      expect(receipts[failed === 'status' ? 'quota' : 'status']).toMatchObject({ status: 'fulfilled' });
+    }
+    pendingReads.length = 0;
+    holdReads = true;
+    const cancelledConsumer = new AbortController();
+    const cancellation = owner.invokeScheduledWithReceipts({ account: target,
+      status: { signal: cancelledConsumer.signal }, quota: {} });
+    try {
+      await vi.waitFor(() => expect(pendingReads).toHaveLength(1));
+      cancelledConsumer.abort(new Error('Quota consumer cancelled'));
+    } finally {
+      holdReads = false;
+      for (const release of pendingReads) release();
+      await expect(cancellation).resolves.toMatchObject({ status: { status: 'rejected' }, quota: { status: 'fulfilled' } });
+    }
     for (const rotation of ['credential', 'configuration'] as const) {
       rotateAfterStatusFields = rotation;
       await expect(owner.invoke({ account: target, operation: { kind: 'status' } }))

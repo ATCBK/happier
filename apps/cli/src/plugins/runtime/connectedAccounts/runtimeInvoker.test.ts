@@ -170,6 +170,7 @@ function invokeEstablished(
     invoker: ReturnType<typeof createEstablishedInvoker>,
     operation: ConnectedAccountRuntimeEstablishedOperation,
     isCurrent: () => boolean = () => true,
+    signal?: AbortSignal,
 ) {
     return invoker.invokeEstablished({
         target: Object.freeze({
@@ -196,10 +197,34 @@ function invokeEstablished(
         }),
         isConfigurationCurrent: isCurrent,
         isCredentialRevisionCurrent: isCurrent,
+        ...(signal ? { signal } : {}),
     });
 }
 
 describe('connected-account runtime invoker', () => {
+    it('lets an external runtime reconcile retained native-file state through the admitted callback', async () => {
+        const invoker = createEstablishedInvoker({
+            ...runtime(() => {}),
+            async materialize(_request, context, options) {
+                const retained: unknown = JSON.parse(new TextDecoder().decode(options?.existingFiles?.['config.json']));
+                const existing = retained && typeof retained === 'object' ? retained : {};
+                return { kind: 'files', files: { 'config.json': new TextEncoder().encode(JSON.stringify({
+                    ...existing, accountId: context.account.accountId,
+                })) } };
+            },
+        });
+        const result = await invokeEstablished(invoker, {
+            kind: 'materialize', request: { kind: 'files', fileIds: ['config.json'] },
+            existingFiles: { 'config.json': new TextEncoder().encode(JSON.stringify({
+                accountId: 'previous-account', workspaceApproved: true,
+            })) },
+        });
+        if (!result || !('kind' in result) || result.kind !== 'files') throw new Error('Expected native files');
+        expect(JSON.parse(new TextDecoder().decode(result.files['config.json']))).toEqual({
+            accountId: 'account-a', workspaceApproved: true,
+        });
+    });
+
     it('reads status credential fields from its admitted snapshot without reopening remote currentness', async () => {
         const isCurrent = vi.fn(() => true);
         let currentnessChecksAtCallbackEntry = 0;
@@ -331,6 +356,42 @@ describe('connected-account runtime invoker', () => {
                 kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'],
             },
         })).resolves.toEqual({ kind: 'httpHeaders', headers });
+    });
+    it.each(['current', 'retiredDuringCopy', 'cancelledDuringCopy', 'producerRejected'] as const)(
+        'qualifies a detached materialization once after copying computed fields (%s)', async (outcome) => {
+        let current = true;
+        const isCurrent = vi.fn(() => current);
+        const cancellation = new AbortController();
+        const producerError = new Error('Materialization callback failed');
+        let qualificationsAtReturn = 0;
+        const invoker = createEstablishedInvoker({
+            ...runtime(() => {}),
+            async materialize() {
+                qualificationsAtReturn = isCurrent.mock.calls.length;
+                if (outcome === 'producerRejected') throw producerError;
+                return { kind: 'httpHeaders', get headers() {
+                    if (outcome === 'retiredDuringCopy') current = false;
+                    if (outcome === 'cancelledDuringCopy') cancellation.abort();
+                    return { authorization: 'Bearer computed-credential' };
+                } };
+            },
+        });
+        const result = invokeEstablished(invoker, {
+            kind: 'materialize', request: {
+                kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'],
+            },
+        }, isCurrent, cancellation.signal);
+        if (outcome === 'retiredDuringCopy') {
+            await expect(result).rejects.toMatchObject({ code: 'connected_account_producer_result_stale' });
+        } else if (outcome === 'cancelledDuringCopy') {
+            await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+        } else if (outcome === 'producerRejected') {
+            await expect(result).rejects.toBe(producerError);
+        } else {
+            await expect(result).resolves.toEqual({ kind: 'httpHeaders', headers: { authorization: 'Bearer computed-credential' } });
+        }
+        // One final admission still measures both independent authorities.
+        expect(isCurrent.mock.calls.length - qualificationsAtReturn).toBe(outcome === 'cancelledDuringCopy' ? 0 : 2);
     });
     it('consumes through the optional recovery facet under exact account context and fails closed without it', async () => {
         const operation = { kind: 'recoveryCredits.consume', request: { idempotencyKey: 'key-1', providerCreditId: 'credit-1' } } as const;

@@ -80,6 +80,8 @@ export type StablePluginConnectedAccountsOwner = Readonly<{
             expectedAccount?: PluginConnectedAccountRef;
             credentialRevisionBasis?: ConnectedAccountMaterializationCredentialRevisionBasis;
             request: ConnectedAccountMaterializationRequest;
+            /** Host-only native-home snapshot; never supplied by SDK service callers. */
+            existingFiles?: Readonly<Record<string, Uint8Array>>;
             signal: AbortSignal;
         }>,
     ): Promise<PluginConnectedAccountMaterialization>;

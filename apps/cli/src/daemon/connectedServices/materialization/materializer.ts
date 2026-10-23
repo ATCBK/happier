@@ -1,4 +1,5 @@
 import { rm } from 'node:fs/promises';
+import type { AgentSessionConnectedAccountSelection } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type {
   ConnectedServiceCredentialRevisionV1,
@@ -40,6 +41,7 @@ export type ConnectedServiceResolvedSelection =
 
 export type ConnectedServicesMaterialization = Readonly<{
   env: Record<string, string>;
+  sessionConnectedAccounts?: readonly AgentSessionConnectedAccountSelection[];
   unsetEnvKeys?: readonly string[];
   targetMaterializedRoot?: string | null;
   requestAuthMaterializedRoot?: string | null;
