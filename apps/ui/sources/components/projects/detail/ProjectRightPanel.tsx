@@ -39,6 +39,7 @@ import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/la
 
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useServicesOpenInBrowser } from '@/components/sessions/localServices/useServicesOpenInBrowser';
 import { ProjectRightPanelBrowserView } from './browser/ProjectRightPanelBrowserView';
 import { ProjectRightPanelServicesView } from './services/ProjectRightPanelServicesView';
@@ -324,6 +325,33 @@ export const ProjectRightPanel = React.memo((props: ProjectRightPanelProps) => {
         : <ProjectRightSidebarProvider {...props}><ProjectRightPanel {...props} /></ProjectRightSidebarProvider>;
 });
 
+const ProjectRightPanelServicesSurface = React.memo((props: Readonly<{
+    workspaceRef: WorkspaceRefV1;
+    scopeId: string;
+    activeRootPath: string;
+    accountLifetime: ServerAccountScopeLifetime | null;
+}>) => {
+    const openServiceInBrowser = useServicesOpenInBrowser({
+        scopeId: props.scopeId,
+        scope: 'workspaceDetails',
+        accountLifetime: props.accountLifetime,
+        machineId: props.workspaceRef.machineId,
+        serverId: props.workspaceRef.serverId,
+    });
+
+    return (
+        <React.Suspense fallback={<PaneLoadingFallback />}>
+            <ProjectRightPanelServicesView
+                machineId={props.workspaceRef.machineId}
+                workspaceRefId={props.workspaceRef.id}
+                serverId={props.workspaceRef.serverId}
+                workspaceRoot={props.activeRootPath}
+                onOpenServiceInBrowser={openServiceInBrowser}
+            />
+        </React.Suspense>
+    );
+});
+
 function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
     model: ReturnType<typeof useProjectRightSidebarModel>;
 }>): React.ReactElement {
@@ -349,16 +377,6 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
         activeRootPath: props.activeRootPath,
         onRevealInFilesTreeNavigate: () => setActiveTab('files'),
     });
-
-
-    const openServiceInBrowser = useServicesOpenInBrowser({
-        scopeId: props.scopeId,
-        scope: 'workspaceDetails',
-        accountLifetime: pluginProjection.accountLifetime,
-        machineId: props.workspaceRef.machineId,
-        serverId: props.workspaceRef.serverId,
-    });
-
     return (
         <View testID="project-right-panel-root" style={styles.container}>
             {!hasActionRail ? <View style={[styles.header, { paddingTop: 10 + insets.top }]}>
@@ -477,15 +495,12 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                     ) : null}
                     {availableTabIds.has('services') ? (
                         <RetainedPanelSurface isActive={activeTab === 'services'} testID="project-rightpanel-surface-services">
-                            <React.Suspense fallback={<PaneLoadingFallback />}>
-                                <ProjectRightPanelServicesView
-                                    machineId={props.workspaceRef.machineId}
-                                    workspaceRefId={props.workspaceRef.id}
-                                    serverId={props.workspaceRef.serverId}
-                                    workspaceRoot={props.activeRootPath}
-                                    onOpenServiceInBrowser={openServiceInBrowser}
-                                />
-                            </React.Suspense>
+                            <ProjectRightPanelServicesSurface
+                                workspaceRef={props.workspaceRef}
+                                scopeId={props.scopeId}
+                                activeRootPath={props.activeRootPath}
+                                accountLifetime={pluginProjection.accountLifetime}
+                            />
                         </RetainedPanelSurface>
                     ) : null}
                     {rightPanelTabs

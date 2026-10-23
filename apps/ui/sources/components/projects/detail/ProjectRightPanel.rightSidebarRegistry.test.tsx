@@ -154,6 +154,13 @@ async function pluginHost(screen: Awaited<ReturnType<typeof mount>>) {
     return screen.tree.findByType(PluginSurfacePlacementHost);
 }
 describe('ProjectRightPanel right-sidebar registry tabs', () => {
+    it('does not read service previews while another retained tab is active', async () => {
+        await mount(createBuiltinPaneDestination('terminal'));
+        expect(projectionTransportTrace.filter(entry => (
+            entry.includes(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT)
+        ))).toHaveLength(0);
+    });
+
     it('retains a real Project Terminal pane across accepted checkout loss without launching a guessed target', async () => {
             const scope = { serverId: runtime.serverId, accountId: 'account-a' };
         const checkout = { ...panelProps().workspaceRef, id: 'feature-checkout', projectKey: 'project-anchor', rootPath: '/repo/feature' };

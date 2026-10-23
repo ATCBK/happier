@@ -52,7 +52,6 @@ export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) 
 ));
 
 const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
-    const isPhone = useDeviceType() === 'phone';
     const { navigateToSurface, selectDashboard, checkoutWorkspace, codeLocation, navigateCodeLocation, openCodeHistory } = useProjectSurfaceController({
         scopeId: props.scopeId,
         workspaceRef: props.workspaceRef,
@@ -77,21 +76,6 @@ const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
     const navigateToBrowse = React.useCallback(() => {
         navigateToSurface('browse');
     }, [navigateToSurface]);
-
-    const switchToBrowserSurface = React.useCallback(() => {
-        navigateToSurface('browser');
-    }, [navigateToSurface]);
-    const { binding: accountLifetime } = useServerCredentialAccountScopeBinding(props.workspaceRef.serverId);
-    // Desktop opens into this Project's details pane. Phones own a separate full-screen
-    // Browser workspace and switch to it only after the shared opener commits its tab.
-    const openServiceInBrowser = useServicesOpenInBrowser({
-        scopeId: isPhone ? `${props.scopeId}:browser` : props.scopeId,
-        scope: isPhone ? 'sessionMobile' : 'workspaceDetails',
-        accountLifetime,
-        machineId: props.workspaceRef.machineId,
-        serverId: props.workspaceRef.serverId,
-        onAfterOpen: isPhone ? switchToBrowserSurface : undefined,
-    });
 
     const {
         openFileInDetails,
@@ -179,22 +163,7 @@ const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
     }
 
     if (props.surface === 'services') {
-        return (
-            <View testID="project-services-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-                <React.Suspense fallback={<PaneLoadingFallback />}>
-                    <ProjectRightPanelServicesView
-                        machineId={props.workspaceRef.machineId}
-                        workspaceRefId={props.workspaceRef.id}
-                        serverId={props.workspaceRef.serverId}
-                        workspaceRoot={props.activeRootPath}
-                        onOpenServiceInBrowser={openServiceInBrowser}
-                        presentation="page"
-                        onAddService={() => navigateToSurface('scripts')}
-                        testID="project-services-page"
-                    />
-                </React.Suspense>
-            </View>
-        );
+        return <ProjectServicesSurface {...props} navigateToSurface={navigateToSurface} />;
     }
 
     if (props.surface === 'overview') {
@@ -226,6 +195,46 @@ const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
                 activeWorktreeId={props.activeWorktreeId}
                 onSelectRootPath={props.onSelectRootPath}
             />
+        </View>
+    );
+});
+
+const ProjectServicesSurface = React.memo((props: ProjectCockpitShellProps & Readonly<{
+    navigateToSurface: (surface: ProjectMobileSurface) => void;
+}>) => {
+    const isPhone = useDeviceType() === 'phone';
+    const switchToBrowserSurface = React.useCallback(() => {
+        props.navigateToSurface('browser');
+    }, [props.navigateToSurface]);
+    const addService = React.useCallback(() => {
+        props.navigateToSurface('scripts');
+    }, [props.navigateToSurface]);
+    const { binding: accountLifetime } = useServerCredentialAccountScopeBinding(props.workspaceRef.serverId);
+    // Desktop opens into this Project's details pane. Phones own a separate full-screen
+    // Browser workspace and switch to it only after the shared opener commits its tab.
+    const openServiceInBrowser = useServicesOpenInBrowser({
+        scopeId: isPhone ? `${props.scopeId}:browser` : props.scopeId,
+        scope: isPhone ? 'sessionMobile' : 'workspaceDetails',
+        accountLifetime,
+        machineId: props.workspaceRef.machineId,
+        serverId: props.workspaceRef.serverId,
+        onAfterOpen: isPhone ? switchToBrowserSurface : undefined,
+    });
+
+    return (
+        <View testID="project-services-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+            <React.Suspense fallback={<PaneLoadingFallback />}>
+                <ProjectRightPanelServicesView
+                    machineId={props.workspaceRef.machineId}
+                    workspaceRefId={props.workspaceRef.id}
+                    serverId={props.workspaceRef.serverId}
+                    workspaceRoot={props.activeRootPath}
+                    onOpenServiceInBrowser={openServiceInBrowser}
+                    presentation="page"
+                    onAddService={addService}
+                    testID="project-services-page"
+                />
+            </React.Suspense>
         </View>
     );
 });
