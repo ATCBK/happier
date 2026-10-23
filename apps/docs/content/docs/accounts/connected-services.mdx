@@ -148,15 +148,25 @@ See [Antigravity](/agents/antigravity) for the managed ACP/native CLI boundary.
 ## Continuing after a usage limit in 0.3 development
 
 Development-only usage-limit recovery lets a waiting session continue after a
-directly selected Connected Account's reported usage-limit reset. It requires
-usage-limit recovery support on the relay and automatic resume to be enabled.
-Checks from an active session, the CLI and MCP use the same daemon-owned recovery
+reported usage-limit reset, including sessions using a native provider login.
+It requires usage-limit recovery support on the relay and automatic resume to be
+enabled. Checks from an active session, the CLI and MCP use the same recovery
 attempt; changing how you check does not start a separate recovery loop.
 
+Happier manages the wait even when the Agent has no separate quota-check command.
+A reported reset time determines when it can try to continue; without a reliable
+reset time, Happier tries again using its recovery backoff. Temporary check
+failures keep the wait active.
+
 Happier sends the configured continuation prompt, not a replay of your original
-request. A queued prompt is not confirmation that the Agent recovered: recovery
-remains pending until the Agent runs successfully. Cancelling the wait, stopping
+request. Once the continuation is accepted into Pending, its normal queue and
+delivery status take over from the usage-limit wait. A queued prompt does not
+confirm that the provider will accept another turn. Cancelling the wait, stopping
 the session or sending newer work takes precedence over automatic continuation.
+Quota readiness, an account switch or a successful runtime launch alone does not
+dismiss the warning. Accepted Pending delivery, explicit cancellation, or
+subsequent Agent activity can end the wait presentation. If
+**Apply reset** fails, its action becomes available again.
 This integration is unreleased and still being validated.
 
 Cancelling recovery for an earlier failure does not hide a new usage-limit issue.
