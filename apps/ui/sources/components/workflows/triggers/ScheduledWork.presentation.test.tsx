@@ -307,7 +307,7 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
                     sourceAction={{ kind: 'edit', onPress: noop }} /></webHosts.View></AppPaneProvider></section>)}
             <section><h2>Board · same next occurrence</h2><BoardCardView card={{ key: 'capture-workflow',
                 ref: { kind: 'workflow', qualifiedId: { serverId: home.id, id: 'daily' } }, picked: true,
-                availability: 'ready', title: 'Daily digest', status: { bucket: 'idle', tone: 'neutral', word: 'Idle' },
+                availability: 'ready', title: 'Daily digest', status: { state: 'waiting', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Idle' },
                 body: { kind: 'workflow', triggerSummary: groups[0]!.title, nextRun: { kind: 'scheduled', at: Date.UTC(2026, 9, 9, 7) },
                     runSummaryAvailable: false, lastRunWord: null, lastRunAt: null, needsYouCount: null } }} /></section>
         </div>
