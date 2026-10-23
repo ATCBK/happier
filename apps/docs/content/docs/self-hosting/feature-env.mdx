@@ -161,7 +161,7 @@ Grouped by feature family.
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES` | Setting | list | — | Restart | Home settings or env | Public exposure modes the server allows (comma or space separated). |
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__AUDIT_LOG_PATH` | Setting | string | — | Restart | Home settings or env | File the `jsonl_file` audit sink appends to. |
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__AUDIT_SINK` | Setting | string | — | Restart | Home settings or env | Durable audit sink for public previews: `jsonl_file`. Public previews need one. |
-| `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED` | Setting | boolean | `true` | Restart | Home settings or env | Require DNS and TLS for a public preview. |
+| `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED` | Setting | boolean | `true` | Restart | Home settings or env | Require an isolated secure preview origin. HTTPS is required except for HTTP on localhost names, including subdomains. |
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED` | Switch | boolean | `false` | Live | Home settings or env | Explicit public exposure for selected local service previews. |
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_CONCURRENT_EXPOSURES` | Setting | int ≥ 1 | — | Restart | Home settings or env | Most public previews exposed at once. Unset leaves the protocol limit. |
 | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS` | Setting | int ≥ 1 | — | Restart | Home settings or env | Longest a public preview stays exposed, in milliseconds. Unset leaves the protocol limit. |

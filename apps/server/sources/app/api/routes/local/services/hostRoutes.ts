@@ -1,5 +1,5 @@
 import type { Fastify } from '@/app/api/types';
-import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
+import { normalizeLocalServiceHostOriginBaseDomain } from '@/app/local/services/preview/origin';
 
 export const LOCAL_SERVICE_APPLICATION_HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
 
@@ -9,8 +9,8 @@ export function registerLocalServiceHostRoutes(
     baseDomain: string | null | undefined,
     handler: (request: unknown, reply: unknown) => Promise<unknown>,
 ): void {
-    const domain = baseDomain ? readLocalServiceRequestHostname({ host: baseDomain }) : null;
-    if (!domain || domain.includes('..') || domain.split('.').some(label => !label) || !domain.includes('.')) return;
+    const domain = baseDomain ? normalizeLocalServiceHostOriginBaseDomain(baseDomain) : null;
+    if (!domain) return;
     const escaped = domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const host = new RegExp(`^[^.]+\\.${escaped}(?::\\d+)?$`, 'iu');
     app.register(async dataPlane => {

@@ -7,6 +7,30 @@ async function loadPreviewOriginModule(): Promise<PreviewOriginModule | null> {
 }
 
 describe("local service preview origin policy", () => {
+    it.each([
+        { publicBaseUrl: "http://localhost:8181", hostOriginBaseDomain: "localhost", origin: "http://preview-123.localhost:8181" },
+        { publicBaseUrl: "http://home.localhost:8181", hostOriginBaseDomain: "preview.localhost", origin: "http://preview-123.preview.localhost:8181" },
+        { publicBaseUrl: "https://home.example.test:8443", hostOriginBaseDomain: "preview.example.test", origin: "https://preview-123.preview.example.test:8443" },
+    ])("preserves the admitted Home scheme and port ($publicBaseUrl)", async ({ publicBaseUrl, hostOriginBaseDomain, origin }) => {
+        const mod = await loadPreviewOriginModule();
+        expect(mod?.resolveLocalServiceHostOrigin({ publicBaseUrl, hostOriginBaseDomain, resourceId: "preview_123" }))
+            .toEqual({ ok: true, origin });
+    });
+
+    it.each(["http://127.0.0.1:8181", "http://[::1]:8181", "http://home.local:8181", "http://localhost.example.test:8181", "http://notlocalhost:8181"])(
+        "keeps HTTPS required outside localhost names (%s)", async (publicBaseUrl) => {
+            const mod = await loadPreviewOriginModule();
+            expect(mod?.resolveLocalServiceHostOrigin({ publicBaseUrl, hostOriginBaseDomain: "preview.localhost", resourceId: "preview_123" }))
+                .toEqual({ ok: false, reasonCode: "https_required" });
+        },
+    );
+
+    it("refuses an HTTP preview domain outside localhost even on a loopback Home", async () => {
+        const mod = await loadPreviewOriginModule();
+        expect(mod?.resolveLocalServiceHostOrigin({ publicBaseUrl: "http://home.localhost:8181", hostOriginBaseDomain: "preview.example.test", resourceId: "preview_123" }))
+            .toEqual({ ok: false, reasonCode: "https_required" });
+    });
+
     it("builds host-origin preview urls and preserves initial path query", async () => {
         const mod = await loadPreviewOriginModule();
 

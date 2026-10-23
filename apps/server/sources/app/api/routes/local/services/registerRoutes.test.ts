@@ -441,7 +441,10 @@ describe("local service API route composition", () => {
         }));
     });
 
-    it("revokes public exposures through the composed shared runtime", async () => {
+    it.each([
+        { publicServerUrl: "https://app.happier.test:8443", domain: "preview.example.test" },
+        { publicServerUrl: "http://home.localhost:8181", domain: "localhost" },
+    ])("revokes public exposures through the composed shared runtime ($publicServerUrl)", async ({ publicServerUrl, domain }) => {
         const mod = await loadLocalServiceRoutesModule();
         expect(mod?.registerLocalServiceRoutes).toBeTypeOf("function");
         if (!mod?.registerLocalServiceRoutes) return;
@@ -452,17 +455,17 @@ describe("local service API route composition", () => {
             env: {
                 ...peerMediationGrantSigningEnv(),
                 HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: "1",
-                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: "preview.example.test",
+                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: domain,
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: "1",
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: "secret_link",
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: "60000",
-                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: "0",
+                HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: "1",
                 [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: "1",
                 [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: "default",
                 [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: "1",
                 [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: "1",
                 [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: "5173",
-                HAPPIER_PUBLIC_SERVER_URL: "https://app.happier.test",
+                HAPPIER_PUBLIC_SERVER_URL: publicServerUrl,
                 HANDY_MASTER_SECRET: "master-secret",
             } as NodeJS.ProcessEnv,
             authorizeSessionAccess,
@@ -499,9 +502,13 @@ describe("local service API route composition", () => {
         expect(publicToken).toBeTypeOf("string");
 
         const accessRequest = mintedPublicRequest(exposureReply);
+        const publicUrl = new URL(exposureResponse!.exposure!.publicUrl!);
+        expect(publicUrl.protocol).toBe(new URL(publicServerUrl).protocol);
+        expect(publicUrl.port).toBe(new URL(publicServerUrl).port);
         const exchangeReply = createReplyStub();
         await getRouteHandler(app, 'GET', '/*')(accessRequest, exchangeReply);
         expect(exchangeReply.statusCode).toBe(303);
+        expect(exchangeReply.headers["Set-Cookie"]).toContain("SameSite=None; Secure; Partitioned");
 
         const revokeReply = createReplyStub();
         await getRouteHandler(app, "DELETE", "/v1/local-services/public/:exposureId")({
@@ -1403,12 +1410,12 @@ describe("local service API route composition", () => {
         expect(socketResponse).toMatch(/\r\nsec-websocket-protocol: vite-hmr\r\n/iu);
     });
 
-    // Private guest content requires an isolated HTTPS host. An HTTP deployment is refused
-    // rather than minting an access URL or exchanging it for an insecure cookie.
+    // Loopback DNS names retain the same Secure/Partitioned cookie contract as HTTPS.
     it.each([
-        { name: "https deployment", publicServerUrl: "https://app.happier.test", expectSecure: true },
-        { name: "http deployment", publicServerUrl: "http://app.happier.test", expectSecure: false },
-    ])("requires an isolated secure preview origin on an $name", async ({ publicServerUrl, expectSecure }) => {
+        { name: "https deployment", publicServerUrl: "https://app.happier.test:8443", domain: "preview.example.test", expectedOrigin: "https://preview-1.preview.example.test:8443" },
+        { name: "loopback HTTP deployment", publicServerUrl: "http://home.localhost:8181", domain: "preview.localhost", expectedOrigin: "http://preview-1.preview.localhost:8181" },
+        { name: "remote HTTP deployment", publicServerUrl: "http://app.happier.test", domain: "preview.example.test", expectedOrigin: null },
+    ])("requires an isolated secure preview origin on an $name", async ({ publicServerUrl, domain, expectedOrigin }) => {
         const mod = await loadLocalServiceRoutesModule();
         expect(mod?.registerLocalServiceRoutes).toBeTypeOf("function");
         if (!mod?.registerLocalServiceRoutes) return;
@@ -1417,7 +1424,7 @@ describe("local service API route composition", () => {
         mod.registerLocalServiceRoutes(app as never, {
             env: {
                 HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: "1",
-                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: "preview.example.test",
+                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: domain,
                 HAPPIER_PUBLIC_SERVER_URL: publicServerUrl,
                 HANDY_MASTER_SECRET: "master-secret",
             } as NodeJS.ProcessEnv,
@@ -1429,7 +1436,7 @@ describe("local service API route composition", () => {
             userId: "user_1",
             body: preview,
         }, registerReply);
-        expect(registerReply.statusCode).toBe(expectSecure ? 201 : 400);
+        expect(registerReply.statusCode).toBe(expectedOrigin ? 201 : 400);
 
         // Legacy path-mode registration is normalized; the API-origin data path is refused.
         const apiReply = createReplyStub();
@@ -1439,7 +1446,7 @@ describe("local service API route composition", () => {
         }, apiReply);
         expect(apiReply.statusCode).toBe(404);
         expect(apiReply.headers["Set-Cookie"]).toBeUndefined();
-        if (!expectSecure) {
+        if (!expectedOrigin) {
             expect(registerReply.send).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: "https_required" }));
             expect(registerReply.headers["Set-Cookie"]).toBeUndefined();
             return;
@@ -1447,7 +1454,7 @@ describe("local service API route composition", () => {
         const registered = registerReply.send.mock.calls[0]?.[0];
         expect(registered.resource.originMode).toBe("host");
         const accessUrl = new URL(registered.accessUrl);
-        expect(accessUrl.origin).toBe("https://preview-1.preview.example.test");
+        expect(accessUrl.origin).toBe(expectedOrigin);
         const previewToken = accessUrl.searchParams.get("previewToken");
         expect(previewToken).toBeTypeOf("string");
 
@@ -1463,7 +1470,10 @@ describe("local service API route composition", () => {
         const setCookie = String(exchangeReply.headers["Set-Cookie"]);
         expect(setCookie).toContain("happier_preview_token=");
         expect(setCookie).toContain("HttpOnly");
-        expect(setCookie.includes("Secure")).toBe(expectSecure);
+        expect(setCookie).toContain("Secure");
+        expect(setCookie).toContain("SameSite=None");
+        expect(setCookie).toContain("Partitioned");
+        expect(setCookie).not.toContain("Domain=");
     });
 
     it("maps route purposes to the canonical session access levels", async () => {

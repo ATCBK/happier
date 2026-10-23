@@ -50,7 +50,13 @@ function isDnsLabel(label: string): boolean {
     return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label);
 }
 
-function normalizeHostOriginBaseDomain(rawDomain: string): string | null {
+function isSecurePreviewUrl(url: URL): boolean {
+    const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
+    return url.protocol === "https:" || (url.protocol === "http:"
+        && (hostname === "localhost" || hostname.endsWith(".localhost")));
+}
+
+export function normalizeLocalServiceHostOriginBaseDomain(rawDomain: string): string | null {
     const trimmed = rawDomain.trim().toLowerCase().replace(/\.$/u, "");
     if (
         trimmed.length === 0 ||
@@ -61,7 +67,7 @@ function normalizeHostOriginBaseDomain(rawDomain: string): string | null {
         return null;
     }
     const labels = trimmed.split(".");
-    if (labels.length < 2 || !labels.every(isDnsLabel)) {
+    if ((labels.length < 2 && trimmed !== "localhost") || !labels.every(isDnsLabel)) {
         return null;
     }
     return trimmed;
@@ -96,18 +102,22 @@ export function resolveLocalServiceHostOrigin(input: Readonly<{
     if (!publicBase || (publicBase.protocol !== "http:" && publicBase.protocol !== "https:")) {
         return { ok: false, reasonCode: "invalid_public_base_url" };
     }
-    const baseDomain = input.hostOriginBaseDomain ? normalizeHostOriginBaseDomain(input.hostOriginBaseDomain) : null;
+    const baseDomain = input.hostOriginBaseDomain ? normalizeLocalServiceHostOriginBaseDomain(input.hostOriginBaseDomain) : null;
     if (!baseDomain) {
         return { ok: false, reasonCode: "host_origin_unavailable" };
     }
-    if (publicBase.protocol !== "https:") {
+    if (!isSecurePreviewUrl(publicBase)) {
         return { ok: false, reasonCode: "https_required" };
     }
-    const origin = `https://${resolveLocalServicePreviewHostLabel(input.resourceId)}.${baseDomain}`;
-    if (origin === publicBase.origin) {
+    const previewBase = new URL(publicBase.origin);
+    previewBase.hostname = `${resolveLocalServicePreviewHostLabel(input.resourceId)}.${baseDomain}`;
+    if (!isSecurePreviewUrl(previewBase)) {
+        return { ok: false, reasonCode: "https_required" };
+    }
+    if (previewBase.origin === publicBase.origin) {
         return { ok: false, reasonCode: "host_origin_unavailable" };
     }
-    return { ok: true, origin };
+    return { ok: true, origin: previewBase.origin };
 }
 
 export function resolveLocalServicePreviewUrl(input: ResolveLocalServicePreviewUrlInput): ResolveLocalServicePreviewUrlResult {

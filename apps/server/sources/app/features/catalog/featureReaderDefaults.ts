@@ -319,7 +319,7 @@ export const FEATURE_READER_DEFAULTS = {
         ...ON,
         ...AT_STARTUP,
         featureId: 'localServices.publicPreview',
-        description: 'Require DNS and TLS for a public preview.',
+        description: 'Require an isolated secure preview origin. HTTPS is required except for HTTP on localhost names, including subdomains.',
     },
     localServicesPublicPreviewAuditSink: {
         type: 'string',

@@ -1,4 +1,9 @@
-/** HTTPS preview cookies stay host-only and scoped to their top-level viewer site. */
+/**
+ * Admitted preview origins keep host-only cookies scoped to their top-level viewer site.
+ * Secure and Partitioned also apply to loopback HTTP: Chromium admits localhost names
+ * for both attributes. Browsers without that exception require HTTPS/native direct access;
+ * dropping Secure would also invalidate SameSite=None and partitioning.
+ */
 export function scopedLocalServiceViewerTokenCookie(input: Readonly<{
     name: 'happier_preview_token' | 'happier_public_token';
     path: string;

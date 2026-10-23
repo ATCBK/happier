@@ -102,6 +102,20 @@ scoped to the top-level viewer site; opening under another site needs a fresh ad
 Older browsers that block cross-site cookies and do not support partitioning may still
 refuse the embedded preview.
 
+Unreleased 0.3 local-service previews also accept plain HTTP when the Home and its
+isolated preview domain are `localhost` or subdomains of it. The preview retains the
+Home's scheme and port. Other names, including `.local` and raw loopback IP addresses,
+require HTTPS. Set the preview domain even for a local Home; previews still need
+their own hostnames and never share the Home's API origin.
+
+The cookie attributes above remain required on loopback HTTP. Chromium accepts them
+on localhost names, including subdomains. WebKit support depends on the operating
+system's cookie storage, so Safari and Tauri's WebKit clients need a check on the
+actual target system. If exchange fails there, use HTTPS or a supported native direct
+preview. See [WebKit's loopback-cookie support change](https://github.com/WebKit/WebKit/commit/aa297f89b9a6)
+for its platform restrictions. This exception concerns local-service previews; it
+does not change the stored-content public-link requirements below.
+
 In 0.3 development, disabling the Home preview feature refuses new admissions and subsequent
 requests from existing viewers. Registrations remain available if the feature is enabled again.
 If a Home configuration read fails during a WebSocket upgrade, that socket closes and the server

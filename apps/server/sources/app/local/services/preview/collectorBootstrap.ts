@@ -138,8 +138,9 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
     }
     // The loader is requested from the document it is injected into, so the tag carries a root-relative
     // URL and no scheme to derive. The document's own origin is only what the CSP admission compares with:
-    // a per-resource preview origin is https by construction (`resolveLocalServiceHostOrigin`).
-    const origin = new URL(`https://${host}`).origin;
+    // the routes already resolved its external protocol from the Home and transport, including
+    // loopback HTTP. Never derive this from a caller-supplied forwarded header.
+    const origin = new URL(`${input.request.externalProtocol ?? 'https'}://${host}`).origin;
     const loader = new URL(COOPERATIVE_COLLECTOR_LOADER_PATH, origin);
     if (config) {
         loader.searchParams.set('n', config.collector.nonce);

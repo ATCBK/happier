@@ -88,7 +88,7 @@ async function echoRequest(request: import("node:http").IncomingMessage, respons
 }
 
 describe('public preview sharing and withdrawal through real routes', () => {
-    async function publicApp(fixture: Awaited<ReturnType<typeof upstream>>) {
+    async function publicApp(fixture: Awaited<ReturnType<typeof upstream>>, options: Readonly<{ wallClock?: boolean; ttlMs?: number }> = {}) {
         let now = 1_000;
         let auditAvailable = true;
         let nextExposure = 0;
@@ -96,7 +96,7 @@ describe('public preview sharing and withdrawal through real routes', () => {
             publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'preview.example.test', tokenSecret: 'fixture-key',
             policy: { enabled: true, allowedModes: ['secret_link', 'authenticated'], maxTtlMs: 60_000, maxConcurrentExposures: 2,
                 dnsTlsRequired: false, auditRequired: true, rateLimitProfileIds: ['default'] },
-            nowMs: () => now, generateExposureId: () => `share-${++nextExposure}`, auditSinkDurable: true,
+            nowMs: options.wallClock ? Date.now : () => now, generateExposureId: () => `share-${++nextExposure}`, auditSinkDurable: true,
             recordAuditEvent() { if (!auditAvailable) throw new Error('audit boundary unavailable'); },
             checkRateLimit: () => true, resolvePreview: () => fixture.preview,
         });
@@ -112,7 +112,7 @@ describe('public preview sharing and withdrawal through real routes', () => {
         const create = async (mode: 'secret_link' | 'authenticated' = 'secret_link') => {
             const response = await app.inject({ method: 'POST', url: '/v1/local-services/public', payload: {
                 machineId: fixture.preview.machineId, sessionId: fixture.preview.sessionId, previewId: fixture.preview.previewId,
-                mode, ttlMs: 60_000, rateLimitProfileId: 'default', confirmation: { acknowledged: true },
+                mode, ttlMs: options.ttlMs ?? 60_000, rateLimitProfileId: 'default', confirmation: { acknowledged: true },
             } });
             expect(response.statusCode).toBe(201);
             return LocalServicePublicExposureV1Schema.parse(response.json().exposure);
@@ -193,7 +193,7 @@ describe('public preview sharing and withdrawal through real routes', () => {
             const accept = createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
             socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
         });
-        const test = await publicApp(fixture);
+        const test = await publicApp(fixture, { wallClock: true, ttlMs: action === 'expire' ? 1_500 : 60_000 });
         const clients: import('node:net').Socket[] = [];
         let request: ReturnType<typeof httpRequest> | undefined;
         try {
@@ -219,11 +219,16 @@ describe('public preview sharing and withdrawal through real routes', () => {
             if (action === 'revoke') {
                 const revoked = await test.revoke(exposure);
                 expect(revoked.json().reasonCode).toBe('audit_sink_unavailable');
-            } else test.expire();
+            } else {
+                await new Promise((resolve) => setTimeout(resolve, Math.max(0, exposure.expiresAt - Date.now())));
+            }
+            // No status/access read may trigger expiry: the exposure deadline itself must
+            // withdraw both retained transports, even when the audit boundary is unavailable.
+            await expect.poll(() => response.destroyed && ws.destroyed).toBe(true);
+            await Promise.all([httpClosed, wsClosed]);
             const snapshot = await test.status();
             expect(snapshot.exposures[0]?.state).toBe(action === 'revoke' ? 'revoked' : 'expired');
             expect(snapshot.diagnostics.some((item) => item.details?.reasonCode === 'audit_sink_unavailable')).toBe(true);
-            await Promise.all([httpClosed, wsClosed]);
             expect((await test.app.inject({ url: `/v1/local-services/public/${exposure.exposureId}/asset`, headers: jar })).statusCode).toBe(403);
         } finally {
             request?.destroy();
@@ -409,10 +414,13 @@ describe("preview native HTTP transport", () => {
         expect((await proxy(fixture)).body.equals(gzipSync(html))).toBe(true);
     });
 
-    it.each(["http", "https"] as const)("injects a scheme-less loader that matches the page's own https origin when the proxy derived %s", async (externalProtocol) => {
+    it.each([
+        { externalProtocol: "https", host: "preview.example.test:8443" },
+        { externalProtocol: "http", host: "preview.localhost:8181" },
+    ] as const)("admits the collector against the configured $externalProtocol preview origin", async ({ externalProtocol, host }) => {
         const fixture = await upstream((_request, response) => {
             response.setHeader("Content-Type", "text/html");
-            response.setHeader("Content-Security-Policy", "script-src https://preview.example.test");
+            response.setHeader("Content-Security-Policy", `script-src ${externalProtocol}://${host}`);
             response.end("<html><head></head><body>page</body></html>");
         });
         const config = { browserSessionId: "bs", viewId: "v", navigationGeneration: 1,
@@ -421,7 +429,7 @@ describe("preview native HTTP transport", () => {
         const bytes: Uint8Array[] = [];
         await proxyLocalServicePreviewHttpRequest({ ...fixture,
             request: { method: "GET", path: "/", search: `?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`,
-                headers: { host: "preview.example.test", "x-forwarded-proto": "https" }, externalProtocol },
+                headers: { host, "x-forwarded-proto": "https" }, externalProtocol },
             response: { writeHead(_code, _message, value) { headers = value; }, write(chunk) { bytes.push(chunk); }, end() {}, destroy() {} },
         });
         expect(headers["x-happier-collector-state"]).toBe("collector_available");

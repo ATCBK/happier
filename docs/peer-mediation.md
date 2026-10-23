@@ -663,14 +663,19 @@ Session-bound Browser previews reuse the Services public-link controls and Actio
 front door for consent, create, copy and revoke. Signing, malformed URL and HTTPS failures still
 fail closed; a retained resource does not by itself establish public-link availability.
 
-Private access URLs require a per-resource HTTPS origin under the configured preview domain.
+Private access URLs require a per-resource isolated origin under the configured preview domain.
+In 0.3 development, `preview/origin.ts` admits HTTPS, or HTTP when both the Home hostname
+and isolated preview hostname are `localhost` or its subdomains. Raw IP addresses and `.local`
+names still require HTTPS. Derived private and public preview origins retain the Home's scheme
+and explicit port; the preview domain may be `localhost` itself.
 Current 0.3 development registrations, including hosted plugin assets, declare `originMode: 'host'`;
 the strict resource schema rejects retired path mode and the `rewrite_path_mode` policy.
 The shared response-header owner keeps same-target redirects on that origin with relative
 locations and scopes application cookies to its paths, without API-route prefixes.
 The origin resolver refuses path mode on the API origin, and refuses a preview hostname equal to
 that origin; native direct access does not weaken this server-origin boundary.
-`hostOriginAvailable` is derived from the actual HTTPS/domain resolver; `pathModeAvailable` is false.
+`hostOriginAvailable` and public exposure readiness use that same origin resolver;
+`pathModeAvailable` is false.
 One-use URL admissions have a short expiry. An exchanged viewer cookie has no elapsed-time
 expiry: the server authorizes it against the live registration until that resource is unregistered.
 Every server HTTP admission and WebSocket upgrade also checks the current Home preview feature
@@ -679,6 +684,17 @@ cookie-authenticated requests without retiring registrations. A failed Home conf
 during an upgrade closes that request's socket; its rejection never escapes the preview ingress.
 Private and public viewer cookies share `app/local/services/viewerCookie.ts`: host-only,
 HttpOnly, Secure, `SameSite=None; Partitioned`, with each route's existing path scope.
+Those attributes also apply on admitted loopback HTTP origins: Chromium's
+[cookie access policy](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/cookies/cookie_util.cc)
+treats localhost names as trustworthy, including subdomains, and its
+[partitioned-cookie change](https://chromium.googlesource.com/chromium/src/+/0f684d1f369ddfaa15266b233cf13e138cddc0c0%5E%21/)
+permits those origins. Do not weaken Secure or partitioning to accommodate a browser.
+WebKit support is platform-dependent: its
+[loopback-cookie change](https://github.com/WebKit/WebKit/commit/aa297f89b9a6)
+is Cocoa-only, requires macOS 26 or newer there, and explicitly depends on underlying
+cookie-storage support. [Tauri uses the OS WebKit on macOS and WebKitGTK on Linux](https://v2.tauri.app/reference/webview-versions/).
+HTTP preview cookie exchange in those clients needs validation on the actual OS/runtime;
+where unsupported, use HTTPS or the existing native direct-preview transport.
 The cross-site Browser frame can retain its exchanged admission, while browsers supporting
 partitioned cookies confine it to the embedding top-level site. Opening the preview under
 another top-level site requires its own URL admission; URL tokens remain one-use.
@@ -696,7 +712,9 @@ existing response-body budget, retains only the HTML head for CSP admission, the
 and subsequent body without waiting for EOF. Non-HTML transport bytes remain streaming.
 Same-preview redirects retain the navigation identity; external redirects never receive it.
 The injected loader tag is root-relative: it is requested from the document it is injected into, so it carries no scheme
-that a TLS terminator could get wrong, and the CSP admission compares against that document's own https preview origin.
+that a TLS terminator could get wrong, and the CSP admission compares against the preview's
+configured external scheme and request authority, including its port. The collector does not
+independently infer the scheme from forwarded headers.
 The loader and UI/native/desktop injection share one collector generator rather than copies.
 The relay loader executes during parsing, before the upstream response ends, so the same
 collector can receive Stop while a streamed document is still loading.
@@ -825,7 +843,9 @@ In current development source, Browser workspace tabs retain the committed locat
 their target identity. Preview locations contain only path, query and hash, with `previewToken`
 removed; reopening acquires fresh access and resolves that location against its current origin.
 The iframe's identity-bound navigation report feeds the control reducer and the existing tab
-persistence owner. Saving an observed location does not navigate the live iframe again. Older
+persistence owner. Saving an observed same-document location retains the live iframe, collector
+readiness and automation owner. Their lifetime follows the assigned document/navigation identity;
+document replacement and Reload still retire the old automation owner. Older
 tabs without a saved location still open at their target's initial page.
 These are current development-source contracts, not iOS/Android device or release certification.
 The current guest listener has no allocated-Origin admission check. Foreign WebSocket Origins

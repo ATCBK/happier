@@ -27,7 +27,10 @@ vi.mock('@/storage/db', async () => {
 });
 
 describe('preview HTTP and public WebSocket through the server relay and daemon TCP terminator', () => {
-    it('returns the private fixture body/subresource and closes a real public websocket on revoke', async () => {
+    it.each([
+        { publicBaseUrl: 'https://home.example.test:8443', hostOriginBaseDomain: 'example.test' },
+        { publicBaseUrl: 'http://home.localhost:8181', hostOriginBaseDomain: 'localhost' },
+    ])('serves private/public HTTP and revokes a real public websocket ($publicBaseUrl)', async ({ publicBaseUrl, hostOriginBaseDomain }) => {
         const paths: string[] = [];
         const wireTrace: string[] = [];
         const closeTransports: (() => void)[] = [];
@@ -95,7 +98,7 @@ describe('preview HTTP and public WebSocket through the server relay and daemon 
         if (!daemon) throw new Error('enabled daemon relay was not registered');
         client.connect();
         await once(client, 'connect');
-        const runtime = createLocalServicePreviewRuntime({ tokenSecret: 'fixture-secret', publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'example.test' });
+        const runtime = createLocalServicePreviewRuntime({ tokenSecret: 'fixture-secret', publicBaseUrl, hostOriginBaseDomain });
         const preview: LocalServicePreviewResourceV1 = {
             previewId: 'preview_fixture', sessionId: 'session_fixture', machineId: 'machine_1',
             owner: { kind: 'session', id: 'session_fixture' },
@@ -122,7 +125,7 @@ describe('preview HTTP and public WebSocket through the server relay and daemon 
         const app = Fastify();
         app.decorate('authenticate', async () => {});
         const publicRuntime = createLocalServicePublicRuntime({
-            publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'example.test',
+            publicBaseUrl, hostOriginBaseDomain,
             tokenSecret: 'public-fixture-secret', resolvePreview: runtime.resolvePreview,
             policy: { enabled: true, allowedModes: ['secret_link'], maxTtlMs: 60_000, auditRequired: false, rateLimitProfileIds: ['default'] },
             // Three application reads and one admitted WebSocket in this journey.
@@ -130,10 +133,10 @@ describe('preview HTTP and public WebSocket through the server relay and daemon 
         });
         registerLocalServiceRoutes(app as never, {
             env: {
-                PUBLIC_URL: 'https://home.example.test',
+                PUBLIC_URL: publicBaseUrl,
                 HAPPIER_FEATURE_LOCAL_SERVICES__ENABLED: 'true',
                 HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
-                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'example.test',
+                HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: hostOriginBaseDomain,
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
                 HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
@@ -152,6 +155,9 @@ describe('preview HTTP and public WebSocket through the server relay and daemon 
             const url = new URL(registered.accessUrl);
             const exchange = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
             expect(exchange.statusCode).toBe(303);
+            expect(url.protocol).toBe(new URL(publicBaseUrl).protocol);
+            expect(url.port).toBe(new URL(publicBaseUrl).port);
+            expect(exchange.headers['set-cookie']).toContain('Secure; Partitioned');
             const cookie = String(exchange.headers['set-cookie']).split(';')[0];
             const bodyRequest = app.inject({ method: 'GET', url: '/body', headers: { host: url.host, cookie } });
             void bodyRequest.catch(() => undefined);
@@ -181,7 +187,7 @@ describe('preview HTTP and public WebSocket through the server relay and daemon 
             }
             const isolated = await app.inject({ method: 'GET', url: '/asset.js', headers: { host: url.host, cookie: publicCookie } });
             expect(isolated.statusCode).toBe(401);
-            const wrongOrigin = await app.inject({ method: 'GET', url: publicUrl.pathname, headers: { host: 'home.example.test', cookie: publicCookie } });
+            const wrongOrigin = await app.inject({ method: 'GET', url: publicUrl.pathname, headers: { host: new URL(publicBaseUrl).host, cookie: publicCookie } });
             expect(wrongOrigin.statusCode, 'public content must stay off the API origin').toBe(403);
             const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
             publicClient = connect(Number(listener.port), '127.0.0.1');
