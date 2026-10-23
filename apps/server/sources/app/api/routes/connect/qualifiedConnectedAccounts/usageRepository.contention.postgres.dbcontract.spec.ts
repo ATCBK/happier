@@ -10,15 +10,20 @@ import { withAuthenticatedTestApp as withAuthenticatedAppHarness } from "@/app/a
 import type { Fastify } from "@/app/api/types";
 import { QualifiedProviderAccountUsageRecordResponseV4Schema } from "@happier-dev/protocol/connect/qualified-connected-account-projections";
 import { ConnectedServiceQuotaSnapshotV1Schema } from "@happier-dev/protocol/connect/connected-service-schemas";
+import { buildProviderAccountUsageRecordId } from "@happier-dev/protocol/connect/account-usage-primitives";
 import { buildProviderAccountUsagePageProjectionV1, packProviderAccountUsagePageProjectionV1, PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING } from "@happier-dev/protocol/connect/providerAccountUsagePageProjection";
 import { createProviderAccountUsageRecordKey, createUsageSnapshot } from "../providerAccountUsageTestkit";
 import { readProviderAccountUsageHistory } from "../providerAccountUsage/recordStorage";
+import { writeProviderAccountUsageRecordWithPolicy } from "../providerAccountUsage/routeWritePolicy";
 import { mutateQualifiedConnectedServiceCredential } from "./credentialRepository";
 import { registerQualifiedConnectedAccountCredentialRoutesV4 } from "./registerQualifiedConnectedAccountCredentialRoutesV4";
 import { createQualifiedConnectedAccountGroup, createQualifiedConnectedAccountGroupMember, deleteQualifiedConnectedAccountGroup, deleteQualifiedConnectedAccountGroupMember } from "./groupRepository";
 import { resolveLegacyQualifiedConnectedAccountService } from "./identity";
 import { projectProviderAccountUsageSnapshotToLegacyQuota } from "./legacyUsageTranslation";
-import { requestQualifiedProviderAccountUsageRefresh, writeLegacyConnectedServiceQuotaCompatibilityRecord } from "./usageRepository";
+import { deleteQualifiedProviderAccountUsageRecord, requestQualifiedConnectedAccountQuotaRefresh,
+    requestLegacyConnectedServiceQuotaCompatibilityRefresh, requestQualifiedProviderAccountUsageRefresh,
+    unlinkQualifiedConnectedAccountQuota, writeLegacyConnectedServiceQuotaCompatibilityRecord,
+    writeQualifiedProviderAccountUsageRecord, writeQualifiedProviderAccountUsageRecordFromLegacyBoundary } from "./usageRepository";
 
 const route = "/v4/connect/qualified/provider-account-usage";
 const service = { pluginId: "example.fix88-usage", localId: "external-service" };
@@ -111,10 +116,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
     }
 
     /** Observe only the real Prisma boundary; all route, admission, merge and SQL logic stays real. */
-    async function observeTransactions<T>(observe: (tx: Tx) => void, run: () => T): Promise<Awaited<T>> {
+    async function observeTransactions<T>(observe: (tx: Tx) => void, run: () => T, isolationLevel?: "ReadCommitted"): Promise<Awaited<T>> {
         const original = db.$transaction.bind(db);
         db.$transaction = (async <R>(callback: (tx: Tx) => Promise<R>, options?: { isolationLevel?: "Serializable" | "RepeatableRead" | "ReadCommitted"; timeout?: number; maxWait?: number }) =>
-            original(async tx => { observe(tx); return await callback(tx); }, options)) as typeof db.$transaction;
+            original(async tx => { observe(tx); return await callback(tx); }, { ...options, ...(isolationLevel ? { isolationLevel } : {}) })) as typeof db.$transaction;
         try { return await run(); }
         finally { db.$transaction = original; }
     }
@@ -202,6 +207,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
                 // Prisma's generic query thenable is replaced only at this
                 // database-observation boundary; awaited results stay real.
                 }) as unknown as typeof tx.providerAccountUsageRecord.update;
+                const updateMany = tx.providerAccountUsageRecord.updateMany.bind(tx.providerAccountUsageRecord);
+                tx.providerAccountUsageRecord.updateMany = (async (args: Parameters<typeof updateMany>[0]) => {
+                    const result = await updateMany(args);
+                    returned.push(result);
+                    return result;
+                }) as unknown as typeof tx.providerAccountUsageRecord.updateMany;
             }, () => kind === "projection" ? put() : app.inject({ method: "POST", url: route, headers,
                 payload: { ...payload, snapshot, fetchedAt: snapshot.fetchedAtMs } }));
             expect(response.statusCode, response.body).toBe(200);
@@ -216,6 +227,60 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
             expect(accepted.entries.map(entry => entry.record.snapshot?.planLabel))
                 .toEqual(kind === "projection" ? [payload.snapshot.planLabel] : [payload.snapshot.planLabel, snapshot.planLabel]);
         });
+    });
+
+    it.each(["observation", "wider_projection"] as const)("refuses a stale projection when a concurrent %s replaces its captured parent", async kind => {
+        const { account, payload, headers } = await fixture();
+        await writeQualifiedProviderAccountUsageRecord({ ...payload, accountId: account.id });
+        const range = { startAtMs: payload.fetchedAt, endAtMs: payload.fetchedAt + 2000 };
+        const history = await readProviderAccountUsageHistory({ accountId: account.id, recordId: payload.recordId,
+            history: { range, pageSize: 100 } });
+        const witness = history.entries[0]!;
+        const projection = (endAtMs: number) => ({ recordId: payload.recordId, encoding: PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING,
+            demand: { range: { ...range, endAtMs }, resolution: "accepted_observations" as const },
+            frontier: { id: witness.id, observedAtMs: witness.observedAtMs }, observationCount: 1,
+            content: { t: "plain" as const, v: packProviderAccountUsagePageProjectionV1(buildProviderAccountUsagePageProjectionV1({
+                recordId: payload.recordId, range: { ...range, endAtMs },
+                history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: payload.snapshot }], nextCursor: null },
+            })) } });
+        let interleaved = false;
+        await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
+            const compete = async () => {
+                if (interleaved) return;
+                interleaved = true;
+                if (kind === "wider_projection") {
+                    const response = await app.inject({ method: "PUT", url: `${route}/history`, headers, payload: projection(range.endAtMs) });
+                    expect(response.statusCode, response.body).toBe(200);
+                } else {
+                    const snapshot = createUsageSnapshot({ fetchedAt: payload.fetchedAt + 1000,
+                        recordKey: payload.recordKey, planLabel: "Concurrent observation" });
+                    await writeQualifiedProviderAccountUsageRecord({ ...payload, accountId: account.id,
+                        snapshot, fetchedAt: snapshot.fetchedAtMs, materialFingerprint: "concurrent-observation" });
+                }
+            };
+            const response = await observeTransactions(tx => {
+                const update = tx.providerAccountUsageRecord.update.bind(tx.providerAccountUsageRecord);
+                tx.providerAccountUsageRecord.update = (async (args: Parameters<typeof update>[0]) => {
+                    if (args.data.metadata) await compete();
+                    return await update(args);
+                }) as unknown as typeof tx.providerAccountUsageRecord.update;
+                const updateMany = tx.providerAccountUsageRecord.updateMany.bind(tx.providerAccountUsageRecord);
+                tx.providerAccountUsageRecord.updateMany = (async (args: Parameters<typeof updateMany>[0]) => {
+                    if (args?.data.metadata) await compete();
+                    return await updateMany(args);
+                }) as unknown as typeof tx.providerAccountUsageRecord.updateMany;
+            }, () => app.inject({ method: "PUT", url: `${route}/history`, headers,
+                payload: projection(payload.fetchedAt + 1500) }), "ReadCommitted");
+            const stored = await db.providerAccountUsageRecord.findUniqueOrThrow({
+                where: { accountId_recordId: { accountId: account.id, recordId: payload.recordId } },
+            });
+            expect(stored.metadata).toMatchObject(kind === "wider_projection"
+                ? { pageProjection: { demand: { range: { endAtMs: range.endAtMs } } } }
+                : { materialFingerprint: "concurrent-observation" });
+            expect(response.statusCode, response.body).toBe(409);
+            expect(response.json()).toEqual({ error: "provider_account_usage_projection_conflict" });
+        });
+        expect(interleaved).toBe(true);
     });
 
     it.each(["account", "group_member", "legacy"] as const)("does not retain the credential lock while a %s write waits for exclusive Account authority", async kind => {
@@ -331,6 +396,134 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
                 expect(consumed).toMatchObject({ content: { t: "plain", v: payload.snapshot }, sources: [payload.source] });
                 expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id, recordId: payload.recordId } })).toBe(1);
             });
+        } finally { await Promise.allSettled(pending); }
+        expect(interleavings).toBeGreaterThan(0);
+    });
+
+    it.each(["standalone", "legacy", "legacy_boundary"] as const)("commits the %s usage writer while the Account cursor changes on every attempt", async kind => {
+        const { account, payload } = await fixture(kind !== "standalone"
+            ? resolveLegacyQualifiedConnectedAccountService("openai-codex") : service);
+        const pending: Promise<unknown>[] = [];
+        let interleavings = 0;
+        try {
+            await observeTransactions(tx => {
+                const find = tx.account.findUnique.bind(tx.account);
+                let observed = false;
+                tx.account.findUnique = (async (args: Parameters<typeof find>[0]) => {
+                    const row = await find(args);
+                    if (!observed) {
+                        observed = true;
+                        interleavings++;
+                        await commitOrBlock(tx, () => db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } }), pending);
+                    }
+                    return row;
+                }) as unknown as typeof tx.account.findUnique;
+            }, () => kind === "legacy"
+                ? writeLegacyConnectedServiceQuotaCompatibilityRecord({
+                    accountId: account.id, serviceId: "openai-codex", profileId: payload.source.ref.accountId,
+                    status: "ok", fetchedAt: payload.fetchedAt, staleAfterMs: payload.staleAfterMs,
+                    payloadMode: "plain_json_v1",
+                    snapshot: ConnectedServiceQuotaSnapshotV1Schema.parse(projectProviderAccountUsageSnapshotToLegacyQuota({
+                        serviceId: "openai-codex", profileId: payload.source.ref.accountId, snapshot: payload.snapshot,
+                    })),
+                })
+                : kind === "legacy_boundary"
+                    ? writeQualifiedProviderAccountUsageRecordFromLegacyBoundary({ ...payload, accountId: account.id })
+                    : writeProviderAccountUsageRecordWithPolicy({ ...payload, accountId: account.id }));
+            await Promise.all(pending);
+            const recordId = kind === "legacy"
+                ? buildProviderAccountUsageRecordId({ ...payload.recordKey, providerId: "openai-codex" })
+                : payload.recordId;
+            const stored = await db.providerAccountUsageRecord.findUniqueOrThrow({
+                where: { accountId_recordId: { accountId: account.id, recordId } },
+            });
+            expect(stored.snapshot).toMatchObject({ planLabel: payload.snapshot.planLabel, fetchedAtMs: payload.fetchedAt });
+            expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id, recordId } })).toBe(1);
+            if (kind !== "standalone") expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(1);
+        } finally { await Promise.allSettled(pending); }
+        expect(interleavings).toBeGreaterThan(0);
+    });
+
+    it.each(["record_delete", "record_refresh", "quota_unlink", "quota_refresh", "legacy_refresh"] as const)("settles %s while independent cursor or currentness writes continue", async kind => {
+        const input = await fixture(kind === "legacy_refresh"
+            ? resolveLegacyQualifiedConnectedAccountService("openai-codex") : service);
+        const { account, payload } = input;
+        await writeQualifiedProviderAccountUsageRecord({ ...payload, accountId: account.id });
+        const secondSource = kind === "quota_unlink" ? await additionalSource(input) : null;
+        if (secondSource) await writeQualifiedProviderAccountUsageRecord({ ...payload, ...secondSource, accountId: account.id });
+        const pending: Promise<unknown>[] = [];
+        let interleavings = 0;
+        try {
+            const result = await observeTransactions(tx => {
+                let observed = false;
+                if (kind === "quota_unlink") {
+                    const find = tx.connectedServiceUsageSource.findMany.bind(tx.connectedServiceUsageSource);
+                    tx.connectedServiceUsageSource.findMany = (async (args: Parameters<typeof find>[0]) => {
+                        const rows = await find(args);
+                        if (!observed && rows.length > 0) {
+                            observed = true;
+                            interleavings++;
+                            await commitOrBlock(tx, () => db.connectedServiceUsageSource.updateMany({
+                                where: { id: { in: rows.map(row => row.id) } }, data: { updatedAt: new Date(Date.now() + interleavings) },
+                            }), pending);
+                        }
+                        return rows;
+                    }) as unknown as typeof tx.connectedServiceUsageSource.findMany;
+                } else if (kind === "record_delete") {
+                    const find = tx.providerAccountUsageRecord.findUnique.bind(tx.providerAccountUsageRecord);
+                    tx.providerAccountUsageRecord.findUnique = (async (args: Parameters<typeof find>[0]) => {
+                        const row = await find(args);
+                        if (!observed && row && "snapshot" in row) {
+                            observed = true;
+                            interleavings++;
+                            await commitOrBlock(tx, () => db.providerAccountUsageRecord.update({
+                                where: { accountId_recordId: { accountId: account.id, recordId: payload.recordId } },
+                                data: { refreshRequestedAt: new Date(Date.now() + interleavings) },
+                            }), pending);
+                        }
+                        return row;
+                    }) as unknown as typeof tx.providerAccountUsageRecord.findUnique;
+                } else {
+                    const find = tx.account.findUnique.bind(tx.account);
+                    tx.account.findUnique = (async (args: Parameters<typeof find>[0]) => {
+                        const row = await find(args);
+                        if (!observed) {
+                            observed = true;
+                            interleavings++;
+                            await commitOrBlock(tx, () => db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } }), pending);
+                        }
+                        return row;
+                    }) as unknown as typeof tx.account.findUnique;
+                }
+            }, () => {
+                const record = { accountId: account.id, recordId: payload.recordId };
+                const quota = { accountId: account.id, ref: payload.source.ref };
+                if (kind === "record_delete") return deleteQualifiedProviderAccountUsageRecord(record);
+                if (kind === "record_refresh") return requestQualifiedProviderAccountUsageRefresh(record);
+                if (kind === "quota_unlink") return unlinkQualifiedConnectedAccountQuota(quota);
+                if (kind === "legacy_refresh") return requestLegacyConnectedServiceQuotaCompatibilityRefresh(quota);
+                return requestQualifiedConnectedAccountQuotaRefresh(quota);
+            });
+            expect(result).toBe(kind === "record_delete" ? "deleted" : kind === "quota_unlink" ? "removed" : "written");
+            await Promise.all(pending);
+            const stored = await db.providerAccountUsageRecord.findUnique({
+                where: { accountId_recordId: { accountId: account.id, recordId: payload.recordId } },
+            });
+            if (kind === "record_delete") {
+                expect(stored).toBeNull();
+                expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(0);
+                expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(0);
+            } else {
+                expect(stored?.snapshot).toEqual(payload.snapshot);
+                expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(1);
+                expect(await db.connectedServiceUsageSource.count({ where: { accountId: account.id } })).toBe(1);
+                if (kind === "quota_unlink") {
+                    expect(await db.connectedServiceUsageSource.count({ where: {
+                        accountId: account.id, connectedAccountId: payload.source.ref.accountId,
+                    } })).toBe(0);
+                    expect(secondSource).not.toBeNull();
+                } else expect(stored?.refreshRequestedAt).toBeInstanceOf(Date);
+            }
         } finally { await Promise.allSettled(pending); }
         expect(interleavings).toBeGreaterThan(0);
     });

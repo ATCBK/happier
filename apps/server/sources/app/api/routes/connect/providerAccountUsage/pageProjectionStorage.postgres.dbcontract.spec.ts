@@ -48,10 +48,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('u
             fetchedAt: value.fetchedAtMs, staleAfterMs: value.staleAfterMs, snapshot: value });
         // Only row cardinality/identity is under test; payload decoding has its
         // own real-storage suite. Avoid inflating this planner fixture's JSON.
+        // Raw Date parameters bind as timestamptz. Preserve Prisma's UTC wall
+        // time in this timestamp column independently of the database timezone.
         for (const [recordId, count] of [[other.recordId, 86000], [snapshot.recordId, 68000]] as const) {
             await db.$executeRaw`INSERT INTO "ProviderAccountUsageHistory" (id, "accountId", "recordId", "observedAt", payload)
                 SELECT ${recordId} || '-' || lpad(i::text, 8, '0'), ${accountId}, ${recordId},
-                    ${new Date(snapshot.fetchedAtMs)}::timestamp + i * interval '1 millisecond', '{}'::jsonb
+                    (${new Date(snapshot.fetchedAtMs)}::timestamptz AT TIME ZONE 'UTC') + i * interval '1 millisecond', '{}'::jsonb
                 FROM generate_series(1, ${count}::integer) AS i`;
         }
         await db.$executeRawUnsafe('ANALYZE "ProviderAccountUsageHistory"');

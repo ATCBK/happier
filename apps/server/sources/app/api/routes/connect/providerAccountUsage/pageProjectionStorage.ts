@@ -5,6 +5,7 @@ import type { Prisma } from '@prisma/client';
 import { StoredProviderAccountUsagePageProjectionV1Schema, ProviderAccountUsagePageProjectionMetadataV1Schema,
     type ProviderAccountUsagePageProjectionCoverageV1Schema, type ProviderAccountUsagePageProjectionPrefixReadV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 import { ProviderAccountUsagePayloadInvariantError } from './types';
+import { readProviderAccountUsageRecordWithCurrentGuard, updateProviderAccountUsageRecordMetadataIfCurrent } from './recordStorage';
 import { isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
 import { log } from '@/utils/logging/log';
 
@@ -95,15 +96,18 @@ export async function writeProviderAccountUsagePageProjection(
     storage: ProjectionStorage,
 ): Promise<StoredProjection | null> {
     const { value } = params;
+    // Capture the parent before its history. Any later accepted observation or
+    // metadata writer changes this same full-content guard before we publish.
+    const captured = await readProviderAccountUsageRecordWithCurrentGuard({ accountId: params.accountId, recordId: value.recordId }, storage);
+    if (!captured) return null;
     const where = { accountId: params.accountId, recordId: value.recordId,
         observedAt: { gte: new Date(value.demand.range.startAtMs), lt: new Date(value.demand.range.endAtMs) } };
-    const [count, last, row] = await Promise.all([
+    const [count, last] = await Promise.all([
         storage.providerAccountUsageHistory.count({ where }),
         storage.providerAccountUsageHistory.findFirst({ where, orderBy: [{ observedAt: 'desc' }, { id: 'desc' }], select: { id: true, observedAt: true } }),
-        storage.providerAccountUsageRecord.findUnique({ where: { accountId_recordId: { accountId: params.accountId, recordId: value.recordId } }, select: { metadata: true } }),
     ]);
-    if (!row || !sameCoverage(value, count, last)) return null;
-    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {};
+    if (!sameCoverage(value, count, last)) return null;
+    const metadata = captured.rawMetadata && typeof captured.rawMetadata === 'object' && !Array.isArray(captured.rawMetadata) ? captured.rawMetadata : {};
     const retained = 'pageProjection' in metadata ? StoredProviderAccountUsagePageProjectionV1Schema.safeParse(metadata.pageProjection) : null;
     if (retained?.success && retained.data.encoding === value.encoding && retained.data.content.t === value.content.t
         && (retained.data.content.t === 'plain' || isAccountScopedBlobCiphertextForKind({
@@ -115,17 +119,14 @@ export async function writeProviderAccountUsagePageProjection(
             && retained.data.demand.range.endAtMs === value.demand.range.endAtMs
             && sameCoverage(retained.data, count, last)) return retained.data;
         const existing = await readProviderAccountUsagePageProjection({ accountId: params.accountId,
-            recordId: value.recordId, projection: value.demand }, storage, row);
+            recordId: value.recordId, projection: value.demand }, storage, { metadata: captured.rawMetadata });
         if (existing.complete && existing.projection) return existing.projection;
     }
-    await storage.providerAccountUsageRecord.update({
-        where: { accountId_recordId: { accountId: params.accountId, recordId: value.recordId } },
-        data: { metadata: { ...metadata, pageProjection: value } as Prisma.InputJsonValue },
-        // The admitted value is already in memory; do not return its packed
-        // body again while this transaction retains the usage tuple lock.
-        select: { id: true },
-    });
-    return value;
+    const updated = await updateProviderAccountUsageRecordMetadataIfCurrent({
+        accountId: params.accountId, recordId: value.recordId,
+        metadata: { ...metadata, pageProjection: value } as Prisma.InputJsonValue,
+    }, captured.guard, storage);
+    return updated ? value : null;
 }
 
 function sameCoverage(value: Pick<ProjectionWrite, 'observationCount' | 'frontier'>, count: number, last: { id: string; observedAt: Date } | null) {

@@ -539,7 +539,7 @@ async function retainEarliestRuntimeOrderInTx(tx: Tx, existing: UsageEvent, requ
     if (Object.entries(next).some(([key, value]) => key !== 'observedAt' && key !== 'metadata'
         && !isDeepStrictEqual(Reflect.get(existing, key), value))) return;
     const metadata = existing.metadata;
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || !('usageAccounting' in metadata)) return;
     const rawAccounting = metadata.usageAccounting;
     if (!rawAccounting || typeof rawAccounting !== 'object' || Array.isArray(rawAccounting)) return;
     // Replay keeps the original fact, including its attribution. Only the
@@ -1320,7 +1320,12 @@ export async function recordLegacyUsageReport(
             report,
             usageEventId,
         };
-    }, { /* Legacy usage deltas depend on the previous cumulative report baseline. */ isolationLevel: "Serializable" });
+    }, {
+        // Sessionless reports read absence before inserting distinct report/delta rows.
+        // The nullable sessionId unique key permits both inserts; the process-local
+        // lock does not cover another server. SSI protects that absent-baseline predicate.
+        isolationLevel: "Serializable",
+    });
     const result = sessionId
         ? await write()
         : await inAccountLegacyUsageWriteLock({ accountId, key }, write);

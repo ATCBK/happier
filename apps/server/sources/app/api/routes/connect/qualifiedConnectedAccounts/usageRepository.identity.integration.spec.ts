@@ -38,6 +38,7 @@ import {
     readQualifiedConnectedAccountQuota,
     readQualifiedProviderAccountUsageHistory,
     requestQualifiedConnectedAccountQuotaRefresh,
+    requestQualifiedProviderAccountUsageRefresh,
     unlinkQualifiedConnectedAccountQuota,
     writeQualifiedProviderAccountUsageRecord,
     writeLegacyConnectedServiceQuotaCompatibilityRecord,
@@ -130,6 +131,26 @@ describe("qualified Connected Account usage stored identity", () => {
             staleAfterMs: snapshot.staleAfterMs,
         };
     }
+
+    it.each(['record', 'account'] as const)('publishes an exact quota-refresh wake after the %s refresh marker commits', async target => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+        const { credential, ref } = await createCredential(account.id);
+        const write = buildUsageWrite(account.id, { credentialRevision: credential.credentialRevision,
+            source: { ref, bindingKind: 'account' }, fetchedAt: Date.now(), planLabel: 'Work' });
+        await writeQualifiedProviderAccountUsageRecord(write);
+        const result = target === 'record'
+            ? await requestQualifiedProviderAccountUsageRefresh({ accountId: account.id, recordId: write.recordId })
+            : await requestQualifiedConnectedAccountQuotaRefresh({ accountId: account.id, ref });
+        expect(result).toBe('written');
+        expect(await db.providerAccountUsageRecord.findFirstOrThrow({ where: { accountId: account.id, recordId: write.recordId } }))
+            .toMatchObject({ refreshRequestedAt: expect.any(Date) });
+        const change = await db.accountChange.findFirst({ where: { accountId: account.id,
+            kind: 'account', entityId: `provider-account-usage-refresh:${write.recordId}` } });
+        expect(change).toMatchObject({ hint: { providerAccountUsageRefresh: true, recordId: write.recordId } });
+        const { ProviderAccountUsageRefreshChangeV1Schema } = await import('@happier-dev/protocol/changes');
+        expect(ProviderAccountUsageRefreshChangeV1Schema.parse({ kind: change!.kind, entityId: change!.entityId, hint: change!.hint }))
+            .toMatchObject({ hint: { recordId: write.recordId } });
+    });
 
     it('does not link historical account-scoped usage after the credential has an attested organization', async () => {
         const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });

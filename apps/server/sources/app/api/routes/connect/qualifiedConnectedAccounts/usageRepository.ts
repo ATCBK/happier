@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { buildProviderAccountUsageRefreshChangeV1 } from '@happier-dev/protocol/changes';
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from '@/app/changes/markAccountChanged';
 
 import { isProviderAccountUsageOrganizationContextMatch } from '@happier-dev/protocol/connect/accountUsage';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema, ProviderAccountUsageRecordKeyV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
@@ -929,7 +931,7 @@ export async function writeQualifiedProviderAccountUsageRecordFromLegacyBoundary
         await writeQualifiedProviderAccountUsageRecordInTx(
             tx,
             params,
-        ), { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        ), { /* Compatibility writes reuse the Account-admitted PAU content CAS. */ isolationLevel: "ReadCommitted" });
 }
 
 export async function writeQualifiedProviderAccountUsageRecord(
@@ -1272,7 +1274,7 @@ export async function writeLegacyConnectedServiceQuotaCompatibilityRecord(
             accountId: params.accountId,
             credential: binding.credential,
         });
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    }, { /* Account admission, the usage content CAS and the final credential fence protect this account source. */ isolationLevel: "ReadCommitted" });
 }
 
 async function listQualifiedUsageSourcesForRecordInStorage(
@@ -1393,6 +1395,7 @@ function projectionMatchesMode(value: Pick<ReturnType<typeof ProviderAccountUsag
 /** Derived B materialization; accepted history and qualified source admission remain authoritative. */
 export async function writeQualifiedProviderAccountUsagePageProjection(params: Readonly<{ accountId: string }> & ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>) {
     return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { intent: 'content' });
         const admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, params);
         if (admitted.status !== 'resolved') return admitted.status;
         if (!projectionMatchesMode(params, admitted.record)) return 'storage_mode_mismatch' as const;
@@ -1412,7 +1415,7 @@ export async function writeQualifiedProviderAccountUsagePageProjection(params: R
             && projection.frontier?.observedAtMs === value.frontier?.observedAtMs;
         // A concurrently retained wider document is not held by this producer.
         return { status: 'written' as const, projection: submittedCoverage ? projection : null };
-    }, { isolationLevel: 'Serializable' });
+    }, { /* Account mode admission and the full-content parent CAS protect the projection. */ isolationLevel: 'ReadCommitted' });
 }
 
 export async function deleteQualifiedProviderAccountUsageRecord(
@@ -1441,7 +1444,7 @@ export async function deleteQualifiedProviderAccountUsageRecord(
             }
         }
         return await deleteProviderAccountUsageRecord(params, tx);
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    }, { /* The keyed delete and its FK cascades are atomic; no prior value is written back. */ isolationLevel: "ReadCommitted" });
 }
 
 export async function clearQualifiedConnectedAccountUsageForAccountInTx(
@@ -1487,8 +1490,20 @@ export async function requestQualifiedProviderAccountUsageRefresh(
                 throw error;
             }
         }
-        return await requestProviderAccountUsageRefresh(params, tx);
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        return await requestProviderAccountUsageRefreshAndNotify(tx, params);
+    }, { /* Refresh changes one scalar atomically and publishes only after a successful update. */ isolationLevel: "ReadCommitted" });
+}
+
+async function requestProviderAccountUsageRefreshAndNotify(
+    tx: Tx,
+    params: Readonly<{ accountId: string; recordId: string }>,
+) {
+    const result = await requestProviderAccountUsageRefresh(params, tx);
+    if (result === 'written') {
+        await markAccountChanged(tx, { accountId: params.accountId,
+            ...buildProviderAccountUsageRefreshChangeV1(params.recordId) });
+    }
+    return result;
 }
 
 async function readFirstQualifiedSourceForRef(
@@ -1803,7 +1818,7 @@ async function unlinkQualifiedConnectedAccountQuotaWithCredentialAdmission(
             );
         }
         return "removed";
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    }, { /* Exact source IDs and the affected-row check protect unlink without replacing shared usage. */ isolationLevel: "ReadCommitted" });
 }
 
 export async function unlinkQualifiedConnectedAccountQuota(
@@ -1843,11 +1858,11 @@ export async function requestQualifiedConnectedAccountQuotaRefresh(
             recordId: source.recordId,
         });
         if (admitted.status !== "resolved") return admitted.status;
-        return await requestProviderAccountUsageRefresh({
+        return await requestProviderAccountUsageRefreshAndNotify(tx, {
             accountId: params.accountId,
             recordId: source.recordId,
-        }, tx);
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        });
+    }, { /* The admitted source selects an atomic scalar refresh, not a read-modify-write. */ isolationLevel: "ReadCommitted" });
 }
 
 
@@ -1868,11 +1883,11 @@ export async function requestLegacyConnectedServiceQuotaCompatibilityRefresh(
             recordId: source.recordId,
         });
         if (admitted.status !== "resolved") return admitted.status;
-        return await requestProviderAccountUsageRefresh({
+        return await requestProviderAccountUsageRefreshAndNotify(tx, {
             accountId: params.accountId,
             recordId: source.recordId,
-        }, tx);
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        });
+    }, { /* The legacy source adapter uses the same atomic refresh owner. */ isolationLevel: "ReadCommitted" });
 }
 type QualifiedProviderAccountUsageAdmission =
     | Readonly<{

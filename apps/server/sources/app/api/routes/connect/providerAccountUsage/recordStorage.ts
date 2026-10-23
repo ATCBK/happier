@@ -192,7 +192,7 @@ function buildProviderAccountUsageRecordUpdateData(parsed: ParsedProviderAccount
 }
 
 function buildProviderAccountUsageRecordCurrentWhere(
-    parsed: ParsedProviderAccountUsageRecordWrite,
+    parsed: Pick<ParsedProviderAccountUsageRecordWrite, "accountId" | "recordId">,
     guard: ProviderAccountUsageRecordCurrentGuard,
 ) {
     return {
@@ -345,6 +345,19 @@ export async function updateProviderAccountUsageRecordIfCurrent(
     return updated.count > 0;
 }
 
+/** Derived metadata shares the observation owner's complete persisted-parent CAS. */
+export async function updateProviderAccountUsageRecordMetadataIfCurrent(
+    params: Readonly<{ accountId: string; recordId: string; metadata: Prisma.InputJsonValue }>,
+    guard: ProviderAccountUsageRecordCurrentGuard,
+    client: ProviderAccountUsageRecordClient,
+): Promise<boolean> {
+    const updated = await client.providerAccountUsageRecord.updateMany({
+        where: buildProviderAccountUsageRecordCurrentWhere(params, guard),
+        data: { metadata: params.metadata },
+    });
+    return updated.count === 1;
+}
+
 export async function writeProviderAccountUsageRecord(
     raw: UpsertProviderAccountUsageRecordParams,
     client: ProviderAccountUsageRecordClient = db,
@@ -366,6 +379,7 @@ export async function readProviderAccountUsageRecordWithCurrentGuard(params: Rea
 }>, client: ProviderAccountUsageRecordClient): Promise<Readonly<{
     record: StoredProviderAccountUsageRecord;
     guard: ProviderAccountUsageRecordCurrentGuard;
+    rawMetadata: unknown;
 }> | null> {
     const row = await client.providerAccountUsageRecord.findUnique({
         where: {
@@ -391,6 +405,7 @@ export async function readProviderAccountUsageRecordWithCurrentGuard(params: Rea
     if (!row) return null;
     return {
         record: parseStoredProviderAccountUsageRecord(row),
+        rawMetadata: row.metadata,
         guard: {
             fetchedAt: row.fetchedAt?.getTime() ?? null,
             ...(row.refreshRequestedAt ? { refreshRequestedAt: row.refreshRequestedAt.getTime() } : {}),

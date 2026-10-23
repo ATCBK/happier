@@ -18,15 +18,22 @@ const value = { recordId: snapshot.recordId, encoding: PROVIDER_ACCOUNT_USAGE_PA
         recordId: snapshot.recordId, range: demand.range, history: { entries: [{ ...frontier, snapshot }], nextCursor: null },
     }) }) };
 
+function storedRecord(metadata: unknown) {
+    return { accountId: 'owner', recordId: snapshot.recordId, recordKeyJson: recordKey,
+        payloadMode: 'plain_json_v1', status: 'ok', snapshot, sealedPayload: null,
+        fetchedAt: new Date(snapshot.fetchedAtMs), staleAfterMs: snapshot.staleAfterMs,
+        refreshRequestedAt: null, metadata };
+}
+
 function databaseBoundary() {
-    const findUnique = vi.fn().mockResolvedValue({ metadata: { materialFingerprint: 'retained', pageProjection: value } });
+    const findUnique = vi.fn().mockResolvedValue(storedRecord({ materialFingerprint: 'retained', pageProjection: value }));
     const count = vi.fn().mockResolvedValue(1);
     const findFirst = vi.fn().mockImplementation(async args => args.select.observedAt
         ? { id: frontier.id, observedAt: new Date(frontier.observedAtMs) } : null);
-    const update = vi.fn().mockResolvedValue({});
+    const update = vi.fn().mockResolvedValue({ count: 1 });
     // Prisma is the genuine database boundary. The integration suite owns SQL,
     // transaction/source admission and exact immutable witness verification.
-    const storage = { providerAccountUsageRecord: { findUnique, update }, providerAccountUsageHistory: { count, findFirst } } as unknown as
+    const storage = { providerAccountUsageRecord: { findUnique, update, updateMany: update }, providerAccountUsageHistory: { count, findFirst } } as unknown as
         Pick<TransactionClient, 'providerAccountUsageRecord' | 'providerAccountUsageHistory'>;
     return { storage, findUnique, count, findFirst, update };
 }
@@ -63,7 +70,7 @@ describe('B page projection persistence', () => {
         if (value.content.t !== 'plain') throw new Error('Expected plain fixture');
         const superseded = { ...Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'encoding')),
             content: { t: 'plain', v: Object.fromEntries(Object.entries(value.content.v).filter(([key]) => key !== 'encoding')) } };
-        db.findUnique.mockResolvedValue({ metadata: { materialFingerprint: 'retained', pageProjection: superseded } });
+        db.findUnique.mockResolvedValue(storedRecord({ materialFingerprint: 'retained', pageProjection: superseded }));
         expect(await readProviderAccountUsagePageProjection({ accountId: 'owner', recordId: snapshot.recordId, projection: demand }, db.storage))
             .toEqual({ projection: null, complete: false });
         expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
@@ -85,7 +92,7 @@ describe('B page projection persistence', () => {
     it('admits only the complete accepted count/frontier and preserves sibling metadata', async () => {
         const db = databaseBoundary();
         const metadata = { materialFingerprint: 'retained', futureField: { retained: true } };
-        db.findUnique.mockResolvedValue({ metadata });
+        db.findUnique.mockResolvedValue(storedRecord(metadata));
         expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
         expect(db.update.mock.calls[0]?.[0].data.metadata).toEqual({ ...metadata, pageProjection: value });
         db.update.mockClear();
@@ -105,7 +112,7 @@ describe('B page projection persistence', () => {
             range: demand.range, history: { entries: [{ ...frontier, snapshot }], nextCursor: null } });
         const sealed = { ...value, content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode: 'e2ee', material,
             randomBytes: length => new Uint8Array(length).fill(1) }) };
-        db.findUnique.mockResolvedValue({ metadata: { pageProjection: sealed } });
+        db.findUnique.mockResolvedValue(storedRecord({ pageProjection: sealed }));
         for (let index = 0; index < 10; index++) {
             const range = { ...demand.range, endAtMs: demand.range.endAtMs + index };
             expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value: { ...sealed,
@@ -133,7 +140,7 @@ describe('B page projection persistence', () => {
         // ciphertext here. Re-reading that body amplifies I/O inside its transaction.
         db.findUnique.mockImplementation(async () => {
             transferredBytes += new TextEncoder().encode(JSON.stringify(metadata)).length;
-            return { metadata };
+            return storedRecord(metadata);
         });
         expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
         expect(transferredBytes).toBe(new TextEncoder().encode(JSON.stringify(metadata)).length);
@@ -149,7 +156,7 @@ describe('B page projection persistence', () => {
                 recordId: alternate.recordId, range: demand.range,
                 history: { entries: [{ ...frontier, snapshot: alternate }], nextCursor: null },
             }) }) };
-        db.findUnique.mockResolvedValue({ metadata: { pageProjection: wrongRecord } });
+        db.findUnique.mockResolvedValue(storedRecord({ pageProjection: wrongRecord }));
         await expect(writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage))
             .rejects.toBeInstanceOf(ProviderAccountUsagePayloadInvariantError);
         expect(db.update).not.toHaveBeenCalled();
@@ -157,7 +164,7 @@ describe('B page projection persistence', () => {
 
     it('replaces a retained envelope that does not match the admitted write mode', async () => {
         const db = databaseBoundary();
-        db.findUnique.mockResolvedValue({ metadata: { pageProjection: { ...value, content: { t: 'encrypted', c: 'opaque' } } } });
+        db.findUnique.mockResolvedValue(storedRecord({ pageProjection: { ...value, content: { t: 'encrypted', c: 'opaque' } } }));
         expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
         expect(db.update).toHaveBeenCalledTimes(1);
     });
