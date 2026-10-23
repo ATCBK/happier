@@ -328,3 +328,5 @@ _.env.pipeline.production.local
 /packages/plugin-ui/api-surface.json
 /packages/sdk/api-declarations.md
 /packages/sdk/api-surface.json
+# Windows-style temp paths created literally on POSIX by path tests (Mutagen replicas, test homes)
+/\\tmp\\*
