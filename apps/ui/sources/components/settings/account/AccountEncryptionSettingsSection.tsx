@@ -26,6 +26,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { AccountEncryptionModeConversionFailureSchema, AccountEncryptionModeConversionResultSchema } from '@/sync/ops/account/convertAccountEncryptionMode';
 import { AccountHistoricalEncryptionKeyForgetResultV1Schema, AccountEncryptionAutomationTemplatesRecoverResultV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 
 type AccountEncryptionModePresentation = Readonly<{
@@ -309,18 +310,20 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                             if (outcome.status === 'cancelled' || outcome.status === 'interaction_opened') return;
                                             const value = outcome.value;
                                             if (outcome.status === 'unavailable') {
-                                                const detail = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-                                                if (detail?.mode === 'plain' || detail?.mode === 'e2ee') {
+                                                const failure = AccountEncryptionModeConversionFailureSchema.safeParse(value);
+                                                const detail = failure.success ? failure.data : null;
+                                                if (detail?.mode) {
                                                     publishAccountEncryptionPresentation(presentationScope, detail.mode);
                                                 }
-                                                throw new HappyError(typeof detail?.message === 'string' ? detail.message : t('settingsAccount.encryptionUpdateFailed'), false, {
-                                                    code: outcome.reason, ...(typeof detail?.status === 'number' ? { status: detail.status } : {}),
+                                                throw new HappyError(detail?.message ?? t('settingsAccount.encryptionUpdateFailed'), false, {
+                                                    code: outcome.reason, ...(detail?.status !== undefined ? { status: detail.status } : {}),
                                                 });
                                             }
-                                            if (!value || typeof value !== 'object' || Array.isArray(value) || (value.mode !== 'e2ee' && value.mode !== 'plain')) {
+                                            const converted = AccountEncryptionModeConversionResultSchema.safeParse(value);
+                                            if (!converted.success) {
                                                 throw new Error('Invalid Account conversion Action result');
                                             }
-                                            publishAccountEncryptionPresentation(presentationScope, value.mode);
+                                            publishAccountEncryptionPresentation(presentationScope, converted.data.mode);
                                             announceAccessibilityMessage(t('common.success'));
                                         } catch (e) {
                                             if (!isCurrent()) return;

@@ -1339,7 +1339,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
               }, 'danger');
             } catch (error) {
               return { status: 'unavailable', reason: error instanceof HappyError ? error.code ?? 'encryption_conversion_unavailable' : 'encryption_conversion_unavailable',
-                value: { message: error instanceof Error ? error.message : 'Account conversion is unavailable',
+                // Only a HappyError message is user-facing; other failures keep the generic copy.
+                value: { ...(error instanceof HappyError ? { message: error.message } : {}),
                   ...(error instanceof AccountEncryptionModeChangedError ? { mode: error.mode } : {}),
                   ...(error instanceof HappyError && error.status !== undefined ? { status: error.status } : {}) } };
             }

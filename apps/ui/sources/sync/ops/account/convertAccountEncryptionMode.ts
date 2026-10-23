@@ -1,4 +1,5 @@
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { z } from 'zod/mini';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { sync } from '@/sync/sync';
@@ -66,6 +67,16 @@ export class AccountEncryptionModeChangedError extends Error {
         this.name = 'AccountEncryptionModeChangedError';
     }
 }
+
+const AccountEncryptionModeSchema = z.enum(['plain', 'e2ee']);
+/** The `settings.invoke` value of a completed conversion. */
+export const AccountEncryptionModeConversionResultSchema = z.object({ mode: AccountEncryptionModeSchema });
+/** The `settings.invoke` value of an unavailable conversion; `mode` is set when the Account mode moved underneath it. */
+export const AccountEncryptionModeConversionFailureSchema = z.object({
+    message: z.optional(z.string()),
+    mode: z.optional(AccountEncryptionModeSchema),
+    status: z.optional(z.number()),
+});
 
 /** One whole-Account conversion owner shared by Settings and Agent Actions. */
 export async function convertAccountEncryptionMode(params: Readonly<{
