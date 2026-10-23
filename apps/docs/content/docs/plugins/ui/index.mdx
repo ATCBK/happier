@@ -330,8 +330,13 @@ Older hosts may omit `ready`, retaining their loading-only observation. Include
 `pending`, `ready` and `revision` in the acquisition dependencies so
 re-admission re-reads without a manual Retry. Retain the read's existing
 cancellation, data and pacing owners. Account-local reads can pass `false` to
-keep their independent availability; this projection reports `ready: true`
-without granting execution permission. An undemanded reader stays cold; a genuine
+ignore unrelated Machine readiness, but must still wait while `ready === false`.
+In the current development build, the same context publisher projects
+`requesterExecutionReady`: reads wait for the mounted caller's admission and, for
+an Account-owned destination, its exact Account origin. A legitimate Machine
+caller does not need an unrelated Account origin. Account reads' revision does not change for Machine-only
+readiness changes. This applies to custom reads on any surface, not just Settings.
+An undemanded reader stays cold; a genuine
 outage after readiness stays an error with Retry. These observations grant no
 permission: every invocation still revalidates authority.
 
