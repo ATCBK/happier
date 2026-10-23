@@ -15451,6 +15451,14 @@ export async function startDaemonSessionControlRuntime(
           serverIdentityId: origin.serverIdentityId,
         };
       }
+      if (!observedServerIdentityId && params.resolveCurrentMachineExecutionOriginContext) {
+        // The connected Machine owner already holds this Home binding. Using
+        // it for approval routing must not refresh the entire feature/catalog
+        // projection on every unsigned Action; effect admission stays fresh.
+        const origin = await params.resolveCurrentMachineExecutionOriginContext(context?.signal ?? replay?.signal)
+          .catch(() => null);
+        if (origin?.machineId === params.machineId) observedServerIdentityId = origin.serverIdentityId;
+      }
       // Machine-sync owners can be replaced after the control listener
       // starts. Resolve their exact current adapters at the request
       // boundary rather than retaining a stale one.
