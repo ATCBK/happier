@@ -675,7 +675,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         testIDPrefix,
     ]);
     const flowRunStates = React.useMemo(() => {
-        if (flowProjection === null) return undefined;
+        if (props.view !== 'flow' || flowProjection === null) return undefined;
         // Which authored node a row belongs to is the structure owner's answer,
         // so an occurrence stays selectable before its private detail has ever
         // been opened.
@@ -686,7 +686,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             projection: flowProjection,
             formatOccurrence: formatMapOccurrence,
         });
-    }, [derivedStructure, flowProjection, formatMapOccurrence, props.invocations, structureProgressById]);
+    }, [derivedStructure, flowProjection, formatMapOccurrence, props.invocations, props.view, structureProgressById]);
 
     /**
      * The terminal primary action (UX §3.3).
