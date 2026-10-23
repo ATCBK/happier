@@ -22,6 +22,7 @@ describe("serverFeatureGate", () => {
         {},
         { HAPPIER_BUILD_FEATURES_DENY: "sharing.session,sessions,browser.diagnostics,voice" },
         { HAPPIER_BUILD_FEATURES_ALLOW: "sessions,sharing.session" },
+        { HAPPIER_BUILD_FEATURES_DENY: "sessions.folders", HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED: "0" },
         { HAPPIER_FEATURE_TEAMS__ENABLED: "0", HAPPIER_FEATURE_AUTOMATIONS__ENABLED: "0", HAPPIER_FEATURE_BROWSER__ENABLED: "0" },
         { HAPPIER_FEATURE_SESSIONS_DRAFTS__ENABLED: "0", HAPPIER_FEATURE_LOCAL_SERVICES_INVENTORY__ENABLED: "0" },
         { HAPPIER_FEATURE_TEAMS__ENABLED: "malformed", HAPPIER_FEATURE_BROWSER_AUTOMATION__ENABLED: "malformed" },

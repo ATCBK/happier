@@ -92,10 +92,6 @@ export type SessionAgentSwitchingFeatureEnv = Readonly<{
   agentSwitchingEnabled: boolean;
 }>;
 
-export type SessionFoldersFeatureEnv = Readonly<{
-  foldersEnabled: boolean;
-}>;
-
 export type SessionDraftsFeatureEnv = Readonly<{
   draftsEnabled: boolean;
 }>;
@@ -583,12 +579,6 @@ export function readSessionEphemeralRunnerFeatureEnv(env: NodeJS.ProcessEnv): Re
 export function readSessionAgentSwitchingFeatureEnv(env: NodeJS.ProcessEnv): SessionAgentSwitchingFeatureEnv {
   return {
     agentSwitchingEnabled: readFeatureConfig(env, 'sessionsAgentSwitchingEnabled'),
-  };
-}
-
-export function readSessionFoldersFeatureEnv(env: NodeJS.ProcessEnv): SessionFoldersFeatureEnv {
-  return {
-    foldersEnabled: readFeatureConfig(env, 'sessionsFoldersEnabled'),
   };
 }
 

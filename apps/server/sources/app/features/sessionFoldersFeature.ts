@@ -1,14 +1,11 @@
-import { readSessionFoldersFeatureEnv } from './catalog/readFeatureEnv';
 import type { FeaturesPayloadDelta } from './types';
 
-export function resolveSessionFoldersFeature(env: NodeJS.ProcessEnv): FeaturesPayloadDelta {
-    const featureConfig = readSessionFoldersFeatureEnv(env);
-
+export function resolveSessionFoldersFeature(_env: NodeJS.ProcessEnv): FeaturesPayloadDelta {
     return {
         features: {
             sessions: {
                 enabled: true,
-                folders: { enabled: featureConfig.foldersEnabled },
+                folders: { enabled: true },
             },
         },
     };

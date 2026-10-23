@@ -143,6 +143,9 @@ export function resolveServerFeaturePayload(
     applyFeatureDependencies({ serverPayload: payload });
     applyBrowserCapabilityFeatureGateClosure(payload);
 
+    // Retained clients read this historical bit; Sections share Sessions availability.
+    payload.features.sessions.folders.enabled = payload.features.sessions.enabled;
+
     return payload;
 }
 
@@ -152,6 +155,7 @@ export function resolveServerFeatureGate(
     resolvers: readonly ServerFeatureResolver[],
     featureId: FeatureId,
 ): boolean {
+    if (featureId === 'sessions.folders') featureId = 'sessions';
     if (resolvers.length === 0) throw new Error('resolveServerFeaturePayload: resolvers list is empty');
     const required = new Set<FeatureId>();
     const include = (id: FeatureId): void => {
@@ -198,5 +202,6 @@ export function resolveServerFeatureDecisions(
         serverPayload: payload,
         buildPolicy: (featureId) => evaluateFeatureBuildPolicy(buildPolicy, featureId),
     });
-    return [...decisions.values()].filter((decision) => isFeatureServerRepresented(decision.featureId));
+    return [...decisions.values()].filter((decision) =>
+        decision.featureId !== 'sessions.folders' && isFeatureServerRepresented(decision.featureId));
 }

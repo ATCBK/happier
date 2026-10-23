@@ -1,4 +1,3 @@
-import type { FeatureId } from '@happier-dev/protocol/features/catalog';
 import { AnyClientUpgradeRequiredV1Schema, CLIENT_UPGRADE_REQUIRED_ERROR_CODE, CLIENT_UPGRADE_REQUIRED_HTTP_STATUS } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import { SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION, SESSION_ORGANIZATION_LEGACY_MAX_ATTENTION_STANDINGS } from '@happier-dev/protocol/sessions/organization/constants';
 import { CreateOrUpdateSessionOrganizationFolderRequestSchema, CreateOrUpdateSessionOrganizationFolderResponseSchema, CreateOrUpdateSessionOrganizationTagRequestSchema, CreateOrUpdateSessionOrganizationTagResponseSchema, DeleteSessionOrganizationLabelRequestSchema, DeleteSessionOrganizationLabelResponseSchema, DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationFolderResponseSchema, DeleteSessionOrganizationTagRequestSchema, DeleteSessionOrganizationTagResponseSchema, ImportLegacySessionOrganizationRequestSchema, ImportLegacySessionOrganizationResponseSchema, MoveSessionFolderAssignmentsRequestSchema, MoveSessionFolderAssignmentsResponseSchema, ReorderSessionOrganizationRequestSchema, ReorderSessionOrganizationResponseSchema, SetSessionFolderAssignmentRequestSchema, SetSessionFolderAssignmentResponseSchema, SetSessionPinRequestSchema, SetSessionPinResponseSchema, SetSessionTagAssignmentsRequestSchema, SetSessionTagAssignmentsResponseSchema, UpsertSessionOrganizationLabelRequestSchema, UpsertSessionOrganizationLabelResponseSchema } from '@happier-dev/protocol/sessions/organization/mutations';
@@ -30,8 +29,6 @@ import { fetchSessionOrganizationSnapshot } from "@/app/session/organization/org
 import { reorderSessionOrganization, reorderSessionPins } from "@/app/session/organization/organizationOrdering";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { type Fastify } from "../../types";
-
-const SESSION_FOLDERS_FEATURE_ID: FeatureId = "sessions.folders";
 
 const sessionIdParamsSchema = z.object({
     sessionId: z.string().check(z.minLength(1)),
@@ -328,7 +325,7 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
         return reply.send(result);
     });
 
-    const folderRoutes = createServerFeatureGatedRouteApp(app, SESSION_FOLDERS_FEATURE_ID);
+    const folderRoutes = createServerFeatureGatedRouteApp(app, "sessions");
 
     folderRoutes.post("/v2/session-organization/folders", {
         preHandler: app.authenticate,

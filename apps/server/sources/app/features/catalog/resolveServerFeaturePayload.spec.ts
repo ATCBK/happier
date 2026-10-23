@@ -9,7 +9,7 @@ import { resolveSessionHandoffFeature } from "../sessionHandoffFeature";
 import { resolveServerUsageAnalyticsCapabilitiesFeature } from "../serverUsageAnalyticsCapabilitiesFeature";
 import { resolveSharingFeature } from "../sharingFeature";
 import { resolveTerminalFeature } from "../terminalFeature";
-import { resolveServerFeatureGate, resolveServerFeaturePayload } from "./resolveServerFeaturePayload";
+import { resolveServerFeatureDecisions, resolveServerFeatureGate, resolveServerFeaturePayload } from "./resolveServerFeaturePayload";
 import { resolveServerFeatureBuildPolicy } from "./serverFeatureBuildPolicy";
 import { serverFeatureRegistry, type ServerFeatureResolver } from "./serverFeatureRegistry";
 import type { FeaturesPayloadDelta } from "../types";
@@ -395,7 +395,7 @@ describe("resolveServerFeaturePayload", () => {
         expect(readOptionalPath(payload, ["features", "sessions", "folders", "enabled"])).toBe(true);
     });
 
-    it("supports disabling session folders through the feature env", async () => {
+    it("projects the legacy folders bit from Sessions despite the retired independent opt-out", async () => {
         const mod = await loadSessionFoldersFeatureModule();
         expect(mod?.resolveSessionFoldersFeature).toBeTypeOf("function");
 
@@ -403,7 +403,13 @@ describe("resolveServerFeaturePayload", () => {
             HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED: "0",
         } as NodeJS.ProcessEnv, [mod!.resolveSessionFoldersFeature]);
 
-        expect(readOptionalPath(payload, ["features", "sessions", "folders", "enabled"])).toBe(false);
+        expect(readOptionalPath(payload, ["features", "sessions", "folders", "enabled"])).toBe(true);
+        const disabledSessions = resolveServerFeaturePayload({ HAPPIER_BUILD_FEATURES_DENY: "sessions" }, [mod!.resolveSessionFoldersFeature]);
+        expect(readOptionalPath(disabledSessions, ["features", "sessions", "folders", "enabled"])).toBe(false);
+        const retiredDeny = resolveServerFeaturePayload({ HAPPIER_BUILD_FEATURES_DENY: "sessions.folders" }, [mod!.resolveSessionFoldersFeature]);
+        expect(readOptionalPath(retiredDeny, ["features", "sessions", "folders", "enabled"])).toBe(true);
+        expect(resolveServerFeatureGate({ HAPPIER_BUILD_FEATURES_DENY: "sessions.folders" }, serverFeatureRegistry, "sessions.folders")).toBe(true);
+        expect(resolveServerFeatureDecisions({}, serverFeatureRegistry).some((decision) => decision.featureId === "sessions.folders")).toBe(false);
     });
 
     it("publishes the Runner surface by default while every canonical dependency still gates it", () => {

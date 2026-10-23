@@ -10,16 +10,17 @@ describe('FEATURE_SERVER_CONFIG', () => {
   });
 
   it('links a catalog switch to its feature, family and catalog description', () => {
-    expect(FEATURE_CONFIG.sessionsFoldersEnabled).toMatchObject({
-      key: 'HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED',
-      featureId: 'sessions.folders',
+    expect(FEATURE_CONFIG.sessionsDraftsEnabled).toMatchObject({
+      key: 'HAPPIER_FEATURE_SESSIONS_DRAFTS__ENABLED',
+      featureId: 'sessions.drafts',
       family: 'sessions',
       section: 'features',
-      description: FEATURE_CATALOG['sessions.folders'].description,
+      description: FEATURE_CATALOG['sessions.drafts'].description,
       editable: 'home',
       apply: 'live',
     });
     expect(FEATURE_CONFIG.encryptionStoragePolicy).toMatchObject({ section: 'policies', editable: 'home' });
+    expect(FEATURE_SERVER_CONFIG.some((entry) => entry.key === 'HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED')).toBe(false);
   });
 
   it('marks keys captured when the server starts as restart-to-apply, and key material as secret', () => {

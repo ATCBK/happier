@@ -177,7 +177,6 @@ export const FEATURE_READER_DEFAULTS = {
     sessionsHandoffEnabled: { ...ON, ...HOME },
     sessionsEphemeralRunnerEnabled: { ...ON, ...HOME },
     sessionsAgentSwitchingEnabled: { ...ON, ...HOME },
-    sessionsFoldersEnabled: { ...ON, ...HOME },
     sessionsDraftsEnabled: { ...ON, ...HOME },
     sessionsFilteredListingEnabled: { ...ON, ...HOME },
     sessionsBoardEnabled: { ...ON, ...HOME },
