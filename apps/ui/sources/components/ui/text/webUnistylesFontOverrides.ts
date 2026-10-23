@@ -8,13 +8,11 @@ export type UnistylesFontMetric = Readonly<{
 }>;
 
 function isCssStyleRule(rule: CSSRule): rule is CSSStyleRule {
-    return (rule as any)?.type === 1;
+    return rule.type === 1;
 }
 
 function isCssGroupingRule(rule: CSSRule): rule is CSSGroupingRule {
-    const type = (rule as any)?.type;
-    // CSSMediaRule (4), CSSSupportsRule (12), etc.
-    return typeof (rule as any)?.cssRules !== 'undefined' && type !== 1;
+    return 'cssRules' in rule && rule.type !== 1;
 }
 
 function extractUnistylesClassNames(selectorText: string): string[] {
@@ -58,45 +56,44 @@ function pickMetricFromRule(rule: CSSStyleRule): UnistylesFontMetric | null {
     };
 }
 
+function collectRuleFontMetrics(
+    rule: CSSRule,
+    cache: Map<string, UnistylesFontMetric>,
+): number {
+    let added = 0;
+    if (isCssStyleRule(rule)) {
+        const selectorText = rule.selectorText ?? '';
+        if (!selectorText.includes('unistyles_')) return 0;
+        const metric = pickMetricFromRule(rule);
+        if (!metric) return 0;
+        for (const cls of extractUnistylesClassNames(selectorText)) {
+            if (!cache.has(cls)) {
+                cache.set(cls, metric);
+                added++;
+            }
+        }
+    } else if (isCssGroupingRule(rule)) {
+        for (const child of Array.from(rule.cssRules)) added += collectRuleFontMetrics(child, cache);
+    }
+    return added;
+}
+
+function collectSheetFontMetrics(sheet: CSSStyleSheet, cache: Map<string, UnistylesFontMetric>): number {
+    try {
+        return Array.from(sheet.cssRules).reduce((added, rule) => added + collectRuleFontMetrics(rule, cache), 0);
+    } catch {
+        // Cross-origin sheets can be inaccessible; they were never admitted font sources.
+        return 0;
+    }
+}
+
 export function scanDocumentForUnistylesFontMetrics(
     document: Document,
     cache: Map<string, UnistylesFontMetric>,
 ): number {
     let added = 0;
-    if (!(document as any)?.styleSheets) return 0;
-
-    const walkRules = (rules: CSSRuleList) => {
-        for (let i = 0; i < rules.length; i++) {
-            const rule = rules[i] as CSSRule;
-            if (isCssStyleRule(rule)) {
-                const selectorText = rule.selectorText ?? '';
-                if (!selectorText.includes('unistyles_')) continue;
-                const metric = pickMetricFromRule(rule);
-                if (!metric) continue;
-                const classNames = extractUnistylesClassNames(selectorText);
-                for (const cls of classNames) {
-                    if (cache.has(cls)) continue;
-                    cache.set(cls, metric);
-                    added += 1;
-                }
-                continue;
-            }
-            if (isCssGroupingRule(rule)) {
-                walkRules((rule as any).cssRules as CSSRuleList);
-            }
-        }
-    };
-
     for (const sheet of Array.from(document.styleSheets)) {
-        let rules: CSSRuleList | null = null;
-        try {
-            rules = sheet.cssRules;
-        } catch {
-            // Some stylesheets can be cross-origin or otherwise inaccessible.
-            rules = null;
-        }
-        if (!rules) continue;
-        walkRules(rules);
+        added += collectSheetFontMetrics(sheet, cache);
     }
 
     return added;
@@ -117,11 +114,11 @@ export function ensureOverrideStyleElement(document: Document): HTMLStyleElement
 }
 
 function getInjectedSet(styleEl: HTMLStyleElement): Set<string> {
-    const anyEl = styleEl as any;
-    if (!anyEl.__happierInjectedUnistylesFontClasses) {
-        anyEl.__happierInjectedUnistylesFontClasses = new Set<string>();
+    const marked = styleEl as HTMLStyleElement & { __happierInjectedUnistylesFontClasses?: Set<string> };
+    if (!marked.__happierInjectedUnistylesFontClasses) {
+        marked.__happierInjectedUnistylesFontClasses = new Set<string>();
     }
-    return anyEl.__happierInjectedUnistylesFontClasses as Set<string>;
+    return marked.__happierInjectedUnistylesFontClasses;
 }
 
 function buildOverrideRule(className: string, metric: UnistylesFontMetric): string {
@@ -164,11 +161,86 @@ export function syncOverrideStyleElement(
 }
 
 export function setRootCssVar(document: Document, scale: number): void {
-    const root = (document as any)?.documentElement;
+    const root = document.documentElement;
     if (!root?.style?.setProperty) return;
     const value =
         typeof scale === 'number' && Number.isFinite(scale)
             ? String(scale)
             : '1';
     root.style.setProperty(HAPPIER_UI_FONT_SCALE_CSS_VAR, value);
+}
+
+type FontObservation = { consumers: number; stop: () => void };
+const fontObservations = new WeakMap<Document, FontObservation>();
+
+/** App and embed roots share one document's CSS observation, not a frame clock. */
+export function observeDocumentUnistylesFontMetrics(document: Document): () => void {
+    let observation = fontObservations.get(document);
+    if (!observation) {
+        const cache = new Map<string, UnistylesFontMetric>();
+        const override = ensureOverrideStyleElement(document);
+        scanDocumentForUnistylesFontMetrics(document, cache);
+        syncOverrideStyleElement(override, cache);
+        let active = true;
+        let publicationPending = false;
+        const publishAdded = (added: number) => {
+            if (added === 0 || publicationPending) return;
+            publicationPending = true;
+            // Preserve one publication for a synchronous CSS burst, before paint,
+            // without allocating a frame or rescanning unrelated stylesheets.
+            queueMicrotask(() => {
+                publicationPending = false;
+                if (active) syncOverrideStyleElement(override, cache);
+            });
+        };
+        const refreshElement = (element: Element) => {
+            if (element === override) return;
+            if (element.tagName === 'STYLE' || element.tagName === 'LINK') {
+                const sheet = (element as HTMLStyleElement | HTMLLinkElement).sheet;
+                if (sheet) publishAdded(collectSheetFontMetrics(sheet, cache));
+            }
+        };
+        const proto = document.defaultView?.CSSStyleSheet?.prototype;
+        const originalInsertRule = proto?.insertRule;
+        const insertRule: CSSStyleSheet['insertRule'] = function (this: CSSStyleSheet, rule, index = 0) {
+            const result = originalInsertRule!.call(this, rule, index);
+            if (active) publishAdded(collectRuleFontMetrics(this.cssRules[result]!, cache));
+            return result;
+        };
+        if (proto && originalInsertRule) proto.insertRule = insertRule;
+
+        const Observer = document.defaultView?.MutationObserver;
+        const observer = Observer ? new Observer(records => {
+            for (const record of records) {
+                const element = record.target.nodeType === 1 ? record.target as Element : record.target.parentElement;
+                if (element) refreshElement(element);
+                for (const node of Array.from(record.addedNodes)) {
+                    if (node.nodeType === 1) refreshElement(node as Element);
+                }
+            }
+        }) : null;
+        observer?.observe(document.head, { childList: true, subtree: true, characterData: true });
+        const onLoad = (event: Event) => {
+            if (event.target && 'nodeType' in event.target && event.target.nodeType === 1) refreshElement(event.target as Element);
+        };
+        document.head.addEventListener('load', onLoad, true);
+        observation = { consumers: 0, stop: () => {
+            active = false;
+            observer?.disconnect();
+            document.head.removeEventListener('load', onLoad, true);
+            if (proto?.insertRule === insertRule) proto.insertRule = originalInsertRule!;
+        } };
+        fontObservations.set(document, observation);
+    }
+    observation.consumers++;
+    const retained = observation;
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        if (--retained.consumers === 0) {
+            retained.stop();
+            fontObservations.delete(document);
+        }
+    };
 }
