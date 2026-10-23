@@ -3424,6 +3424,107 @@ describe('WorkflowRunContent', () => {
     expect(fresh).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['action', 'root', 'if', 'loop'] as const)(
+    'offers a plain Retry for a recoverable %s that presses through the retry handler',
+    async (blockKind) => {
+      const retry = vi.fn();
+      const same = vi.fn();
+      const fresh = vi.fn();
+      const notPrepared = { kind: 'unavailable', reason: 'recovery_not_prepared' } as const;
+      const screen = await renderContent({
+        run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+        selectedInvocationId: 'inv-1',
+        selectedInvocationRecoveryAvailability: {
+          reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+          retry: { kind: 'available', causalInvocationIds: ['inv-1'] },
+          continueSameConversation: notPrepared,
+          continueFreshAgent: notPrepared,
+          restoreWorkspace: notPrepared,
+        },
+        invocations: [
+          createWorkflowInvocationIndexFixture({ id: 'inv-1', lifecycle: 'failed' }),
+        ],
+        selectedInvocationProgress: {
+          kind: 'happier.workflow-progress.v1',
+          invocationPath: { blockId: blockKind === 'root' ? '$root' : 'projector', scope: [] },
+          blockKind,
+          attempt: '0',
+          logicalInvocationRecordId: 'inv-1',
+        },
+        onRetry: retry,
+        onRetrySameConversation: same,
+        onRetryFreshAgent: fresh,
+      });
+      // An Action or frame is never offered as an Agent; Retry reads as itself and shares the card.
+      expect(screen.findByTestId('workflow-run-retry-same')).toBeNull();
+      expect(screen.findByTestId('workflow-run-retry-fresh')).toBeNull();
+      expect(screen.findByTestId('workflow-run-retry-replacement')).toBeNull();
+      expect(screen.getTextContent()).not.toContain('workflows.recovery.freshAgent');
+      expect(screen.getTextContent()).toContain('workflows.recovery.retry');
+      expect(screen.findByTestId('workflow-run-recovery-card')).not.toBeNull();
+      await screen.pressByTestIdAsync('workflow-run-retry');
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(same).not.toHaveBeenCalled();
+      expect(fresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it('offers an Agent step only its conversation choices, never a plain Retry', async () => {
+    const screen = await renderContent({
+      run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+      selectedInvocationId: 'inv-1',
+      selectedInvocationRecoveryAvailability: {
+        reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+        retry: { kind: 'available', causalInvocationIds: ['inv-1'] },
+        continueSameConversation: { kind: 'available' },
+        continueFreshAgent: { kind: 'available' },
+        restoreWorkspace: { kind: 'unavailable', reason: 'recovery_not_prepared' },
+      },
+      invocations: [
+        createWorkflowInvocationIndexFixture({ id: 'inv-1', lifecycle: 'failed' }),
+      ],
+      selectedInvocationProgress: {
+        kind: 'happier.workflow-progress.v1',
+        invocationPath: { blockId: 'analyze', scope: [] },
+        blockKind: 'step',
+        attempt: '0',
+        logicalInvocationRecordId: 'inv-1',
+      },
+      onRetry: vi.fn(),
+      onRetrySameConversation: vi.fn(),
+      onRetryFreshAgent: vi.fn(),
+    });
+    expect(screen.findByTestId('workflow-run-retry')).toBeNull();
+    expect(screen.findByTestId('workflow-run-retry-same')).not.toBeNull();
+    expect(screen.findByTestId('workflow-run-retry-fresh')).not.toBeNull();
+  });
+
+  it('shows no Retry control for an Action whose owner answer is unavailable', async () => {
+    const screen = await renderContent({
+      run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+      selectedInvocationId: 'inv-1',
+      selectedInvocationRecoveryAvailability: {
+        reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+        retry: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+        continueSameConversation: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+        continueFreshAgent: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+        restoreWorkspace: { kind: 'unavailable', reason: 'recovery_not_prepared' },
+      },
+      invocations: [
+        createWorkflowInvocationIndexFixture({ id: 'inv-1', lifecycle: 'failed' }),
+      ],
+      selectedInvocationProgress: {
+        kind: 'happier.workflow-progress.v1',
+        invocationPath: { blockId: 'projector', scope: [] },
+        blockKind: 'action',
+        attempt: '0',
+        logicalInvocationRecordId: 'inv-1',
+      },
+      onRetry: vi.fn(),
+    });
+    expect(screen.findByTestId('workflow-run-retry')).toBeNull();
+  });
+
   it('formats and exposes only the actual resolved workspace through canonical actions', async () => {
     const copyWorkspace = vi.fn();
     const openWorkspace = vi.fn();

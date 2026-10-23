@@ -249,6 +249,8 @@ export type WorkflowRunContentProps = Readonly<{
     onOpenWorkspace?: (workspaceRefId: string, directory: string) => void;
     onRetrySameConversation?: () => void;
     onRetryFreshAgent?: () => void;
+    /** Repeat an Action or structural frame with its original input; it has no conversation to choose. */
+    onRetry?: () => void;
     /** Repeat the selected attempt with an input the person reviewed instead of the original. */
     onRetryWithReplacement?: (input: WorkflowRecoveryContinuation) => void;
     onReattach?: () => void;
@@ -1370,6 +1372,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             ...(props.onRetryFreshAgent === undefined
                 ? {}
                 : { onRetryFreshAgent: props.onRetryFreshAgent }),
+            ...(props.onRetry === undefined ? {} : { onRetry: props.onRetry }),
             ...(props.onRetryWithReplacement === undefined
                 ? {}
                 : { onRetryWithReplacement: props.onRetryWithReplacement }),
@@ -1399,6 +1402,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         props.onReattach,
         props.onRespondToRequest,
         props.onRestoreWorkspace,
+        props.onRetry,
         props.onRetryFreshAgent,
         props.onRetrySameConversation,
         props.onRetryWithReplacement,

@@ -15476,6 +15476,8 @@ const pl = translated(workflowValueReferenceTranslations.pl, {
         sameConversationTitle: 'Kontynuuj w tej samej rozmowie',
         freshAgentBody: 'Nowy Agent otrzymuje dane wejściowe kroku i przestrzeń roboczą, ale nie tę rozmowę.',
         startFresh: 'Zacznij od nowa',
+        retry: 'Powtórz',
+        retryExplain: 'Uruchamia to ponownie z oryginalnymi danymi wejściowymi.',
     },
 
     unavailable: {

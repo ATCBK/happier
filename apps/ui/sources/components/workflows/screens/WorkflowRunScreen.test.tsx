@@ -2175,6 +2175,99 @@ describe('WorkflowRunScreen', () => {
         });
     });
 
+    it.each(['action', 'if', 'loop'] as const)('retries a recoverable %s with the owner\'s causal set, its original input and no replacement', async (blockKind) => {
+        const rootId = '66666666-6666-4666-8666-666666666666';
+        const selectedId = '44444444-4444-4444-8444-444444444444';
+        const invocations = [
+            createWorkflowInvocationIndexFixture({ id: rootId, sequence: '0', lifecycle: 'failed' }),
+            createWorkflowInvocationIndexFixture({ id: selectedId, parentRecordId: rootId, sequence: '1', lifecycle: 'failed' }),
+        ];
+        const causalInvocationIds = [rootId, selectedId];
+        const notPrepared = { kind: 'unavailable' as const, reason: 'recovery_not_prepared' as const };
+        detailActions.getInvocation.mockResolvedValue({
+            invocation: {
+                index: invocations[1],
+                parentRevision: 1,
+                progress: {
+                    kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'projector', scope: [] },
+                    blockKind, attempt: '0', logicalInvocationRecordId: selectedId,
+                },
+                recoveryAvailability: {
+                    reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+                    retry: { kind: 'available', causalInvocationIds },
+                    continueSameConversation: notPrepared, continueFreshAgent: notPrepared, restoreWorkspace: notPrepared,
+                },
+            },
+        });
+        detailActions.retryInvocation.mockResolvedValue({
+            run: createWorkflowRunSummaryFixture({ id: '11111111-1111-4111-8111-111111111111', state: 'running' }),
+            invocation: invocations[1], disposition: 'accepted',
+        });
+        keyInvocationReads(invocations);
+        await renderRunScreen({
+            run: createWorkflowRunSummaryFixture({
+                id: '11111111-1111-4111-8111-111111111111', state: 'interrupted', origin: { kind: 'direct' },
+                availability: { cancel: false, pause: false },
+            }),
+            invocations,
+        });
+        await act(async () => readContentProps()?.onSelectInvocation(selectedId));
+        await act(async () => {});
+
+        // No Agent conversation belongs to this invocation, so none of its handlers is wired.
+        expect(readContentProps()?.onRetrySameConversation).toBeUndefined();
+        expect(readContentProps()?.onRetryFreshAgent).toBeUndefined();
+        expect(readContentProps()?.onRetryWithReplacement).toBeUndefined();
+        await act(async () => requireDefined(readContentProps()?.onRetry, 'Expected a plain Retry handler')());
+        await act(async () => {});
+        expect(detailActions.retryInvocation).toHaveBeenCalledTimes(1);
+        expect(detailActions.retryInvocation.mock.calls[0]?.[0]).toMatchObject({
+            runId: '11111111-1111-4111-8111-111111111111',
+            expectedRevision: 1,
+            invocation: { recordId: selectedId },
+            causalInvocationIds,
+            input: { kind: 'original' },
+        });
+    });
+
+    it('wires no plain Retry for an Agent step', async () => {
+        const rootId = '66666666-6666-4666-8666-666666666666';
+        const selectedId = '44444444-4444-4444-8444-444444444444';
+        const invocations = [
+            createWorkflowInvocationIndexFixture({ id: rootId, sequence: '0', lifecycle: 'failed' }),
+            createWorkflowInvocationIndexFixture({ id: selectedId, parentRecordId: rootId, sequence: '1', lifecycle: 'failed' }),
+        ];
+        detailActions.getInvocation.mockResolvedValue({
+            invocation: {
+                index: invocations[1],
+                parentRevision: 1,
+                progress: {
+                    kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'analyze', scope: [] },
+                    blockKind: 'step', attempt: '0', logicalInvocationRecordId: selectedId,
+                },
+                recoveryAvailability: {
+                    reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+                    retry: { kind: 'available', causalInvocationIds: [rootId, selectedId] },
+                    continueSameConversation: { kind: 'unavailable', reason: 'recovery_not_prepared' },
+                    continueFreshAgent: { kind: 'available' },
+                    restoreWorkspace: { kind: 'unavailable', reason: 'recovery_not_prepared' },
+                },
+            },
+        });
+        keyInvocationReads(invocations);
+        await renderRunScreen({
+            run: createWorkflowRunSummaryFixture({
+                id: '11111111-1111-4111-8111-111111111111', state: 'interrupted', origin: { kind: 'direct' },
+                availability: { cancel: false, pause: false },
+            }),
+            invocations,
+        });
+        await act(async () => readContentProps()?.onSelectInvocation(selectedId));
+        await act(async () => {});
+        expect(readContentProps()?.onRetry).toBeUndefined();
+        expect(readContentProps()?.onRetryFreshAgent).toBeDefined();
+    });
+
     it.each(['unknown', 'offline', 'unavailable', 'denied', 'supplemental503', 'supplemental403', 'supplementalCancelled', 'supplementalRetired', 'supplementalFocusRetired'] as const)('keeps recovery content readable without inventing native continuation evidence (%s)', async (state) => {
         const root = createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333', lifecycle: 'failed' });
         const step = createWorkflowInvocationIndexFixture({ id: '44444444-4444-4444-8444-444444444444',

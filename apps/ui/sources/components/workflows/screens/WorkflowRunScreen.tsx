@@ -2080,6 +2080,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 onRunWithAnotherAgent={whenEvidenceConfirmed(selectedRecovery?.canRunWithAnotherAgent
                     && visibleAcceptedContext !== null
                     ? requestRunWithAnotherAgent : undefined)}
+                // An Action or frame retries with the owner's causal set and its original input; the wire
+                // still names a conversation, and a new one is the only thing it can start.
+                onRetry={whenEvidenceConfirmed(selectedInvocationId && selectedRecovery?.canRetry ? () => { void retrySelected('fresh_agent'); } : undefined)}
                 onRetryWithReplacement={whenEvidenceConfirmed(selectedInvocationId
                     && (selectedRecovery?.canRetrySameConversation || selectedRecovery?.canRetryFreshAgent)
                     ? (input) => { void retrySelected(input.conversation, { document: input.document, input: input.input }); }

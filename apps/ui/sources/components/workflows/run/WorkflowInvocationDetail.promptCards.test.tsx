@@ -80,6 +80,7 @@ const recovery: WorkflowInvocationRecoveryPresentation = {
     canReattach: false,
     canRetrySameConversation: false,
     canRetryFreshAgent: false,
+    canRetry: false,
     retryCausalInvocationIds: [],
     unavailableReasons: { reattach: null, retry: null, continueSameConversation: null, continueFreshAgent: null },
     canContinuePrepared: false,

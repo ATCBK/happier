@@ -15488,6 +15488,8 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
         sameConversationTitle: 'Продолжить в том же разговоре',
         freshAgentBody: 'Новый Agent получит входные данные шага и рабочую область, но не этот разговор.',
         startFresh: 'Начать заново',
+        retry: 'Повторить',
+        retryExplain: 'Запускает это ещё раз с исходными входными данными.',
     },
 
     unavailable: {

@@ -15443,6 +15443,8 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         sameConversationTitle: '同じ会話で続ける',
         freshAgentBody: '新しい Agent はステップの入力とワークスペースを受け取りますが、この会話は引き継ぎません。',
         startFresh: '新しく始める',
+        retry: '再実行',
+        retryExplain: '元の入力でもう一度実行します。',
     },
 
     unavailable: {

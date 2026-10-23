@@ -140,6 +140,11 @@ export type WorkflowInvocationRecoveryPresentation = Readonly<{
     canReattach: boolean;
     canRetrySameConversation: boolean;
     canRetryFreshAgent: boolean;
+    /**
+     * Repeat an Action or a structural frame (root, If, loop, parallel, workflow) with its original input.
+     * Only an Agent step has a conversation to continue, so it keeps the two choices above instead.
+     */
+    canRetry: boolean;
     /** Exact parent-before-child causal closure reviewed for the retry mutation. */
     retryCausalInvocationIds: readonly string[];
     /** Typed owner reasons retained for non-visual consumers and future copy projection. */
@@ -279,6 +284,7 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
             && params.recoveryAvailability?.continueSameConversation.kind === 'available',
         canRetryFreshAgent: retryable
             && params.recoveryAvailability?.continueFreshAgent.kind === 'available',
+        canRetry: retryable && params.progress != null && params.progress.blockKind !== 'step',
         retryCausalInvocationIds,
         unavailableReasons: {
             reattach: params.recoveryAvailability?.reattach.kind === 'unavailable'

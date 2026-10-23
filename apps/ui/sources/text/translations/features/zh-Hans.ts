@@ -15439,6 +15439,8 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         sameConversationTitle: '在同一对话中继续',
         freshAgentBody: '新的 Agent 会获得此步骤的输入和工作区，但不会获得这段对话。',
         startFresh: '重新开始',
+        retry: '重试',
+        retryExplain: '使用原始输入再次运行。',
     },
 
     unavailable: {

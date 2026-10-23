@@ -14949,6 +14949,8 @@ const de = translated(workflowValueReferenceTranslations.de, {
         sameConversationTitle: 'Im selben Gespräch fortsetzen',
         freshAgentBody: 'Ein neuer Agent erhält die Eingabe des Schritts und den Arbeitsbereich, nicht dieses Gespräch.',
         startFresh: 'Neu beginnen',
+        retry: 'Wiederholen',
+        retryExplain: 'Führt dies erneut mit der ursprünglichen Eingabe aus.',
     },
 
     unavailable: {

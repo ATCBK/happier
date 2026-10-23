@@ -15503,6 +15503,8 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
         sameConversationTitle: 'Continuer dans la même conversation',
         freshAgentBody: 'Un nouvel Agent reçoit l’entrée de l’étape et l’espace de travail, pas cette conversation.',
         startFresh: 'Recommencer',
+        retry: 'Réessayer',
+        retryExplain: 'Relance cet élément avec son entrée d’origine.',
     },
 
     unavailable: {

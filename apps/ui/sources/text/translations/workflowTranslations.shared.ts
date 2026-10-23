@@ -655,6 +655,8 @@ export const en = {
         sameConversationTitle: 'Continue in the same conversation',
         freshAgentBody: 'A fresh Agent gets the step’s input and the workspace, not this conversation.',
         startFresh: 'Start fresh',
+        retry: 'Retry',
+        retryExplain: 'Runs this again with its original input.',
     },
 
     unavailable: {

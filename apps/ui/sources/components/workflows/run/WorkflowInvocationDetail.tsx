@@ -107,6 +107,7 @@ export type WorkflowInvocationDetailProps = Readonly<{
     onReattach?: () => void;
     onRetrySameConversation?: () => void;
     onRetryFreshAgent?: () => void;
+    onRetry?: () => void;
     onRetryWithReplacement?: (input: WorkflowRecoveryContinuation) => void;
     onContinuePrepared?: (choice: WorkflowRecoveryContinuation) => void;
     /** Acknowledgement is owned by the host: it is submitted with the operation. */
@@ -292,6 +293,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     const reattachOffered = recovery.canReattach && props.onReattach !== undefined;
     const retrySameOffered = recovery.canRetrySameConversation && props.onRetrySameConversation !== undefined;
     const retryFreshOffered = recovery.canRetryFreshAgent && props.onRetryFreshAgent !== undefined;
+    const retryOffered = recovery.canRetry && props.onRetry !== undefined;
     const replacementOffered = (recovery.canRetrySameConversation || recovery.canRetryFreshAgent)
         && props.onRetryWithReplacement !== undefined;
     const restoreOffered = recovery.workspaceUnavailable && recovery.canRestoreWorkspace
@@ -302,7 +304,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     // One primary: the first offered choice, in the order the lab ranks them; the rest stay secondary.
     const offeredChoices = ([
         ['prepared', preparedOffered], ['reattach', reattachOffered], ['same', retrySameOffered],
-        ['fresh', retryFreshOffered], ['restore', restoreOffered], ['reviewed', reviewedNewRunOffered],
+        ['fresh', retryFreshOffered], ['retry', retryOffered], ['restore', restoreOffered], ['reviewed', reviewedNewRunOffered],
         ['another', anotherAgentOffered],
     ] as const).filter(([, offered]) => offered).map(([choice]) => choice);
     const choiceDisplay = (choice: (typeof offeredChoices)[number]) => offeredChoices[0] === choice ? 'default' as const : 'secondary' as const;
@@ -607,6 +609,28 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                                         onPress={() => {
                                             if (!retryable) return;
                                             props.onRetryFreshAgent?.();
+                                        }}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {retryOffered ? (
+                            <Item
+                                title={t('workflows.recovery.retry')}
+                                subtitle={t('workflows.recovery.retryExplain')}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-retry`}
+                                        size="small"
+                                        display={choiceDisplay('retry')}
+                                        loading={operationPending}
+                                        disabled={!retryable}
+                                        title={t('workflows.recovery.retry')}
+                                        onPress={() => {
+                                            if (!retryable) return;
+                                            props.onRetry?.();
                                         }}
                                     />
                                 )}

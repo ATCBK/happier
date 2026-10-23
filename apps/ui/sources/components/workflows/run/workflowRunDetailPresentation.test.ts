@@ -529,6 +529,80 @@ describe('managed workflow Run presentation', () => {
         })).toMatchObject({ canRetrySameConversation: false, canRetryFreshAgent: false });
     });
 
+    /**
+     * The real `workflow.run.invocations.get` answers a failed Action, or an interrupted root, If or loop
+     * frame, with Retry available and both Agent-conversation choices `recovery_not_prepared`. Retry for
+     * these is an ordinary repeat of the original input, never a conversation choice (RV-FIX208-A1).
+     */
+    it.each([
+        ['a failed Action', 'action', 'failed'],
+        ['an interrupted root', 'root', 'needs_attention'],
+        ['an interrupted If frame', 'if', 'failed'],
+        ['an interrupted loop frame', 'loop', 'failed'],
+        ['a failed workflow call', 'workflow', 'failed'],
+    ] as const)('offers a plain Retry for %s with the returned causal set and no conversation choice', (_label, blockKind, lifecycle) => {
+        const notPrepared = { kind: 'unavailable' as const, reason: 'recovery_not_prepared' as const };
+        const causalInvocationIds = ['parent-frame', 'selected'];
+        const presentation = projectWorkflowInvocationRecovery({
+            run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+            invocation: createWorkflowInvocationIndexFixture({ id: 'selected', lifecycle }),
+            progress: WorkflowProgressEnvelopeV1Schema.parse({
+                kind: 'happier.workflow-progress.v1', blockKind, attempt: '0', logicalInvocationRecordId: 'selected',
+                invocationPath: { blockId: blockKind === 'root' ? '$root' : 'projector', scope: [] },
+            }),
+            recoveryAvailability: {
+                reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+                retry: { kind: 'available', causalInvocationIds },
+                continueSameConversation: notPrepared, continueFreshAgent: notPrepared, restoreWorkspace: notPrepared,
+            },
+            machineHomeDirectory: null,
+        });
+        expect(presentation).toMatchObject({
+            canRetry: true,
+            canRetrySameConversation: false,
+            canRetryFreshAgent: false,
+            retryCausalInvocationIds: causalInvocationIds,
+        });
+    });
+
+    it('keeps an Agent step on its conversation choices and withholds a plain Retry from it', () => {
+        const available = { kind: 'available' as const };
+        const notPrepared = { kind: 'unavailable' as const, reason: 'recovery_not_prepared' as const };
+        const presentation = projectWorkflowInvocationRecovery({
+            run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+            invocation: createWorkflowInvocationIndexFixture({ id: 'selected', lifecycle: 'failed' }),
+            progress: WorkflowProgressEnvelopeV1Schema.parse({
+                kind: 'happier.workflow-progress.v1', blockKind: 'step', attempt: '0', logicalInvocationRecordId: 'selected',
+                invocationPath: { blockId: 'analyze', scope: [] },
+            }),
+            recoveryAvailability: {
+                reattach: { kind: 'unavailable', reason: 'invocation_not_recoverable' },
+                retry: { kind: 'available', causalInvocationIds: ['selected'] },
+                continueSameConversation: notPrepared, continueFreshAgent: available, restoreWorkspace: notPrepared,
+            },
+            machineHomeDirectory: null,
+        });
+        expect(presentation).toMatchObject({ canRetry: false, canRetryFreshAgent: true, canRetrySameConversation: false });
+    });
+
+    it.each(['action', 'if', 'loop'] as const)('offers no Retry for a %s whose owner answer is unavailable', blockKind => {
+        const notRecoverable = { kind: 'unavailable' as const, reason: 'invocation_not_recoverable' as const };
+        const presentation = projectWorkflowInvocationRecovery({
+            run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+            invocation: createWorkflowInvocationIndexFixture({ id: 'selected', lifecycle: 'completed' }),
+            progress: WorkflowProgressEnvelopeV1Schema.parse({
+                kind: 'happier.workflow-progress.v1', blockKind, attempt: '0', logicalInvocationRecordId: 'selected',
+                invocationPath: { blockId: 'projector', scope: [] },
+            }),
+            recoveryAvailability: {
+                reattach: notRecoverable, retry: notRecoverable, continueSameConversation: notRecoverable,
+                continueFreshAgent: notRecoverable, restoreWorkspace: notRecoverable,
+            },
+            machineHomeDirectory: null,
+        });
+        expect(presentation).toMatchObject({ canRetry: false, retryCausalInvocationIds: [] });
+    });
+
     it('offers a prepared continuation only for its exact eligible conversation', () => {
         const unavailable = { kind: 'unavailable' as const, reason: 'recovery_not_prepared' as const };
         const params = {

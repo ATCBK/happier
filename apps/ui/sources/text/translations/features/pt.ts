@@ -15456,6 +15456,8 @@ const pt = translated(workflowValueReferenceTranslations.pt, {
         sameConversationTitle: 'Continuar na mesma conversa',
         freshAgentBody: 'Um novo Agent recebe a entrada da etapa e o espaço de trabalho, não esta conversa.',
         startFresh: 'Começar de novo',
+        retry: 'Repetir',
+        retryExplain: 'Executa de novo com a entrada original.',
     },
 
     unavailable: {
