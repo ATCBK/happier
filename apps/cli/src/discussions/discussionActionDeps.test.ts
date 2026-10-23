@@ -192,8 +192,10 @@ describe('Home Discussion resource transport', () => {
           : kit.execute(operation, options) },
         resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
         reconcileInvocation: async () => { throw new Error('A terminal result must not execute again'); },
-        onInvocationSettled: async ({ invocation }) => createWorkflowDiscussionResultPublisher({ credentials: keyless, origin,
-          isCurrent: async () => true, publish })({ runId, invocation }) });
+        onInvocationSettled: async ({ invocation }) => {
+          await createWorkflowDiscussionResultPublisher({ credentials: keyless, origin,
+            isCurrent: async () => true, publish })({ runId, invocation });
+        } });
       await recover('startup');
       expect(axiosGet.mock.calls.some(([url]) => new URL(String(url)).pathname === `/v2/sessions/${sessionId}`), JSON.stringify({
         reads: axiosGet.mock.calls.map(([url]) => new URL(String(url)).pathname),

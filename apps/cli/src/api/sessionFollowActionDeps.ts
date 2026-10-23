@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isSessionTargetPreparationAction } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSessionFollowActionRequest, parseSessionFollowActionResponse } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { ListSessionFollowSourcesResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { DeliveryMuteErrorResponseV1Schema, FollowReceiverRefV1Schema } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
@@ -63,7 +63,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
   const ruleAccess = (context: ActionExecutorContext, effectActionId: string, privateRuleOperation: boolean, signal?: AbortSignal) => {
     const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
     const root = ActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
-    const readActionId = root.success && getActionSpec(root.data).sessionTarget ? root.data : effectActionId;
+    const readActionId = root.success && isSessionTargetPreparationAction(root.data) ? root.data : effectActionId;
     const assertCurrent = async () => {
       signal?.throwIfAborted();
       if (privateRuleOperation && (requester ? !await requester.isCurrent() : input.isCredentialCurrent && !await input.isCredentialCurrent())) {

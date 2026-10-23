@@ -15334,6 +15334,11 @@ export function getActionSpec(id: ActionId): ActionSpec {
   return spec;
 }
 
+/** Invocation and inspection prepare targets under their own admitted Action root. */
+export function isSessionTargetPreparationAction(id: ActionId): boolean {
+  return id === 'session.targets.resolve' || Boolean(getActionSpec(id).sessionTarget);
+}
+
 export function getActionContextualDefaults(
   action: ActionId | string | ActionSpec,
   input?: unknown,

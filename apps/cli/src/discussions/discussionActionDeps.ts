@@ -33,7 +33,7 @@ import { DiscussionSecondOpinionStartInputV1Schema } from '@happier-dev/protocol
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewResponseV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { isSessionTargetPreparationAction, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { DiscussionSettingsResponseV1Schema } from '@happier-dev/protocol/discussions/settings';
 import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
@@ -175,7 +175,7 @@ export function createDiscussionActionDeps(options: Readonly<{
     // answer-policy check before an addressed post/reply. Home admits their
     // exact route under that root; they never become a second signed effect.
     const effectActionId = actionId === 'discussion.participants.list' && root.success
-      && (getActionSpec(root.data).sessionTarget || root.data === 'discussion.post' || root.data === 'discussion.reply')
+      && (isSessionTargetPreparationAction(root.data) || root.data === 'discussion.post' || root.data === 'discussion.reply')
       ? root.data : actionId;
     const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
       context, effectActionId, method, path, ...(body === undefined ? {} : { body }),

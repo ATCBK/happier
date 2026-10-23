@@ -187,13 +187,17 @@ describe('Follow HTTP family adapter', () => {
         .resolves.toMatchObject({ ok: true, sessionAddresses: [{ serverId: homeId, sessionId: 'source' }] });
     });
   });
-  it.each(['read', 'write'] as const)('keeps nested Follow %s authorization bound to its declared effect', async operation => {
+  it.each([
+    { operation: 'read', root: 'session.status.get' },
+    { operation: 'read', root: 'session.targets.resolve' },
+    { operation: 'write', root: 'session.status.get' },
+  ] as const)('keeps nested Follow $operation authorization bound to its declared effect ($root)', async ({ operation, root }) => {
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'source' };
     const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'execution-proof', binding: {
       serverIdentityId: 'home', accountId: 'account-1', custodianAccountId: 'account-1', installationId: 'installation-1',
       principalId: 'principal-1', credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1,
-      machineId: 'machine-1', actionId: 'session.status.get', requestId: 'request-1', requestEnvelopeDigest: 'd'.repeat(43), target,
+      machineId: 'machine-1', actionId: root, requestId: 'request-1', requestEnvelopeDigest: 'd'.repeat(43), target,
     } };
     let effect: unknown;
     app.get('/v2/sessions/:sourceSessionId/follows/followers', async request => {
@@ -215,7 +219,7 @@ describe('Follow HTTP family adapter', () => {
     else await deps.sessionFollowAction!({ context, actionId: 'follow.set', serverId: 'home', input: {
       source: { kind: 'session', sessionId: 'source' }, receiver: { kind: 'session', sessionId: 'receiver' }, policy: { preset: 'quiet' },
     } });
-    expect(effect).toBe(operation === 'read' ? 'session.status.get' : 'follow.set');
+    expect(effect).toBe(operation === 'read' ? root : 'follow.set');
   });
   it('preserves source continuation and emits private rules once across following pages', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'page-account' })).toString('base64url')}.signature`;
