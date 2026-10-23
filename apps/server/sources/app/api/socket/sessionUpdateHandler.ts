@@ -564,7 +564,9 @@ export function sessionUpdateHandler(
         } catch { respond({ v: 1, ok: false, error: 'unavailable' }); }
     });
 
-    registerSessionEvent(SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+    // Machine recovery uses this event too. Only the authenticated carrier's
+    // owner may parse and acknowledge it; Socket.IO dispatches every listener.
+    if (connection.connectionType === 'session-scoped') registerSessionEvent(SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionMessageReplyMutationResultV1Schema.parse(response));
         const request = SessionMessageReplyMutationV1Schema.safeParse(data);
         if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId

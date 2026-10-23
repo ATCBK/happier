@@ -349,7 +349,8 @@ export function machineUpdateHandler(
         }
     });
 
-    socket.on(SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, async (request: unknown, callback?: (response: SessionMessageReplyMutationResultV1) => void) => {
+    // Session publishers use the same event with their own envelope and owner.
+    if (readSocketMachineIdentity(socket).clientType === 'machine-scoped') socket.on(SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, async (request: unknown, callback?: (response: SessionMessageReplyMutationResultV1) => void) => {
         const parsed = SessionMessageReplyMachineMutationV1Schema.safeParse(request);
         const machineId = readAuthenticatedMachineId(socket);
         const installationId = readVerifiedMachineSocketInstallationIdFromSocketData(socket.data);
