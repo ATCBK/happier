@@ -10,6 +10,7 @@ import {
     selectBrowserDiagnosticsForView,
 } from '@/sync/domains/browser/diagnostics/store';
 import { createBrowserAutomationControlService } from '@/sync/domains/browser/automation/controlService';
+import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
 
 import { WebIframeEngine } from './WebIframeEngine';
 import { buildInjectedBrowserDiagnosticsScript } from '../../adapters/diagnostics';
@@ -140,13 +141,24 @@ describe('WebIframeEngine diagnostics wiring', () => {
         } finally { for (const screen of screens) await screen.unmount(); }
     });
 
-    it.each(['pagehide', 'load'] as const)('admits an isolated cooperative preview only after its exact-source and nonce handshake, drives the real collector and retires on %s', async (retirement) => {
+    it.each(['pagehide', 'load', 'reload', 'address'] as const)('keeps same-document automation after its exact-source handshake and retires on %s', async (retirement) => {
         const host = installTestWindow();
         const button = Object.assign(new EventTarget(), { getAttribute: () => null, innerText: 'Click' });
         const clicked = vi.fn(); button.addEventListener('click', clicked);
+        const keys: string[] = [];
+        class TestKeyboardEvent extends Event {
+            readonly key: string;
+            constructor(type: string, init: KeyboardEventInit = {}) {
+                super(type, init);
+                this.key = init.key ?? '';
+            }
+        }
+        button.addEventListener('keydown', event => keys.push((event as TestKeyboardEvent).key));
         const document = { title: 'Cooperative preview', readyState: 'complete', documentElement: { nodeType: 1 }, querySelectorAll: (selector: string) => selector === '#button' ? [button] : [] };
+        const navigation = Object.assign(new EventTarget(), { canGoBack: false, canGoForward: false });
         const frame = Object.assign(new EventTarget(), {
             location: { origin: 'https://preview.example.test', href: 'https://preview.example.test/' },
+            navigation,
             localStorage: { length: 0 }, sessionStorage: { length: 0 },
             parent: host,
             postMessage: (data: string) => queueMicrotask(() => dispatchMessage(frame, { data, origin: 'https://app.example.test', source: host })),
@@ -155,10 +167,15 @@ describe('WebIframeEngine diagnostics wiring', () => {
         Object.defineProperty(frame, 'document', { get: () => { throw new DOMException('Cross origin', 'SecurityError'); } });
         const identity = { browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 6, collectorId: 'collector_1', nonce: 'nonce_1' };
         const service = createBrowserAutomationControlService({ nowMs: Date.now });
-        const screen = await renderScreen(<WebIframeEngine title="Cooperative" url="https://preview.example.test/?signed=a%20b" sandbox="allow-scripts allow-same-origin" testID="cooperative"
+        const observed = vi.fn();
+        const element = (url: string, navigationKey?: string) => <WebIframeEngine title="Cooperative" url={url} navigationKey={navigationKey} sandbox="allow-scripts allow-same-origin" testID="cooperative"
+            onNavigationStateChange={observed}
             diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
-            automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: ['click'], controlService: service }}
-        />, { createNodeMock: (element) => element.type === 'iframe' ? { contentWindow: frame } : null });
+            automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: ['click', 'press'], controlService: service }}
+        />;
+        const screen = await renderScreen(element('https://preview.example.test/?signed=a%20b'), { createNodeMock: (element) => element.type === 'iframe' ? { contentWindow: frame } : null });
+        const iframe = screen.findByType('iframe');
+        const initialSource = iframe.props.src;
         expect(new URL(screen.findByType('iframe').props.src).searchParams.has('__happierCollector')).toBe(true);
         expect(screen.findByType('iframe').props.src).toContain('?signed=a%20b&');
         const ready = { v: 1, kind: 'browser.collector.ready', ...identity };
@@ -171,16 +188,50 @@ describe('WebIframeEngine diagnostics wiring', () => {
         expect((await service.executeAction(action)).status).not.toBe('succeeded');
         const config = JSON.parse(new URL(screen.findByType('iframe').props.src).searchParams.get('__happierCollector')!);
         await act(async () => {
-            new Function('window', 'document', 'console', 'performance', 'Event', buildInjectedBrowserDiagnosticsRuntimeScript(JSON.stringify({ ...config, cooperativePreview: true })))(frame, document, { log() {}, info() {}, warn() {}, error() {}, debug() {} }, { getEntriesByType: () => [] }, Event);
+            new Function('window', 'document', 'console', 'performance', 'Event', 'KeyboardEvent', buildInjectedBrowserDiagnosticsRuntimeScript(JSON.stringify({ ...config, cooperativePreview: true })))(frame, document, { log() {}, info() {}, warn() {}, error() {}, debug() {} }, { getEntriesByType: () => [] }, Event, TestKeyboardEvent);
         });
         expect((await service.executeAction(action)).status).toBe('succeeded');
         expect(clicked).toHaveBeenCalledOnce();
         await act(async () => screen.findByType('iframe').props.onLoad());
         expect((await service.executeAction({ ...action, automationRequestId: 'after_first_load' })).status).toBe('succeeded');
+
+        // Exercise the generated reporter, then publish its observation through the real provider-preserving update.
+        await act(async () => {
+            new Function('window', 'document', buildCooperativeNavigationRuntimeScript(JSON.stringify(config)))(frame, document);
+        });
+        frame.location.href = 'https://preview.example.test/details?tab=2#section';
+        await act(async () => { navigation.dispatchEvent(new Event('currententrychange')); });
+        expect(observed).toHaveBeenLastCalledWith(expect.objectContaining({ url: frame.location.href }));
+        await screen.update(element(observed.mock.lastCall![0].url));
+        expect(screen.findByType('iframe')).toBe(iframe);
+        expect(iframe.props.src).toBe(initialSource);
+        expect((await service.executeAction({ ...action, automationRequestId: 'after_observation' })).status).toBe('succeeded');
+        expect(clicked).toHaveBeenCalledTimes(3);
+        const execute = createBrowserRuntimeActionExecutor({ automation: { controlService: service } });
+        expect(await execute({ actionId: 'browser.automation.press', context: { surface: 'agent', authority: 'account_automation' },
+            input: { v: 1, browserSessionId: identity.browserSessionId, viewId: identity.viewId,
+                navigationGeneration: identity.navigationGeneration, requestedBy: 'agent', requesterRef: action.requesterRef,
+                timeoutMs: action.timeoutMs, automationRequestId: 'press_after_observation', actionKind: 'press',
+                payload: { locator: { kind: 'css', value: '#button' }, key: 'Enter' } } })).toMatchObject({ status: 'succeeded' });
+        expect(keys).toEqual(['Enter']);
+        // A repeated address echo must not forget the observation and navigate the document.
+        await screen.update(element(frame.location.href));
+        expect(screen.findByType('iframe')).toBe(iframe);
+        expect(iframe.props.src).toBe(initialSource);
+        frame.location.href = 'https://preview.example.test/details?tab=3#next';
+        await act(async () => { navigation.dispatchEvent(new Event('currententrychange')); });
+        await screen.update(element(observed.mock.lastCall![0].url));
+        expect(iframe.props.src).toBe(initialSource);
         await act(async () => {
             if (retirement === 'pagehide') frame.dispatchEvent(new Event('pagehide'));
+            else if (retirement === 'reload') await screen.update(element(frame.location.href, 'reload_1'));
+            else if (retirement === 'address') await screen.update(element('https://preview.example.test/different-document'));
             else screen.findByType('iframe').props.onLoad();
         });
+        if (retirement === 'reload') {
+            const reloaded = new URL(screen.findByType('iframe').props.src);
+            expect(reloaded.pathname + reloaded.search.split('&__happierCollector=')[0] + reloaded.hash).toBe('/details?tab=3#next');
+        }
         expect((await service.executeAction({ ...action, automationRequestId: 'after_navigation' })).status).not.toBe('succeeded');
         await act(async () => dispatchMessage(host, { data: JSON.stringify(ready), origin: 'https://preview.example.test', source: frame as unknown as WindowProxy }));
         expect((await service.executeAction({ ...action, automationRequestId: 'stale_ready' })).status).not.toBe('succeeded');
