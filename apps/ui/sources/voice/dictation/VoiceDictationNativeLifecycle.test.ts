@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import type {
     VoiceAudioSessionCoordinator,
     VoiceAudioSessionPlatformEvent,
@@ -223,6 +224,7 @@ async function proveTerminalLifecycleAndRetry(input: Readonly<{
     controller: ReturnType<typeof createVoiceDictationController>;
     coordinator: VoiceAudioSessionCoordinator;
     emit: (event: VoiceAudioSessionPlatformEvent) => void;
+    restore: ReturnType<typeof vi.fn>;
 }>): Promise<void> {
     for (const nativeEvent of TERMINAL_NATIVE_EVENTS) {
         await expect(input.controller.toggle('dictation-session')).resolves.toEqual({
@@ -239,20 +241,25 @@ async function proveTerminalLifecycleAndRetry(input: Readonly<{
         });
         expect(input.coordinator.getSnapshot().leaseCount).toBe(1);
 
+        const restoring = createDeferred<void>();
+        input.restore.mockImplementationOnce(async () => { restoring.resolve(); });
         input.emit(nativeEvent.createEvent(currentGeneration));
-        await vi.waitFor(() => {
-            expect(input.controller.getSnapshot().status).toBe('idle');
-            expect(input.coordinator.getSnapshot().leaseCount).toBe(0);
-        });
+        await restoring.promise;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await waitForTestEvent(input.controller.subscribe, input.controller.getSnapshot, snapshot => snapshot.status === 'idle');
+        expect(input.controller.getSnapshot().status).toBe('idle');
+        expect(input.coordinator.getSnapshot().leaseCount).toBe(0);
 
         await expect(input.controller.toggle('dictation-session')).resolves.toEqual({
             kind: 'started',
         });
         expect(input.coordinator.getSnapshot().leaseCount).toBe(1);
+        const cancellationRestored = createDeferred<void>();
+        input.restore.mockImplementationOnce(async () => { cancellationRestored.resolve(); });
         await input.controller.cancel('dictation-session');
-        await vi.waitFor(() => {
-            expect(input.coordinator.getSnapshot().leaseCount).toBe(0);
-        });
+        await cancellationRestored.promise;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(input.coordinator.getSnapshot().leaseCount).toBe(0);
     }
 }
 
@@ -276,6 +283,7 @@ describe('Dictation native audio lifecycle', () => {
             controller: dictation.controller,
             coordinator: native.coordinator,
             emit: native.emit,
+            restore: native.restore,
         });
 
         expect(dictation.recorderStop).toHaveBeenCalledTimes(8);
@@ -292,6 +300,7 @@ describe('Dictation native audio lifecycle', () => {
             controller: dictation.controller,
             coordinator: native.coordinator,
             emit: native.emit,
+            restore: native.restore,
         });
 
         expect(nativeBoundary.recognizerStop).toHaveBeenCalledTimes(8);

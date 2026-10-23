@@ -14,7 +14,7 @@ import { attachVoiceAgentActionEffectId } from '@/voice/agent/types';
 import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
-import { createDeferred, createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { writeVoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
 import {
@@ -322,8 +322,13 @@ describe('voiceQaController', () => {
     const response = remote.handle('https://local-voice-actions.example.test/v2/sessions/s1');
     if (!response) throw new Error('Missing canonical target response');
     const held = createDeferred<Response>();
-    setLocalVoiceHttpResponder(request => request.method === 'GET' && request.path === '/v2/sessions/s1'
-      && useVoiceQaStore.getState().status === 'running' ? held.promise : undefined);
+    const refreshEntered = createDeferred<void>();
+    setLocalVoiceHttpResponder(request => {
+      if (request.method !== 'GET' || request.path !== '/v2/sessions/s1'
+        || useVoiceQaStore.getState().status !== 'running') return undefined;
+      refreshEntered.resolve();
+      return held.promise;
+    });
     const controller = prepareLocalQaSession();
     let starting: ReturnType<typeof controller.start> | null = null;
     // Runner timeouts do not reject the suspended test body. Release its HTTP
@@ -338,14 +343,17 @@ describe('voiceQaController', () => {
       starting = controller.start({ sessionAddress: qaAddress('s1') });
       await starting;
       expect(useVoiceQaStore.getState().status).toBe('running');
-      await vi.waitFor(() => expect(readLocalVoiceHttpRequests().some(request => {
+      await refreshEntered.promise;
+      expect(readLocalVoiceHttpRequests().some(request => {
         const input = SessionReadBatchRequestV1Schema.safeParse(request.body);
         return request.path === '/v2/sessions/read-batch' && input.success && input.data.sessionIds.includes('s1');
-      })).toBe(true));
+      })).toBe(true);
       expect(useVoiceQaStore.getState().entries.some(entry => entry.text.includes('user_action=1(actual_question)'))).toBe(false);
       held.resolve(response);
-      await vi.waitFor(() => expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
-        && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true));
+      await waitForTestEvent(useVoiceQaStore.subscribe, useVoiceQaStore.getState, state => state.entries.some(entry => entry.kind === 'system'
+        && entry.text.includes('Pending requests detected in target-session context after refresh: yes')));
+      expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
+        && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true);
       expect(useVoiceQaStore.getState().entries.some(entry => entry.text.includes('user_action=1(actual_question)'))).toBe(true);
       await controller.stop();
     } finally {
@@ -514,8 +522,10 @@ describe('voiceQaController', () => {
       await voiceAgentSessions.stop('voice-hidden-s1');
     });
     await controller.start({ sessionAddress: qaAddress('s1') });
-    await vi.waitFor(() => expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
-      && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true));
+    await waitForTestEvent(useVoiceQaStore.subscribe, useVoiceQaStore.getState, state => state.entries.some(entry => entry.kind === 'system'
+      && entry.text.includes('Pending requests detected in target-session context after refresh: yes')));
+    expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
+      && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true);
     expect(targetRefresh).toHaveBeenCalledWith(expect.objectContaining({ method: 'GET', path: '/v2/sessions/s1' }));
     const breakdowns = useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'system'
       && entry.text.includes('Pending request breakdown:')).map(entry => entry.text);
@@ -1010,13 +1020,15 @@ describe('voiceQaController', () => {
       expect(readStoredSessionMessages(storage.getState(), 'voice-hidden-s1')
         .some(message => message.kind === 'agent-text' && message.text === reply)).toBe(false);
       await publishLocalVoiceAssistantMessage({ sessionId: 'voice-hidden-s1', id: 'qa-later-assistant', text: reply });
-      await vi.waitFor(() => expect(readStoredSessionMessages(storage.getState(), 'voice-hidden-s1')
+      await waitForTestEvent(storage.subscribe, () => readStoredSessionMessages(storage.getState(), 'voice-hidden-s1'),
+        messages => messages.some(message => message.kind === 'agent-text' && message.text === reply));
+      expect(readStoredSessionMessages(storage.getState(), 'voice-hidden-s1')
         .some(message => message.kind === 'agent-text' && message.text === reply), JSON.stringify({
           consumption: resolveSessionLiveConsumption('voice-hidden-s1', localVoiceHomeId),
           sessionSeq: storage.getState().sessions['voice-hidden-s1']?.seq,
           messagesLoaded: storage.getState().sessionMessages['voice-hidden-s1']?.isLoaded,
           qaStatus: useVoiceQaStore.getState().status,
-        })).toBe(true));
+        })).toBe(true);
       const result = await sending;
       expect(streams.size).toBeGreaterThan(0);
       expect(readStreamIds).toContain('qa-later-outer-stream');
@@ -1315,12 +1327,17 @@ describe('voiceQaController', () => {
 
     it('coalesces repeated media Start attempts without toggling the production lifecycle or leaking a forced route', async () => {
       const permission = createDeferred<{ granted: boolean; canAskAgain: boolean }>();
-      nativeMicRequestPermissionsAsync.mockImplementationOnce(() => permission.promise);
+      const permissionRequested = createDeferred<void>();
+      nativeMicRequestPermissionsAsync.mockImplementationOnce(() => {
+        permissionRequested.resolve();
+        return permission.promise;
+      });
       const controller = createVoiceQaController();
       const params = { sessionAddress: qaAddress('s1'), mode: 'media' as const, transportRouteRequirement: 'server_relay' as const };
       const first = controller.start(params);
       const repeated = controller.start(params);
-      await vi.waitFor(() => expect(nativeMicRequestPermissionsAsync).toHaveBeenCalledTimes(1));
+      await Promise.race([permissionRequested.promise, first]);
+      expect(nativeMicRequestPermissionsAsync).toHaveBeenCalledTimes(1);
       expect(readDaemonSpeechStreamQaRouteRequirement('s1')).toBe('server_relay');
       permission.resolve({ granted: true, canAskAgain: true });
       await expect(Promise.all([first, repeated])).resolves.toEqual([

@@ -16,6 +16,7 @@ import { writeVoiceProviderSettingsConfig, readLocalConversationVoiceSettings } 
 import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
 import { createVoiceSessionManager } from '@/voice/session/voiceSessionManager';
 import { setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 const restoreModuleLoader = await warmLocalVoiceEngineHarnessGraph();
 const { createDefaultVoiceQaControllerDeps } = await import('./voiceQaRuntimeDeps');
@@ -77,12 +78,18 @@ describe('Voice QA media controls', () => {
         tts: { ...config.tts, autoSpeakReplies: false },
       }),
     } });
-    speechRecStart.mockImplementation(() => { emitSpeechRecEvent('start'); emitSpeechRecEvent('audiostart'); });
+    const rearmed = createDeferred<void>();
+    speechRecStart.mockImplementation(() => {
+      emitSpeechRecEvent('start'); emitSpeechRecEvent('audiostart');
+      if (speechRecStart.mock.calls.length > 1) rearmed.resolve();
+    });
     speechRecStop.mockImplementation(() => { emitSpeechRecEvent('end'); });
     await manager.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
     emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'first QA input', confidence: 0.9 }] });
-    await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalled());
-    await vi.waitFor(() => expect(speechRecStart.mock.calls.length).toBeGreaterThan(1));
+    await rearmed.promise;
+    expect(localVoicePendingEnqueue).toHaveBeenCalled();
+    expect(speechRecStart.mock.calls.length).toBeGreaterThan(1);
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.mode === 'listening');
     expect(manager.getSnapshot().mode).toBe('listening');
     await stop();
     expect(manager.getSnapshot().status).toBe('disconnected');

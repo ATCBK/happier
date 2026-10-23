@@ -5,7 +5,7 @@ import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol';
-import { renderScreen as renderRuntimeScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen as renderRuntimeScreen, waitForTestEvent } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -40,6 +40,7 @@ const platformOsMock = nativeSpeech.platform;
 let nativeAudio = nativeSpeech.reset().audioSession;
 const recognizer = vi.hoisted(() => ({
   listeners: new Map<string, Set<() => void>>(),
+  callListeners: new Set<() => void>(),
   start: vi.fn(), stop: vi.fn(), abort: vi.fn(),
 }));
 vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
@@ -51,16 +52,33 @@ vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
     listeners.add(listener);
     return { remove: () => listeners.delete(listener) };
   },
-  start: (...args: unknown[]) => recognizer.start(...args),
-  stop: () => recognizer.stop(), abort: () => recognizer.abort(),
+  start: (...args: unknown[]) => {
+    const result = recognizer.start(...args);
+    for (const listener of recognizer.callListeners) listener();
+    return result;
+  },
+  stop: () => {
+    const result = recognizer.stop();
+    for (const listener of recognizer.callListeners) listener();
+    return result;
+  },
+  abort: () => recognizer.abort(),
 } }));
-const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn() }));
+const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn(), callListeners: new Set<() => void>() }));
 // Metro selects the .web mic sources for the web platform these mounted browser cases model;
 // Vitest has no platform extension resolution, so select them explicitly (leaf modules, no UI cycle).
 vi.mock('@/voice/runtime/mic/createRealtimeMicSession', async () => await import('@/voice/runtime/mic/createRealtimeMicSession.web'));
 vi.mock('@/voice/runtime/mic/createLiveMicSession', async () => await import('@/voice/runtime/mic/createLiveMicSession.web'));
-vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
-vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: (...args: unknown[]) => {
+  const result = sdk.startSession(...args);
+  for (const listener of sdk.callListeners) listener();
+  return result;
+} } }));
+vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: (...args: unknown[]) => {
+  const result = sdk.startSession(...args);
+  for (const listener of sdk.callListeners) listener();
+  return result;
+} } }));
 vi.mock('expo-audio', () => ({ AudioModule: {
   setAudioModeAsync: vi.fn(async () => undefined),
   requestRecordingPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
@@ -81,6 +99,33 @@ const OPENAI_PROVIDER_ID = 'happier.voice.openai/realtime-openai';
 const CODEX_CONNECTED_SERVICE_KEY = readBuiltInLegacyConnectedAccountServiceKeyIngress('openai-codex')!;
 
 const sessionAddress = (sessionId: string) => ({ serverId: 'server-1', sessionId });
+
+function waitForSdkCall(method: 'startSession' | 'endSession', count: number) {
+  return waitForTestEvent(notify => {
+    sdk.callListeners.add(notify);
+    return () => { sdk.callListeners.delete(notify); };
+  }, () => sdk[method].mock.calls.length, calls => calls >= count);
+}
+
+function waitForRecognizerCall(method: 'start' | 'stop', count: number) {
+  return waitForTestEvent(notify => {
+    recognizer.callListeners.add(notify);
+    return () => { recognizer.callListeners.delete(notify); };
+  }, () => recognizer[method].mock.calls.length, calls => calls >= count);
+}
+
+async function waitForMountedController(expected: ReturnType<typeof import('./voiceSessionLifecycleControllerStore')['getVoiceSessionLifecycleController']>) {
+  const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
+  const { subscribeToVoiceSessionSnapshot } = await import('./voiceSessionStore');
+  const { getVoiceAdapterRegistry } = await import('./voiceAdapterRegistry');
+  await waitForTestEvent(notify => {
+    const stopSnapshot = subscribeToVoiceSessionSnapshot(notify);
+    // Cleanup always withdraws the registry after clearing the controller,
+    // including when the already-idle snapshot is deliberately unchanged.
+    const stopRegistry = getVoiceAdapterRegistry().subscribe!(notify);
+    return () => { stopSnapshot(); stopRegistry(); };
+  }, getVoiceSessionLifecycleController, controller => controller === expected);
+}
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -181,17 +226,6 @@ async function setCurrentUiContextToolSetMode(mode: typeof currentUiContextToolS
 }
 
 
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-
-  return { promise, resolve, reject };
-}
-
 function LayoutCommitBoundary({
   children,
   onLayout,
@@ -233,6 +267,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
     connectedServiceCredentialRevisionsV1: ['work', 'primary', 'backup'].map(profileId => ({ serviceId: 'openai-codex', profileId, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
   } : {}) });
   const agentRequests: Array<Readonly<{ method: string; targetId: string; params: unknown; timeoutMs: number | null }>> = [];
+  const agentRequestListeners = new Set<() => void>();
   const watches = new Map<string, ReturnType<typeof createDeferred<ReturnType<typeof agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse>>>>();
   const daemonSessions: Record<string, ReturnType<typeof createSessionFixture>> = {};
   const { buildVoiceTranscriptHistorySessionMetadata, VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } = await import('@/voice/persistence/voiceTranscriptHistorySession');
@@ -294,12 +329,14 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START) {
         const request = agentProtocol.AgentSessionRealtimeStartRequestV1Schema.parse(raw.params);
         agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        for (const listener of agentRequestListeners) listener();
         return { ok: true, result: agentProtocol.AgentSessionRealtimeStartResultV1Schema.parse({ ok: true, status: 'started', transport: { kind: 'webrtc', answerSdp: 'v=0\r\na=mounted-codex-answer\r\n' } }) };
       }
       if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_WATCH) {
         const request = agentProtocol.AgentSessionRealtimeWatchRequestV1Schema.parse(raw.params);
         expect(requestTimeoutMs).toBeNull();
         agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        for (const listener of agentRequestListeners) listener();
         const watch = createDeferred<ReturnType<typeof agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse>>();
         watches.set(request.applicationAttemptId, watch);
         return { ok: true, result: await watch.promise };
@@ -307,6 +344,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       if (method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP) {
         const request = agentProtocol.AgentSessionRealtimeStopRequestV1Schema.parse(raw.params);
         agentRequests.push({ method, targetId, params: request, timeoutMs: requestTimeoutMs });
+        for (const listener of agentRequestListeners) listener();
         watches.get(request.applicationAttemptId)?.resolve(agentProtocol.AgentSessionRealtimeWatchResultV1Schema.parse({ ok: true, status: 'terminal', event: { kind: 'terminal', reason: 'stopped' } }));
         return { ok: true, result: agentProtocol.AgentSessionRealtimeStopResultV1Schema.parse({ ok: true, status: 'stopped' }) };
       }
@@ -401,10 +439,10 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
   }
   const { sync } = await import('@/sync/sync');
   await sync.resumeSync('manual');
-  await vi.waitFor(() => {
-    expect(storage.getState().profileScope).toEqual({ serverId: account.home.id, accountId: 'account-a' });
-    expect(storage.getState().isDataReady).toBe(true);
-  });
+  await waitForTestEvent(storage.subscribe, storage.getState, state => state.isDataReady
+    && state.profileScope?.serverId === account.home.id && state.profileScope.accountId === 'account-a');
+  expect(storage.getState().profileScope).toEqual({ serverId: account.home.id, accountId: 'account-a' });
+  expect(storage.getState().isDataReady).toBe(true);
   const localProviderId = input.selectedProviderId === 'local_conversation' ? 'local_conversation' : 'local_direct';
   const voice = input.local
     ? writeVoiceProviderSettingsConfig(voiceSettingsParse({ providerId: localProviderId }), localProviderId,
@@ -422,7 +460,11 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
   });
   sdk.endSession.mockReset().mockResolvedValue(undefined);
   const conversation = {
-    getId: () => 'mounted-provider-conversation', endSession: sdk.endSession,
+    getId: () => 'mounted-provider-conversation', endSession: (...args: unknown[]) => {
+      const result = sdk.endSession(...args);
+      for (const listener of sdk.callListeners) listener();
+      return result;
+    },
     setMicMuted() {}, setVolume() {}, sendUserMessage() {}, sendContextualUpdate() {},
   };
   sdk.startSession.mockReset().mockImplementation(async () => {
@@ -452,6 +494,12 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
   if (!lifecycle) throw new Error('Mounted Voice lifecycle unavailable');
   expect(lifecycle.getConfiguredProviderId()).toBe(input.codex ? CODEX_PROVIDER_ID : input.local ? localProviderId : ELEVENLABS_PROVIDER_ID);
   return { screen, lifecycle, runtime, httpRequests, agentRequests, sessionHttp,
+    waitForAgentRequests(predicate: (requests: typeof agentRequests) => boolean) {
+      return waitForTestEvent(notify => {
+        agentRequestListeners.add(notify);
+        return () => { agentRequestListeners.delete(notify); };
+      }, () => agentRequests, predicate);
+    },
     get profile() { return profile; },
     async publishProfile(next: z.input<typeof AccountProfileSchema>) {
       profile = AccountProfileSchema.parse(next);
@@ -466,7 +514,8 @@ async function mountGeneratedElevenLabsRuntime(input: Readonly<{ currentUi?: boo
   const { lifecycle } = mounted;
   await act(async () => { await lifecycle.toggle(null); });
   expect(lifecycle.getSnapshot(), JSON.stringify({ snapshot: lifecycle.getSnapshot(), sdkStarts: sdk.startSession.mock.calls.length, requests: mounted.httpRequests })).toMatchObject({ adapterId: ELEVENLABS_PROVIDER_ID, status: 'connected' });
-  await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+  await waitForSdkCall('startSession', 1);
+  expect(sdk.startSession).toHaveBeenCalledOnce();
   const options: ElevenLabsStartOptions = sdk.startSession.mock.calls[0][0];
   return { ...mounted, options };
 }
@@ -476,7 +525,8 @@ async function mountGeneratedLocalRuntime(selectedProviderId: 'local_direct' | '
   if (!accountConnection) throw new Error('Native Voice Account unavailable');
   const target = { serverId: accountConnection.home.id, sessionId: 'mounted-native-session' };
   await act(async () => { await mounted.lifecycle.toggle(target); });
-  await vi.waitFor(() => expect(recognizer.start, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+  await waitForRecognizerCall('start', 1);
+  expect(recognizer.start, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce();
   expect(mounted.lifecycle.getSnapshot()).toMatchObject({ adapterId: selectedProviderId,
     sessionId: target.sessionId, status: 'connected', canStop: true,
   });
@@ -524,8 +574,11 @@ async function mountGeneratedCodexRuntime(input: Readonly<{ global?: boolean; gr
   let start: Promise<void> | undefined;
   try {
     await act(async () => { start = mounted.lifecycle.toggle(input.global ? null : target); void start.catch(() => {}); });
-    await vi.waitFor(() => expect(browser.peers, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveLength(1));
-    await vi.waitFor(() => expect(browser.peer.setRemoteDescription, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+    if (!start) throw new Error('Mounted Voice start was not admitted');
+    const peer = await Promise.race([browser.peerCreated(), start.then(() => browser.peer)]);
+    expect(browser.peers, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveLength(1);
+    await Promise.race([peer.remoteDescriptionSet, start]);
+    expect(peer.setRemoteDescription, JSON.stringify(mounted.lifecycle.getSnapshot())).toHaveBeenCalledOnce();
     browser.peer.channel.open();
     await act(async () => { await start; });
     expect(mounted.lifecycle.getSnapshot()).toMatchObject({ adapterId: CODEX_PROVIDER_ID, status: 'connected', canStop: true });
@@ -546,10 +599,10 @@ async function prepareMountedOpenAiRuntime(input: Readonly<{ credentialSource?: 
   const { sync } = await import('@/sync/sync');
   const { storage } = await import('@/sync/domains/state/storage');
   await sync.resumeSync('manual');
-  await vi.waitFor(() => {
-    expect(storage.getState().profileScope).toEqual({ serverId: environment.accountConnection.home.id, accountId: 'openai-composed-account' });
-    expect(storage.getState().isDataReady).toBe(true);
-  });
+  await waitForTestEvent(storage.subscribe, storage.getState, state => state.isDataReady
+    && state.profileScope?.serverId === environment.accountConnection.home.id && state.profileScope.accountId === 'openai-composed-account');
+  expect(storage.getState().profileScope).toEqual({ serverId: environment.accountConnection.home.id, accountId: 'openai-composed-account' });
+  expect(storage.getState().isDataReady).toBe(true);
   const audioContext = new TestVoiceAudioContext();
   // The browser SDK fixture exposes only the Web Audio leaves capture consumes.
   const browser = installVoiceWebRtcBrowserBoundary({ createAudioContext: () => audioContext as unknown as AudioContext });
@@ -583,6 +636,8 @@ describe('VoiceSessionRuntime', () => {
     resourceMaterials = [];
     nativeAudio = nativeSpeech.reset().audioSession;
     recognizer.listeners.clear();
+    recognizer.callListeners.clear();
+    sdk.callListeners.clear();
     recognizer.start.mockReset().mockImplementation(() => {
       for (const listener of recognizer.listeners.get('audiostart') ?? []) listener();
     });
@@ -614,9 +669,9 @@ describe('VoiceSessionRuntime', () => {
       await screen.unmount();
     }
     const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
-    // React cleanup's disposal is asynchronous. A second dispose() can return
-    // early; the public null publication proves assembly/media teardown joined.
-    if (mountedScreens.length) await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+    // The public null publication follows both controller and assembly disposal.
+    if (mountedScreens.length) await waitForMountedController(null);
+    if (mountedScreens.length) expect(getVoiceSessionLifecycleController()).toBeNull();
     for (const environment of openAiRuntimeEnvironments.splice(0).reverse()) await environment.dispose();
     for (const browser of browserBoundaries.splice(0).reverse()) browser.restore();
     for (const dispose of actionLoaderDisposals.splice(0).reverse()) dispose();
@@ -692,9 +747,11 @@ describe('VoiceSessionRuntime', () => {
       expect(glance.getTextContent()).toContain(request.arguments.command);
     } else {
       await glance.pressByTestIdAsync('voice-glance-end');
-      await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected'));
+      await waitForTestEvent(mounted.lifecycle.subscribe, () => mounted.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+      expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected');
       expect(getVoiceSessionEndedAttempt()).toMatchObject({ targetSessionAddress: mounted.target,
         accountScope: { serverId: mounted.target.serverId, accountId: 'account-a' }, conversationSessionAddress: null });
+      await waitForTestEvent(glance.subscribe, () => expect(glance.findByTestId('voice-glance-ended-pending.review')).not.toBeNull());
       await glance.pressByTestIdAsync('voice-glance-ended-pending.review');
       expect(glance.findByTestId('direct-review-destination')?.props.children)
         .toBe(`/session/${session.id}?serverId=${encodeURIComponent(mounted.target.serverId)}`);
@@ -784,8 +841,10 @@ describe('VoiceSessionRuntime', () => {
     const conversation = binding.conversationSessionAddress;
     // Observe this client's actual first ACK before assigning the independent
     // client's next sequence. Otherwise the fixture creates two seq-1 notes.
-    await vi.waitFor(() => expect(readStoredSessionMessages(storage.getState(), conversation.sessionId)
-      .some(message => readVoiceContinuationProvenance(message.meta)?.deviceId === getDeviceAnalyticsId())).toBe(true));
+    await waitForTestEvent(storage.subscribe, () => readStoredSessionMessages(storage.getState(), conversation.sessionId),
+      messages => messages.some(message => readVoiceContinuationProvenance(message.meta)?.deviceId === getDeviceAnalyticsId()));
+    expect(readStoredSessionMessages(storage.getState(), conversation.sessionId)
+      .some(message => readVoiceContinuationProvenance(message.meta)?.deviceId === getDeviceAnalyticsId())).toBe(true);
     const boundary = storage.getState().sessions[conversation.sessionId]?.seq ?? 0;
     const remoteDevice = `${getDeviceAnalyticsId()}-other-device`;
     const remote = createVoiceContinuationProjection();
@@ -830,7 +889,8 @@ describe('VoiceSessionRuntime', () => {
     expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
     setVoiceSessionLifecycleController(mounted.lifecycle);
     await act(async () => { voiceHooks.onMessages(conversation, received); });
-    await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected'));
+    await waitForTestEvent(mounted.lifecycle.subscribe, () => mounted.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+    expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected');
     expect(getVoiceSessionEndedAttempt()).toMatchObject({ attemptId, conversationSessionAddress: conversation,
       reason: { kind: 'continued_elsewhere', continuation: note.continuation } });
     expect(remote.observe(conversation, received)).toBeNull();
@@ -865,7 +925,8 @@ describe('VoiceSessionRuntime', () => {
     let start: Promise<void> | undefined;
     await act(async () => { start = mounted.lifecycle.toggle(null); });
     try {
-      await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+      await waitForSdkCall('startSession', 1);
+      expect(sdk.startSession).toHaveBeenCalledOnce();
       expect(mounted.lifecycle.getSnapshot().status).toBe('connecting');
       expect(mounted.httpRequests.filter(request => request.method === 'POST' && request.path.endsWith('/messages'))).toEqual([]);
     } finally {
@@ -875,22 +936,22 @@ describe('VoiceSessionRuntime', () => {
     const binding = getVoiceSessionPresentedBinding();
     if (!binding) throw new Error('Expected an admitted connected carrier');
     expect(mounted.agentRequests).toEqual([]);
-    await vi.waitFor(() => {
-      const notes = readStoredSessionMessages(storage.getState(), binding.conversationSessionId)
-        .filter(message => readVoiceContinuationProvenance(message.meta) !== null);
-      expect(notes, JSON.stringify(mounted.httpRequests)).toHaveLength(1);
-      expect(notes[0]?.seq).toBe(1);
-      expect(readVoiceContinuationProvenance(notes[0]?.meta)).toMatchObject({
-        deviceId: getDeviceAnalyticsId(), conversation: binding.conversationSessionAddress,
-      });
+    const notes = await waitForTestEvent(storage.subscribe, () => readStoredSessionMessages(storage.getState(), binding.conversationSessionId)
+      .filter(message => readVoiceContinuationProvenance(message.meta) !== null), messages => messages.length > 0);
+    expect(notes, JSON.stringify(mounted.httpRequests)).toHaveLength(1);
+    expect(notes[0]?.seq).toBe(1);
+    expect(readVoiceContinuationProvenance(notes[0]?.meta)).toMatchObject({
+      deviceId: getDeviceAnalyticsId(), conversation: binding.conversationSessionAddress,
     });
   });
 
   it('retries a failed connected continuation with the same identity after Home recovery, then acknowledges once', async () => {
     const firstResponse = createDeferred<Response>();
+    const firstWrite = createDeferred<void>();
     const writes: string[] = [];
     const mounted = await prepareGeneratedVoiceRuntime({ transcriptResponse: async ({ localId }) => {
       writes.push(localId);
+      firstWrite.resolve();
       return writes.length === 1 ? firstResponse.promise : null;
     } });
     const { storage } = await import('@/sync/domains/state/storage');
@@ -898,7 +959,8 @@ describe('VoiceSessionRuntime', () => {
     const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
     const { readVoiceContinuationProvenance } = await import('@/voice/transcript/voiceTranscriptNoteMeta');
     await act(async () => { await mounted.lifecycle.toggle(null); });
-    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    await firstWrite.promise;
+    expect(writes).toHaveLength(1);
     const binding = getVoiceSessionPresentedBinding();
     if (!binding) throw new Error('Expected a connected carrier');
     const notes = () => readStoredSessionMessages(storage.getState(), binding.conversationSessionId)
@@ -914,7 +976,8 @@ describe('VoiceSessionRuntime', () => {
     await act(async () => { firstResponse.resolve(Response.json({}, { status: 503 })); });
     // Recovered Home/current carrier facts are the existing retry trigger.
     await act(async () => { updateCarrier(); });
-    await vi.waitFor(() => expect(notes()).toHaveLength(1));
+    await waitForTestEvent(storage.subscribe, notes, messages => messages.length > 0);
+    expect(notes()).toHaveLength(1);
     expect(writes).toEqual([writes[0], writes[0]]);
     await act(async () => { updateCarrier(); });
     expect(writes).toHaveLength(2);
@@ -1030,7 +1093,9 @@ describe('VoiceSessionRuntime', () => {
       await setCurrentUiContextToolSetMode('off');
       await screen.update(runtime);
     });
-    await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledTimes(2));
+    await waitForSdkCall('startSession', 2);
+    expect(sdk.startSession).toHaveBeenCalledTimes(2);
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'connected');
     expect(sdk.endSession).toHaveBeenCalledOnce();
     expect(lifecycle.getSnapshot().status).toBe('connected');
 
@@ -1038,7 +1103,9 @@ describe('VoiceSessionRuntime', () => {
       await setCurrentUiContextToolSetMode('on_demand');
       await screen.update(runtime);
     });
-    await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledTimes(3));
+    await waitForSdkCall('startSession', 3);
+    expect(sdk.startSession).toHaveBeenCalledTimes(3);
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'connected');
     expect(sdk.endSession).toHaveBeenCalledTimes(2);
     expect(lifecycle.getSnapshot().status).toBe('connected');
   });
@@ -1051,7 +1118,8 @@ describe('VoiceSessionRuntime', () => {
     await act(async () => {
       options.onModeChange?.({ mode: 'speaking' });
     });
-    await vi.waitFor(() => expect(getVoiceSessionSnapshot().mode).toBe('speaking'));
+    await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.mode === 'speaking');
+    expect(getVoiceSessionSnapshot().mode).toBe('speaking');
     expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
   });
 
@@ -1124,8 +1192,11 @@ describe('VoiceSessionRuntime', () => {
     let retry: Promise<void> | undefined;
     try {
       await act(async () => { retry = lifecycle.toggle(null); void retry.catch(() => {}); });
-      await vi.waitFor(() => expect(browser.peers).toHaveLength(1));
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+      if (!retry) throw new Error('Mounted Voice retry was not admitted');
+      const peer = await Promise.race([browser.peerCreated(), retry.then(() => browser.peer)]);
+      expect(browser.peers).toHaveLength(1);
+      await Promise.race([peer.remoteDescriptionSet, retry]);
+      expect(peer.setRemoteDescription, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce();
       browser.peer.channel.open();
       await act(async () => { await retry; });
       expect(mintRequests).toBe(requestsBeforeRepair + 1);
@@ -1199,8 +1270,10 @@ describe('VoiceSessionRuntime', () => {
     const { OpenAiRealtimeSettingsV1Schema } = await import('../../../../../packages/plugins/openai/src/protocol/voice/settings');
     const start = lifecycle.toggle(null);
     void start.catch(() => undefined);
-    await vi.waitFor(() => expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1));
-    await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalledOnce());
+    const peer = await Promise.race([browser.peerCreated(), start.then(() => browser.peer)]);
+    expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1);
+    await Promise.race([peer.remoteDescriptionSet, start]);
+    expect(peer.setRemoteDescription).toHaveBeenCalledOnce();
     browser.peer.channel.open();
     await act(async () => { await start; });
     expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connected' });
@@ -1228,7 +1301,8 @@ describe('VoiceSessionRuntime', () => {
     // currentness. The separate Account transition keeper covers A/B, Home
     // replacement and null admission without a call-only lifecycle classifier.
     await environment.accountConnection.dispose();
-    await vi.waitFor(() => expect(browser.peer.close).toHaveBeenCalledOnce());
+    await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+    expect(browser.peer.close).toHaveBeenCalledOnce();
     expect(browser.micTrack.stop).toHaveBeenCalledOnce();
     await mounted.screen.unmount();
     generatedRuntimeScreens.splice(generatedRuntimeScreens.indexOf(mounted.screen), 1);
@@ -1249,7 +1323,8 @@ describe('VoiceSessionRuntime', () => {
     const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: agentVoice }, storage.getState().settings));
     await agent.screen.update(agent.runtime);
-    await vi.waitFor(() => expect(agentStops()).toHaveLength(1));
+    await agent.waitForAgentRequests(requests => requests.filter(request => request.method.endsWith('.stop')).length >= 1);
+    expect(agentStops()).toHaveLength(1);
     expect(agent.browser.peer.close).toHaveBeenCalledOnce();
     expect(agent.browser.micTrack.stop).toHaveBeenCalledOnce();
     expect(agentStarts()).toHaveLength(1);
@@ -1277,10 +1352,12 @@ describe('VoiceSessionRuntime', () => {
     });
     expect(selectedAuthority.isCurrent()).toBe(true);
     const mintGate = createDeferred<void>();
+    const mintStarted = createDeferred<void>();
     const providerResponse = environment.providerFetch.getMockImplementation();
     if (!providerResponse) throw new Error('OpenAI HTTP boundary unavailable');
     environment.providerFetch.mockImplementationOnce(async (...args) => {
       // Hold the real provider HTTP response, not the adapter or lifecycle.
+      mintStarted.resolve();
       await mintGate.promise;
       return providerResponse(...args);
     });
@@ -1288,7 +1365,8 @@ describe('VoiceSessionRuntime', () => {
     // The held SDK operation may reject if an assertion fails and cleanup wins.
     void start.catch(() => undefined);
     try {
-      await vi.waitFor(() => expect(environment.providerFetch, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce());
+      await Promise.race([mintStarted.promise, start]);
+      expect(environment.providerFetch, JSON.stringify(lifecycle.getSnapshot())).toHaveBeenCalledOnce();
       expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, status: 'connecting' });
       const added = applyAccountSettingsSavedSecretMutation(storage.getState().settings, {
         kind: 'add',
@@ -1317,8 +1395,10 @@ describe('VoiceSessionRuntime', () => {
       expect(browser.micTracks).toEqual([]);
 
       mintGate.resolve();
-      await vi.waitFor(() => expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1));
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalledOnce());
+      const peer = await Promise.race([browser.peerCreated(), start.then(() => browser.peer)]);
+      expect(browser.peers, JSON.stringify(lifecycle.getSnapshot())).toHaveLength(1);
+      await Promise.race([peer.remoteDescriptionSet, start]);
+      expect(peer.setRemoteDescription).toHaveBeenCalledOnce();
       browser.peer.channel.open();
       await act(async () => { await start; });
       expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
@@ -1352,9 +1432,11 @@ describe('VoiceSessionRuntime', () => {
         })),
       });
     });
-    await vi.waitFor(() => expect(stops()).toHaveLength(1));
+    await mounted.waitForAgentRequests(requests => requests.filter(request => request.method.endsWith('.stop')).length >= 1);
+    expect(stops()).toHaveLength(1);
     expect(stops()[0]?.targetId).toBe(admittedSessionId);
-    await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+    await waitForTestEvent(mounted.lifecycle.subscribe, () => mounted.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected' && snapshot.canStop === false);
+    expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
     expect(starts()).toHaveLength(1);
     await act(async () => {
       await mounted.publishProfile({
@@ -1387,9 +1469,11 @@ describe('VoiceSessionRuntime', () => {
           })),
         });
       });
-      await vi.waitFor(() => expect(stops()).toHaveLength(1));
+      await mounted.waitForAgentRequests(requests => requests.filter(request => request.method.endsWith('.stop')).length >= 1);
+      expect(stops()).toHaveLength(1);
       expect(stops()[0]?.targetId).toBe(admittedSessionId);
-      await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+      await waitForTestEvent(mounted.lifecycle.subscribe, () => mounted.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected' && snapshot.canStop === false);
+      expect(mounted.lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
       expect(starts()).toHaveLength(1);
       await act(async () => { await mounted.publishProfile(mounted.profile); });
       expect(stops()).toHaveLength(1);
@@ -1439,11 +1523,14 @@ describe('VoiceSessionRuntime', () => {
       await applyAccountScope({ serverId: 'server-b', accountId: 'account-b' }, { address: target, boundary: mounted.sessionHttp });
       await screen.update(runtime);
     });
-    await vi.waitFor(() => expect(mounted.browser.peer.close).toHaveBeenCalledOnce());
+    await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+    expect(mounted.browser.peer.close).toHaveBeenCalledOnce();
     expect(mounted.browser.micTrack.stop).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(stops(), JSON.stringify(retiredAccountHttpRequests)).toHaveLength(1));
+    await mounted.waitForAgentRequests(requests => requests.filter(request => request.method.endsWith('.stop')).length >= 1);
+    expect(stops(), JSON.stringify(retiredAccountHttpRequests)).toHaveLength(1);
     expect(stops()[0]?.targetId).toBe(target.sessionId);
-    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false }));
+    await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected' && snapshot.canStop === false);
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
     expect(starts()).toHaveLength(1);
     await screen.update(runtime);
     expect(stops()).toHaveLength(1);
@@ -1469,8 +1556,10 @@ describe('VoiceSessionRuntime', () => {
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+    await waitForSdkCall('endSession', 1);
+    expect(sdk.endSession).toHaveBeenCalledOnce();
+    await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
     expect(sdk.startSession).toHaveBeenCalledOnce();
   });
 
@@ -1612,20 +1701,26 @@ describe('VoiceSessionRuntime', () => {
       void start.catch(() => undefined);
     });
     try {
-      await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalledOnce());
+      await waitForSdkCall('startSession', 1);
+      expect(sdk.startSession).toHaveBeenCalledOnce();
       expect(lifecycle.getSnapshot().status).toBe('connecting');
       switching = applyAccountScope({ serverId: 'server-b', accountId: 'account-b' });
       void switching.catch(() => undefined);
       // Real Account admission may join old media cleanup. Observe retirement
       // before releasing its non-abortable SDK carrier; do not await B first.
-      await vi.waitFor(() => expect(accountLifetime.isCurrent()).toBe(false));
+      await waitForTestEvent(notify => {
+        const retirement = accountLifetime.onRetire(notify);
+        return () => retirement.dispose();
+      }, accountLifetime.isCurrent, current => !current);
+      expect(accountLifetime.isCurrent()).toBe(false);
       expect(statuses).not.toContain('connected');
       startDeferred.resolve();
       await act(async () => {
         await Promise.all([start, switching]);
         await screen.update(runtime);
       });
-      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      await waitForSdkCall('endSession', 1);
+      expect(sdk.endSession).toHaveBeenCalledOnce();
       expect(statuses).not.toContain('connected');
       expect(lifecycle.getSnapshot().status).toBe('disconnected');
       // The late SDK carrier is closed and the actual admission owner makes
@@ -1668,7 +1763,8 @@ describe('VoiceSessionRuntime', () => {
         storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation' } }, storage.getState().settings));
         await screen.update(runtime);
       });
-      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      await waitForRecognizerCall('stop', 1);
+      expect(recognizer.stop).toHaveBeenCalledOnce();
       expect(lifecycle.getConfiguredProviderId()).toBe('local_conversation');
       expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: target.sessionId });
       expect(recognizer.start).toHaveBeenCalledOnce();
@@ -1679,7 +1775,8 @@ describe('VoiceSessionRuntime', () => {
     } finally {
       stopped.resolve();
       await stopped.promise;
-      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+      await waitForRecognizerCall('start', 2);
+      expect(recognizer.start).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -1697,14 +1794,17 @@ describe('VoiceSessionRuntime', () => {
         storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation' } }, storage.getState().settings));
         await screen.update(runtime);
       });
-      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      await waitForRecognizerCall('stop', 1);
+      expect(recognizer.stop).toHaveBeenCalledOnce();
       // The genuine recognizer already emitted its terminal end event, but
       // media restore still owns capture. A successor cannot start yet.
       expect(recognizer.abort).not.toHaveBeenCalled();
       expect(recognizer.start).toHaveBeenCalledOnce();
       expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: target.sessionId });
       await act(async () => { stopped.resolve(); await stopped.promise; });
-      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+      await waitForRecognizerCall('start', 2);
+      expect(recognizer.start).toHaveBeenCalledTimes(2);
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'connected');
       expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
       expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_conversation',
         sessionId: target.sessionId, status: 'connected', canStop: true,
@@ -1731,7 +1831,8 @@ describe('VoiceSessionRuntime', () => {
         } }, storage.getState().settings));
         await screen.update(runtime);
       });
-      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      await waitForSdkCall('endSession', 1);
+      expect(sdk.endSession).toHaveBeenCalledOnce();
       expect(sdk.startSession).toHaveBeenCalledOnce();
       // Teardown keeps Stop and does not announce a new connection (`ending` projects as connected).
       expect(getVoiceSessionSnapshot()).toEqual(active);
@@ -1739,7 +1840,8 @@ describe('VoiceSessionRuntime', () => {
         stopped.resolve();
         await stopped.promise;
       });
-      await vi.waitFor(() => expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot()));
+      await waitForTestEvent(lifecycle.subscribe, () => lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+      expect(getVoiceSessionSnapshot()).toEqual(lifecycle.getSnapshot());
       expect(getVoiceSessionSnapshot()).toEqual({
         adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
       });
@@ -1819,7 +1921,8 @@ describe('VoiceSessionRuntime', () => {
     const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
     const activeSnapshot = getVoiceSessionSnapshot();
     await screen.unmount();
-    await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+    await waitForSdkCall('endSession', 1);
+    expect(sdk.endSession).toHaveBeenCalledOnce();
     const competingAdmission = voiceCaptureAdmissionController.acquire('dictation');
     if (competingAdmission.status === 'acquired') {
       competingAdmission.lease.release();
@@ -1837,7 +1940,8 @@ describe('VoiceSessionRuntime', () => {
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+    await waitForMountedController(null);
+    expect(getVoiceSessionLifecycleController()).toBeNull();
     expect(getVoiceSessionSnapshot()).toEqual({
       adapterId: null,
       sessionId: null,
@@ -1861,7 +1965,8 @@ describe('VoiceSessionRuntime', () => {
     nativeAudio.nativeModule.restoreAudioSession.mockImplementation(() => stopDeferred.promise);
     try {
       await screen.unmount();
-      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      await waitForRecognizerCall('stop', 1);
+      expect(recognizer.stop).toHaveBeenCalledOnce();
       expect(recognizer.abort).not.toHaveBeenCalled();
       expect(getVoiceSessionSnapshot()).toEqual(active);
       expect(getVoiceSessionLifecycleController()).toBe(lifecycle);
@@ -1869,7 +1974,8 @@ describe('VoiceSessionRuntime', () => {
         stopDeferred.resolve();
         await stopDeferred.promise;
       });
-      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+      await waitForMountedController(null);
+      expect(getVoiceSessionLifecycleController()).toBeNull();
       expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
       expect(getVoiceSessionSnapshot()).toEqual({
         adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
@@ -1888,7 +1994,8 @@ describe('VoiceSessionRuntime', () => {
     sdk.endSession.mockImplementationOnce(() => oldStopDeferred.promise);
     try {
       await oldScreen.unmount();
-      await vi.waitFor(() => expect(sdk.endSession).toHaveBeenCalledOnce());
+      await waitForSdkCall('endSession', 1);
+      expect(sdk.endSession).toHaveBeenCalledOnce();
       const freshScreen = await renderRuntimeScreen(runtime);
       generatedRuntimeScreens.push(freshScreen);
       const freshController = getVoiceSessionLifecycleController();
@@ -1905,16 +2012,17 @@ describe('VoiceSessionRuntime', () => {
         oldStopDeferred.resolve();
         await oldStopDeferred.promise;
       });
-      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBe(freshController));
+      await oldController.dispose();
+      await waitForMountedController(freshController);
+      expect(getVoiceSessionLifecycleController()).toBe(freshController);
       expect(getVoiceSessionSnapshot()).not.toMatchObject({ status: 'connected', mode: 'speaking' });
-      await vi.waitFor(() => {
-        const admission = voiceCaptureAdmissionController.acquire('dictation');
-        if (admission.status === 'acquired') admission.lease.release();
-        expect(admission.status).toBe('acquired');
-        expect(freshController.getSnapshot().status).toBe('disconnected');
-      });
+      const admission = voiceCaptureAdmissionController.acquire('dictation');
+      if (admission.status === 'acquired') admission.lease.release();
+      expect(admission.status).toBe('acquired');
+      expect(freshController.getSnapshot().status).toBe('disconnected');
       await act(async () => { await freshController.toggle(null); });
-      await vi.waitFor(() => expect(sdk.startSession, JSON.stringify(freshController.getSnapshot())).toHaveBeenCalledTimes(2));
+      await waitForSdkCall('startSession', 2);
+      expect(sdk.startSession, JSON.stringify(freshController.getSnapshot())).toHaveBeenCalledTimes(2);
       expect(getVoiceSessionSnapshot()).toMatchObject({
         adapterId: ELEVENLABS_PROVIDER_ID, sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected',
       });
@@ -1942,7 +2050,8 @@ describe('VoiceSessionRuntime', () => {
     nativeAudio.nativeModule.restoreAudioSession.mockImplementationOnce(() => oldStopDeferred.promise);
     try {
       await oldScreen.unmount();
-      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledOnce());
+      await waitForRecognizerCall('stop', 1);
+      expect(recognizer.stop).toHaveBeenCalledOnce();
       const freshScreen = await renderRuntimeScreen(runtime);
       generatedRuntimeScreens.push(freshScreen);
       const freshController = getVoiceSessionLifecycleController();
@@ -1962,7 +2071,8 @@ describe('VoiceSessionRuntime', () => {
         await oldStopDeferred.promise;
       });
       await act(async () => { await freshStart; });
-      await vi.waitFor(() => expect(recognizer.start).toHaveBeenCalledTimes(2));
+      await waitForRecognizerCall('start', 2);
+      expect(recognizer.start).toHaveBeenCalledTimes(2);
       expect(getVoiceSessionLifecycleController()).toBe(freshController);
       expect(getVoiceSessionSnapshot()).toMatchObject({ adapterId: 'local_direct',
         sessionId: target.sessionId, status: 'connected', canStop: true,
@@ -1971,8 +2081,10 @@ describe('VoiceSessionRuntime', () => {
       expect(recognizer.abort).not.toHaveBeenCalled();
       expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBeGreaterThan(0);
       await freshScreen.unmount();
-      await vi.waitFor(() => expect(recognizer.stop).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+      await waitForRecognizerCall('stop', 2);
+      expect(recognizer.stop).toHaveBeenCalledTimes(2);
+      await waitForMountedController(null);
+      expect(getVoiceSessionLifecycleController()).toBeNull();
       expect(nativeSpeech.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     } finally {
       oldStopDeferred.resolve();

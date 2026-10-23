@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,7 +90,7 @@ async function answerClearDialog(screen: Awaited<ReturnType<typeof renderScreen>
   expect(screen.findHostByTestId('web-modal-confirm')).not.toBeNull();
   await screen.pressByTestIdAsync(confirm ? 'web-modal-confirm' : 'web-modal-cancel');
   await flushAsyncState();
-  await vi.waitFor(() => expect(screen.findAllByType(WebAlertModal)).toHaveLength(0));
+  await waitForTestEvent(screen.subscribe, () => expect(screen.findAllByType(WebAlertModal)).toHaveLength(0));
 }
 
 function voiceMessage(input: Readonly<{
@@ -843,6 +844,7 @@ describe('VoiceHistoryScreen', () => {
       return scope ? `${scope.serverId}/${scope.accountId}` : null;
     };
     const accountBDiscovery = createDeferred<string | null>();
+    const accountBDiscoveryStarted = createDeferred<void>();
     let discoveries = 0;
     const consumer = createVoiceHistoryConsumer(createDeps(
       [voiceMessage({
@@ -863,6 +865,7 @@ describe('VoiceHistoryScreen', () => {
           // Account B's read is deliberately still in flight while the
           // assertions below run: nothing may keep Account A on screen
           // while the switch is only partially applied.
+          if (discoveries === 2) accountBDiscoveryStarted.resolve();
           return discoveries === 1
             ? 'voice-history-session-a'
             : await accountBDiscovery.promise;
@@ -900,7 +903,8 @@ describe('VoiceHistoryScreen', () => {
       expect(screen.findByTestId('voice-history-loading')).not.toBeNull();
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds()).toEqual([]);
       expect(readMountedSessionTranscriptConsumerSessionIdsForRetention()).toEqual([]);
-      await vi.waitFor(() => expect(discoveries).toBe(2));
+      await accountBDiscoveryStarted.promise;
+      expect(discoveries).toBe(2);
 
       await act(async () => {
         accountBDiscovery.resolve(null);

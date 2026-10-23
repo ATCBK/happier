@@ -1,5 +1,6 @@
 import { createVoiceTranscriptLadderMapper } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { log } from '@/log';
@@ -29,12 +30,14 @@ const wireSchema = z.strictObject({
 });
 let beforeAcknowledgement: (request: TranscriptRequest) => void | Promise<void>;
 const pendingWriterOperations: Promise<unknown>[] = [];
+const requestListeners = new Set<() => void>();
 
 beforeEach(() => {
   wireRequests.length = 0;
   durableRows.clear();
   acknowledgements.clear();
   pendingWriterOperations.length = 0;
+  requestListeners.clear();
   beforeAcknowledgement = () => undefined;
   log.clear();
   storage.setState({ sessionMessages: {}, sessions: Object.fromEntries(
@@ -50,6 +53,7 @@ function writeTranscript(input: PersistSessionTranscriptMessageInput) {
       const request = { sessionId, localId: body.localId, messageRole: body.messageRole,
         rawRecord: body.content.v, createdAt: 100 };
       wireRequests.push(request);
+      for (const listener of requestListeners) listener();
       await beforeAcknowledgement(request);
       const existing = acknowledgements.get(body.localId);
       const acknowledgement = existing ?? { id: 'ack-' + (acknowledgements.size + 1),
@@ -76,6 +80,16 @@ function persistCanonicalItem(item: CanonicalVoiceTranscriptItem) {
 
 function storedCarrierRows() { return readStoredSessionMessages(storage.getState(), 'carrier'); }
 async function settleWrites() { await Promise.allSettled(pendingWriterOperations); }
+function waitForTranscriptRequests(count: number) {
+  return waitForTestEvent(
+    (listener) => {
+      requestListeners.add(listener);
+      return () => { requestListeners.delete(listener); };
+    },
+    () => wireRequests.length,
+    (length) => length >= count,
+  );
+}
 
 function event(overrides: Record<string, unknown>) {
   return {
@@ -649,7 +663,8 @@ describe('canonical voice transcript projector', () => {
       }),
     });
 
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(3));
+    await waitForTranscriptRequests(3);
+    expect(wireRequests).toHaveLength(3);
     await settleWrites();
     expect(storedCarrierRows()).toHaveLength(2);
     expect(durableRows).toHaveLength(2);
@@ -696,16 +711,13 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('commits distinct final rows in canonical event-arrival order when the first persistence attempt is delayed', async () => {
-    let resolveFirstWrite!: () => void;
-    const firstWriteBlocked = new Promise<void>((resolve) => {
-      resolveFirstWrite = resolve;
-    });
+    const firstWrite = createDeferred<void>();
     const committedHistory: Array<Readonly<{
       seq: number;
       input: PersistSessionTranscriptMessageInput;
     }>> = [];
     beforeAcknowledgement = async input => {
-      if (input.messageRole === 'user') await firstWriteBlocked;
+      if (input.messageRole === 'user') await firstWrite.promise;
       committedHistory.push({ seq: committedHistory.length + 1, input });
     };
     const persistFinal = writeTranscript;
@@ -724,7 +736,8 @@ describe('canonical voice transcript projector', () => {
         text: 'first question',
       }),
     });
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+    await waitForTranscriptRequests(1);
+    expect(wireRequests).toHaveLength(1);
     projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
       event: event({
@@ -747,9 +760,11 @@ describe('canonical voice transcript projector', () => {
     expect(wireRequests).toHaveLength(1);
     expect(committedHistory).toEqual([]);
 
-    resolveFirstWrite();
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
-    await vi.waitFor(() => expect(committedHistory).toHaveLength(2));
+    firstWrite.resolve();
+    await waitForTranscriptRequests(2);
+    expect(wireRequests).toHaveLength(2);
+    await settleWrites();
+    expect(committedHistory).toHaveLength(2);
 
     expect(committedHistory
       .sort((left, right) => left.seq - right.seq)
@@ -760,11 +775,8 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('settles the persistence tail admitted by an exact canonical projection', async () => {
-    let resolveWrite!: () => void;
-    const writeBlocked = new Promise<void>((resolve) => {
-      resolveWrite = resolve;
-    });
-    beforeAcknowledgement = async () => { await writeBlocked; };
+    const write = createDeferred<void>();
+    beforeAcknowledgement = async () => { await write.promise; };
     const projector = createVoiceTranscriptProjector({
       getState: storage.getState,
       persistFinal: writeTranscript,
@@ -788,9 +800,9 @@ describe('canonical voice transcript projector', () => {
       settled = true;
     });
 
-    await Promise.resolve();
+    await waitForTranscriptRequests(1);
     expect(settled).toBe(false);
-    resolveWrite();
+    write.resolve();
     await settlement;
     expect(settled).toBe(true);
     expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'answer pending persistence' })]);
@@ -847,7 +859,9 @@ describe('canonical voice transcript projector', () => {
       }),
       source: sourceB,
     });
-    await vi.waitFor(() => expect(persisted).toHaveLength(1));
+    await waitForTranscriptRequests(1);
+    expect(persisted).toHaveLength(1);
+    await settleWrites();
     expect(projector.canonicalSnapshot('carrier')).toEqual([
       expect.objectContaining({
         attemptIdentity: b.attemptIdentity,
@@ -866,7 +880,9 @@ describe('canonical voice transcript projector', () => {
     // The opaque admission is single-use: a repeated delayed callback cannot
     // manufacture a second persistence mutation.
     expect(projector.commitAdmittedCanonicalPersistenceEvent(admitted!)).toBeNull();
-    await vi.waitFor(() => expect(persisted).toHaveLength(2));
+    await waitForTranscriptRequests(2);
+    expect(persisted).toHaveLength(2);
+    await settleWrites();
     expect(persisted.map((input) => input.localId)).toEqual(expect.arrayContaining([
       deriveCanonicalVoiceTranscriptEntryId({
         attemptIdentity: a.attemptIdentity,
@@ -932,7 +948,9 @@ describe('canonical voice transcript projector', () => {
       event: aFinal,
       source: sourceA,
     })).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => expect(persisted).toHaveLength(1));
+    await waitForTranscriptRequests(1);
+    expect(persisted).toHaveLength(1);
+    await settleWrites();
 
     const aCorrection = event({
       type: 'voice.transcript.corrected',
@@ -968,7 +986,9 @@ describe('canonical voice transcript projector', () => {
       }),
       source: sourceB,
     })).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => expect(persisted).toHaveLength(2));
+    await waitForTranscriptRequests(2);
+    expect(persisted).toHaveLength(2);
+    await settleWrites();
 
     const aEntryId = deriveCanonicalVoiceTranscriptEntryId({
       attemptIdentity: a.attemptIdentity,
@@ -977,7 +997,9 @@ describe('canonical voice transcript projector', () => {
     });
     expect(projector.commitAdmittedCanonicalPersistenceEvent(admitted!)).toBe(aEntryId);
     expect(projector.commitAdmittedCanonicalPersistenceEvent(admitted!)).toBeNull();
-    await vi.waitFor(() => expect(persisted).toHaveLength(3));
+    await waitForTranscriptRequests(3);
+    expect(persisted).toHaveLength(3);
+    await settleWrites();
     expect(persisted.filter((input) => input.localId === aEntryId)).toEqual([
       expect.objectContaining({
         rawRecord: expect.objectContaining({
@@ -1058,7 +1080,9 @@ describe('canonical voice transcript projector', () => {
     expect(projector.commitAdmittedCanonicalPersistenceEvent(admittedFinal!)).toBe(entryId);
     expect(projector.commitAdmittedCanonicalPersistenceEvent(admittedCorrection!)).toBe(entryId);
 
-    await vi.waitFor(() => expect(persisted).toHaveLength(2));
+    await waitForTranscriptRequests(2);
+    expect(persisted).toHaveLength(2);
+    await settleWrites();
     expect(persisted).toEqual([
       expect.objectContaining({
         rawRecord: expect.objectContaining({
@@ -1120,14 +1144,11 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('serializes same-row final and correction persistence so the correction cannot be overwritten by a late final', async () => {
-    let resolveFirstWrite!: () => void;
-    const firstWriteBlocked = new Promise<void>((resolve) => {
-      resolveFirstWrite = resolve;
-    });
+    const firstWrite = createDeferred<void>();
     let writeCount = 0;
     beforeAcknowledgement = async () => {
       writeCount += 1;
-      if (writeCount === 1) await firstWriteBlocked;
+      if (writeCount === 1) await firstWrite.promise;
     };
     const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
@@ -1145,7 +1166,8 @@ describe('canonical voice transcript projector', () => {
         text: 'initial question',
       }),
     });
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+    await waitForTranscriptRequests(1);
+    expect(wireRequests).toHaveLength(1);
     projector.projectCanonicalEvent({
       conversationSessionId: 'carrier',
       event: event({
@@ -1160,28 +1182,25 @@ describe('canonical voice transcript projector', () => {
     });
 
     expect(wireRequests).toHaveLength(1);
-    resolveFirstWrite();
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
-    await vi.waitFor(() => {
-      expect([...durableRows.values()]).toEqual([
-        expect.objectContaining({
-          rawRecord: expect.objectContaining({
-            content: { type: 'text', text: 'corrected question' },
-          }),
+    firstWrite.resolve();
+    await waitForTranscriptRequests(2);
+    expect(wireRequests).toHaveLength(2);
+    await settleWrites();
+    expect([...durableRows.values()]).toEqual([
+      expect.objectContaining({
+        rawRecord: expect.objectContaining({
+          content: { type: 'text', text: 'corrected question' },
         }),
-      ]);
-    });
+      }),
+    ]);
   });
 
   it('settles only the released attempt and cannot retire a newer transcript attempt', async () => {
-    let resolveFirstWrite!: () => void;
-    const firstWriteBlocked = new Promise<void>((resolve) => {
-      resolveFirstWrite = resolve;
-    });
+    const firstWrite = createDeferred<void>();
     let writeCount = 0;
     beforeAcknowledgement = async () => {
       writeCount += 1;
-      if (writeCount === 1) await firstWriteBlocked;
+      if (writeCount === 1) await firstWrite.promise;
     };
     const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
@@ -1199,7 +1218,8 @@ describe('canonical voice transcript projector', () => {
         text: 'first attempt',
       }),
     });
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+    await waitForTranscriptRequests(1);
+    expect(wireRequests).toHaveLength(1);
 
     const secondAttempt = projector.beginCanonicalAttempt('carrier');
     projector.projectCanonicalEvent({
@@ -1212,7 +1232,8 @@ describe('canonical voice transcript projector', () => {
         text: 'second attempt',
       }),
     });
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
+    await waitForTranscriptRequests(2);
+    expect(wireRequests).toHaveLength(2);
 
     let releaseSettled = false;
     const releaseFirstAttempt = projector.releaseCanonicalConversation(
@@ -1225,7 +1246,7 @@ describe('canonical voice transcript projector', () => {
     await Promise.resolve();
     expect(releaseSettled).toBe(false);
 
-    resolveFirstWrite();
+    firstWrite.resolve();
     await expect(releaseFirstAttempt).resolves.toBe(false);
     expect(projector.canonicalSnapshot('carrier')).toEqual([
       expect.objectContaining({
@@ -1241,9 +1262,9 @@ describe('canonical voice transcript projector', () => {
 
   it('settles a rejected admitted write without retrying or blocking attempt release', async () => {
     const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    let rejectWrite!: (error: Error) => void;
+    const write = createDeferred<never>();
     beforeAcknowledgement = async () => {
-      await new Promise<never>((_resolve, reject) => { rejectWrite = reject; });
+      await write.promise;
     };
     const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
@@ -1263,7 +1284,8 @@ describe('canonical voice transcript projector', () => {
           text: 'cannot persist',
         }),
       });
-      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+      await waitForTranscriptRequests(1);
+      expect(wireRequests).toHaveLength(1);
 
       let releaseSettled = false;
       const release = projector.releaseCanonicalConversation(
@@ -1276,7 +1298,7 @@ describe('canonical voice transcript projector', () => {
       await Promise.resolve();
       expect(releaseSettled).toBe(false);
 
-      rejectWrite(new Error('offline'));
+      write.reject(new Error('offline'));
       await expect(release).resolves.toBe(true);
       expect(wireRequests).toHaveLength(1);
       expect(durableRows.size).toBe(0);
@@ -1314,7 +1336,8 @@ describe('canonical voice transcript projector', () => {
           text: 'initial question',
         }),
       });
-      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+      await waitForTranscriptRequests(1);
+      expect(wireRequests).toHaveLength(1);
       projector.projectCanonicalEvent({
         conversationSessionId: 'carrier',
         event: event({
@@ -1328,15 +1351,16 @@ describe('canonical voice transcript projector', () => {
         }),
       });
 
-      await vi.waitFor(() => expect(wireRequests).toHaveLength(2));
-      await vi.waitFor(() => expect([...durableRows.values()]).toEqual([
+      await waitForTranscriptRequests(2);
+      expect(wireRequests).toHaveLength(2);
+      await settleWrites();
+      expect([...durableRows.values()]).toEqual([
         expect.objectContaining({
           rawRecord: expect.objectContaining({
             content: { type: 'text', text: 'corrected question' },
           }),
         }),
-      ]));
-      await settleWrites();
+      ]);
       expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'corrected question' })]);
       expect(consoleInfo).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
@@ -1350,10 +1374,10 @@ describe('canonical voice transcript projector', () => {
   it('keeps an identical authoritative final replay inert after its host write fails without creating a ghost', async () => {
     const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     let writeCount = 0;
-    let rejectFirstWrite!: (error: Error) => void;
+    const firstWrite = createDeferred<never>();
     beforeAcknowledgement = async () => {
       writeCount += 1;
-      if (writeCount === 1) await new Promise<never>((_resolve, reject) => { rejectFirstWrite = reject; });
+      if (writeCount === 1) await firstWrite.promise;
     };
     const persistFinal = writeTranscript;
     const projector = createVoiceTranscriptProjector({
@@ -1373,7 +1397,8 @@ describe('canonical voice transcript projector', () => {
         conversationSessionId: 'carrier',
         event: final,
       }).status).toBe('applied');
-      await vi.waitFor(() => expect(wireRequests).toHaveLength(1));
+      await waitForTranscriptRequests(1);
+      expect(wireRequests).toHaveLength(1);
       expect(projector.projectCanonicalEvent({
         conversationSessionId: 'carrier',
         event: {
@@ -1385,11 +1410,13 @@ describe('canonical voice transcript projector', () => {
       await Promise.resolve();
       expect(wireRequests).toHaveLength(1);
 
-      rejectFirstWrite(new Error('offline'));
-      await vi.waitFor(() => expect(consoleInfo).toHaveBeenCalledWith(
+      firstWrite.reject(new Error('offline'));
+      await projector.settleAdmittedCanonicalPersistence({ conversationSessionId: 'carrier',
+        attemptIdentity: projector.canonicalSnapshot('carrier')[0]!.attemptIdentity });
+      expect(consoleInfo).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
-      ));
+      );
       expect(storedCarrierRows()).toEqual([]);
       expect(durableRows).toHaveLength(0);
 
@@ -1401,7 +1428,8 @@ describe('canonical voice transcript projector', () => {
           provenance: 'replay',
         },
       }).status).toBe('duplicate');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await projector.settleAdmittedCanonicalPersistence({ conversationSessionId: 'carrier',
+        attemptIdentity: projector.canonicalSnapshot('carrier')[0]!.attemptIdentity });
 
       expect(wireRequests).toHaveLength(1);
       expect(storedCarrierRows()).toEqual([]);
@@ -1480,7 +1508,8 @@ describe('canonical voice transcript projector', () => {
       }).status).toBe('applied');
     }
 
-    await vi.waitFor(() => expect(wireRequests).toHaveLength(3));
+    await waitForTranscriptRequests(3);
+    expect(wireRequests).toHaveLength(3);
     await settleWrites();
     expect(new Set(wireRequests.map(request => request.localId)).size).toBe(1);
     expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: supersedingFinals[2] })]);
@@ -1624,11 +1653,13 @@ describe('canonical voice transcript refusals are named', () => {
       event: event({ type: 'voice.transcript.final', text: 'authoritative words' }),
     });
 
-    await vi.waitFor(() => expect(readNamedDrops()).toEqual([{
+    await waitForTestEvent((listener) => log.onChange(listener), readNamedDrops,
+      (drops) => drops.some((drop) => drop.kind === 'transcript_persist_failed'));
+    expect(readNamedDrops()).toEqual([{
       providerId: 'happier.voice.openai/realtime-openai',
       outcome: 'transcript_dropped',
       kind: 'transcript_persist_failed',
       reason: 'voice_transcript_write_failed',
-    }]));
+    }]);
   });
 });

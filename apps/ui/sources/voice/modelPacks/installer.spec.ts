@@ -5,6 +5,7 @@ import { checkModelPackUpdateAvailable, ensureModelPackInstalled, findRunningMod
 import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 import { deriveModelPackStagingPlan } from '@happier-dev/voice-modelpacks';
+import { createDeferred } from '@/dev/testkit';
 
 const nativeDownload = vi.hoisted(() => vi.fn<(
   url: string, uri: string, options?: DownloadOptions, progress?: (value: DownloadProgressData) => void,
@@ -23,9 +24,11 @@ describe('modelPacks installer (native)', () => {
       files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sizeBytes: 1,
         sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
     let transferSignal: AbortSignal | null = null;
+    const transferStarted = createDeferred<void>();
     const fetchImpl: typeof fetch = async (input, init) => {
       if (String(input).includes('manifest.json')) return Response.json(manifest);
       transferSignal = init?.signal ?? null;
+      transferStarted.resolve();
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       });
@@ -35,7 +38,8 @@ describe('modelPacks installer (native)', () => {
     const started = ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
       manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: firstController.signal }, overrides);
     const startedOutcome = started.catch((error: unknown) => error);
-    await vi.waitFor(() => expect(transferSignal).not.toBeNull());
+    await transferStarted.promise;
+    expect(transferSignal).not.toBeNull();
     const running = await findRunningModelPackInstall({ packId: manifest.packId }, overrides);
     expect(running).not.toBeNull();
     const controller = new AbortController();
@@ -59,9 +63,11 @@ describe('modelPacks installer (native)', () => {
     let releaseDownload!: () => void;
     const downloadHeld = new Promise<void>(resolve => { releaseDownload = resolve; });
     const artifactRequests: string[] = [];
+    const artifactRequested = createDeferred<void>();
     const fetchImpl: typeof fetch = async (input) => {
       if (String(input).includes('manifest.json')) return Response.json(manifest);
       artifactRequests.push(String(input));
+      artifactRequested.resolve();
       await downloadHeld;
       return new Response(bytes);
     };
@@ -69,7 +75,8 @@ describe('modelPacks installer (native)', () => {
     const request = { packId: manifest.packId, mode: 'download_if_missing' as const,
       manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal };
     const first = ensureModelPackInstalled(request, overrides);
-    await vi.waitFor(() => expect(artifactRequests).toHaveLength(1));
+    await artifactRequested.promise;
+    expect(artifactRequests).toHaveLength(1);
     const followerProgress: number[] = [];
     const second = ensureModelPackInstalled({ ...request, signal: new AbortController().signal,
       onProgress: progress => followerProgress.push(progress.loaded) }, overrides);

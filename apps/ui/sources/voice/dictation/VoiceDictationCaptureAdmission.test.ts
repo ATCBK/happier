@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 
 import { createVoiceCaptureAdmissionBinding } from '@/voice/runtime/input/VoiceCaptureAdmissionBinding';
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
@@ -129,10 +130,10 @@ describe('Dictation capture admission integration', () => {
 
         await controller.cancel('session-1');
 
-        await vi.waitFor(() => {
-            expect(rawCaptureOwner.stopSession).toHaveBeenCalledOnce();
-            expect(admission.acquire('conversation').status).toBe('acquired');
-        });
+        expect(rawCaptureOwner.stopSession).toHaveBeenCalledOnce();
+        await rawCaptureOwner.stopSession.mock.results[0]?.value;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(admission.acquire('conversation').status).toBe('acquired');
     });
 
     it('abandons a never-settling stop, permits Conversation Voice immediately, and cleans one late artifact once', async () => {
@@ -145,7 +146,8 @@ describe('Dictation capture admission integration', () => {
             captureOwner: rawCaptureOwner,
             productOwner: 'dictation',
         });
-        const deleteRecordedAudio = vi.fn(async () => {});
+        const deleted = createDeferred<void>();
+        const deleteRecordedAudio = vi.fn(async () => { deleted.resolve(); });
         const controller = createVoiceDictationController({
             captureOwner,
             getSettings: () => ({
@@ -177,9 +179,8 @@ describe('Dictation capture admission integration', () => {
 
         await expect(controller.toggle('dictation-session-2')).resolves.toEqual({ kind: 'started' });
         resolveStop('file:///late-dictation.m4a');
-        await vi.waitFor(() => {
-            expect(deleteRecordedAudio).toHaveBeenCalledTimes(1);
-        });
+        await deleted.promise;
+        expect(deleteRecordedAudio).toHaveBeenCalledTimes(1);
         expect(deleteRecordedAudio).toHaveBeenCalledWith('file:///late-dictation.m4a');
         expect(controller.getSnapshot()).toMatchObject({
             sessionId: 'dictation-session-2',

@@ -207,10 +207,15 @@ describe('createDefaultVoiceQaControllerDeps', () => {
                 getId: () => 'qa-aborted-elevenlabs',
             };
             const negotiation = createDeferred<typeof lateConversation>();
-            sdk.startSession.mockImplementationOnce(() => negotiation.promise);
+            const sdkStarted = createDeferred<void>();
+            sdk.startSession.mockImplementationOnce(() => {
+                sdkStarted.resolve();
+                return negotiation.promise;
+            });
             const starting = controller.start({ initialContext: 'context' })
                 .then(() => ({ error: null }), error => ({ error }));
-            await vi.waitFor(() => expect(sdk.startSession).toHaveBeenCalled());
+            await Promise.race([sdkStarted.promise, starting]);
+            expect(sdk.startSession).toHaveBeenCalled();
             const stopping = deps.stopRealtime();
             negotiation.resolve(lateConversation);
             await stopping;
@@ -226,15 +231,19 @@ describe('createDefaultVoiceQaControllerDeps', () => {
             sendUserMessage: sdk.sendUserMessage, sendContextualUpdate: sdk.sendContextualUpdate,
             getId: () => 'qa-late-elevenlabs',
         };
-        let finishNegotiation!: (conversation: typeof lateConversation) => void;
-        const negotiation = new Promise<typeof lateConversation>(resolve => { finishNegotiation = resolve; });
+        const negotiation = createDeferred<typeof lateConversation>();
+        const sdkStarted = createDeferred<void>();
         const startsBeforeCancellation = sdk.startSession.mock.calls.length;
-        sdk.startSession.mockImplementationOnce(() => negotiation);
+        sdk.startSession.mockImplementationOnce(() => {
+            sdkStarted.resolve();
+            return negotiation.promise;
+        });
         const cancelledStart = controller.start({ initialContext: 'context' })
             .then(() => ({ error: null }), error => ({ error }));
-        await vi.waitFor(() => expect(sdk.startSession.mock.calls.length).toBeGreaterThan(startsBeforeCancellation));
+        await Promise.race([sdkStarted.promise, cancelledStart]);
+        expect(sdk.startSession.mock.calls.length).toBeGreaterThan(startsBeforeCancellation);
         const stopping = controller.stop();
-        finishNegotiation(lateConversation);
+        negotiation.resolve(lateConversation);
         await stopping;
         expect((await cancelledStart).error).toMatchObject({ message: 'realtime_voice_session_not_started' });
         expect(useVoiceQaStore.getState().status).toBe('idle');

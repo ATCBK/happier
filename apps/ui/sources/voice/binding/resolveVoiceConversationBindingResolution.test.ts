@@ -10,6 +10,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForTestEvent } from '@/dev/testkit';
 import type { BuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
 import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 
@@ -17,6 +18,11 @@ const nativeAlertCalls = vi.hoisted(() => {
   const calls: Parameters<typeof import('react-native')['Alert']['alert']>[] = [];
   return calls;
 });
+const nativeAlertObservers = vi.hoisted(() => new Set<() => void>());
+const subscribeNativeAlert = (notify: () => void) => {
+  nativeAlertObservers.add(notify);
+  return () => { nativeAlertObservers.delete(notify); };
+};
 
 vi.mock('react-native', async () => {
   const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -25,6 +31,7 @@ vi.mock('react-native', async () => {
       // Native presentation/user input is external; Modal.confirm stays real.
       alert: (...args: Parameters<typeof import('react-native')['Alert']['alert']>) => {
         nativeAlertCalls.push(args);
+        for (const notify of nativeAlertObservers) notify();
       },
     },
   });
@@ -237,7 +244,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
     persistVoiceAutoTargetMachineId('m_old', storage.getState().settingsScope);
     const resolutionPromise = ensureVoiceConversationBindingResolution({ providerId: 'local_conversation', controlSessionId: '__voice_agent__',
       requestedTargetSessionId: null, settings: localSettings() });
-    await expect.poll(() => nativeAlertCalls.length, { timeout: 10_000 }).toBe(1);
+    await waitForTestEvent(subscribeNativeAlert, () => expect(nativeAlertCalls.length).toBe(1));
     expect(readVoiceAutoTargetMachineId(storage.getState())).toBe('m_old');
     expect(readVoiceAgentRecoveryReplaySource('__voice_agent__')).toBeNull();
     expect(nativeAlertCalls[0]?.[3]?.cancelable).toBe(false);
@@ -245,7 +252,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
     if (!confirmSwitch) throw new Error('Native switch confirmation was not presented');
     confirmSwitch();
 
-    await expect.poll(() => nativeAlertCalls.length).toBe(2);
+    await waitForTestEvent(subscribeNativeAlert, () => expect(nativeAlertCalls.length).toBe(2));
     expect(readVoiceAutoTargetMachineId(storage.getState())).toBe('m_old');
     expect(readVoiceAgentRecoveryReplaySource('__voice_agent__')).toBeNull();
     expect(nativeAlertCalls[1]?.[3]?.cancelable).toBe(false);

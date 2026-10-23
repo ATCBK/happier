@@ -7,10 +7,12 @@ import {
     machineRpcWithServerScope,
     registerLocalVoiceEngineHarnessHooks,
     setPlatformOs,
+    waitForLocalVoiceBoundaryEvent,
 } from '@/voice/local/localVoiceEngine.testHarness';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 // This file statically imports Socket consumers before the mixed native/Web
 // recipe is installed; use the testkit's documented hoisted transport boundary.
@@ -43,21 +45,6 @@ afterEach(async () => {
     const { resetVoiceSessionRuntimeStateForTests } = await import('./voiceSessionStore');
     await resetVoiceSessionRuntimeStateForTests();
 });
-
-function createDeferred<T>() {
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((res, rej) => {
-        resolve = res;
-        reject = rej;
-    });
-
-    return {
-        promise,
-        resolve,
-        reject,
-    };
-}
 
 function createAdapter(params: Readonly<{
     id: string;
@@ -189,9 +176,12 @@ async function createActualLifecycle(input: Readonly<{ currentUiContext?: boolea
     return {
         environment, browser, runtime, audioContext, captureAdmission, lifecycle, target,
         async start(global = false) {
+            const peerIndex = browser.peers.length;
             const starting = lifecycle.toggle(global ? null : target);
-            await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
-            browser.peer.channel.open();
+            const peer = await Promise.race([browser.peerCreated(peerIndex), starting.then(() => browser.peer)]);
+            await Promise.race([peer.dataChannelCreated, starting]);
+            expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events');
+            peer.channel.open();
             await starting;
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
         },
@@ -286,7 +276,8 @@ describe('createVoiceSessionLifecycleController', () => {
             const media = navigator.mediaDevices;
             vi.spyOn(media, 'getUserMedia').mockRejectedValueOnce(new DOMException('Microphone blocked', 'NotAllowedError'));
             await fixture.lifecycle.toggle(fixture.target).catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.canStop === false);
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
             const failure = fixture.lifecycle.getSnapshot();
             expect(failure).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
                 errorCode: 'mic_permission_denied', errorRecoveryAction: 'open_settings', errorPresentation: 'permission_required' });
@@ -327,8 +318,9 @@ describe('createVoiceSessionLifecycleController', () => {
         try {
             await fixture.start();
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
-            await vi.waitFor(() => expect(fixture.browser.micTrack.stop).toHaveBeenCalled());
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.canStop === false);
+            expect(fixture.browser.micTrack.stop).toHaveBeenCalled();
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
             expect(fixture.browser.peer.close).toHaveBeenCalled();
             expect(fixture.lifecycle.getSnapshot().status).toBe('disconnected');
         } finally { await fixture.dispose(); }
@@ -340,7 +332,8 @@ describe('createVoiceSessionLifecycleController', () => {
         try {
             starting = fixture.lifecycle.toggle(fixture.target);
             void starting.catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            await (await fixture.browser.peerCreated()).dataChannelCreated;
+            expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false });
             expect(fixture.browser.peer.close).not.toHaveBeenCalled();
             fixture.browser.peer.channel.open();
@@ -353,16 +346,22 @@ describe('createVoiceSessionLifecycleController', () => {
     it('keeps in-flight ordinary preparation when the change applies only to the next start', async () => {
         const fixture = await createActualLifecycle();
         const mint = createDeferred<Response>();
-        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        const mintStarted = createDeferred<void>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => {
+            mintStarted.resolve();
+            return mint.promise;
+        });
         let starting: Promise<void> | null = null;
         try {
             starting = fixture.lifecycle.toggle(fixture.target);
             void starting.catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            await mintStarted.promise;
+            expect(fixture.environment.providerFetch).toHaveBeenCalled();
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: false });
             expect(fixture.browser.peers).toHaveLength(0);
             mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
-            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            await (await fixture.browser.peerCreated()).dataChannelCreated;
+            expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
             fixture.browser.peer.channel.open();
             await starting;
             expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
@@ -375,7 +374,8 @@ describe('createVoiceSessionLifecycleController', () => {
         try {
             starting = fixture.lifecycle.toggle(null);
             void starting.catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            await (await fixture.browser.peerCreated()).dataChannelCreated;
+            expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ globalBindingAuthorityChanged: true });
             await starting.catch(() => undefined);
             expect(fixture.browser.peer.close).toHaveBeenCalled();
@@ -387,12 +387,17 @@ describe('createVoiceSessionLifecycleController', () => {
     it('fences in-flight preparation when its exact credential authority changes', async () => {
         const fixture = await createActualLifecycle();
         const mint = createDeferred<Response>();
-        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        const mintStarted = createDeferred<void>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => {
+            mintStarted.resolve();
+            return mint.promise;
+        });
         let starting: Promise<void> | null = null;
         try {
             starting = fixture.lifecycle.toggle(null);
             void starting.catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            await mintStarted.promise;
+            expect(fixture.environment.providerFetch).toHaveBeenCalled();
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
             mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
             await starting.catch(() => undefined);
@@ -405,12 +410,17 @@ describe('createVoiceSessionLifecycleController', () => {
     it('fences a pending Global Agent start when its selected global binding changes before publication', async () => {
         const fixture = await createActualLifecycle();
         const mint = createDeferred<Response>();
-        fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+        const mintStarted = createDeferred<void>();
+        fixture.environment.providerFetch.mockImplementationOnce(() => {
+            mintStarted.resolve();
+            return mint.promise;
+        });
         let starting: Promise<void> | null = null;
         try {
             starting = fixture.lifecycle.toggle(null);
             void starting.catch(() => undefined);
-            await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+            await mintStarted.promise;
+            expect(fixture.environment.providerFetch).toHaveBeenCalled();
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: false, globalBindingAuthorityChanged: true });
             mint.resolve(Response.json(fixture.environment.createClientAuthProviderResponse('ek_source_composed', Math.floor(Date.now() / 1000) + 60)));
             await starting.catch(() => undefined);
@@ -436,7 +446,8 @@ describe('createVoiceSessionLifecycleController', () => {
         try {
             await fixture.start();
             fixture.browser.peer.channel.message(JSON.stringify({ type: 'output_audio_buffer.started', event_id: 'lifecycle-output-started', response_id: 'lifecycle-response' }));
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().mode).toBe('speaking'));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.mode === 'speaking');
+            expect(fixture.lifecycle.getSnapshot().mode).toBe('speaking');
             const before = fixture.browser.peer.channel.sent.length;
             await fixture.lifecycle.bargeIn('another-visible-session');
             expect(fixture.browser.peer.channel.sent.slice(before).map(frame => JSON.parse(frame).type)).toContain('response.cancel');
@@ -650,12 +661,17 @@ describe('createVoiceSessionLifecycleController', () => {
     it('does not republish a pending switch after dispose', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             fixture.lifecycle.setCurrentUiContextToolSetEnabled(false);
             await fixture.start();
             fixture.lifecycle.setCurrentUiContextToolSetEnabled(true);
-            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.audioContext.close).toHaveBeenCalled();
             const disposal = fixture.lifecycle.dispose();
             const frozen = fixture.lifecycle.getSnapshot();
             const requests = fixture.environment.providerFetch.mock.calls.length;
@@ -670,16 +686,22 @@ describe('createVoiceSessionLifecycleController', () => {
     it('discards an Account-retired pending provider switch before source stop settles', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             fixture.lifecycle.setCurrentUiContextToolSetEnabled(false);
             await fixture.start();
             fixture.lifecycle.setCurrentUiContextToolSetEnabled(true);
-            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.audioContext.close).toHaveBeenCalled();
             fixture.lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
             const requests = fixture.environment.providerFetch.mock.calls.length;
             cleanup.resolve();
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().canStop).toBe(false));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.canStop === false);
+            expect(fixture.lifecycle.getSnapshot().canStop).toBe(false);
             expect(fixture.browser.micSession.getStream()).toBeNull();
             expect(fixture.environment.providerFetch).toHaveBeenCalledTimes(requests);
             expect(fixture.lifecycle.getSnapshot()).toEqual({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
@@ -802,13 +824,19 @@ describe('createVoiceSessionLifecycleController', () => {
     it('stays disconnected after switching off even if the old source later reconnects', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             await fixture.start();
             fixture.lifecycle.setConfiguredProviderId('off');
-            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.audioContext.close).toHaveBeenCalled();
             cleanup.resolve();
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot().status).toBe('disconnected'));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected');
+            expect(fixture.lifecycle.getSnapshot().status).toBe('disconnected');
             // A stale browser task from the retired peer cannot restore authority.
             fixture.browser.peer.connectionState = 'connected';
             fixture.browser.peer.dispatchEvent(new Event('connectionstatechange'));
@@ -821,6 +849,7 @@ describe('createVoiceSessionLifecycleController', () => {
     it('stops the owned adapter through the canonical lifecycle controller seam', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
+        const cleanupStarted = createDeferred<void>();
         const endedTrackStates: MediaStreamTrackState[] = [];
         const unsubscribe = fixture.lifecycle.subscribe(() => {
             const snapshot = fixture.lifecycle.getSnapshot();
@@ -828,11 +857,15 @@ describe('createVoiceSessionLifecycleController', () => {
                 endedTrackStates.push(fixture.browser.micTrack.readyState);
             }
         });
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             await fixture.start();
             const stop = fixture.lifecycle.stop('stale-session');
-            await vi.waitFor(() => expect(fixture.browser.micTrack.stop).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.browser.micTrack.stop).toHaveBeenCalled();
             cleanup.resolve();
             await stop;
             expect(fixture.browser.peer.close).toHaveBeenCalled();
@@ -850,11 +883,16 @@ describe('createVoiceSessionLifecycleController', () => {
         // Web Audio cleanup that serializes the provider handoff.
         registerVoiceAdapters([fixture.runtime.adapter, createLocalConversationVoiceAdapter()]);
         const cleanup = createDeferred<void>();
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             await fixture.start();
             fixture.lifecycle.setConfiguredProviderId('off');
-            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.audioContext.close).toHaveBeenCalled();
             await fixture.environment.configureVoice({ ...storage.getState().settings.voice, providerId: 'local_conversation' });
             fixture.lifecycle.setConfiguredProviderId('local_conversation');
             const ending = operation === 'stop'
@@ -1106,12 +1144,14 @@ describe('createVoiceSessionLifecycleController', () => {
             vi.stubGlobal('RTCPeerConnection', vi.fn(() => reconnectPeer));
             fixture.browser.peer.connectionState = 'failed';
             fixture.browser.peer.dispatchEvent(new Event('connectionstatechange'));
-            await vi.waitFor(() => expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            await reconnectPeer.dataChannelCreated;
+            expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events');
             const retry = fixture.lifecycle.retry('another-visible-session');
             reconnectPeer.channel.open();
             await retry;
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
-                sessionId: fixture.runtime.historySessionId, status: 'connected', canStop: true }));
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'connected' && snapshot.canStop === true);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
+                sessionId: fixture.runtime.historySessionId, status: 'connected', canStop: true });
             expect(reconnectPeer.close).not.toHaveBeenCalled();
             expect(reconnectPeer.createDataChannel).toHaveBeenCalledTimes(1);
             expect(fixture.environment.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/realtime/client_secrets'))).toHaveLength(1);
@@ -1145,12 +1185,15 @@ describe('createVoiceSessionLifecycleController', () => {
             fixture.lifecycle.setCurrentUiContextToolSetEnabled(mode !== 'off');
         };
         const finishRestart = async (peers: number) => {
-            await vi.waitFor(() => expect(fixture.browser.peers).toHaveLength(peers));
-            fixture.browser.peer.channel.open();
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+            const peer = await fixture.browser.peerCreated(peers - 1);
+            expect(fixture.browser.peers).toHaveLength(peers);
+            await peer.dataChannelCreated;
+            peer.channel.open();
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'connected' && snapshot.canStop === true);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({
                 adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
                 status: 'connected', canStop: true,
-            }));
+            });
         };
         try {
             await setMode('off');
@@ -1420,18 +1463,25 @@ describe('createVoiceSessionLifecycleController', () => {
                 };
                 try {
                     await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
-                    await vi.waitFor(() => expect(seeds()).toHaveLength(1));
+                    await waitForLocalVoiceBoundaryEvent('agent-start', 1);
+                    const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+                    await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                    expect(seeds()).toHaveLength(1);
                     expect(seeds()[0]?.disabledActionIds ?? []).not.toEqual(expect.arrayContaining(currentUiActionIds));
                     const initialRunId = localVoiceAgentRpc.readRetainedRun()?.runId;
                     expect(initialRunId).toBeDefined();
                     setMode('off');
-                    await vi.waitFor(() => expect(seeds()).toHaveLength(2));
+                    await waitForLocalVoiceBoundaryEvent('agent-start', 2);
+                    await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                    expect(seeds()).toHaveLength(2);
                     expect(seeds()[1]?.disabledActionIds).toEqual(expect.arrayContaining(currentUiActionIds));
                     expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
                         .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: initialRunId } }]);
                     expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_conversation', status: 'connected', canStop: true });
                     setMode(restoredMode);
-                    await vi.waitFor(() => expect(seeds()).toHaveLength(3));
+                    await waitForLocalVoiceBoundaryEvent('agent-start', 3);
+                    await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                    expect(seeds()).toHaveLength(3);
                     expect(seeds()[2]?.disabledActionIds ?? []).not.toEqual(expect.arrayContaining(currentUiActionIds));
                     expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(2);
                 } finally { await controller.dispose(); }
@@ -1472,24 +1522,30 @@ describe('createVoiceSessionLifecycleController', () => {
                 if (engineKind === 'realtime') {
                     const fixture = await createActualLifecycle();
                     const mint = createDeferred<Response>();
-                    fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+                    const mintStarted = createDeferred<void>();
+                    fixture.environment.providerFetch.mockImplementationOnce(() => {
+                        mintStarted.resolve();
+                        return mint.promise;
+                    });
                     let starting: Promise<void> | null = null;
                     let startSettled = false;
                     try {
                         starting = fixture.lifecycle.toggle(fixture.target);
                         void starting.then(() => { startSettled = true; }, () => { startSettled = true; });
-                        await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+                        await mintStarted.promise;
+                        expect(fixture.environment.providerFetch).toHaveBeenCalled();
                         expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
                         const { getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
                         const registration = getExternalVoiceProviderRegistration(OPENAI_PROVIDER_ID);
                         if (!registration) throw new Error('Actual OpenAI registration missing');
                         removeExternalVoiceProviderRegistration(registration.token);
                         registerVoiceAdapters([]);
-                        await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+                        await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'error' && snapshot.canStop === false);
+                        expect(fixture.lifecycle.getSnapshot()).toMatchObject({
                             adapterId: OPENAI_PROVIDER_ID, sessionId: fixture.runtime.historySessionId,
                             status: 'error', canStop: false, errorCode: 'service_temporarily_unavailable',
                             errorMessage: 'voice_provider_adapter_not_registered',
-                        }));
+                        });
                         expect(startSettled).toBe(false);
                         const dictation = fixture.captureAdmission.acquire('dictation');
                         expect(dictation.status).toBe('acquired');
@@ -1527,16 +1583,17 @@ describe('createVoiceSessionLifecycleController', () => {
                 try {
                     starting = controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
                     void starting.then(() => { startSettled = true; }, () => { startSettled = true; });
-                    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled());
+                    await waitForLocalVoiceBoundaryEvent('audio-start');
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled();
                     expect(voiceCaptureAdmissionController.acquire('dictation').status).toBe('busy');
                     registerVoiceAdapters([]);
                     // Observe the native owner's bounded terminal retirement
                     // while its OS Start reply remains pending.
-                    await vi.waitFor(() => {
+                    await waitForTestEvent(controller.subscribe, () => {
                         const dictation = voiceCaptureAdmissionController.acquire('dictation');
                         if (dictation.status === 'acquired') dictation.lease.release();
                         expect(dictation.status).toBe('acquired');
-                    }, { timeout: 5_000 });
+                    });
                     expect(startSettled).toBe(false);
                     expect(localVoiceSpeechOutputBoundary.fileRecording.stop).not.toHaveBeenCalled();
                     expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_direct', sessionId: 's1',
@@ -1544,8 +1601,9 @@ describe('createVoiceSessionLifecycleController', () => {
                         errorMessage: 'voice_provider_adapter_not_registered' });
                     recording.resolve({ recordingId: 'withdrawn-during-native-start' });
                     await starting;
-                    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.stop)
-                        .toHaveBeenCalledWith({ recordingId: 'withdrawn-during-native-start' }));
+                    await waitForLocalVoiceBoundaryEvent('recording-stop');
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.stop)
+                        .toHaveBeenCalledWith({ recordingId: 'withdrawn-during-native-start' });
                     expect(controller.getSnapshot()).toMatchObject({ status: 'error', canStop: false,
                         errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' });
                     await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
@@ -1562,7 +1620,11 @@ describe('createVoiceSessionLifecycleController', () => {
     it('keeps the withdrawn provider owning its live attempt until that exact adapter terminalizes', async () => {
         const fixture = await createActualLifecycle();
         const cleanup = createDeferred<void>();
-        fixture.audioContext.close.mockImplementation(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementation(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         try {
             await fixture.start();
             const { getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
@@ -1571,13 +1633,15 @@ describe('createVoiceSessionLifecycleController', () => {
             removeExternalVoiceProviderRegistration(registration.token);
             const { registerVoiceAdapters } = await import('./voiceAdapterRegistry');
             registerVoiceAdapters([]);
-            await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalled());
+            await cleanupStarted.promise;
+            expect(fixture.audioContext.close).toHaveBeenCalled();
             expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
             expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID, canStop: true });
             cleanup.resolve();
-            await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
+            await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'error' && snapshot.canStop === false);
+            expect(fixture.lifecycle.getSnapshot()).toMatchObject({ adapterId: OPENAI_PROVIDER_ID,
                 sessionId: fixture.runtime.historySessionId, status: 'error', canStop: false,
-                errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' }));
+                errorCode: 'service_temporarily_unavailable', errorRecoveryAction: 'retry' });
             const dictation = fixture.captureAdmission.acquire('dictation');
             expect(dictation.status).toBe('acquired');
             if (dictation.status === 'acquired') dictation.lease.release();
@@ -1672,12 +1736,18 @@ describe('createVoiceSessionLifecycleController', () => {
             expect(retired.listenerCount()).toBe(1);
             expect(replacement.listenerCount()).toBe(1);
 
+            const stopResult = retired.stop.mock.results.at(-1);
+            if (stopResult?.type !== 'return') throw new Error('Retired adapter stop did not return its completion');
+            let retiredStopSettled = false;
+            const stopSettled = stopResult.value.then(() => { retiredStopSettled = true; });
+            const retiredPublication = waitForTestEvent(controller.subscribe, () => retiredStopSettled, Boolean);
             releaseRetiredStop.resolve();
-            await vi.waitFor(() => {
-                const admission = captureAdmission.acquire('dictation');
-                expect(admission).toMatchObject({ status: 'acquired' });
-                if (admission.status === 'acquired') admission.lease.release();
-            });
+            await stopSettled;
+            await retiredPublication;
+            await waitForTestEvent(controller.subscribe, controller.getSnapshot, snapshot => snapshot.status === 'disconnected' && !snapshot.canStop);
+            const admission = captureAdmission.acquire('dictation');
+            expect(admission).toMatchObject({ status: 'acquired' });
+            if (admission.status === 'acquired') admission.lease.release();
 
             // Retention ends with the old attempt. Its subscription must not
             // wait for an unrelated later registry publication to disappear.
@@ -1712,12 +1782,17 @@ describe('createVoiceSessionLifecycleController', () => {
         async (operation) => {
             const fixture = await createActualLifecycle();
             const mint = createDeferred<Response>();
-            fixture.environment.providerFetch.mockImplementationOnce(() => mint.promise);
+            const mintStarted = createDeferred<void>();
+            fixture.environment.providerFetch.mockImplementationOnce(() => {
+                mintStarted.resolve();
+                return mint.promise;
+            });
             let starting: Promise<void> | null = null;
             try {
                 starting = fixture.lifecycle.toggle(fixture.target);
                 void starting.catch(() => undefined);
-                await vi.waitFor(() => expect(fixture.environment.providerFetch).toHaveBeenCalled());
+                await mintStarted.promise;
+                expect(fixture.environment.providerFetch).toHaveBeenCalled();
                 expect(fixture.captureAdmission.acquire('dictation').status).toBe('busy');
                 const end = operation === 'stop'
                     ? fixture.lifecycle.stop('another-visible-session')

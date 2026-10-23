@@ -6,7 +6,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -55,7 +55,8 @@ it('the collection Retry invokes that same Action and publishes the freshly load
         group: { serverId, serverName: 'Home' }, canRetry: true, compact: false,
     }));
     await screen.pressByTestIdAsync('settings.machines.unreadable.retry');
-    await act(async () => { await vi.waitFor(() => expect(storage.getState().machines['new-machine']).toBeDefined()); });
+    await waitForTestEvent(storage.subscribe, () => storage.getState().machines['new-machine'], machine => machine !== undefined);
+    expect(storage.getState().machines['new-machine']).toBeDefined();
     expect(storage.getState().machines['cached-machine']).toBeUndefined();
 });
 

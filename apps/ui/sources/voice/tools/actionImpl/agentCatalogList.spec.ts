@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import {
   AgentsBackendsListOutputSchema,
@@ -326,12 +327,17 @@ describe('agent catalog voice tools', () => {
     const featureFetch = new Promise<Response>((_resolve, reject) => {
       rejectFeatureFetch = reject;
     });
-    const fetchSpy = vi.fn(async () => await featureFetch);
+    const featureFetchStarted = createDeferred<void>();
+    const fetchSpy = vi.fn(async () => {
+      featureFetchStarted.resolve();
+      return await featureFetch;
+    });
     featureResponse = fetchSpy;
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 
     const resultPromise = listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    await featureFetchStarted.promise;
+    expect(fetchSpy).toHaveBeenCalled();
 
     expect(describeProviderModelsMock).not.toHaveBeenCalled();
 

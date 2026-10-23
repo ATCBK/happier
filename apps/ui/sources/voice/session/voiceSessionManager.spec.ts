@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceWebRtcPeer } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { waitForTestEvent } from '@/dev/testkit';
 
 vi.mock('socket.io-client', async importOriginal =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -40,9 +41,10 @@ describe('voiceSessionManager', () => {
   });
 
   async function connect(starting: Promise<void>, peer?: TestVoiceWebRtcPeer) {
-    await vi.waitFor(() => expect(browser.peers.length).toBeGreaterThan(0));
-    const connectedPeer = peer ?? browser.peer;
-    await vi.waitFor(() => expect(connectedPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+    const connectedPeer = peer ?? await Promise.race([browser.peerCreated(), starting.then(() => browser.peer)]);
+    expect(browser.peers.length).toBeGreaterThan(0);
+    await Promise.race([connectedPeer.dataChannelCreated, starting]);
+    expect(connectedPeer.createDataChannel).toHaveBeenCalledWith('oai-events');
     connectedPeer.channel.open();
     await starting;
     expect(runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
@@ -58,8 +60,8 @@ describe('voiceSessionManager', () => {
     expect(browser.micTrack.enabled).toBe(false);
     expect(manager.getSnapshot().micMuted).toBe(true);
     manager.sendContextUpdate(sessionId, 'hello from the current session');
-    await vi.waitFor(() => expect(browser.peer.channel.sent.some(value =>
-      value.includes('hello from the current session'))).toBe(true));
+    await browser.peer.channel.controlSent(value => value.includes('hello from the current session'));
+    expect(browser.peer.channel.sent.some(value => value.includes('hello from the current session'))).toBe(true);
     expect(browser.peer.channel.sent.map(value => JSON.parse(value))
       .some(event => event.type === 'response.cancel')).toBe(true);
 
@@ -67,9 +69,10 @@ describe('voiceSessionManager', () => {
       type: 'error', event_id: 'manager-terminal-session',
       error: { code: 'session_expired', message: 'Session expired' },
     }));
-    await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'error' && !snapshot.canStop);
+    expect(manager.getSnapshot()).toMatchObject({
       status: 'error', canStop: false, errorRecoveryAction: 'retry',
-    }));
+    });
     const nextPeer = new TestVoiceWebRtcPeer();
     vi.mocked(globalThis.RTCPeerConnection).mockImplementationOnce(() => nextPeer as unknown as RTCPeerConnection);
     await connect(manager.retry(sessionId), nextPeer);

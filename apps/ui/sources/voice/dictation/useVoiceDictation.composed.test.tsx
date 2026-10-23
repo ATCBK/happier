@@ -11,6 +11,7 @@ import {
     createMachineFixture,
     createRootLayoutFeaturesResponse,
     renderHook,
+    waitForTestEvent,
     standardCleanup,
 } from '@/dev/testkit';
 import {
@@ -256,10 +257,9 @@ describe('useVoiceDictation composed daemon readiness', () => {
             });
         });
 
-        await vi.waitFor(() => {
-            expect(hook.getCurrent().status).toBe('idle');
-            expect(stopRecording).toHaveBeenCalledTimes(2);
-        });
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, current => current.status === 'idle');
+        expect(hook.getCurrent().status).toBe('idle');
+        expect(stopRecording).toHaveBeenCalledTimes(2);
         await expect(hook.getCurrent().toggle()).resolves.toEqual({ kind: 'cancelled' });
 
         // A plugin-owned field consumes the same singleton capture admission and
@@ -280,10 +280,9 @@ describe('useVoiceDictation composed daemon readiness', () => {
         await act(async () => { await field.getCurrent().onPress(); });
         expect(field.getCurrent().status).toBe('listening');
         await field.rerender({ presented: false });
-        await vi.waitFor(() => {
-            expect(field.getCurrent().status).toBe('idle');
-            expect(stopRecording).toHaveBeenCalledTimes(3);
-        });
+        await waitForTestEvent(field.subscribe, field.getCurrent, current => current.status === 'idle');
+        expect(field.getCurrent().status).toBe('idle');
+        expect(stopRecording).toHaveBeenCalledTimes(3);
         expect(delivered).not.toHaveBeenCalled();
         await field.unmount();
     });

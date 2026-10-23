@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
 
@@ -18,8 +19,7 @@ await loadSyncSingletonForTests();
 const pendingBoundaries = new Set<() => void>();
 
 function deferred() {
-    let resolve!: () => void;
-    const promise = new Promise<void>(done => { resolve = done; });
+    const { promise, resolve } = createDeferred<void>();
     const release = () => { pendingBoundaries.delete(release); resolve(); };
     pendingBoundaries.add(release);
     return { promise, resolve: release };
@@ -74,9 +74,12 @@ describe('Voice session lifecycle capture admission', () => {
     }
 
     async function connect(fixture: Awaited<ReturnType<typeof createHarness>>) {
+        const peerIndex = fixture.browser.peers.length;
         const starting = fixture.lifecycle.toggle(null);
-        await vi.waitFor(() => expect(fixture.browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
-        fixture.browser.peer.channel.open();
+        const peer = await Promise.race([fixture.browser.peerCreated(peerIndex), starting.then(() => fixture.browser.peer)]);
+        await Promise.race([peer.dataChannelCreated, starting]);
+        expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events');
+        peer.channel.open();
         await starting;
         expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
         expect(fixture.browser.micSession.getStream()).not.toBeNull();
@@ -116,7 +119,7 @@ describe('Voice session lifecycle capture admission', () => {
             expect((await executeVoiceConversationAction('ui.voice_global.set_muted',
                 { expectedAttempt, muted: true }, { navigate() {} })).status).toBe('completed');
             expect((await invoke('ui.voice_global.hold_begin')).status).toBe('completed');
-            await vi.waitFor(() => expect(browser.micTrack.enabled).toBe(true));
+            expect(browser.micTrack.enabled).toBe(true);
             const suspension = await lifecycle.suspendInput(runtime.controlSessionId);
             expect(suspension).not.toBeNull();
             expect(browser.micTrack.enabled).toBe(false);
@@ -156,13 +159,18 @@ describe('Voice session lifecycle capture admission', () => {
         const fixture = await createHarness();
         await connect(fixture);
         const cleanup = deferred();
-        fixture.audioContext.close.mockImplementationOnce(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        fixture.audioContext.close.mockImplementationOnce(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         expect(fixture.captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
 
         const stopping = fixture.lifecycle.stop(fixture.runtime.controlSessionId);
         expect(fixture.lifecycle.getSnapshot().canStop || fixture.browser.micTrack.readyState === 'ended').toBe(true);
         const disposal = fixture.lifecycle.dispose();
-        await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalledOnce());
+        await cleanupStarted.promise;
+        expect(fixture.audioContext.close).toHaveBeenCalledOnce();
         expect(fixture.captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
         cleanup.resolve();
         await Promise.all([stopping, disposal]);
@@ -173,16 +181,26 @@ describe('Voice session lifecycle capture admission', () => {
 
     it('stops an admitted realtime adapter when disposal races its pending start', async () => {
         const remoteDescription = deferred();
+        const remoteDescriptionStarted = createDeferred<void>();
         const cleanup = deferred();
+        const cleanupStarted = createDeferred<void>();
         const fixture = await createHarness(peer => {
-            peer.setRemoteDescription.mockImplementationOnce(() => remoteDescription.promise);
+            peer.setRemoteDescription.mockImplementationOnce(() => {
+                remoteDescriptionStarted.resolve();
+                return remoteDescription.promise;
+            });
         });
-        fixture.audioContext.close.mockImplementationOnce(() => cleanup.promise);
+        fixture.audioContext.close.mockImplementationOnce(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         const starting = fixture.lifecycle.toggle(null);
-        await vi.waitFor(() => expect(fixture.browser.peer.setRemoteDescription).toHaveBeenCalledOnce());
+        await Promise.race([remoteDescriptionStarted.promise, starting]);
+        expect(fixture.browser.peer.setRemoteDescription).toHaveBeenCalledOnce();
         expect(fixture.browser.micSession.getStream()).not.toBeNull();
         const disposal = fixture.lifecycle.dispose();
-        await vi.waitFor(() => expect(fixture.audioContext.close).toHaveBeenCalledOnce());
+        await cleanupStarted.promise;
+        expect(fixture.audioContext.close).toHaveBeenCalledOnce();
         expect(fixture.captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
         expect(fixture.browser.micTrack.stop).toHaveBeenCalledOnce();
         remoteDescription.resolve();
@@ -203,18 +221,24 @@ describe('Voice session lifecycle capture admission', () => {
 
         await connect(fixture);
         fixture.browser.micTrack.dispatchEvent(new Event('ended'));
-        await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+        await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'disconnected' && snapshot.canStop === false);
+        expect(fixture.lifecycle.getSnapshot()).toMatchObject({
             status: 'disconnected', canStop: false, errorRecoveryAction: 'reconnect',
-        }));
+        });
         expectAdmissionReleased(fixture);
 
         // A fresh physical browser device and generated activation replace the terminal carrier.
         const next = await createHarness();
         await connect(next);
         const cleanup = deferred();
-        next.audioContext.close.mockImplementationOnce(() => cleanup.promise);
+        const cleanupStarted = createDeferred<void>();
+        next.audioContext.close.mockImplementationOnce(() => {
+            cleanupStarted.resolve();
+            return cleanup.promise;
+        });
         const disposal = next.lifecycle.dispose();
-        await vi.waitFor(() => expect(next.audioContext.close).toHaveBeenCalledOnce());
+        await cleanupStarted.promise;
+        expect(next.audioContext.close).toHaveBeenCalledOnce();
         expect(next.captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
         cleanup.resolve();
         await disposal;
@@ -231,9 +255,10 @@ describe('Voice session lifecycle capture admission', () => {
             type: 'error', event_id: 'capture-admission-terminal-session',
             error: { code: 'session_expired', message: 'Session expired' },
         }));
-        await vi.waitFor(() => expect(fixture.lifecycle.getSnapshot()).toMatchObject({
+        await waitForTestEvent(fixture.lifecycle.subscribe, () => fixture.lifecycle.getSnapshot(), snapshot => snapshot.status === 'error' && snapshot.canStop === false);
+        expect(fixture.lifecycle.getSnapshot()).toMatchObject({
             status: 'error', canStop: false, errorCode: 'voice_session_expired', errorRecoveryAction: 'retry',
-        }));
+        });
         expectAdmissionReleased(fixture);
         expect(fixture.browser.micTrack.stop).toHaveBeenCalledOnce();
 
@@ -241,7 +266,8 @@ describe('Voice session lifecycle capture admission', () => {
         const nextPeer = new TestVoiceWebRtcPeer();
         vi.mocked(globalThis.RTCPeerConnection).mockImplementationOnce(() => nextPeer as unknown as RTCPeerConnection);
         const retrying = fixture.lifecycle.toggle(null);
-        await vi.waitFor(() => expect(nextPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+        await Promise.race([nextPeer.dataChannelCreated, retrying]);
+        expect(nextPeer.createDataChannel).toHaveBeenCalledWith('oai-events');
         nextPeer.channel.open();
         await retrying;
         expect(fixture.lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });

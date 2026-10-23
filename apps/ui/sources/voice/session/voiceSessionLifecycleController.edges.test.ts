@@ -3,10 +3,11 @@ import 'fake-indexeddb/auto';
 import {
     getStorage, loadLocalVoiceEngineWithCompatState, localVoiceHomeId, machineRpcWithServerScope,
     localVoiceAgentRpc, localVoiceSpeechOutputBoundary, registerLocalVoiceEngineHarnessHooks,
-    setPlatformOs, warmLocalVoiceEngineHarnessGraph,
+    setPlatformOs, warmLocalVoiceEngineHarnessGraph, waitForLocalVoiceBoundaryEvent,
 } from '@/voice/local/localVoiceEngine.testHarness';
 import { createReactNativeAppStateEmitter } from '@/dev/testkit/mocks/reactNative';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 import { createVoiceCaptureAdmissionController } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
@@ -170,6 +171,7 @@ describe('voice session lifecycle edge contracts', () => {
         let releaseRemoteStop!: () => void;
         const remoteStop = new Promise<void>(resolve => { releaseRemoteStop = resolve; });
         let remoteStopEntered = false;
+        const remoteStopStarted = createDeferred<void>();
         machineRpcWithServerScope.mockImplementation(async request => {
             if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM) {
                 return DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [] });
@@ -181,6 +183,7 @@ describe('voice session lifecycle edge contracts', () => {
             }
             if (request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL) {
                 remoteStopEntered = true;
+                remoteStopStarted.resolve();
                 await remoteStop;
                 return DaemonVoiceInferenceSttStreamCancelResponseSchema.parse({ ok: true,
                     streamId: 'end-track-stream', generation: 1 });
@@ -201,9 +204,10 @@ describe('voice session lifecycle edge contracts', () => {
             expect(controller.getSnapshot(), JSON.stringify(controller.getSnapshot())).toMatchObject({ status: 'connected', canStop: true });
             expect(capture.getSnapshot().subscriberCount).toBeGreaterThan(0);
             stopping = controller.stop(target.sessionId);
-            await vi.waitFor(() => expect(remoteStopEntered).toBe(true));
+            await Promise.race([remoteStopStarted.promise, stopping]);
+            expect(remoteStopEntered).toBe(true);
             expect(controller.getSnapshot()).toMatchObject({ status: 'connected', mode: 'idle', canStop: true });
-            await vi.waitFor(() => expect(capture.getSnapshot().subscriberCount).toBe(0));
+            expect(capture.getSnapshot().subscriberCount).toBe(0);
             releaseRemoteStop();
             await stopping;
             expect(controller.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
@@ -218,11 +222,15 @@ describe('voice session lifecycle edge contracts', () => {
         let failFirstOffer = true;
         let rejectOffer!: (error: Error) => void;
         const offer = new Promise<RTCSessionDescriptionInit>((_resolve, reject) => { rejectOffer = reject; });
+        const offerStarted = createDeferred<void>();
         void offer.catch(() => {});
         const attempt = await createOpenAiAttempt(peer => {
             if (!failFirstOffer) return;
             failFirstOffer = false;
-            peer.createOffer.mockImplementationOnce(() => offer);
+            peer.createOffer.mockImplementationOnce(() => {
+                offerStarted.resolve();
+                return offer;
+            });
         }, () => {
             const context = new TestVoiceAudioContext();
             if (contexts.length === 0) context.close.mockRejectedValueOnce(new Error('AudioContext close failed'));
@@ -243,7 +251,8 @@ describe('voice session lifecycle edge contracts', () => {
         });
         try {
             const starting = attempt.controller.toggle(null);
-            await vi.waitFor(() => expect(attempt.browser.peers[0]?.createOffer).toHaveBeenCalled());
+            await Promise.race([offerStarted.promise, starting]);
+            expect(attempt.browser.peers[0]?.createOffer).toHaveBeenCalled();
             const context = contexts[0];
             if (!context) throw new Error('Expected actual acquired browser AudioContext');
             expect(attempt.browser.micSession.getAudioContext?.()).toBe(context);
@@ -343,17 +352,19 @@ describe('voice session lifecycle edge contracts', () => {
                 await controller.toggle(target);
                 expect(controller.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
                 expect(notes).toHaveLength(1);
-                await vi.waitFor(() => expect(machineRpcWithServerScope.mock.calls.some(([request]) =>
-                    request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM)).toBe(true));
+                await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM}`);
+                expect(machineRpcWithServerScope.mock.calls.some(([request]) =>
+                    request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM)).toBe(true);
                 const coordinator = localVoiceSpeechOutputBoundary.getAudioSessionCoordinator();
                 if (!coordinator) throw new Error('Expected actual native audio session coordinator');
                 expect(coordinator.getSnapshot().leaseCount).toBeGreaterThan(0);
                 expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(1);
                 releaseWarm();
-                await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({
+                await waitForTestEvent(controller.subscribe, controller.getSnapshot, snapshot => snapshot.status === 'disconnected' && !snapshot.canStop);
+                expect(controller.getSnapshot()).toMatchObject({
                     status: 'disconnected', canStop: false, errorCode: 'provider_error',
                     errorMessage: 'daemon_voice_inference_model_not_installed', errorRecoveryAction: 'retry',
-                }));
+                });
                 const failure = controller.getSnapshot();
                 expect(getVoiceAdapterRegistry().get('local_conversation')?.getSnapshot()).toEqual(failure);
                 expect(coordinator.getSnapshot().leaseCount).toBeGreaterThan(0);
@@ -490,7 +501,10 @@ describe('voice session lifecycle edge contracts', () => {
             const start = controller.toggle(target);
             try {
                 if (status === 'connected') await start;
-                else await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled());
+                else {
+                    await waitForLocalVoiceBoundaryEvent('audio-start');
+                    expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled();
+                }
                 const live = controller.getSnapshot();
                 expect(live).toMatchObject({ status, canStop: true });
                 await controller.dismissFailedAttempt(target.sessionId);
@@ -674,7 +688,8 @@ describe('voice session lifecycle edge contracts', () => {
             controller.setConfiguredProviderId('local_direct');
             expect(controller.getSnapshot().status).toBe('disconnected');
             expect(isServerReachabilityNetworkAllowed()).toBe(true);
-            await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled());
+            await waitForLocalVoiceBoundaryEvent('audio-start');
+            expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalled();
             expect(controller.getSnapshot()).toMatchObject({ status: 'connecting', canStop: true });
             rejectRecording(new Error('Native recording unavailable'));
             await expect(starting).rejects.toThrow('Native recording unavailable');
@@ -784,21 +799,31 @@ describe('voice session lifecycle edge contracts', () => {
                 controller.setConfiguredProviderId('local_conversation');
                 setDisclosure(mode);
                 await controller.toggle(target);
-                await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun()).not.toBeNull(), { timeout: 60_000 });
+                await waitForLocalVoiceBoundaryEvent('agent-start', 1);
+                const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+                await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                expect(localVoiceAgentRpc.readRetainedRun()).not.toBeNull();
                 const initialRun = localVoiceAgentRpc.readRetainedRun();
                 expect(controller.getSnapshot()).toMatchObject({
                     sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', canStop: true,
                 });
                 const initialControlSessionId = controller.getSnapshot().sessionId;
                 setDisclosure('off');
-                await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(2), { timeout: 60_000 });
-                await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('connected'));
+                await waitForLocalVoiceBoundaryEvent('audio-start', 2);
+                await waitForLocalVoiceBoundaryEvent('agent-start', 2);
+                await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(2);
+                await waitForTestEvent(controller.subscribe, controller.getSnapshot, snapshot => snapshot.status === 'connected');
+                expect(controller.getSnapshot().status).toBe('connected');
                 expect(controller.getSnapshot().sessionId).toBe(initialControlSessionId);
                 expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
                     .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: initialRun?.runId } }]);
                 setDisclosure(mode);
-                await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(3), { timeout: 60_000 });
-                await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun()).not.toBeNull(), { timeout: 60_000 });
+                await waitForLocalVoiceBoundaryEvent('audio-start', 3);
+                expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(3);
+                await waitForLocalVoiceBoundaryEvent('agent-start', 3);
+                await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+                expect(localVoiceAgentRpc.readRetainedRun()).not.toBeNull();
                 expect(localVoiceSpeechOutputBoundary.fileRecording.stop).toHaveBeenCalledTimes(2);
                 expect(controller.getSnapshot()).toMatchObject({
                     adapterId: 'local_conversation', sessionId: initialControlSessionId,

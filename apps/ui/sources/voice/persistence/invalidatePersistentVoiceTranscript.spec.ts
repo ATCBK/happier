@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { standardCleanup } from '@/dev/testkit';
+import { standardCleanup, waitForTestEvent } from '@/dev/testkit';
 
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -25,7 +25,10 @@ describe('invalidatePersistentVoiceTranscript', () => {
     expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
     expect(readLocalConversationVoiceSettings(account.settings.voiceSettingsV1).agent.transcript.epoch).toBe(3);
     // The Settings owner debounces its pending flush; observe actual HTTP persistence.
-    await vi.waitFor(() => expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(3));
+    await waitForTestEvent(account.subscribe,
+      () => readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch,
+      epoch => epoch === 3);
+    expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(3);
     expect(account.persistedSettings.voice).toMatchObject({ assistantLanguage: 'fr', privacy: { shareToolNames: false } });
     expect(account.writes.length).toBeGreaterThan(0);
 

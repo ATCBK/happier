@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -33,6 +34,7 @@ describe('voiceQaOutputFixturePlayback', () => {
   });
 
   it('plays a fetched WAV through the canonical sink and settles its output artifact', async () => {
+    const playbackStarted = createDeferred<void>();
     let ended: (() => void) | null = null;
     (globalThis as any).AudioContext = class {
       destination = {};
@@ -45,7 +47,7 @@ describe('voiceQaOutputFixturePlayback', () => {
           buffer: null,
           connect: vi.fn(),
           disconnect: vi.fn(),
-          start: vi.fn(),
+          start: vi.fn(() => playbackStarted.resolve()),
           stop: vi.fn(),
           set onended(value: (() => void) | null) {
             ended = value;
@@ -68,7 +70,8 @@ describe('voiceQaOutputFixturePlayback', () => {
     const done = playback.play('https://fixtures.invalid/short.wav').finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing'));
+    await Promise.race([playbackStarted.promise, done]);
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     await Promise.resolve();
     expect(settled).toBe(false);
     if (!ended) throw new Error('Expected fixture playback completion handler');
@@ -129,6 +132,7 @@ describe('voiceQaOutputFixturePlayback', () => {
 
   it('cancels only the active attempt and does not poison the next playback', async () => {
     const endedHandlers: Array<(() => void) | null> = [];
+    const playbackStarted = [createDeferred<void>(), createDeferred<void>()];
     (globalThis as any).AudioContext = class {
       destination = {};
       async resume() {}
@@ -142,7 +146,7 @@ describe('voiceQaOutputFixturePlayback', () => {
           buffer: null,
           connect: vi.fn(),
           disconnect: vi.fn(),
-          start: vi.fn(),
+          start: vi.fn(() => playbackStarted[index]!.resolve()),
           stop: vi.fn(() => endedHandlers[index]?.()),
           set onended(value: (() => void) | null) {
             endedHandlers[index] = value;
@@ -162,25 +166,25 @@ describe('voiceQaOutputFixturePlayback', () => {
     const first = playback.play('https://fixtures.invalid/first.wav').finally(() => {
       firstSettled = true;
     });
-    await vi.waitFor(() => expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing'));
+    await Promise.race([playbackStarted[0]!.promise, first]);
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     playback.stop();
-    await vi.waitFor(() => expect(firstSettled).toBe(true));
     await first;
+    expect(firstSettled).toBe(true);
     expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('cancelled');
 
     let secondSettled = false;
     const second = playback.play('https://fixtures.invalid/second.wav').finally(() => {
       secondSettled = true;
     });
-    await vi.waitFor(() => {
-      expect(getVoiceQaOutputTapSnapshot().artifact).toMatchObject({ id: 2, lifecycle: 'playing' });
-    });
+    await Promise.race([playbackStarted[1]!.promise, second]);
+    expect(getVoiceQaOutputTapSnapshot().artifact).toMatchObject({ id: 2, lifecycle: 'playing' });
     await Promise.resolve();
     expect(secondSettled).toBe(false);
     expect(endedHandlers[1]).toBeTypeOf('function');
     endedHandlers[1]?.();
-    await vi.waitFor(() => expect(secondSettled).toBe(true));
     await second;
+    expect(secondSettled).toBe(true);
     expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('completed');
   });
 });

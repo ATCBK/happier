@@ -816,11 +816,16 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
 
   it('refuses an Account replacement during spawn without publishing sticky auto-target memory', async () => {
     const spawned = createDeferred<{ type: 'success'; sessionId: string }>();
-    spawnResponse.mockImplementation(async () => await spawned.promise);
+    const spawnEntered = createDeferred<void>();
+    spawnResponse.mockImplementation(async () => {
+      spawnEntered.resolve();
+      return await spawned.promise;
+    });
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
 
     const pending = ensureVoiceConversationSessionForVoiceHome();
-    await vi.waitFor(() => expect(spawnResponse).toHaveBeenCalledOnce());
+    await spawnEntered.promise;
+    expect(spawnResponse).toHaveBeenCalledOnce();
     storage.setState({ settingsScope: { serverId: 'server-2', accountId: 'account-2' } });
     state.sessions['voice-home-session'] = {
       id: 'voice-home-session',
@@ -876,7 +881,9 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
 
   it('coalesces concurrent voice-home ensures while the spawn is pending', async () => {
     const spawned = createDeferred<{ type: 'success'; sessionId: string }>();
+    const spawnEntered = createDeferred<void>();
     spawnResponse.mockImplementation((params: any) => {
+      spawnEntered.resolve();
       state.sessions['voice-home-session'] = {
         id: 'voice-home-session',
         active: true,
@@ -893,7 +900,8 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     const first = ensureVoiceConversationSessionForVoiceHome();
     const second = ensureVoiceConversationSessionForVoiceHome();
 
-    await vi.waitFor(() => expect(spawnResponse).toHaveBeenCalledTimes(1));
+    await spawnEntered.promise;
+    expect(spawnResponse).toHaveBeenCalledTimes(1);
 
     spawned.resolve({ type: 'success', sessionId: 'voice-home-session' });
 
@@ -905,7 +913,9 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
 
   it('releases one cancelled Voice Home reader while another reader completes the shared spawn', async () => {
     const spawned = createDeferred<{ type: 'success'; sessionId: string }>();
+    const spawnEntered = createDeferred<void>();
     spawnResponse.mockImplementation((params: WireSpawnFixtureInput) => {
+      spawnEntered.resolve();
       state.sessions['voice-home-session'] = { id: 'voice-home-session', active: true, updatedAt: 1,
         metadata: { machineId: params.machineId, path: params.directory } };
       return spawned.promise;
@@ -916,10 +926,12 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     const first = ensureVoiceConversationSessionForVoiceHome(null, caller.signal)
       .then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
     const second = ensureVoiceConversationSessionForVoiceHome();
-    await vi.waitFor(() => expect(spawnResponse).toHaveBeenCalledTimes(1));
+    await spawnEntered.promise;
+    expect(spawnResponse).toHaveBeenCalledTimes(1);
     caller.abort();
     try {
-      await vi.waitFor(() => expect(outcome).toBe('cancelled'));
+      await first;
+      expect(outcome).toBe('cancelled');
       spawned.resolve({ type: 'success', sessionId: 'voice-home-session' });
       await expect(second).resolves.toBe('voice-home-session');
       await first;
@@ -936,13 +948,18 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       code: 'spawn_failed';
       retryable: true;
     }>();
-    spawnResponse.mockImplementationOnce(() => failedSpawn.promise);
+    const spawnEntered = createDeferred<void>();
+    spawnResponse.mockImplementationOnce(() => {
+      spawnEntered.resolve();
+      return failedSpawn.promise;
+    });
 
     const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
     const first = ensureVoiceConversationSessionForVoiceHome();
     const second = ensureVoiceConversationSessionForVoiceHome();
 
-    await vi.waitFor(() => expect(spawnResponse).toHaveBeenCalledTimes(1));
+    await spawnEntered.promise;
+    expect(spawnResponse).toHaveBeenCalledTimes(1);
 
     failedSpawn.resolve({
       type: 'error',
@@ -2417,8 +2434,12 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
 
   it('awaits authoritative session-list hydration before reusing a matching inactive hidden session', async () => {
     const sessionListHydration = createDeferred<void>();
+    const rootRead = createDeferred<void>();
+    const carrierRead = createDeferred<void>();
+    const listRead = createDeferred<void>();
     sessionDetailResponse.mockImplementation(async (sessionId: string) => {
       if (sessionId === 'root-session') {
+        rootRead.resolve();
         state.sessions['root-session'] = {
           id: 'root-session',
           active: false,
@@ -2436,6 +2457,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
         throw new Error('unrelated hidden hydration failed');
       }
       expect(sessionId).toBe('voice-root-session');
+      carrierRead.resolve();
       await sessionListHydration.promise;
       state.sessions['voice-root-session'] = {
         id: 'voice-root-session',
@@ -2454,6 +2476,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
       };
     });
     listResponse.mockImplementation(async () => {
+      listRead.resolve();
       state.sessionListRowsByServerId ??= {};
       state.sessionListRowsByServerId[homeId] ??= {};
       state.sessionListRowsByServerId[homeId]['voice-root-session'] = {
@@ -2493,9 +2516,10 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     );
 
     try {
-      await vi.waitFor(() => expect(sessionDetailResponse).toHaveBeenCalledWith('root-session', { serverId: homeId }));
-      await vi.waitFor(() => expect(listResponse).toHaveBeenCalledWith());
-      await vi.waitFor(() => expect(sessionDetailResponse).toHaveBeenCalledWith('voice-root-session', { serverId: homeId }));
+      await Promise.all([rootRead.promise, listRead.promise, carrierRead.promise]);
+      expect(sessionDetailResponse).toHaveBeenCalledWith('root-session', { serverId: homeId });
+      expect(listResponse).toHaveBeenCalledWith();
+      expect(sessionDetailResponse).toHaveBeenCalledWith('voice-root-session', { serverId: homeId });
       expect(ensureSettled).toBe(false);
       expect(spawnResponse).not.toHaveBeenCalled();
 
@@ -2553,9 +2577,11 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
 
     const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
     const admitted = createDeferred<void>();
+    const resumeEntered = createDeferred<void>();
     const order: string[] = [];
     resumeResponse.mockImplementation(async () => {
       order.push('resume');
+      resumeEntered.resolve();
       await admitted.promise;
       return { type: 'success', sessionId: 'voice-root-session' };
     });
@@ -2563,7 +2589,8 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
       serverId: homeId, sessionId: entry === 'coding root' ? 'root-session' : 'voice-root-session',
     } }).then(id => { order.push('endpoint'); return id; });
     try {
-      await vi.waitFor(() => expect(order.length).toBeGreaterThan(0));
+      await resumeEntered.promise;
+      expect(order.length).toBeGreaterThan(0);
       expect(order).toEqual(['resume']);
       expect(resumeResponse).toHaveBeenCalledWith(expect.objectContaining({
         serverId: homeId, machineId: 'machine-target', payload: expect.objectContaining({

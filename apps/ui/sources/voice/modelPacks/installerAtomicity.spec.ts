@@ -12,6 +12,7 @@ import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/install
 import { createExpoModelPackInstallerHost, reconcileExpoModelPackPromotion } from '@/voice/modelPacks/installer/host.native';
 import { deriveModelPackStagingPlan } from '@happier-dev/voice-modelpacks';
 import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { createDeferred } from '@/dev/testkit';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
@@ -163,9 +164,11 @@ describe('modelPacks installer (native) atomicity', () => {
     let markDownloadStarted!: () => void;
     const downloadStarted = new Promise<void>((resolve) => { markDownloadStarted = resolve; });
     let transferSignal: AbortSignal | null = null;
+    const transferAborted = createDeferred<void>();
     const fetchImpl: typeof fetch = async (url, init) => {
       if (String(url).includes('manifest.json')) return Response.json(manifest);
       transferSignal = init?.signal ?? null;
+      transferSignal?.addEventListener('abort', () => transferAborted.resolve(), { once: true });
       return new Response(new ReadableStream<Uint8Array>({
         async start(controller) {
           markDownloadStarted();
@@ -188,7 +191,8 @@ describe('modelPacks installer (native) atomicity', () => {
 
     let removalSettled = false;
     const removal = removeModelPack({ packId }, { fs }).then(() => { removalSettled = true; });
-    await vi.waitFor(() => expect((transferSignal as AbortSignal | null)?.aborted).toBe(true));
+    await transferAborted.promise;
+    expect((transferSignal as AbortSignal | null)?.aborted).toBe(true);
     expect(removalSettled).toBe(false);
     releaseDownload();
     await removal;

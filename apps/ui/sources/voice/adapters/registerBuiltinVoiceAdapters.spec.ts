@@ -10,7 +10,7 @@ import type {
 import type { BundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
 import type { BundledConversationRuntimeEntry } from '@/voice/registry/bundledConversationRuntimes';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
-import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createSessionFixture } from '@/dev/testkit';
 import {
   audioSessionRelease,
   localVoiceHomeId,
@@ -47,21 +47,6 @@ const installedTestSessionIds = new Set<string>();
 function requireTestServerId(): string {
   if (!localVoiceHomeId) throw new Error('Adapter test Account was not applied');
   return localVoiceHomeId;
-}
-
-function createDeferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return Object.freeze({ promise, resolve });
-}
-
-function createDeferredResult<T>(): Readonly<{
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-}> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return Object.freeze({ promise, resolve });
 }
 
 function requireBundledRuntimeHost(
@@ -400,7 +385,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
 
   it('ignores a disposed generation late callback after a fresh runtime owns the machine', async () => {
     const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
-    const oldDisposal = createDeferred();
+    const oldDisposal = createDeferred<void>();
     let oldHost: BundledConversationRuntimeHost;
     const freshHostRef: { current: BundledConversationRuntimeHost | null } = { current: null };
     const oldEntry = createPublicEntry({
@@ -563,8 +548,12 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
       const conversationSessionIdA = `${providerId}-session-a`;
       const conversationSessionIdB = `${providerId}-session-b`;
       const attemptLifetime = new AbortController();
-      const projection = createDeferredResult<unknown>();
-      machineRpcBoundary.machineRpc.mockReturnValueOnce(projection.promise);
+      const projection = createDeferred<unknown>();
+      const projectionEntered = createDeferred<void>();
+      machineRpcBoundary.machineRpc.mockImplementationOnce(() => {
+        projectionEntered.resolve();
+        return projection.promise;
+      });
       let host: BundledConversationRuntimeHost | null = null;
       const entry = createPublicEntry({
         providerId,
@@ -639,7 +628,8 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
         onStarted: vi.fn(),
       });
       if (!pendingAuthority) throw new Error('Agent realtime race authority did not begin');
-      await vi.waitFor(() => expect(machineRpcBoundary.machineRpc).toHaveBeenCalledTimes(1));
+      await projectionEntered.promise;
+      expect(machineRpcBoundary.machineRpc).toHaveBeenCalledTimes(1);
 
       let replacementAssembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly> | null = null;
       if (invalidation === 'binding rebind') {
@@ -703,7 +693,8 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
       const conversationSessionId = `${providerId}-session`;
       const oldAttemptLifetime = new AbortController();
       const replacementAttemptLifetime = new AbortController();
-      const deferredOldStop = createDeferred();
+      const deferredOldStop = createDeferred<void>();
+      const oldStopEntered = createDeferred<void>();
       let oldHost: BundledConversationRuntimeHost | null = null;
       let replacementHost: BundledConversationRuntimeHost | null = null;
       let oldStartedHandle: AgentSessionRealtimeHandle | null = null;
@@ -758,6 +749,7 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
           return await new Promise<never>(() => undefined);
         }
         if (input.method.endsWith('.stop')) {
+          oldStopEntered.resolve();
           await deferredOldStop.promise;
           activeAttemptIds.delete(readApplicationAttemptId(input.payload));
           return { ok: true, status: 'stopped' };
@@ -896,13 +888,12 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
         expect(replacementBoundApplicationAttemptId).toMatch(
           /^voice:1:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
         );
-        await vi.waitFor(() => {
-          expect(sessionRpcBoundary.sessionRpc.mock.calls.filter(
+        await oldStopEntered.promise;
+        expect(sessionRpcBoundary.sessionRpc.mock.calls.filter(
             ([input]) => (
               input as Readonly<{ method: string }>
             ).method.endsWith('.stop'),
           )).toHaveLength(1);
-        });
         const callerOnlyStop = new AbortController();
         const staleStopResult = oldStarted.handle.stop({
           signal: callerOnlyStop.signal,
@@ -920,13 +911,12 @@ describe('createBuiltinVoiceAdapterAssembly', () => {
       const firstDispose = oldAssembly.dispose().then(() => {
         firstDisposeSettled = true;
       });
-      await vi.waitFor(() => {
-        expect(sessionRpcBoundary.sessionRpc.mock.calls.filter(
+      await oldStopEntered.promise;
+      expect(sessionRpcBoundary.sessionRpc.mock.calls.filter(
           ([input]) => (
             input as Readonly<{ method: string }>
           ).method.endsWith('.stop'),
         )).toHaveLength(1);
-      });
       const secondDispose = oldAssembly.dispose().then(() => {
         secondDisposeSettled = true;
       });

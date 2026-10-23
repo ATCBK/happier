@@ -11,7 +11,7 @@ import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema,
   DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createHash } from 'node:crypto';
-import { flushHookEffects, registerStandardCleanupTarget } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, registerStandardCleanupTarget, renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
@@ -283,7 +283,8 @@ describe('DictationSettingsSection', () => {
         sttBinding: 'same_as_local' as const,
       },
     };
-    const setVoice = vi.fn();
+    const voiceChanged = createDeferred<void>();
+    const setVoice = vi.fn<React.ComponentProps<typeof DictationSettingsSection>['setVoice']>(() => { voiceChanged.resolve(); });
     let tree!: ReturnType<typeof create>;
     await act(async () => {
       tree = create(<OverlayPortalProvider><DictationSettingsSection
@@ -319,7 +320,8 @@ describe('DictationSettingsSection', () => {
     });
     await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
     expect(tree.root.findAllByType(Popover)).toHaveLength(0);
-    await vi.waitFor(() => expect(setVoice).toHaveBeenCalledOnce());
+    await voiceChanged.promise;
+    expect(setVoice).toHaveBeenCalledOnce();
     expect(readLocalDirectVoiceSettings(setVoice.mock.calls[0]![0]).stt.localNeural.language).toBe('fr');
     expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]![0]).stt.provider)
       .toBe('happier.voice.openai-compat/stt');
@@ -736,14 +738,10 @@ describe('DictationSettingsSection', () => {
       executionMachineId="machine-online"
       localAvailability={localAvailability}
     />;
-    let tree!: ReturnType<typeof create>;
-    await act(async () => {
-      tree = create(render(account.settings.voice));
-      registerStandardCleanupTarget(tree);
-    });
-    await act(async () => {
-    });
-    await vi.waitFor(() => expect(dictationCardReadiness(tree)?.status).toBe('ready'));
+    const screen = await renderScreen(render(account.settings.voice));
+    const tree = screen.tree;
+    await waitForTestEvent(screen.subscribe, () => dictationCardReadiness(tree), readiness => readiness?.status === 'ready');
+    expect(dictationCardReadiness(tree)?.status).toBe('ready');
     expect(account.resources).toHaveLength(1);
     account.resources.splice(0);
     await act(async () => {

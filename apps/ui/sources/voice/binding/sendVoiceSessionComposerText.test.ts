@@ -2,7 +2,7 @@ import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { z } from 'zod/mini';
-import { createSessionFixture } from '@/dev/testkit';
+import { createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import type { VoiceAdapterController } from '@/voice/session/types';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -559,7 +559,9 @@ describe('Voice composer through Sync HTTP custody', () => {
             const activity = EphemeralUpdateSchema.parse({ type: 'activity', id: session.id, active: true, activeAt: Date.now(), thinking: false });
             for (const boundary of network.socketBoundaries.filter(value => value.serverUrl === account!.home.serverUrl)) boundary.trigger('ephemeral', activity);
         }
-        await vi.waitFor(() => expect(getStorage().getState().sessions[root.id]?.presence).toBe('online'));
+        await waitForTestEvent(getStorage().subscribe,
+            () => getStorage().getState().sessions[root.id]?.presence, presence => presence === 'online');
+        expect(getStorage().getState().sessions[root.id]?.presence).toBe('online');
         let daemonCommittedOuterInput = false;
         const daemon = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: async (method, input) => {
             if (method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
@@ -658,7 +660,8 @@ describe('Voice composer through Sync HTTP custody', () => {
                 expect(dispatch.mock.settledResults).toEqual([]);
                 if (outcome.startsWith('aborted-')) {
                     await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
-                    await vi.waitFor(() => expect(dispatch.mock.settledResults).toEqual([{ type: 'fulfilled', value: undefined }]));
+                    await dispatch.mock.results[0]?.value;
+                    expect(dispatch.mock.settledResults).toEqual([{ type: 'fulfilled', value: undefined }]);
                     expect(deliveryStatus).toEqual({ status: 'external_handoff' });
                 }
                 release();

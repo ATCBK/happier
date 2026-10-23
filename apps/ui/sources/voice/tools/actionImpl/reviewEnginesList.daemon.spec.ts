@@ -2,7 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
-import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture, createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture, createSessionFixture, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -70,8 +70,9 @@ describe('daemon-owned Review engine inventory', () => {
             comparison: { kind: 'workingTree' }, comparisonId: 'comparison-1', scopeLabel: 'Pending changes',
             defaultWalkthrough: false, onClose: vi.fn(), onStarted: vi.fn(),
         }));
-        await vi.waitFor(() => expect(screen.findByTestId('start-review-engine-claude')?.props.accessibilityLabel)
-            .toContain('account-review-model'));
+        await waitForTestEvent(screen.subscribe, () => screen.findByTestId('start-review-engine-claude')?.props.accessibilityLabel,
+            value => typeof value === 'string' && value.includes('account-review-model'));
+        expect(screen.findByTestId('start-review-engine-claude')?.props.accessibilityLabel).toContain('account-review-model');
         expect(screen.findByTestId('start-review-engine-codex')?.props.accessibilityLabel).toBe('Codex');
         const launchInput = ReviewStartInputSchema.parse({ sessionId: 's1', engineIds: ['claude'], instructions: 'Review',
             modelId: 'team-review-model', teamCredentialModel: { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',

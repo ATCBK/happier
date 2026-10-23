@@ -5,7 +5,7 @@ import { AccountSettingsSchema } from '@happier-dev/protocol';
 import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
 import { z } from 'zod/mini';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -63,7 +63,9 @@ describe('Review inventory order through Start selection', () => {
             comparison: { kind: 'workingTree' }, comparisonId: 'comparison-1', scopeLabel: 'Pending changes',
             defaultWalkthrough: true, preselectedEngineIds: preselected, onClose: vi.fn(), onStarted: vi.fn(),
         }));
-        await vi.waitFor(() => expect(screen.findByTestId(`start-review-engine-${expected}`)?.props.accessibilityState?.checked).toBe(true));
+        await waitForTestEvent(screen.subscribe, () => screen.findByTestId(`start-review-engine-${expected}`)?.props.accessibilityState?.checked,
+            checked => checked === true);
+        expect(screen.findByTestId(`start-review-engine-${expected}`)?.props.accessibilityState?.checked).toBe(true);
         expect(items.slice(0, 5).map(item => item.engineId)).toEqual(['claude', 'codex', 'opencode', 'antigravity', 'gemini']);
         if (expected !== 'antigravity') expect(screen.findByTestId('start-review-engine-antigravity')?.props.accessibilityState?.checked).toBe(false);
     });

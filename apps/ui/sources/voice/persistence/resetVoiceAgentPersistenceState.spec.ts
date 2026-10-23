@@ -1,7 +1,7 @@
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { buildVoiceAgentRunMetadataV1 } from '@happier-dev/protocol/voice/voiceAgentRunMetadataV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 
@@ -73,7 +73,10 @@ describe('resetVoiceAgentPersistenceState', () => {
     expect(sessionHttp.writes).toContain('sys_bound');
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_bound' })).toBeNull();
     expect(readVoiceAgentRunMetadataFromSession({ sessionId: 'sys_newer' })?.runId).toBe('run_newer');
-    await vi.waitFor(() => expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(2));
+    await waitForTestEvent(account.subscribe,
+      () => readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch,
+      epoch => epoch === 2);
+    expect(readLocalConversationVoiceSettings(account.persistedSettings.voice).agent.transcript.epoch).toBe(2);
     const { sync } = await import('@/sync/sync');
     storage.setState({ sessions: {} });
     expect(await sync.ensureSessionVisibleForMessageRoute('sys_bound', { forceRefresh: true, serverId: account.scope.serverId }))
