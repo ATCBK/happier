@@ -33,6 +33,7 @@ beforeAll(async () => { startupHome.path = await mkdtemp(join(tmpdir(), 'codex-h
 afterAll(async () => { await rm(startupHome.path, { recursive: true, force: true }); });
 
 const contentReadClock = vi.hoisted(() => ({ advance: null as (() => void) | null,
+  nativeProxyAvailable: true,
   onDirectoryRead: null as (() => void) | null,
   onMetadataRead: null as (() => void) | null,
   slowOffset: 64 * 1024,
@@ -41,6 +42,11 @@ const contentReadClock = vi.hoisted(() => ({ advance: null as (() => void) | nul
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, stat: async (...args: Parameters<typeof actual.stat>) => {
+    // The native protocol fixture replaces the vendor process. Mirror its
+    // control-socket presence at the filesystem boundary as well.
+    if (String(args[0]).endsWith(join('app-server-control', 'app-server-control.sock')) && contentReadClock.nativeProxyAvailable) {
+      return actual.stat(startupHome.path);
+    }
     const metadata = await actual.stat(...args);
     contentReadClock.onMetadataRead?.();
     return metadata;
@@ -179,6 +185,33 @@ function invocation(overrides: Readonly<{
 
 describe('Codex public Agent External Sessions contribution', () => {
 
+  it('reports an absent native proxy without launching it and keeps complete rollouts readable', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-proxy-unavailable-'));
+    const launches: unknown[] = [];
+    try {
+      contentReadClock.nativeProxyAvailable = false;
+      const sessions = join(home, 'sessions'); await mkdir(sessions);
+      for (const [id, paginated] of [['complete', false], ['paginated', true]] as const) {
+        await writeFile(join(sessions, `rollout-${id}.jsonl`),
+          jsonl({ type: 'session_meta', payload: { id, ...(paginated ? { history_mode: 'paginated' } : {}) } })
+          + jsonl({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'readable quartz' }] } }));
+      }
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: home } });
+      const request = { ...invocation({ exec: createThreadListingExec([], [], { items: [], onLaunch: spec => launches.push(spec) }) }),
+        source: { kind: 'codexHome', home: 'user' }, direction: 'older' as const, maxItems: 10 };
+      for (let tick = 0; tick < 2; tick++) {
+        for (const remoteSessionId of ['paginated', 'native-only']) {
+          expect(await contribution.pageTranscript({ ...request, remoteSessionId }))
+            .toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
+        }
+      }
+      const complete = await contribution.pageTranscript({ ...request, remoteSessionId: 'complete' });
+      expect(complete.ok).toBe(true);
+      expect(JSON.stringify(complete)).toContain('readable quartz');
+      expect(launches).toEqual([]);
+    } finally { contentReadClock.nativeProxyAvailable = true; await rm(home, { recursive: true, force: true }); }
+  });
+
   it.each(['page', 'follow'] as const)('preserves an actionable record-limit failure for %s reads', async operation => {
     const home = await mkdtemp(join(tmpdir(), 'codex-record-limit-'));
     try {
@@ -232,7 +265,14 @@ describe('Codex public Agent External Sessions contribution', () => {
       expect(appended.ok, JSON.stringify(appended)).toBe(true);
       if (!appended.ok) throw new Error(appended.message);
       expect(appended.value).toMatchObject({ outcome: 'advanced', items: [expect.objectContaining({ raw: { role: 'user', content: { type: 'text', text: 'message-5' } } })] });
-    } finally { await rm(home, { recursive: true, force: true }); }
+      const beforeUnavailable = launches.length;
+      contentReadClock.nativeProxyAvailable = false;
+      expect(await contribution.pageTranscript({ ...request, cursor: tail! }))
+        .toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
+      expect(await contribution.readAfterTranscript({ ...request, cursor: tail! }))
+        .toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
+      expect(launches).toHaveLength(beforeUnavailable);
+    } finally { contentReadClock.nativeProxyAvailable = true; await rm(home, { recursive: true, force: true }); }
   });
 
   it('preserves partial native command rows and empty native follow continuations', async () => {

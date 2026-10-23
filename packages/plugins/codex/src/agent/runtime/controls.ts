@@ -31,6 +31,7 @@ function diagnostic(code: string, message = code) {
 async function withControlClient<T>(
   context: AgentSessionControlContext,
   run: (client: Awaited<ReturnType<typeof createCodexNativeAppServerClient>>) => Promise<T>,
+  readSkillsRoot?: () => string | undefined,
 ): Promise<T> {
   const client = await createCodexNativeAppServerClient({
     exec: context.services.exec,
@@ -40,6 +41,10 @@ async function withControlClient<T>(
     signal: context.signal,
   });
   try {
+    const skillsRoot = readSkillsRoot?.();
+    if (skillsRoot) {
+      await client.request('skills/extraRoots/set', { extraRoots: [skillsRoot] }, { signal: context.signal });
+    }
     return await run(client);
   } finally {
     await client.dispose().catch(() => undefined);
@@ -90,7 +95,7 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
   };
 }
 
-const catalog: AgentSessionCatalogControl = {
+const createCatalog = (readSessionSkillsRoot: (sessionId: string) => string | undefined): AgentSessionCatalogControl => ({
   async list(request, context) {
     let phase: 'startup' | 'request' = 'startup';
     try {
@@ -129,7 +134,7 @@ const catalog: AgentSessionCatalogControl = {
             enabled: item.enabled,
           })),
         };
-      });
+      }, request.kind === 'skills' ? () => readSessionSkillsRoot(context.session.id) : undefined);
     } catch (error) {
       const { errorClass, errorCode, httpStatus } = readUnexpectedActionErrorDiagnosticV1(error);
       const details = { phase, errorClass, errorCode, httpStatus };
@@ -138,7 +143,7 @@ const catalog: AgentSessionCatalogControl = {
         diagnostic: { ...diagnostic(`codex_catalog_${phase}_failed`), details } };
     }
   },
-};
+});
 
 const usageLimitRecovery: AgentSessionUsageLimitRecoveryControl = {
   async execute(request, context) {
@@ -186,10 +191,20 @@ const continuation: AgentSessionContinuationControl = {
 export function createCodexNativeSessionControls(
   goalProjection: CodexGoalProjection = createCodexGoalProjection(),
 ) {
+  // Retain only readers: the live runtime owns delivery and acknowledged reloads.
+  const skillRootReaders = new Map<string, () => string | undefined>();
   return Object.freeze({
     goals: createGoalControl(goalProjection),
-    catalog,
+    catalog: createCatalog(sessionId => skillRootReaders.get(sessionId)?.()),
     usageLimitRecovery,
     continuation,
+    bindSessionSkillsRoot(sessionId: string, readSkillsRoot: () => string | undefined) {
+      skillRootReaders.set(sessionId, readSkillsRoot);
+      return () => {
+        if (skillRootReaders.get(sessionId) === readSkillsRoot) skillRootReaders.delete(sessionId);
+      };
+    },
   });
 }
+
+export type CodexSessionSkillsRootBinder = ReturnType<typeof createCodexNativeSessionControls>['bindSessionSkillsRoot'];

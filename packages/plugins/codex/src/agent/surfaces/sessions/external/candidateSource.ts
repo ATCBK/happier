@@ -10,6 +10,7 @@ import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/se
 import { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 import { resolveCodexRuntimeHomeEnvironment } from '../../../auth/services/state/sharing/files.js';
+import { assertCodexNativeProxyAvailable } from './nativeProxy.js';
 
 import {
   createCodexNativeAppServerClient,
@@ -313,7 +314,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
   if (!homeEntry) {
     return Object.freeze({ active: null, archived: null, incomplete: false });
   }
-  // Proxy startup and stdio fallback share the caller's invocation deadline.
+  // Proxy reads share the caller's invocation deadline.
   // Only callers without one use the standalone listing budget.
   const budgetMs = params.deadlineAtMs === undefined
     ? resolveCodexExternalSessionAppServerListBudgetMs(params.env)
@@ -338,6 +339,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
     try {
       // Discovery reads only an already-running server. A missing proxy is
       // unavailable native history, never authority to start/backfill a store.
+      await assertCodexNativeProxyAvailable(processEnv, signal);
       client = await createCodexNativeAppServerClient({
         exec: params.exec,
         logger: params.logger,

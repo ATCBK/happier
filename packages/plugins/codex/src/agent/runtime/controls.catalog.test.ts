@@ -1,9 +1,62 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentSessionControlContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionControlContext, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentRuntimeDiagnosticDataV1Schema } from '@happier-dev/protocol/runtime/agentRuntimeDiagnosticV1';
 
 import { withCodexNativeAttachFixture } from './appServer/runtime.nativeAttach.test-support.js';
 import { createCodexNativeSessionControls } from './controls.js';
+import { createCodexAgentRuntime } from './engine.js';
+
+describe('Codex delivered skill catalog context', () => {
+  it('uses the live delivery root for fresh catalog clients, including external plugin skills and reloads', async () => {
+    const skills: AgentSessionSkillDelivery = {
+      pluginRoot: '/private/session-delivery', skillsRoot: '/private/session-delivery/skills',
+      items: [
+        { name: 'account-review', skillId: 'account-review', digest: 'sha256:account', directory: '/private/session-delivery/skills/account-source' },
+        { name: 'external-review', skillId: 'plugin:acme.tools:review', digest: 'sha256:external', directory: '/private/session-delivery/skills/external-source' },
+      ], nativeDisables: [],
+    };
+    const replacement = { ...skills, skillsRoot: '/private/session-reloaded/skills',
+      items: skills.items.map(item => ({ ...item, directory: item.directory.replace('session-delivery', 'session-reloaded') })) };
+    const engine = await createCodexAgentRuntime({
+      plugin: { id: 'happier.agent.codex', version: '0.0.0' }, agent: { id: 'codex' }, signal: new AbortController().signal,
+    });
+    if (!engine.sessions?.catalog) throw new Error('Missing Codex Session catalog');
+    const sessions = engine.sessions;
+    const catalog = engine.sessions.catalog;
+    const nativeBoundary = {
+      skills, sessionFactory: sessions, rejectExtraRootsSet: false,
+      skillListResponseForRoots: (roots: readonly string[]) => ({ data: [{ skills:
+        [skills, replacement].filter(delivery => roots.includes(delivery.skillsRoot))
+          .flatMap(delivery => delivery.items.map(item => ({ name: item.name, path: `${item.directory}/SKILL.md` }))),
+      }] }),
+    };
+    await withCodexNativeAttachFixture(async fixture => {
+      const session = await fixture.openConfiguredSession();
+      const context = {
+        signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
+        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+      } as unknown as AgentSessionControlContext;
+      const expected = (delivery: AgentSessionSkillDelivery) => ({ status: 'ok', kind: 'skills',
+        items: delivery.items.map(item => ({ name: item.name, path: `${item.directory}/SKILL.md` })) });
+      expect(session.skillsDelivered).toBe(true);
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(skills));
+      await expect(session.refreshSkills?.({ skills: replacement }, { signal: AbortSignal.abort() })).rejects.toThrow();
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(skills));
+      expect(await session.refreshSkills?.({ skills: replacement })).toEqual({ kind: 'applied' });
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(replacement));
+      nativeBoundary.rejectExtraRootsSet = true;
+      expect(await catalog.list({ kind: 'skills' }, context))
+        .toMatchObject({ status: 'unavailable', diagnostic: { code: 'codex_catalog_startup_failed' } });
+      expect(await catalog.list({ kind: 'vendorPlugins' }, context)).toMatchObject({ status: 'ok', kind: 'vendorPlugins' });
+      nativeBoundary.rejectExtraRootsSet = false;
+      // A separate Session and a disposed launch must not inherit this Session's root.
+      expect(await catalog.list({ kind: 'skills' }, { ...context, session: { ...context.session, id: 'other-session' } }))
+        .toMatchObject({ status: 'ok', kind: 'skills', items: [] });
+      await session.dispose();
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject({ status: 'ok', kind: 'skills', items: [] });
+    }, nativeBoundary);
+  });
+});
 
 describe('Codex native catalog failure evidence', () => {
   it.each(['startup', 'request'] as const)('retains a safe typed %s cause through the real client', async phase => {

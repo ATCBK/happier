@@ -25,6 +25,7 @@ const appServerProbe = vi.hoisted(() => ({
 }));
 
 const rolloutFsProbe = vi.hoisted(() => ({
+  nativeProxyAvailable: true,
   statPaths: [] as string[],
   onStat: null as (() => void) | null,
   onOpen: null as ((filePath: unknown) => void) | null,
@@ -83,6 +84,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     stat: async (...args: Parameters<typeof actual.stat>) => {
       const filePath = args[0];
+      // Native RPC is a process boundary fixture; give it a matching socket
+      // presence without requiring a vendor server on the test machine.
+      if (String(filePath).endsWith(join('app-server-control', 'app-server-control.sock')) && rolloutFsProbe.nativeProxyAvailable) {
+        return actual.stat(tmpdir());
+      }
       if (typeof filePath === 'string' && filePath.endsWith('.jsonl')) {
         rolloutFsProbe.statPaths.push(filePath);
         rolloutFsProbe.onStat?.();
@@ -102,6 +108,7 @@ describe('Codex candidate conversation search', () => {
     const controller = new AbortController();
     try {
       const startedAtMs = Date.now();
+      rolloutFsProbe.nativeProxyAvailable = false;
       appServerProbe.threads = [{ id: 'native-only', updatedAt: 2_000_000_000 }];
       appServerProbe.onCreate = async () => { throw new Error('App-server proxy socket is absent'); };
       const source = { kind: 'codexHome' as const, home: 'user' as const, homePath: root };
@@ -113,10 +120,11 @@ describe('Codex candidate conversation search', () => {
         ripgrep: { run: async () => { throw new Error('An empty rollout corpus needs no ripgrep process'); } },
         signal: controller.signal,
       });
-      expect(appServerProbe.transports).toEqual([{ kind: 'daemonProxy' }]);
+      expect(appServerProbe.transports).toEqual([]);
       expect(result).toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
       expect(appServerProbe.calls).toEqual([]);
     } finally {
+      rolloutFsProbe.nativeProxyAvailable = true;
       controller.abort();
       appServerProbe.onCreate = null;
       await rm(root, { recursive: true, force: true });

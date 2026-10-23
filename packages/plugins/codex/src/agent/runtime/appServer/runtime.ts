@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   AgentSessionConversationRollbackRequest,
   AgentSessionConversationRollbackResult,
@@ -146,7 +146,8 @@ import {
   trimStringValue,
 } from './wire/fields.js';
 import { resolveCodexTerminalPermissionPolicy } from '../terminal/permissionPolicy.js';
-import { handleTokenUsageNotification } from '../../usage/handleTokenUsageNotification.js';
+import { handleTokenUsageNotification, type CodexTokenUsageRuntimeObservation } from '../../usage/handleTokenUsageNotification.js';
+import { buildCodexAppServerTokenCountObservationInput } from '../../usage/tokenCountMessage.js';
 import { isCodexRequestUsageIdentityContradicted, resolveCodexRequestUsageAttribution } from './requestUsageAttribution.js';
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { createCodexAppServerRealtimeConversation } from './realtime.js';
@@ -225,6 +226,7 @@ export type CodexAppServerRuntime = CodexAppServerSession & Readonly<{
   realtimeConversation: AgentSessionRealtimeConversation;
   prepareProviderCliAttach(): Promise<string>;
   prepareSkillDelivery(): Promise<void>;
+  readDeliveredSkillsRoot(): string | undefined;
   refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
   supportsInFlightSteer(): boolean;
   isTurnInFlight(): boolean;
@@ -2149,6 +2151,42 @@ export function createCodexAppServerRuntime(
     nextClient.registerNotificationHandler('account/rateLimits/updated', (notificationParams) => {
       void recordProviderAccountUsageSnapshot(notificationParams, { operationIdentity: null });
     });
+    const publishUsageObservation = (observation: CodexTokenUsageRuntimeObservation, notificationParams: unknown, responseBound: boolean): void => {
+      const { turnId: nativeTurnId, ...sessionObservation } = observation;
+      const hostTurnId = pendingTurn && notificationMatchesPendingTurn(notificationParams)
+        ? pendingTurn.sessionTurnId
+        : null;
+      const attribution = responseBound && hostTurnId ? resolveCodexRequestUsageAttribution({
+        turnId: hostTurnId, service: params.connectedAccountService,
+        requestIdentity: pendingTurn?.providerOperationIdentity ?? null,
+        accountScope: pendingTurn?.providerAccountScope,
+        scope: observation.scope, matchesNativeAttempt: Boolean(pendingTurn?.agentTurnId && pendingTurn.agentTurnId === nativeTurnId),
+      }) : undefined;
+      publishRuntimeEvent({ ...sessionObservation, ...(hostTurnId ? { turnId: hostTurnId } : {}), ...(attribution ? { attribution } : {}) });
+    };
+    if (params.happierSessionId !== undefined) nextClient.registerNotificationHandler('rawResponse/completed', (notificationParams) => {
+      const record = readRecord(notificationParams);
+      const responseId = trimStringValue(record?.responseId);
+      const nativeTurnId = readTurnId(notificationParams);
+      const nativeThreadId = readThreadId(notificationParams);
+      if (!responseId || !nativeTurnId || !nativeThreadId || nativeThreadId !== threadId
+        || !pendingTurn || pendingTurn.agentTurnId !== nativeTurnId) return;
+      // Codex rust-v0.160.0/0.162.1 emits exact upstream usage here before its
+      // cumulative TokenCount snapshot. The same responseId is persisted in
+      // TokenUsageRecord and consumed by native accounting for deduplication.
+      // A response's counters do not establish a context-window snapshot.
+      const input = buildCodexAppServerTokenCountObservationInput({
+        notificationParams: { tokenUsage: { last: record?.usage } },
+        modelId: currentModelId, modelSource: params.initialProviderBinding ? 'provider' : 'codex-native',
+      });
+      if (!input?.runtimeObservation?.tokens) return;
+      const { context: _context, ...observation } = input.runtimeObservation;
+      publishUsageObservation({ ...observation, source: 'codex-app-server-response-usage',
+        observationId: `codex-response:${createHash('sha256').update(JSON.stringify([runtimeTargetId, threadId, responseId])).digest('hex')}`,
+        turnId: nativeTurnId,
+        accounting: { ...observation.accounting, nativeSessionId: nativeThreadId, inferenceId: responseId, historyComplete: false },
+      }, notificationParams, true);
+    });
     if (params.happierSessionId !== undefined) nextClient.registerNotificationHandler('thread/tokenUsage/updated', (notificationParams) => {
       if (readThreadId(notificationParams) !== threadId) return;
       handleTokenUsageNotification({
@@ -2165,24 +2203,10 @@ export function createCodexAppServerRuntime(
             meta: { source: 'codex-app-server-token-usage' },
           });
           if (observation) {
-            // The usage codec identifies native records; canonical turn scope belongs
-            // to the admitted host turn, never Codex's native turn id. Late cumulative
-            // observations remain session-scoped after that turn has retired.
-            const { turnId: _nativeTurnId, ...sessionObservation } = observation;
-            const hostTurnId = pendingTurn && notificationMatchesPendingTurn(notificationParams)
-              ? pendingTurn.sessionTurnId
-              : null;
-            const attribution = hostTurnId ? resolveCodexRequestUsageAttribution({
-              turnId: hostTurnId, service: params.connectedAccountService,
-              requestIdentity: pendingTurn?.providerOperationIdentity ?? null,
-              accountScope: pendingTurn?.providerAccountScope,
-              scope: observation.scope, matchesNativeAttempt: Boolean(pendingTurn?.agentTurnId && pendingTurn.agentTurnId === _nativeTurnId),
-            }) : undefined;
-            publishRuntimeEvent({
-              ...sessionObservation,
-              ...(hostTurnId ? { turnId: hostTurnId } : {}),
-              ...(attribution ? { attribution } : {}),
-            });
+            // Snapshots can be estimated/replayed; even last-only compatibility
+            // input cannot certify an exact request. Keep its private counters,
+            // context and admitted host correlation without request proof.
+            publishUsageObservation(observation, notificationParams, false);
           }
         },
       });
@@ -3402,6 +3426,7 @@ export function createCodexAppServerRuntime(
     realtimeConversation,
     prepareProviderCliAttach,
     get skillsDelivered() { return skillsDelivered; },
+    readDeliveredSkillsRoot: () => skillsDelivered === true ? currentSkills?.skillsRoot : undefined,
     async prepareSkillDelivery() { await ensureClient(); },
     async refreshSkills(request, options) {
       options?.signal?.throwIfAborted();

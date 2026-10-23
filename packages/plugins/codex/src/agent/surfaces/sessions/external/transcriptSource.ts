@@ -1,5 +1,6 @@
 import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 import { createCodexNativeAppServerClient } from '../../../runtime/appServer/client.js';
+import { assertCodexNativeProxyAvailable } from './nativeProxy.js';
 import { resolveCodexRuntimeHomeEnvironment } from '../../../auth/services/state/sharing/files.js';
 import { readCodexSessionMetaFromRollout } from '../../../rollout/discovery/indexData.js';
 import { decodeCodexNativeTranscriptCursor, pageCodexNativeTranscript } from './nativeTranscript.js';
@@ -1248,6 +1249,7 @@ async function readCodexNativeTranscriptIfNeeded(
       const env = { ...process.env, ...params.env };
       const processEnv = { ...env, ...await resolveCodexRuntimeHomeEnvironment({ env, codexHome: home.codexHome, home: home.source.home,
         cwd: process.cwd(), expandHomePath: value => expandHomePath(value, resolveHomeDirFromEnvironment(env)) }) };
+      await assertCodexNativeProxyAvailable(processEnv, params.signal);
       client = await createCodexNativeAppServerClient({ exec: params.exec, logger: params.logger, processEnv, signal: params.signal,
         // History reads may connect to an existing server, but must not start
         // one (which can backfill or migrate native storage before initialize).

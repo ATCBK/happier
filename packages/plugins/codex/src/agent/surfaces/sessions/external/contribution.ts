@@ -15,6 +15,7 @@ import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sess
 import { canonicalizePath } from '@happier-dev/plugin-sdk/fs';
 import { getAgentExternalSessionsInvocationFailure } from '@happier-dev/plugin-sdk/sessions/external';
 import { CODEX_NATIVE_ACCOUNTING_SOURCE, readCodexNativeAccounting } from '../../../usage/nativeAccounting.js';
+import { CodexNativeProxyUnavailableError } from './nativeProxy.js';
 
 import {
   canonicalizeCodexHomePath,
@@ -478,6 +479,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         if (after) return after;
         if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof CodexExternalTranscriptSourceUnavailableError) return failed('candidate_not_found', 'Codex transcript source is no longer available.', false);
+        if (error instanceof CodexNativeProxyUnavailableError) return failed('agent_unavailable', error.message, true);
         logTranscriptReadFailure(request, error, 'pageTranscript');
         return failed(
           'agent_error',
@@ -514,6 +516,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
         if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
+        if (error instanceof CodexNativeProxyUnavailableError) return failed('agent_unavailable', error.message, true);
         logTranscriptReadFailure(request, error, 'readAfterTranscript');
         return ok({ outcome: 'read_failed' });
       }

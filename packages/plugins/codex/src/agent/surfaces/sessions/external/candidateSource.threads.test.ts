@@ -74,6 +74,10 @@ async function writeCorpus(root: string): Promise<string> {
   const codexHome = join(root, 'codex-home');
   const sessionsDir = join(codexHome, 'sessions', '2026', '09', '26');
   await mkdir(sessionsDir, { recursive: true });
+  // The process fixture above represents an available native server. Mirror
+  // its control-path presence without launching a vendor process.
+  await mkdir(join(codexHome, 'app-server-control'));
+  await writeFile(join(codexHome, 'app-server-control', 'app-server-control.sock'), '');
   // Threads interleave with top-level sessions in both traversal and activity order.
   const ordered = [TOP_LEVEL_IDS[0]!, REVIEWER_ID, TOP_LEVEL_IDS[1]!, SUBAGENT_ID, TOP_LEVEL_IDS[2]!];
   for (const [index, id] of ordered.entries()) {
