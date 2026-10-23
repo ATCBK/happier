@@ -1464,6 +1464,10 @@ clients do not infer it from item paths. Caution, Check, Keep and Forbidden item
 do not contribute. Missing means unreported, not zero; capacity-only edges retain
 the last measured value, and recipient summaries omit this inventory figure.
 The same lazy service owns the per-Account Pile, current review and mutation RPCs.
+Volume `pileBytes` and `trashBytes` retain allocated occupancy for the chart;
+optional `pileFreesBytes` and `trashFreesBytes` carry measured exclusive bytes for
+the cleanup forecast. Capacity-only updates retain both. A reader with no exclusive
+figure omits the forecast rather than promising allocated/shared bytes as free space.
 Collection stamps identity and attribution from current admission, not caller facts.
 Review measures the selected union once, absorbs nested selections and uses identity,
 worktree change facts and current loss facts (including each Session holder) for `expect`;
