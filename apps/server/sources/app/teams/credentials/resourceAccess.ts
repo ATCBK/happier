@@ -1,5 +1,5 @@
 import { resolveTeamMembershipContextInTx, type TeamMembershipLifetimeContext } from "../memberships/effectiveMembership";
-import { resolveTeamGroupMembershipContextInTx, type TeamGroupMembershipLifetimeContext } from "../groups/effectiveGroupMembership";
+import { resolveTeamGroupMembershipsForAccountInTx, type TeamGroupMembershipLifetimeContext } from "../groups/effectiveGroupMembership";
 import type { Tx } from "@/storage/inTx";
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialDeliveryModeV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { isTeamPrincipalRoleV1 } from '@happier-dev/protocol/teams';
@@ -67,13 +67,9 @@ export async function resolveTeamCredentialEntitlementInTx(
     if (!membership?.effective) return { ok: false, reason: "access_removed" };
     const custodianMembership = resource.custodianAccountId === input.accountId
         ? membership : await readMembership(resource.custodianAccountId);
-    const groupMemberships: TeamGroupMembershipLifetimeContext[] = [];
-    for (const grant of resource.groupGrants) {
-        const result = await resolveTeamGroupMembershipContextInTx(tx, {
-            teamId: resource.teamId, groupId: grant.teamGroupId, accountId: input.accountId,
-        });
-        if (result.ok) groupMemberships.push(result.groupMembership);
-    }
+    const groupMemberships = resource.groupGrants.length === 0 ? [] : await resolveTeamGroupMembershipsForAccountInTx(tx, {
+        teamId: resource.teamId, credentialResourceId: resource.id, accountId: input.accountId,
+    });
     return projectTeamCredentialEntitlement({ resource, membership, custodianMembership, groupMemberships });
 }
 
@@ -110,15 +106,10 @@ export async function hasCurrentTeamCredentialAudienceMatchInTx(
     if (!membershipResult.ok || !membershipResult.membership.effective) return false;
     if (resource.allMembersDeliveryMode !== null && isTeamPrincipalRoleV1(membershipResult.membership.role)) return true;
     if (resource.memberGrants.some(grant => grant.teamMembershipId === membershipRow.id)) return true;
-    for (const grant of resource.groupGrants) {
-        const group = await resolveTeamGroupMembershipContextInTx(tx, {
-            teamId: resource.teamId,
-            groupId: grant.teamGroupId,
-            accountId: input.accountId,
-        });
-        if (group.ok && group.groupMembership.effective) return true;
-    }
-    return false;
+    const groupMemberships = resource.groupGrants.length === 0 ? [] : await resolveTeamGroupMembershipsForAccountInTx(tx, {
+        teamId: resource.teamId, credentialResourceId: input.resourceId, accountId: input.accountId,
+    });
+    return groupMemberships.some(group => group.effective);
 }
 
 /** Current audience entitlement only; source readiness and Session policy remain required. */

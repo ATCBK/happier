@@ -71,28 +71,59 @@ export async function resolveEffectiveTeamGroupIdsForAccountInTx(
     tx: Tx,
     params: Readonly<{ teamId: string; accountId: string }>,
 ): Promise<readonly string[]> {
-    const membership = await tx.teamMembership.findUnique({
-        where: { teamId_accountId: { teamId: params.teamId, accountId: params.accountId } },
+    return (await resolveTeamGroupMembershipsForAccountInTx(tx, params))
+        .filter(membership => membership.effective).map(membership => membership.teamGroupId).sort();
+}
+
+/** Read only this Account's current lifetime memberships, optionally for one credential audience. */
+export async function resolveTeamGroupMembershipsForAccountInTx(
+    tx: Tx,
+    params: Readonly<{ teamId: string; accountId: string; credentialResourceId?: string }>,
+): Promise<readonly TeamGroupMembershipLifetimeContext[]> {
+    const memberships = await tx.teamGroupMembership.findMany({
+        where: {
+            teamMembership: { teamId: params.teamId, accountId: params.accountId },
+            group: {
+                teamId: params.teamId,
+                ...(params.credentialResourceId ? { credentialGrants: { some: { resourceId: params.credentialResourceId } } } : {}),
+            },
+        },
         select: {
-            status: true,
-            account: { select: { status: true } },
-            team: { select: { archivedAt: true } },
-            groupMemberships: {
-                select: { group: { select: { id: true, archivedAt: true } } },
+            nativeContribution: true, sessionAccessStartsAt: true,
+            group: { select: { id: true, teamId: true, archivedAt: true } },
+            teamMembership: {
+                select: { id: true, status: true, account: { select: { status: true } }, team: { select: { archivedAt: true } } },
             },
         },
     });
-    if (!membership) return [];
+    return memberships.map(row => projectTeamGroupMembershipLifetime({
+        ...row, membership: row.teamMembership, accountId: params.accountId,
+    }));
+}
 
-    return membership.groupMemberships
-        .filter(({ group }) => isEffectiveTeamGroupMembership({
-            accountStatus: membership.account.status,
-            membershipStatus: membership.status,
-            teamArchivedAt: membership.team.archivedAt,
-            groupArchivedAt: group.archivedAt,
-        }))
-        .map(({ group }) => group.id)
-        .sort();
+function projectTeamGroupMembershipLifetime(input: Readonly<{
+    accountId: string;
+    group: Readonly<{ id: string; teamId: string; archivedAt: Date | null }>;
+    membership: Readonly<{ id: string; status: TeamMembershipStatus;
+        account: Readonly<{ status: AccountStatus }>; team: Readonly<{ archivedAt: Date | null }> }>;
+    nativeContribution: boolean;
+    sessionAccessStartsAt: Date | null;
+}>): TeamGroupMembershipLifetimeContext {
+    return {
+        teamId: input.group.teamId,
+        teamGroupId: input.group.id,
+        teamMembershipId: input.membership.id,
+        accountId: input.accountId,
+        nativeContribution: input.nativeContribution,
+        sessionAccessStartsAt: input.sessionAccessStartsAt,
+        historyAccess: sessionHistoryAccessOf(input.sessionAccessStartsAt),
+        effective: isEffectiveTeamGroupMembership({
+            accountStatus: input.membership.account.status,
+            membershipStatus: input.membership.status,
+            teamArchivedAt: input.membership.team.archivedAt,
+            groupArchivedAt: input.group.archivedAt,
+        }),
+    };
 }
 
 /**
@@ -126,9 +157,7 @@ export async function resolveTeamGroupMembershipContextInTx(
             team: { select: { archivedAt: true } },
         },
     });
-    if (!group || group.teamId !== params.teamId) {
-        return { ok: false, error: "team_group_not_found" };
-    }
+    if (!group || group.teamId !== params.teamId) return { ok: false, error: "team_group_not_found" };
 
     const membership = await tx.teamMembership.findUnique({
         where: { teamId_accountId: { teamId: params.teamId, accountId: params.accountId } },
@@ -143,36 +172,11 @@ export async function resolveTeamGroupMembershipContextInTx(
     }
 
     const groupMembership = await tx.teamGroupMembership.findUnique({
-        where: {
-            teamGroupId_teamMembershipId: {
-                teamGroupId: group.id,
-                teamMembershipId: membership.id,
-            },
-        },
+        where: { teamGroupId_teamMembershipId: { teamGroupId: group.id, teamMembershipId: membership.id } },
         select: { nativeContribution: true, sessionAccessStartsAt: true },
     });
-    if (!groupMembership) {
-        return { ok: false, error: "team_group_membership_not_found" };
-    }
-
-    const effective = isEffectiveTeamGroupMembership({
-        accountStatus: membership.account.status,
-        membershipStatus: membership.status,
-        teamArchivedAt: group.team.archivedAt,
-        groupArchivedAt: group.archivedAt,
-    });
-
-    return {
-        ok: true,
-        groupMembership: {
-            teamId: group.teamId,
-            teamGroupId: group.id,
-            teamMembershipId: membership.id,
-            accountId: params.accountId,
-            nativeContribution: groupMembership.nativeContribution,
-            sessionAccessStartsAt: groupMembership.sessionAccessStartsAt,
-            historyAccess: sessionHistoryAccessOf(groupMembership.sessionAccessStartsAt),
-            effective,
-        },
-    };
+    if (!groupMembership) return { ok: false, error: "team_group_membership_not_found" };
+    return { ok: true, groupMembership: projectTeamGroupMembershipLifetime({
+        group, membership: { ...membership, team: group.team }, accountId: params.accountId, ...groupMembership,
+    }) };
 }
