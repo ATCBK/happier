@@ -46,6 +46,33 @@ export function assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx: Tx, a
     }
 }
 
+/** Lock the complete terminal audience, reusing native locks held by entry admission. */
+export async function acquireAccountSessionOwnerMetadataPublicationFencesInTx(tx: Tx, accountIds: readonly string[]): Promise<void> {
+    const ids = [...new Set(accountIds)].sort();
+    assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx, ids);
+    if (ids.length === 0) return;
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, 'postgres'));
+    if (dialect === 'postgres') {
+        const context = getTransactionContext(tx, { optional: true });
+        const admitted = (context as (typeof context & AdmissionContext))?.[admissionSymbol];
+        // NO KEY UPDATE and UPDATE already exclude concurrent publication.
+        // KEY SHARE deliberately permits it during domain work, so content
+        // admission must still acquire the sorted terminal publication locks.
+        if (admitted && ids.every(id => {
+            const admission = admitted.get(id);
+            return admission?.held && admission.strength >= admissionStrength.serializing;
+        })) return;
+        await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE', ids,
+        );
+    } else if (dialect === 'mysql') {
+        await tx.$queryRawUnsafe(
+            `SELECT \`id\` FROM \`Account\` WHERE \`id\` IN (${ids.map(() => '?').join(', ')}) ORDER BY \`id\` FOR UPDATE`,
+            ...ids,
+        );
+    }
+}
+
 export class AccountSessionOwnerMetadataFenceAccountNotFoundError extends Error {
     constructor(accountId: string) {
         super(

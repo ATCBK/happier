@@ -6,7 +6,7 @@ import { eventRouter } from "@/app/events/connectionEventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { ChangeKindSchema, type ChangeKind } from '@happier-dev/protocol/changes';
 import { PluginDomainChangeHintSchema, buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
-import { acquireAccountSessionOwnerMetadataFencesInTx, assertAccountSessionOwnerMetadataAdmissionAudienceInTx, type AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
+import { acquireAccountSessionOwnerMetadataFencesInTx, acquireAccountSessionOwnerMetadataPublicationFencesInTx, type AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 
 /** An allocation intent, resolved only by the transaction's publication phase. */
 export interface AccountChangePublication {
@@ -102,19 +102,7 @@ export async function flushAccountChangesInTx(tx: Tx): Promise<void> {
     if (state.phase !== 'domain') throw new Error('Account publication phase already started');
     state.phase = 'validating';
     if (state.operations.length > 0) {
-        const accountIds = [...state.accountIds].sort();
-        assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx, accountIds);
-        const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, 'postgres'));
-        if (accountIds.length > 0 && dialect === 'postgres') {
-            await tx.$queryRawUnsafe(
-                'SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE', accountIds,
-            );
-        } else if (accountIds.length > 0 && dialect === 'mysql') {
-            await tx.$queryRawUnsafe(
-                `SELECT \`id\` FROM \`Account\` WHERE \`id\` IN (${accountIds.map(() => '?').join(', ')}) ORDER BY \`id\` FOR UPDATE`,
-                ...accountIds,
-            );
-        }
+        await acquireAccountSessionOwnerMetadataPublicationFencesInTx(tx, [...state.accountIds]);
     }
     for (const validate of state.validations) await validate(tx);
     state.phase = 'publishing';
