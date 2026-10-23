@@ -244,13 +244,14 @@ function createMutableConnectionStateCollection() {
     },
     async query(request: Readonly<{ index: string; prefix?: readonly unknown[]; limit?: number }>) {
       assertChannelsTestCollectionQueryLimit(request.limit);
-      if (request.index !== CHANNEL_STATE_INDEX_ID.byKind) {
+      if (request.index !== CHANNEL_STATE_INDEX_ID.byKind && request.index !== CHANNEL_STATE_INDEX_ID.byConnectionBindingV2) {
         throw new Error(`Unexpected owner query index: ${request.index}`);
       }
-      const kind = request.prefix?.[0];
+      const field = request.index === CHANNEL_STATE_INDEX_ID.byKind
+        ? CHANNEL_STATE_FIELD.recordKind : CHANNEL_STATE_FIELD.connectionId;
       return {
         rows: [...rows.values()].filter((row) => (
-          (row.value as Readonly<Record<string, unknown>>)[CHANNEL_STATE_FIELD.recordKind] === kind
+          (row.value as Readonly<Record<string, unknown>>)[field] === request.prefix?.[0]
         )),
         changeCursor: 1,
         nextCursor: undefined,
@@ -1817,8 +1818,8 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
     let enabled = false;
     collection.query = async (request) => {
       const scanned = await queryBeforeConcurrentEnable(request);
-      if (!enabled && request.index === CHANNEL_STATE_INDEX_ID.byKind
-        && request.prefix?.[0] === CHANNEL_STATE_RECORD_KIND.binding) {
+      if (!enabled && request.index === CHANNEL_STATE_INDEX_ID.byConnectionBindingV2
+        && request.prefix?.[0] === connectionId) {
         enabled = true;
         await setConversationBindingEnabledForInvocation({
           bindingId,
@@ -3587,12 +3588,13 @@ describe('retestConversationConnectionForInvocation', () => {
       async query(request: Readonly<{ index: string; prefix?: readonly unknown[]; limit?: number }>) {
         assertChannelsTestCollectionQueryLimit(request.limit);
         if (
-          request.index !== CHANNEL_STATE_INDEX_ID.byKind
-          || request.prefix?.[0] !== CHANNEL_STATE_RECORD_KIND.binding
+          request.index !== CHANNEL_STATE_INDEX_ID.byConnectionBindingV2
+          || request.prefix?.[0] !== connectionId
         ) {
           throw new Error(`Unexpected retest query: ${JSON.stringify(request)}`);
         }
-        return { rows: bindingRows, changeCursor: 7, nextCursor: undefined };
+        return { rows: [row, ...bindingRows].filter(current => current.value['connection-id'] === connectionId),
+          changeCursor: 7, nextCursor: undefined };
       },
       async batch(operations: readonly Readonly<{
         kind: string;
