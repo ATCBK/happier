@@ -6642,7 +6642,7 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                 inTrash: ({ count }) => `回收站中有 ${count} 项`,
                 freed: ({ amount }) => `已释放 ${amount}`,
                 goneForGood: ({ count }) => `${count} 项已永久删除`,
-                readyNote: "确认之前不会删除任何内容。",
+                readyNote: "尚未删除任何内容。",
                 readyNoteDisk: "四处查看时，待清理列表会一直保留。",
                 heldNote: "回收站清空后，空间就会回来。",
                 heldNoteOn: ({ date }) => `回收站在 ${date} 清空后，空间就会回来。`,

@@ -6652,7 +6652,7 @@ const machineDetailPageTranslations = { ca: translated({
                 inTrash: ({ count }) => `${count} ${count === 1 ? 'element' : 'elements'} a la paperera`,
                 freed: ({ amount }) => `${amount} alliberats`,
                 goneForGood: ({ count }) => `${count} ${count === 1 ? 'element ha desaparegut' : 'elements han desaparegut'} per sempre`,
-                readyNote: "No es treu res fins que ho confirmis.",
+                readyNote: "Encara no s’ha tret res.",
                 readyNoteDisk: "El munt t’acompanya mentre mires.",
                 heldNote: "L’espai torna quan es buida la paperera.",
                 heldNoteOn: ({ date }) => `L’espai torna quan es buidi la paperera el ${date}.`,

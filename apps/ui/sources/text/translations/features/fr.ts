@@ -6650,7 +6650,7 @@ const machineDetailPageTranslations = { fr: translated({
                 inTrash: ({ count }) => `${count} ${count < 2 ? 'élément' : 'éléments'} dans la corbeille`,
                 freed: ({ amount }) => `${amount} libérés`,
                 goneForGood: ({ count }) => `${count} ${count < 2 ? 'élément a' : 'éléments ont'} disparu pour de bon`,
-                readyNote: "Rien n’est supprimé avant ta confirmation.",
+                readyNote: "Rien n’est encore supprimé.",
                 readyNoteDisk: "La pile te suit pendant que tu explores.",
                 heldNote: "L’espace revient quand la corbeille est vidée.",
                 heldNoteOn: ({ date }) => `L’espace revient quand la corbeille est vidée, le ${date}.`,

@@ -789,7 +789,7 @@ export const english = {
             inTrash: ({ count }: { count: number }) => `${count} ${count === 1 ? 'item' : 'items'} in Trash`,
             freed: ({ amount }: { amount: string }) => `${amount} freed`,
             goneForGood: ({ count }: { count: number }) => `${count} ${count === 1 ? 'item is' : 'items are'} gone for good`,
-            readyNote: 'Nothing is removed until you confirm.',
+            readyNote: 'Nothing is removed yet.',
             readyNoteDisk: 'The pile stays with you while you look around.',
             heldNote: 'The space comes back when the Trash empties.',
             heldNoteOn: ({ date }: { date: string }) => `The space comes back when the Trash empties on ${date}.`,

@@ -6642,7 +6642,7 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 inTrash: ({ count }) => `垃圾桶中有 ${count} 項`,
                 freed: ({ amount }) => `已釋放 ${amount}`,
                 goneForGood: ({ count }) => `${count} 項已永久刪除`,
-                readyNote: "確認之前不會刪除任何內容。",
+                readyNote: "尚未刪除任何內容。",
                 readyNoteDisk: "四處查看時，待清理清單會一直保留。",
                 heldNote: "垃圾桶清空後，空間就會回來。",
                 heldNoteOn: ({ date }) => `垃圾桶在 ${date} 清空後，空間就會回來。`,

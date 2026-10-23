@@ -6652,7 +6652,7 @@ const machineDetailPageTranslations = { it: translated({
                 inTrash: ({ count }) => `${count} ${count === 1 ? 'elemento' : 'elementi'} nel Cestino`,
                 freed: ({ amount }) => `${amount} liberati`,
                 goneForGood: ({ count }) => `${count} ${count === 1 ? 'elemento è sparito' : 'elementi sono spariti'} per sempre`,
-                readyNote: "Non viene rimosso nulla finché non confermi.",
+                readyNote: "Ancora nulla rimosso.",
                 readyNoteDisk: "Il mucchio resta con te mentre dai un’occhiata.",
                 heldNote: "Lo spazio torna libero quando il Cestino viene svuotato.",
                 heldNoteOn: ({ date }) => `Lo spazio torna libero quando il Cestino viene svuotato il ${date}.`,

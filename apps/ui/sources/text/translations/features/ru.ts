@@ -6679,7 +6679,7 @@ const machineDetailPageTranslations = { ru: translated({
                 inTrash: ({ count }) => `В корзине · элементы: ${count}`,
                 freed: ({ amount }) => `Освобождено ${amount}`,
                 goneForGood: ({ count }) => `Удалено навсегда · элементы: ${count}`,
-                readyNote: "Ничего не удаляется, пока вы не подтвердите.",
+                readyNote: "Пока ничего не удаляется.",
                 readyNoteDisk: "Куча остаётся с вами, пока вы осматриваетесь.",
                 heldNote: "Место освободится после очистки корзины.",
                 heldNoteOn: ({ date }) => `Место освободится после очистки корзины ${date}.`,

@@ -6647,7 +6647,7 @@ const machineDetailPageTranslations = { ja: translated({
                 inTrash: ({ count }) => `ゴミ箱に ${count} 件`,
                 freed: ({ amount }) => `${amount} を解放しました`,
                 goneForGood: ({ count }) => `${count} 件を完全に削除しました`,
-                readyNote: "確認するまで何も削除されません。",
+                readyNote: "まだ何も削除されません。",
                 readyNoteDisk: "見て回っている間も削除候補はそのまま残ります。",
                 heldNote: "ゴミ箱を空にすると容量が戻ります。",
                 heldNoteOn: ({ date }) => `${date} にゴミ箱が空になると容量が戻ります。`,

@@ -6644,7 +6644,7 @@ const machineDetailPageTranslations = { de: translated({
                 inTrash: ({ count }) => `${count} ${count === 1 ? 'Element' : 'Elemente'} im Papierkorb`,
                 freed: ({ amount }) => `${amount} freigegeben`,
                 goneForGood: ({ count }) => `${count} ${count === 1 ? 'Element ist' : 'Elemente sind'} endgültig weg`,
-                readyNote: "Nichts wird entfernt, bevor du bestätigst.",
+                readyNote: "Noch wird nichts entfernt.",
                 readyNoteDisk: "Der Stapel bleibt bei dir, während du dich umsiehst.",
                 heldNote: "Der Speicherplatz wird frei, wenn der Papierkorb geleert wird.",
                 heldNoteOn: ({ date }) => `Der Speicherplatz wird frei, wenn der Papierkorb am ${date} geleert wird.`,

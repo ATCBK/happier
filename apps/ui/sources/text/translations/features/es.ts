@@ -6652,7 +6652,7 @@ const machineDetailPageTranslations = { es: translated({
                 inTrash: ({ count }) => `${count} ${count === 1 ? 'elemento' : 'elementos'} en la Papelera`,
                 freed: ({ amount }) => `${amount} liberados`,
                 goneForGood: ({ count }) => `${count} ${count === 1 ? 'elemento ha desaparecido' : 'elementos han desaparecido'} para siempre`,
-                readyNote: "No se quita nada hasta que confirmes.",
+                readyNote: "Aún no se quita nada.",
                 readyNoteDisk: "El montón te acompaña mientras echas un vistazo.",
                 heldNote: "El espacio vuelve cuando se vacía la Papelera.",
                 heldNoteOn: ({ date }) => `El espacio vuelve cuando se vacíe la Papelera el ${date}.`,

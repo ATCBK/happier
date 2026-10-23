@@ -6652,7 +6652,7 @@ const machineDetailPageTranslations = { pt: translated({
                 inTrash: ({ count }) => `${count} ${count === 1 ? 'item' : 'itens'} na Lixeira`,
                 freed: ({ amount }) => `${amount} libertados`,
                 goneForGood: ({ count }) => `${count} ${count === 1 ? 'item desapareceu' : 'itens desapareceram'} de vez`,
-                readyNote: "Nada é removido até confirmar.",
+                readyNote: "Nada removido ainda.",
                 readyNoteDisk: "A pilha fica consigo enquanto explora.",
                 heldNote: "O espaço volta quando a Lixeira for esvaziada.",
                 heldNoteOn: ({ date }) => `O espaço volta quando a Lixeira for esvaziada a ${date}.`,

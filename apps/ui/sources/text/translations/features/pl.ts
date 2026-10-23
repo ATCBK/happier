@@ -6670,7 +6670,7 @@ const machineDetailPageTranslations = { pl: translated({
                 inTrash: ({ count }) => `W Koszu · elementy: ${count}`,
                 freed: ({ amount }) => `Zwolniono ${amount}`,
                 goneForGood: ({ count }) => `Usunięte na dobre · elementy: ${count}`,
-                readyNote: "Nic nie zostanie usunięte, dopóki nie potwierdzisz.",
+                readyNote: "Nic jeszcze nie usunięto.",
                 readyNoteDisk: "Stos zostaje z tobą, gdy się rozglądasz.",
                 heldNote: "Miejsce wróci po opróżnieniu Kosza.",
                 heldNoteOn: ({ date }) => `Miejsce wróci po opróżnieniu Kosza ${date}.`,
