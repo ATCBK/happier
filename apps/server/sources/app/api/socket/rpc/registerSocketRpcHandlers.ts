@@ -89,7 +89,7 @@ import { readVerifiedMachineSocketInstallationIdFromSocketData } from "../machin
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, resolveCurrentSessionMachineFromServer } from "../externalActionDispatcher";
 import { forwardRpcCall } from "./forwardRpcCall";
 import type { RpcForwardTargetGuard } from "./_types";
-import { buildRpcMethodRoom } from "./rpcMethodRoom";
+import { buildMachineRpcAvailabilityRoom, buildRpcMethodRoom } from "./rpcMethodRoom";
 import { RPC_REGISTERED_METHODS_SOCKET_DATA_KEY, readSocketRegisteredRpcMethods } from './rpcRegisteredMethods';
 import { getMachineSocketRoom } from "../../socketRooms";
 import { isWorkflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
@@ -838,7 +838,8 @@ async function hydrateMachineScopedRpcAvailabilityForSocket(params: Readonly<{
     });
     if (state !== "available") return;
 
-    const snapshot = await readSocketRoomSnapshot({ io: params.io, room: `user:${params.userId}` });
+    const snapshot = await readSocketRoomSnapshot({ io: params.io,
+        room: buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId }) });
     const methods = new Set<string>();
     // Reconnect hints advertise positive registrations, never complete absence.
     for (const socket of snapshot.sockets) {
@@ -992,6 +993,10 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
 
             await params.socket.join(buildRpcMethodRoom({ userId: params.userId, method }));
+            const availability = parseMachineScopedRpcMethod(method);
+            if (availability && machineScopedSocketMachineId === null && !params.ephemeralRunnerAdmission) {
+                await params.socket.join(buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId: availability.machineId }));
+            }
             ownedMethods.add(method);
             writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
             recordRpcRegistration(method);
@@ -1046,6 +1051,22 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     await params.socket.join(room);
                     writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
                 } else {
+                    const availability = parseMachineScopedRpcMethod(method);
+                    if (availability) {
+                        const availabilityRoom = buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId: availability.machineId });
+                        const stillOwnsAvailability = () => {
+                            for (const owned of ownedMethods) {
+                                if (parseMachineScopedRpcMethod(owned)?.machineId === availability.machineId) return true;
+                            }
+                            return false;
+                        };
+                        if (!stillOwnsAvailability()) {
+                            await params.socket.leave(availabilityRoom);
+                            // Match method-room retirement: an overlapping registration can
+                            // finish while the older leave is pending at the adapter boundary.
+                            if (!disconnected && stillOwnsAvailability()) await params.socket.join(availabilityRoom);
+                        }
+                    }
                     recordRpcUnregistration(method);
                     await emitMachineScopedRpcUnregisteredWhenUnavailable({
                         userId: params.userId,
@@ -2285,6 +2306,14 @@ export function registerSocketRpcHandlers(params: Readonly<{
             await Promise.resolve(params.socket.leave(buildRpcMethodRoom({ userId: params.userId, method }))).catch((error: unknown) => {
                 log({ module: "websocket-rpc", level: "error" }, `Error leaving rpc room on disconnect: ${error}`);
             });
+            const availability = parseMachineScopedRpcMethod(method);
+            if (availability) {
+                await Promise.resolve(params.socket.leave(buildMachineRpcAvailabilityRoom({
+                    userId: params.userId, machineId: availability.machineId,
+                }))).catch((error: unknown) => {
+                    log({ module: "websocket-rpc", level: "error" }, `Error leaving rpc availability room on disconnect: ${error}`);
+                });
+            }
             await emitMachineScopedRpcUnregisteredWhenUnavailable({
                 userId: params.userId,
                 io: params.io,

@@ -39,6 +39,7 @@ import {
     mountedWorkReadClientRpcMethod,
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { getMachineSocketRoom } from '../../socketRooms';
+import { buildMachineRpcAvailabilityRoom } from './rpcMethodRoom';
 import * as logging from '@/utils/logging/log';
 import { callSocketRpc } from '@happier-dev/sync-client';
 import { createHash } from 'node:crypto';
@@ -3958,6 +3959,22 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             data: { clientType: "machine-scoped", machineId: "machine-1" },
         });
         const method = `machine-1:${rpcMethod}`;
+        for (let index = 0; index < 1_001; index++) {
+            const unrelated = createRoomAwareSocket({ id: `unrelated-${index}`, data: { clientType: 'user-scoped' } });
+            addToRoom('user:user-1', unrelated);
+        }
+        const transported: string[] = [];
+        const read = io.in.bind(io);
+        vi.spyOn(io, 'in').mockImplementation((room) => {
+            const operator = read(room);
+            const fetch = operator.fetchSockets.bind(operator);
+            operator.fetchSockets = async () => {
+                const sockets = await fetch();
+                transported.push(...sockets.map(socket => socket.id));
+                return sockets;
+            };
+            return operator;
+        });
         addToRoom("user:user-1", uiSocket);
         addToRoom("machine:machine-1:user-1", daemonSocket);
         registerSocketRpcHandlers({ userId: "user-1", socket: uiSocket as any, io });
@@ -3965,12 +3982,37 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         await triggerSocketHandler(uiSocket, SOCKET_RPC_EVENTS.REGISTER, { method });
         uiSocket.emit.mockClear();
         daemonSocket.emit.mockClear();
+        transported.length = 0;
 
         registerSocketRpcHandlers({ userId: "user-1", socket: daemonSocket as any, io });
 
         await vi.waitFor(() => {
             expect(daemonSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method });
         });
+        expect(transported).toEqual(['ui-socket']);
+    });
+
+    it('keeps a different live method indexed when the previous last method retires during its join', async () => {
+        const { io, rooms, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
+        const ui = createRoomAwareSocket({ id: 'ui-index-race', data: { clientType: 'user-scoped' } });
+        const oldMethod = `machine-1:${RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME}`;
+        const newMethod = `machine-1:${RPC_METHODS.UI_ACTION_EXECUTE}`;
+        const indexRoom = buildMachineRpcAvailabilityRoom({ userId: 'user-1', machineId: 'machine-1' });
+        registerSocketRpcHandlers({ userId: 'user-1', socket: ui as unknown as Socket, io });
+        await triggerSocketHandler(ui, SOCKET_RPC_EVENTS.REGISTER, { method: oldMethod });
+        // The real registration/unregistration owners run; only asynchronous adapter
+        // completion is controlled to exercise a different-method interleaving.
+        let interleaved = false;
+        ui.join.mockImplementation(async (room: string) => {
+            addToRoom(room, ui);
+            if (room === indexRoom && !interleaved) {
+                interleaved = true;
+                await triggerSocketHandler(ui, SOCKET_RPC_EVENTS.UNREGISTER, { method: oldMethod });
+            }
+        });
+        await triggerSocketHandler(ui, SOCKET_RPC_EVENTS.REGISTER, { method: newMethod });
+        expect(ui.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method: newMethod });
+        expect(rooms.get(indexRoom)?.has(ui)).toBe(true);
     });
 
     it("rejects explicit Session stop from a shared editor before lifecycle dispatch", async () => {
