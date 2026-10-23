@@ -7,6 +7,8 @@ import {
   SessionRoleValueRow,
   isSessionRoleSnapshotCopiedAcrossOwners,
 } from '@/components/roles/session/sessionRole';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SessionTriggerHistoryScope } from '@/components/workflows/triggers/SessionTriggerHistoryScope';
 import { SessionTriggersSection } from '@/components/workflows/triggers/SessionTriggersSection';
@@ -14,8 +16,9 @@ import { SessionWritesHereSection } from '@/components/workflows/triggers/Sessio
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { t } from '@/text';
 
 import { SessionContextSection } from './context/SessionContextSection';
 import { SessionInstructionsSection } from './instructions/SessionInstructionsSection';
@@ -23,15 +26,20 @@ import { SessionMemorySection } from './memory/SessionMemorySection';
 import { SessionNotesSection } from './roles/SessionNotesSection';
 import { SessionRolesSection } from './roles/SessionRolesSection';
 import { SessionVoiceSection } from './voice/SessionVoiceSection';
-import { WorkSectionPlacementProvider } from './WorkSection';
+import {
+  WorkSectionPlacementProvider,
+  WorkSectionSetupDisclosureProvider,
+  type WorkSectionSetupDisclosure,
+} from './WorkSection';
 
 /** Where `/session/[id]/triggers` brings the person: the Triggers section of the Session's Info page. */
 export const SESSION_SETUP_TRIGGERS_ANCHOR_ID = 'session-setup-triggers';
 
 /**
- * How this agent is set up (coordination lab P1i, owner decision Y5): the Session's Info page answers
- * it in the order you'd ask — Role · Instructions · Memory · Context · Voice · Triggers (and what
- * writes into it) · Roles and Notes. The Work pane keeps only what's happening.
+ * How this agent is set up (calm-shell lab csinfo I2, P2 R06): the Session's Info answers it in the
+ * order you'd ask — Role · Instructions · Memory · Context · Voice · Roles · Notes. Habits (what
+ * starts from this session and what writes into it) is its own section, {@link SessionHabitsSection}.
+ * The Work pane keeps only what's happening.
  *
  * The sections are the same components the Work pane used to host, moved with their owners; on this
  * page they take the configuration-page section anatomy through `WorkSectionPlacementProvider`.
@@ -64,35 +72,89 @@ export const SessionSetupSections = React.memo(function SessionSetupSections(
   const context = (
     <SessionContextSection session={session} serverId={serverId} />
   );
+  const disclosure = useSessionSetupDisclosure();
+  return (
+    <ItemGroup
+      testID="session-setup"
+      title={t('sessionPages.info.setupTitle')}
+      description={t('sessionPages.info.setupDescription')}
+    >
+      {/* The role leads, as one value row that opens its picker. */}
+      <SessionRoleValueRow
+        sessionId={session.id}
+        serverId={serverId}
+        testID="session-setup-role-value"
+        icon={<Icon name="person" />}
+      />
+      <WorkSectionPlacementProvider value="setup">
+        <WorkSectionSetupDisclosureProvider value={disclosure}>
+          <SessionInstructionsSection session={session} serverId={serverId} />
+          <SessionMemorySection session={session} serverId={serverId} />
+          {isBot ? null : context}
+          <SessionVoiceSection session={session} serverId={serverId} />
+          {isBot ? context : null}
+          <SessionRolesSection
+            sessionId={session.id}
+            serverId={serverId}
+            copiedAtSpawn={copiedAtSpawn}
+          />
+          <SessionNotesSection sessionId={session.id} serverId={serverId} />
+        </WorkSectionSetupDisclosureProvider>
+      </WorkSectionPlacementProvider>
+    </ItemGroup>
+  );
+});
+
+type SessionSetupSectionKey = keyof NonNullable<ReturnType<typeof useSessionSetupExpandedSections>>;
+
+function useSessionSetupExpandedSections() {
+  return useLocalSetting('sessionInfoExpandedSectionsV1');
+}
+
+/**
+ * Which Setup rows are open, remembered on this device for every Session (lab csinfo I2):
+ * Instructions starts open, the rest closed. Written only when the person opens or closes a row.
+ */
+function useSessionSetupDisclosure(): WorkSectionSetupDisclosure {
+  const remembered = useSessionSetupExpandedSections();
+  return React.useMemo(() => ({
+    isExpanded: (key: string) => remembered[key as SessionSetupSectionKey] ?? key === 'instructions',
+    setExpanded: (key: string, expanded: boolean) => {
+      const current = storage.getState().localSettings.sessionInfoExpandedSectionsV1;
+      storage.getState().applyLocalSettings({
+        sessionInfoExpandedSectionsV1: { ...current, [key]: expanded },
+      });
+    },
+  }), [remembered]);
+}
+
+/**
+ * Habits (lab csinfo I2): what starts from this session, then what writes into it, as one section,
+ * closing on the way to every automation of the session. `?trigger=` deep links land on its anchor.
+ */
+export const SessionHabitsSection = React.memo(function SessionHabitsSection(
+  props: Readonly<{
+    sessionId: string;
+    serverId: string;
+    onOpenAllAutomations?: () => void;
+  }>,
+) {
   return (
     <WorkSectionPlacementProvider value="page">
-      {/* The role leads, as one value row under the page's identity (it names itself). */}
-      <ItemGroup testID="session-setup-role">
-        <SessionRoleValueRow
-          sessionId={session.id}
-          serverId={serverId}
-          testID="session-setup-role-value"
-        />
-      </ItemGroup>
-      <SessionInstructionsSection session={session} serverId={serverId} />
-      <SessionMemorySection session={session} serverId={serverId} />
-      {isBot ? null : context}
-      <SessionVoiceSection session={session} serverId={serverId} />
       <SessionTriggerHistoryScope>
         <View nativeID={SESSION_SETUP_TRIGGERS_ANCHOR_ID} collapsable={false}>
-          {/* One section (lab P1-I): what starts from this session, then what writes into it. */}
-          <SessionTriggersSection sessionId={session.id} serverId={serverId}>
-            <SessionWritesHereSection sessionId={session.id} serverId={serverId} />
+          <SessionTriggersSection sessionId={props.sessionId} serverId={props.serverId}>
+            <SessionWritesHereSection sessionId={props.sessionId} serverId={props.serverId} />
+            {props.onOpenAllAutomations ? (
+              <Item
+                testID="session-habits-all-automations"
+                title={t('sessionPages.info.allAutomations')}
+                onPress={props.onOpenAllAutomations}
+              />
+            ) : null}
           </SessionTriggersSection>
         </View>
       </SessionTriggerHistoryScope>
-      {isBot ? context : null}
-      <SessionRolesSection
-        sessionId={session.id}
-        serverId={serverId}
-        copiedAtSpawn={copiedAtSpawn}
-      />
-      <SessionNotesSection sessionId={session.id} serverId={serverId} />
     </WorkSectionPlacementProvider>
   );
 });

@@ -70,7 +70,7 @@ function needsYouSession(): WorkItem {
         facts: ['Claude'],
         parentKey: null,
         level: 0,
-        status: { bucket: 'needs_you', tone: 'attention', word: 'Needs your permission' },
+        status: { state: 'permission_required', bucket: 'needs_you', tone: 'attention', attentionType: 'approval', word: 'Needs your permission' },
         progress: null,
         open: { kind: 'session', sessionId: 'checkout' },
     };
@@ -89,9 +89,9 @@ describe('WorkItemRow', () => {
     });
     it('keeps an offline row\'s corner quiet: its word says Offline, nothing in it is still going (Recent, lab convo-W2)', async () => {
         const { presentWorkItem } = await import('./WorkItemRow');
-        const offline: WorkItem = { ...needsYouSession(), status: { bucket: 'offline', tone: 'neutral', word: 'Offline' } };
+        const offline: WorkItem = { ...needsYouSession(), status: { state: 'disconnected', bucket: 'offline', tone: 'neutral', attentionType: null, word: 'Offline' } };
         expect(presentWorkItem(offline).phase).toBe('finished');
-        expect(presentWorkItem({ ...needsYouSession(), status: { bucket: 'working', tone: 'neutral', word: 'Working' } }).phase).toBe('live');
+        expect(presentWorkItem({ ...needsYouSession(), status: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' } }).phase).toBe('live');
     });
     it('does not repaint unchanged real rows when another projected Session changes', async () => {
         const { WorkItemRow } = await import('./WorkItemRow');
@@ -195,7 +195,7 @@ function workingRun(runId: string): WorkItem {
         facts: [],
         parentKey: null,
         level: 0,
-        status: { bucket: 'working', tone: 'neutral', word: 'Running' },
+        status: { state: 'running', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Running' },
         progress: null,
         open: { kind: 'workflow_run', runId },
     };

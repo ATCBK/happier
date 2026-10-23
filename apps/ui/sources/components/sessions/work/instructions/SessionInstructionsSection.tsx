@@ -245,6 +245,8 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
       anatomy="page"
       title={t('sessionInstructions.title')}
       count=""
+      icon="book-open"
+      summary={document?.title ?? (status === 'none' ? t('common.add') : undefined)}
       nativeID="instructions"
       loading={status === 'loading' || status === 'inactive'}
       action={

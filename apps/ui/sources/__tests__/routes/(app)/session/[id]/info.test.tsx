@@ -7,7 +7,7 @@ import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { Settings } from '@/sync/domains/settings/settings';
-import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
+import { clearTempData } from '@/utils/sessions/tempDataStore';
 import { createSessionRouteHomesFixture, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import type {
@@ -991,10 +991,10 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
 
         expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-execution-machine')?.props).toMatchObject({
-            subtitle: 'Mac Studio',
+            detail: 'Mac Studio',
         });
         await vi.waitFor(() => expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-placement-origin')?.props).toMatchObject({
-            subtitle: 'Development',
+            detail: 'Development',
         }));
     });
 
@@ -1401,8 +1401,9 @@ describe('/session/[id]/info', () => {
         expect(mockSession.metadata).toMatchObject({ apiKey: expect.any(String), nested: { visible: 'safe-visible-value' } });
 
         const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-about-more');
         const copyMetadataItem = screen.findAllByType(Item)
-            .find((node: any) => node.props?.title === 'sessionInfo.copyMetadata');
+            .find((node: any) => node.props?.testID === 'session-info-copy-metadata');
         expect(copyMetadataItem?.props.copy).toContain('safe-visible-value');
         expect(copyMetadataItem?.props.copy).not.toContain('raw-metadata-api-key');
         expect(copyMetadataItem?.props.copy).not.toContain('raw-auth-token');
@@ -1505,11 +1506,9 @@ describe('/session/[id]/info', () => {
             const screen = await renderInfoScreen();
             const items = screen.findAllByType(Item);
 
-            expect(items.some((node: any) =>
-                node.props?.title === 'sessionInfo.sessionStatus'
-                && node.props?.detail === 'status.ready'
-            ), JSON.stringify(items.filter(node => node.props.title === 'sessionInfo.sessionStatus')
-                .map(node => ({ title: node.props.title, detail: node.props.detail })))).toBe(true);
+            // One status, in the identity line; the duplicate Activity row is gone.
+            expect(screen.findByTestId('session-info-status')?.props.children).toBe('status.ready');
+            expect(items.some((node: any) => node.props?.title === 'sessionInfo.sessionStatus')).toBe(false);
             expect(items.some((node: any) => node.props?.title === 'sessionInfo.thinking')).toBe(false);
         } finally {
             (globalThis as { __DEV__?: boolean }).__DEV__ = previousDevFlag;
@@ -2076,13 +2075,15 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const resumeIdentity = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.opencodeSessionId');
-        expect(resumeIdentity?.props.copy).toBe('runtime-session-1234567890');
-        const resumeCommand = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.copyResumeCommand');
+        // The resume command leads About for an inactive Session; the vendor id is one disclosure away.
+        const resumeCommand = screen.findAllByType(Item).find(node => node.props.testID === 'session-info-resume-command');
         expect(resumeCommand).toBeTruthy();
         expect(resumeCommand?.props.copy).toEqual(expect.any(String));
         expect(resumeCommand?.props.copy).not.toBe('');
-        expect(resumeCommand?.props.copy).toBe(resumeCommand?.props.subtitle);
+        expect(resumeCommand?.props.copy).toBe(resumeCommand?.props.detail);
+        await screen.pressByTestIdAsync('session-info-about-more');
+        const resumeIdentity = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.opencodeSessionId');
+        expect(resumeIdentity?.props.copy).toBe('runtime-session-1234567890');
     });
 
     it('infers the provider from the current runtime descriptor when flavor is missing', async () => {
@@ -2111,6 +2112,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-about-more');
         const resumeIdentity = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.opencodeSessionId');
         expect(resumeIdentity?.props.copy).toBe('runtime-session-1234567890');
         const avatar = screen.findByType(Avatar);
@@ -2137,14 +2139,13 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const viewMachineItem = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.viewMachine');
-        expect(viewMachineItem).toBeTruthy();
-        expect(viewMachineItem?.props.subtitleAccessory).toBeTruthy();
-        expect(viewMachineItem?.props.subtitleAccessory?.props.testID).toBe('sessionInfo.viewMachineTargetMachineId');
-        expect(viewMachineItem?.props.subtitleAccessory?.props.children).toBe('machine-target');
-        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.path')).toBeTruthy();
+        // About's Run on is the way to the Machine (no separate View machine row).
+        const runOnItem = screen.findAllByType(Item).find(node => node.props.testID === 'session-info-execution-machine');
+        expect(runOnItem).toBeTruthy();
+        expect(screen.findAllByType(Item).filter(node => node.props.title === 'sessionInfo.viewMachine')).toHaveLength(0);
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-folder')).toBeTruthy();
 
-        pressTestInstance(viewMachineItem);
+        pressTestInstance(runOnItem);
 
         expect(routerPushSpy).toHaveBeenCalledWith('/machines/machine-target?serverId=server-1');
     });
@@ -2200,26 +2201,26 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         screen.pressByTestId('session-info-new-session-same-setup');
-
-        const pushArg = routerPushSpy.mock.calls[0]?.[0] as any;
+        await vi.waitFor(() => expect(routerPushSpy).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/new' })));
+        const pushArg = routerPushSpy.mock.calls.find(([href]) => href.pathname === '/new')?.[0] as {
+            pathname: string; params: { draftId: string; draftServerId: string; draftAccountId: string };
+        };
         expect(pushArg).toEqual({
             pathname: '/new',
             params: {
-                dataId: expect.any(String),
                 draftId: expect.any(String),
-                machineId: 'machine-target',
-                directory: '/workspace/repo',
-                spawnServerId: 'server-1',
+                draftServerId: expect.any(String),
+                draftAccountId: 'viewer-account',
             },
         });
-        const tempData = peekTempData<NewSessionData>(pushArg.params.dataId);
-        expect(tempData).toEqual(expect.objectContaining({
-            prompt: '',
-            replacePersistedDraftSelections: true,
-            machineId: 'machine-target',
-            directory: '/workspace/repo',
-            agentType: 'codex',
-            backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const draft = readNewSessionDraftFromRepository({ scope: {
+            serverId: pushArg.params.draftServerId, accountId: pushArg.params.draftAccountId,
+        }, draftId: pushArg.params.draftId });
+        expect(draft).toEqual(expect.objectContaining({
+            input: '',
+            selectedMachineId: 'machine-target',
+            selectedPath: '/workspace/repo',
             selectedProfileId: 'profile-1',
             transcriptStorage: 'direct',
             permissionMode: 'safe-yolo',
@@ -2239,10 +2240,11 @@ describe('/session/[id]/info', () => {
             },
             acpSessionModeId: 'plan',
         }));
-        expect(tempData).not.toHaveProperty('placementOrigin');
+        expect(draft?.organizationPlacement).toEqual({ folderId: null, tagIds: [] });
+        expect(draft).not.toHaveProperty('resumeSessionId');
     });
 
-    it('always shows the View session log action even when developer mode is disabled', async () => {
+    it('offers Session log navigation only in developer mode', async () => {
         mockSession = {
             id: 'session-1',
             active: false,
@@ -2254,7 +2256,8 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.viewSessionLogTitle')).toBeTruthy();
+        expect(screen.findByTestId('session-info-session-log')).toBeNull();
+        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.viewSessionLogTitle')).toBeUndefined();
     });
 
     it('shows the session log path row when a sessionLogPath is present even when developer mode is disabled', async () => {
@@ -2271,7 +2274,8 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionLog.logPathCopyLabel')).toBeTruthy();
+        await screen.pressByTestIdAsync('session-info-about-more');
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-session-log-path')).toBeTruthy();
     });
 
     it('copies developer debug information and omits unknown provider artifact lines', async () => {
@@ -2752,7 +2756,7 @@ describe('/session/[id]/info', () => {
         expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
-    it.each([true, false])('offers Delete from the page header menu for a retired eligible session with rename rights %s and the existing confirmation', async (canRename) => {
+    it.each([true, false])('offers Delete in Leave (not the header menu) for a retired eligible session with rename rights %s and the existing confirmation', async (canRename) => {
         sessionIsConnected = false;
         modalConfirmSpy.mockResolvedValueOnce(false);
         mockSession = createSessionFixture({
@@ -2766,10 +2770,14 @@ describe('/session/[id]/info', () => {
         });
 
         const screen = await renderInfoScreen();
-        await screen.pressByTestIdAsync('session-info-menu.trigger');
-        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-delete')).not.toBeNull());
-        expect(screen.findByTestId('session-info-rename') !== null).toBe(canRename);
-        await screen.pressByTestIdAsync('session-info-delete');
+        if (canRename) {
+            await screen.pressByTestIdAsync('session-info-menu.trigger');
+            await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull());
+            expect(screen.findByTestId('session-info-delete')).toBeNull();
+        } else {
+            expect(screen.findByTestId('session-info-menu.trigger')).toBeNull();
+        }
+        await screen.pressByTestIdAsync('sessionInfo.deleteSession');
 
         await waitForHeaderMenuOutcome(() => expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.deleteSession',
@@ -2785,7 +2793,7 @@ describe('/session/[id]/info', () => {
         { reason: 'connected', active: false, connected: true, retired: true, canDelete: true },
         { reason: 'recoverable', active: false, connected: false, retired: false, canDelete: true },
         { reason: 'without deletion rights', active: false, connected: false, retired: true, canDelete: false },
-    ])('suppresses Delete in the page header menu for a session that is $reason', async ({ active, connected, retired, canDelete }) => {
+    ])('suppresses Delete for a session that is $reason', async ({ active, connected, retired, canDelete }) => {
         sessionIsConnected = connected;
         mockSession = createSessionFixture({
             active,
@@ -2799,8 +2807,6 @@ describe('/session/[id]/info', () => {
         });
 
         const screen = await renderInfoScreen();
-        await screen.pressByTestIdAsync('session-info-menu.trigger');
-        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull());
         expect(screen.findByTestId('session-info-delete')).toBeNull();
         expect(screen.findByTestId('sessionInfo.deleteSession')).toBeNull();
     });

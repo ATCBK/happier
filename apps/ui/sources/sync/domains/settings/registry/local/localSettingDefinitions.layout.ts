@@ -328,4 +328,22 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
             serializeCurrent: objectKeyCount,
         },
     },
+    /**
+     * Which Session Info sections are open on this device, for every Session (P2 §5). Absent
+     * Instructions reads open, every other absent key closed; written only on a real disclosure change.
+     */
+    sessionInfoExpandedSectionsV1: {
+        schema: z.catch(z.object({
+            instructions: z.optional(z.boolean()),
+            memory: z.optional(z.boolean()),
+            context: z.optional(z.boolean()),
+            voice: z.optional(z.boolean()),
+            roles: z.optional(z.boolean()),
+            notes: z.optional(z.boolean()),
+            about: z.optional(z.boolean()),
+        }), {}),
+        default: {},
+        description: 'Which Session Info sections are open on this device',
+        storageScope: 'local',
+    },
 } as const;

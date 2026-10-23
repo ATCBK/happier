@@ -91,6 +91,7 @@ export const SessionVoiceSection = React.memo(function SessionVoiceSection(
       anatomy="page"
       title={t('sessionVoice.title')}
       count=""
+      icon="waveform"
       nativeID="voice"
     >
       {field && declaration ? (

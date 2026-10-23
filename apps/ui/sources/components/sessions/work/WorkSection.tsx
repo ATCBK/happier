@@ -12,6 +12,9 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
+import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
@@ -49,6 +52,10 @@ export type WorkSectionProps = Readonly<{
     nativeID?: string;
     /** One quiet operation on the whole section ("+", ✎, "Use defaults"), at the header's trailing edge. */
     action?: React.ReactNode;
+    /** `setup` placement: the row's leading glyph. */
+    icon?: IconName;
+    /** `setup` placement: the closed row's value ("Release reviewer", "On", "5 on"); defaults to the count. */
+    summary?: string;
     children?: React.ReactNode;
 }>;
 
@@ -56,9 +63,11 @@ export type WorkSectionProps = Readonly<{
  * Where a Session's configuration sections are drawn. `pane` (default): laid flat on the Work pane
  * (lab `convo-W8/W9`). `page`: the Session's Info page (coordination lab P1i), where the same section
  * components take the configuration-page section anatomy — title, its explanation above the rows, one
- * sheet — so a section moves between hosts without a second component.
+ * sheet — so a section moves between hosts without a second component. `setup`: one row of Session
+ * Info's Setup section (calm-shell lab csinfo I2), naming the section with its current value and
+ * opening it in place; the section's own body is the row's body.
  */
-export type WorkSectionPlacement = 'pane' | 'page';
+export type WorkSectionPlacement = 'pane' | 'page' | 'setup';
 
 const WorkSectionPlacementContext = React.createContext<WorkSectionPlacement>('pane');
 
@@ -68,10 +77,77 @@ export function WorkSectionPlacementProvider(props: Readonly<{ value: WorkSectio
 
 export const WorkSection = React.memo((props: WorkSectionProps) => {
     const placement = React.useContext(WorkSectionPlacementContext);
+    if (placement === 'setup' && props.anatomy === 'page') return <WorkSectionAsSetupRow {...props} />;
     return placement === 'page' && props.anatomy === 'page'
         ? <WorkSectionOnPage {...props} />
         : <WorkSectionOnPane {...props} />;
 });
+
+/**
+ * Which Setup rows are open: the Setup composition owns it (with its device memory); a row reads and
+ * changes its own entry by the section's key.
+ */
+export type WorkSectionSetupDisclosure = Readonly<{
+    isExpanded: (sectionKey: string) => boolean;
+    setExpanded: (sectionKey: string, expanded: boolean) => void;
+}>;
+
+const WorkSectionSetupDisclosureContext = React.createContext<WorkSectionSetupDisclosure | null>(null);
+
+export function WorkSectionSetupDisclosureProvider(props: Readonly<{ value: WorkSectionSetupDisclosure; children?: React.ReactNode }>) {
+    return <WorkSectionSetupDisclosureContext.Provider value={props.value}>{props.children}</WorkSectionSetupDisclosureContext.Provider>;
+}
+
+/** A section's key in the Setup memory: its anchor, else its test id without the Work prefix. */
+function readSetupSectionKey(props: WorkSectionProps): string {
+    return props.nativeID ?? props.testID.replace(/^session-work-/, '');
+}
+
+/**
+ * A configuration section as one Setup row (lab csinfo I2): glyph, name and its current value; it
+ * opens in place to the section itself, laid on the row's text edge. A never-opened body is not
+ * mounted; the section's quiet operations join the row while it is open.
+ */
+function WorkSectionAsSetupRow(props: WorkSectionProps) {
+    const disclosure = React.useContext(WorkSectionSetupDisclosureContext);
+    const sectionKey = readSetupSectionKey(props);
+    const [localExpanded, setLocalExpanded] = React.useState(false);
+    const expanded = disclosure ? disclosure.isExpanded(sectionKey) : localExpanded;
+    const onExpandedChange = React.useCallback((next: boolean) => {
+        if (disclosure) disclosure.setExpanded(sectionKey, next);
+        else setLocalExpanded(next);
+    }, [disclosure, sectionKey]);
+    const value = props.loading ? undefined : (props.summary ?? readCountText(props) ?? undefined);
+    return (
+        <View nativeID={props.nativeID} collapsable={false}>
+            <ExpandableItem
+                testID={props.testID}
+                expanded={expanded}
+                onExpandedChange={onExpandedChange}
+                header={({ expanded: open, headerProps }) => (
+                    <Item
+                        {...headerProps}
+                        testID={`${props.testID}:row`}
+                        title={props.title}
+                        icon={props.icon ? <Icon name={props.icon} /> : undefined}
+                        detail={open ? undefined : value}
+                        showChevron={false}
+                        rightElement={(
+                            <View style={stylesheet.setupTrailing}>
+                                {open && props.action ? props.action : null}
+                                <ExpandableItemCaret expanded={open} />
+                            </View>
+                        )}
+                    />
+                )}
+            >
+                <View style={stylesheet.setupBody}>
+                    {props.loading ? <SkeletonRows testID={`${props.testID}-loading`} rows={2} accessibilityLabel={props.title} /> : props.children}
+                </View>
+            </ExpandableItem>
+        </View>
+    );
+}
 
 /** A configuration section on a page: the page's own section (`ItemGroup`), its ⓘ text read as the description. */
 function WorkSectionOnPage(props: WorkSectionProps) {
@@ -200,6 +276,16 @@ function useWorkSectionBlockInset(): Readonly<{ paddingHorizontal: number; paddi
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // A Setup row's body starts on the row's text edge, past the glyph column.
+    setupBody: {
+        paddingLeft: HAPPIER_PAGE_METRICS.rowLeadingColumnPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx,
+        paddingBottom: theme.space.s8,
+    },
+    setupTrailing: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
+    },
     description: {
         ...Typography.default(),
         ...happierPageTextMetrics('sectionDescription'),

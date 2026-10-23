@@ -15,17 +15,26 @@ type SessionRetentionNoticeProps = Readonly<{
     sessionId: string;
 }>;
 
-export function SessionRetentionNotice(props: SessionRetentionNoticeProps) {
-    const { theme } = useUnistyles();
-    const serverId = resolveSessionListLookupSessionServerId(storage.getState(), props.sessionId);
+/**
+ * What this Home does with inactive Sessions, as one sentence, or null while the policy is unread or
+ * keeps them. Session Info folds it into Leave's description, for the exact Home it was given.
+ */
+export function useSessionRetentionSummary(serverId: string | null): string | null {
     const retention = useServerRetentionPolicy(serverId);
     // A notice about deletion is shown only from a policy that answered, never while it is being read.
     const policy = retention.status === 'ready' ? retention.policy : null;
     const sessionsPolicy = policy
         ? normalizeServerRetentionPolicy(policy).domains.find((domain) => domain.id === 'sessions')?.policy
         : null;
+    if (!serverId || !policy || sessionsPolicy?.mode !== 'delete_inactive') return null;
+    return formatSessionRetentionSummary(policy) ?? null;
+}
 
-    if (!serverId || !policy || sessionsPolicy?.mode !== 'delete_inactive') {
+export function SessionRetentionNotice(props: SessionRetentionNoticeProps) {
+    const { theme } = useUnistyles();
+    const serverId = resolveSessionListLookupSessionServerId(storage.getState(), props.sessionId);
+    const summary = useSessionRetentionSummary(serverId);
+    if (!summary) {
         return null;
     }
 
@@ -34,7 +43,7 @@ export function SessionRetentionNotice(props: SessionRetentionNoticeProps) {
             <Item
                 testID="session-retention-notice"
                 title={t('server.retention.sessions')}
-                subtitle={formatSessionRetentionSummary(policy) ?? t('server.retention.keepForever')}
+                subtitle={summary}
                 icon={(
                     <Icon
                         testID="session-retention-notice-icon"

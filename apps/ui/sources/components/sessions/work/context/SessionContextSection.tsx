@@ -113,6 +113,7 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
     return (
         <WorkSection
             testID="session-work-context"
+            icon="list"
             anatomy="page"
             title={t('memoryContext.session.contextTitle')}
             count={onCount > 0 ? t('memoryContext.session.contextOnCount', { count: onCount }) : ''}

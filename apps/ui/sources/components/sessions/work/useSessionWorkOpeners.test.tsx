@@ -22,13 +22,13 @@ import { isWorkflowRunPeekDetailsResource } from './createWorkflowRunPeekDetails
 const report = {
     key: 'session:report', kind: 'session', title: 'Report', agentId: null,
     facts: [], parentKey: null, level: 0, progress: null,
-    status: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+    status: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' },
     open: { kind: 'session', sessionId: 'report' },
 } satisfies WorkItem;
 
 const waitingRun = {
     ...report, key: 'workflow:run/7', kind: 'workflow_run', title: 'Review each changed file',
-    status: { bucket: 'needs_you', tone: 'attention', word: 'Waiting for your review' },
+    status: { state: 'waiting_for_review', bucket: 'needs_you', tone: 'attention', attentionType: 'decision', word: 'Waiting for your review' },
     open: { kind: 'workflow_run', runId: 'run/7' },
 } satisfies WorkItem;
 

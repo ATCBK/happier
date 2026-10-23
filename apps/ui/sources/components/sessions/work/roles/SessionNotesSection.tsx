@@ -61,6 +61,8 @@ function SessionNotesContent(props: SessionNotesSectionProps) {
             anatomy="page"
             title={t('roles.session.notesTitle')}
             count=""
+            icon="pencil-simple"
+            summary={notes ? notes.split('\n')[0] : t('sessionPages.info.addNote')}
             action={editing || !notes ? null : (
                 <IconButton
                     testID="session-work-notes.edit"

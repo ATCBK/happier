@@ -84,6 +84,7 @@ function SessionRolesContent(props: SessionRolesSectionProps) {
     return (
         <WorkSection
             testID="session-work-roles"
+            icon="users"
             anatomy="page"
             title={t('roles.session.sectionTitle')}
             count={summary}
