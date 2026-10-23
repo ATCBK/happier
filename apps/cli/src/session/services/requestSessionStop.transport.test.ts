@@ -213,17 +213,33 @@ describe('requestSessionStop machine transport', () => {
 
   it('routes layout-one Stop through the Account-owned locality instead of caller-local control', async () => {
     boundary.mode = 'stopped';
-    const result = requestSessionStop({ credentials, idOrPrefix: sessionId });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toContain(SOCKET_RPC_EVENTS.CALL);
-    expect(issuedMethods).toEqual(['owning-machine:stop-session']);
-    await expect(result).resolves.toEqual({
-      ok: true, sessionId, stopped: true,
-    });
-    expect(calls.filter(event => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
-    expect(readPersistedStop()).toMatchObject({ v: 1, cause: 'explicit_stop' });
-    expect(issuedRequestIds).toHaveLength(1);
-    expect(readPersistedStop()).toMatchObject({ requestId: issuedRequestIds[0] });
+    vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+    // Observe the real file logger; only HTTP and Socket.IO are replaced above.
+    const diagnostic = vi.spyOn(logger, 'warnLocalFile');
+    const actionRequestId = 'f2e910c0-0bdd-4f80-ad96-31dc574c701c';
+    const result = requestSessionStop({ credentials, idOrPrefix: sessionId,
+      actionContext: { surface: 'cli', authority: 'present_user', actionRequestId } });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toContain(SOCKET_RPC_EVENTS.CALL);
+      expect(issuedMethods).toEqual(['owning-machine:stop-session']);
+      await expect(result).resolves.toEqual({
+        ok: true, sessionId, stopped: true,
+      });
+      expect(calls.filter(event => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
+      expect(readPersistedStop()).toMatchObject({ v: 1, cause: 'explicit_stop' });
+      expect(issuedRequestIds).toHaveLength(1);
+      expect(readPersistedStop()).toMatchObject({ requestId: issuedRequestIds[0] });
+      expect(issuedRequestIds[0]).not.toBe(actionRequestId);
+      for (const phase of ['stop.resolve_session', 'stop.owner_rpc', 'stop.inactive_projection']) {
+        expect(diagnostic.mock.calls).toEqual(expect.arrayContaining([
+          ['[external-action-stage]', expect.objectContaining({ actionId: 'session.stop',
+            rootRequestId: actionRequestId, stage: `${phase}.begin` })],
+          ['[external-action-stage]', expect.objectContaining({ actionId: 'session.stop',
+            rootRequestId: actionRequestId, stage: `${phase}.end` })],
+        ]));
+      }
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('completes explicit Stop after a real metadata PATCH outlives the generic HTTP cutoff', async () => {

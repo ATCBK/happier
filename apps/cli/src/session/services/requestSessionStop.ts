@@ -350,8 +350,11 @@ export async function requestSessionStop(params: Readonly<{
   const actionId = params.externalAction?.effectActionId ?? 'session.stop';
   const rootRequestId = params.externalAction?.context.actionRequestId;
   const stopRequestId = rootRequestId ?? randomUUID();
+  // Ordinary root Actions carry their diagnostic context without a signed effect.
+  // Correlate their phases without changing the Stop mutation/transport identity.
+  const traceRequestId = rootRequestId ?? params.actionContext?.actionRequestId;
   const signal = params.signal ?? params.actionContext?.signal ?? params.externalAction?.context.signal;
-  const resolved = await runTracedExternalActionStage(actionId, rootRequestId, 'stop.resolve_session', () => resolveSessionIdOrPrefix({
+  const resolved = await runTracedExternalActionStage(actionId, traceRequestId, 'stop.resolve_session', () => resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
     ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
@@ -442,7 +445,7 @@ export async function requestSessionStop(params: Readonly<{
     }
     if (machineId) {
       phase = 'stop_owning_machine';
-      const physicalStopResult = await runTracedExternalActionStage(actionId, rootRequestId, 'stop.owner_rpc', () => stopSessionOnOwningMachine({
+      const physicalStopResult = await runTracedExternalActionStage(actionId, traceRequestId, 'stop.owner_rpc', () => stopSessionOnOwningMachine({
         credentials: params.credentials,
         sessionId: resolved.sessionId,
         machineId,
@@ -475,7 +478,7 @@ export async function requestSessionStop(params: Readonly<{
         };
       }
       phase = 'observe_inactive';
-      const stopped = await runTracedExternalActionStage(actionId, rootRequestId, 'stop.inactive_projection', () => waitForSessionStopResult({
+      const stopped = await runTracedExternalActionStage(actionId, traceRequestId, 'stop.inactive_projection', () => waitForSessionStopResult({
         token: params.credentials.token,
         sessionId: resolved.sessionId,
         ...(signal ? { signal } : {}),
