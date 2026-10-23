@@ -21,6 +21,7 @@ import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/cat
 import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -956,6 +957,7 @@ describe('realtime_codex normal web composed gate', () => {
         [activeServerId]: [globalMachine],
       },
     }) as never);
+    observeMachinePresenceForTest({ serverId: activeServerId, accountId: 'codex-composed-account' }, [globalMachine.id]);
     daemonProjection = PluginProjectionV2Schema.parse({
         v: 2,
         generation: 1,
@@ -1304,6 +1306,7 @@ describe('realtime_codex normal web composed gate', () => {
         }),
       },
     }) as never);
+    observeMachinePresenceForTest({ serverId: activeServerId, accountId: 'codex-composed-account' }, [globalMachine.id]);
 
     daemonProjection = PluginProjectionV2Schema.parse({
           v: 2,

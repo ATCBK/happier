@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { FeaturesResponseSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 
@@ -53,6 +54,7 @@ describe('selected Voice machine client', () => {
       },
     });
     storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id, activeAt: Date.now() })));
+    observeMachinePresenceForTest({ serverId: account.home.id, accountId: 'account-a' }, machineIds);
     selectMachine('machine-a');
   });
   afterEach(async () => { await account?.dispose(); account = null; });
@@ -125,6 +127,7 @@ describe('selected Voice machine client', () => {
     storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id, activeAt: Date.now(),
       ...(id === 'machine-origin' ? { active: false, replacedByMachineId: 'machine-replacement' } : {}),
     })));
+    observeMachinePresenceForTest({ serverId: account!.home.id, accountId: 'account-a' }, machineIds);
     const operation = createSelectedVoiceMachineClient().bindOperation('  machine-origin  ');
     await operation.invoke('daemon.voice.speech.transcribeUpload.init', {});
     expect(resolveVoiceExecutionMachineId()).toBe('machine-a');
@@ -135,6 +138,7 @@ describe('selected Voice machine client', () => {
     storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id,
       active: id !== 'machine-origin', activeAt: id === 'machine-origin' ? 1 : Date.now(),
     })));
+    observeMachinePresenceForTest({ serverId: account!.home.id, accountId: 'account-a' }, machineIds);
     recordMachineRequestFailed({ serverId: account!.home.id, accountId: 'account-a', machineId: 'machine-origin' });
     expect(() => createSelectedVoiceMachineClient().bindOperation('machine-origin'))
       .toThrow(expect.objectContaining({ code: 'machine_unavailable' }));

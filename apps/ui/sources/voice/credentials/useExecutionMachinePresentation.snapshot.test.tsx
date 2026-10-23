@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 
 installDisconnectedServerSocketBoundary();
 const { activateStorageAccountScope } = await import('@/dev/testkit/mocks/storage');
@@ -36,18 +37,15 @@ it.each(['execution', 'catalog'] as const)('keeps the %s snapshot stable across 
     machineListByServerId: { [scope.serverId]: [machine] },
     machineListStatusByServerId: { [scope.serverId]: 'idle' },
   }));
+  observeMachinePresenceForTest(scope, [machine.id]);
   const snapshot = storage.getState();
   expect(resolveVoiceExecutionMachineIdFromState(snapshot)).toBe(machine.id);
   const deadline = machine.activeAt + readMachineOnlineGraceMsFromEnv();
   let now = deadline - 1;
   const voice = voiceSettingsParse({ providerId: 'local_conversation' });
-  // Advance the genuine clock boundary across the existing presence deadline
-  // at the first machine-selection read, not at React scheduler clock reads.
-  vi.spyOn(Date, 'now').mockImplementation(() => {
-    const current = now;
-    if (new Error().stack?.includes('resolveReplacementAwareSelection')) now = deadline + 1;
-    return current;
-  });
+  // React's initial subscription may legitimately re-read selection. Move the
+  // clock at the render boundary, not based on an internal function's stack.
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
   const consoleErrors = vi.spyOn(console, 'error');
   const hook = await renderHook(() => {
     return consumer === 'execution' ? useVoiceExecutionMachineId()
@@ -60,6 +58,7 @@ it.each(['execution', 'catalog'] as const)('keeps the %s snapshot stable across 
   const first = hook.getCurrent();
   if (consumer === 'execution') expect(first).toBe(machine.id);
   else expect(first).toEqual(expect.any(String));
+  now = deadline + 1;
   await hook.rerender();
   if (consumer === 'execution') expect(hook.getCurrent()).toBeNull();
   else expect(hook.getCurrent()).not.toBe(first);
