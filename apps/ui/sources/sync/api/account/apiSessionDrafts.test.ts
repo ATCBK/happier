@@ -74,6 +74,60 @@ describe('apiSessionDrafts', () => {
         expect(error).toBeInstanceOf(Error);
         expect(shouldRetryError(error)).toBe(retryable);
     });
+
+    it.each([
+        { kind: 'session', sessionId: 'missing-session' },
+        { kind: 'run', sessionId: 'missing-session', runId: 'run-a' },
+    ] as const)('preserves the typed missing-Session refusal for a $kind draft clear', async (missingAddress) => {
+        const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');
+        request.mockResolvedValueOnce(jsonResponse({ error: 'session_unavailable' }, 404));
+
+        await expect(createApiSessionDraftsTransport({ request }).mutate({
+            address: missingAddress, expectedRevision: 0, content: null,
+        })).rejects.toMatchObject({ name: 'HappyError', code: 'session_unavailable', status: 404, canTryAgain: false });
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives a failed fetch a typed network outcome without disguising programming errors or cancellation', async () => {
+        const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');
+        const transport = createApiSessionDraftsTransport({ request });
+        request.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        await expect(transport.mutate({ address, expectedRevision: 0, content: null }))
+            .rejects.toMatchObject({ name: 'HappyError', code: 'network_error', kind: 'network', canTryAgain: true });
+
+        const programmingError = new TypeError('Cannot read properties of undefined');
+        const cancellation = new DOMException('Cancelled', 'AbortError');
+        request.mockRejectedValueOnce(programmingError).mockRejectedValueOnce(cancellation);
+        await expect(transport.read(address)).rejects.toBe(programmingError);
+        await expect(transport.read(address)).rejects.toBe(cancellation);
+    });
+
+    it('retains the local PR form when the real draft-delete transport refuses a missing Session', async () => {
+        const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');
+        const { createSessionDraftRepository, readSessionScmDraftFromDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { createSessionDraftCipher } = await import('@/sync/encryption/sessionDraftEncryption');
+        const values = new Map<string, string>();
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        const cipher = createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
+            getSessionContext: () => ({ mode: 'plain' }), randomBytes: size => new Uint8Array(size) });
+        const repository = createSessionDraftRepository({
+            storage: { getString: key => values.get(key), set: (key, value) => { values.set(key, value); },
+                delete: key => { values.delete(key); } },
+            scope, syncEnabled: false, cipher,
+        });
+        repository.writeExistingSessionDraft({ scope, sessionId: address.sessionId,
+            patch: { scmPullRequestV1: { title: 'Keep my title', body: 'Keep my description', base: 'main', draft: true } } });
+        request.mockResolvedValueOnce(jsonResponse({ error: 'session_unavailable' }, 404));
+
+        await expect(repository.deleteSessionDraftWithScopedRuntime({ scope, address,
+            runtime: { transport: createApiSessionDraftsTransport({ request }), cipher },
+            isCurrent: () => true,
+        })).rejects.toMatchObject({ code: 'session_unavailable' });
+        const retained = repository.getSessionDraftSnapshot(scope, address);
+        expect(retained?.status).toBe('offline');
+        expect(readSessionScmDraftFromDraft(retained?.document).pullRequest)
+            .toMatchObject({ title: 'Keep my title', body: 'Keep my description' });
+    });
 });
 
 
