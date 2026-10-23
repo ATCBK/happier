@@ -400,20 +400,27 @@ export function useSessionReferenceTarget(
   );
 }
 
-const sessionForkSupportSourceCache = new Map<string, Readonly<{
+type SessionForkSupportSourceCacheEntry = Readonly<{
   signature: string;
   value: SessionForkSupportSource;
-}>>();
+}>;
 
 export function useSessionForkSupportSource(
   sessionId: string | null,
   serverId?: string | null,
 ): SessionForkSupportSource | null {
+  // Previous metadata is useful only to this mounted target. An address-keyed
+  // process cache outlived both deleted Sessions and retired Homes.
+  const cache = React.useMemo(() => ({ current: null as SessionForkSupportSourceCacheEntry | null }),
+    [sessionId, serverId]);
   return getStorage()(
     useShallow((state) => {
       const normalizedSessionId = normalizeSessionId(sessionId);
       const normalizedServerId = normalizeTrimmedString(serverId);
-      if (!normalizedSessionId) return null;
+      if (!normalizedSessionId) {
+        cache.current = null;
+        return null;
+      }
       const directSession = state.sessions[normalizedSessionId] ?? null;
       const session = normalizedServerId
         ? directSession && areServerProfileIdentifiersEquivalent(directSession.serverId, normalizedServerId)
@@ -423,15 +430,15 @@ export function useSessionForkSupportSource(
               sessionId: normalizedSessionId,
             })?.session ?? null
         : directSession;
-      if (!session) return null;
+      if (!session) {
+        cache.current = null;
+        return null;
+      }
 
       const ownerMetadataView = 'ownerMetadataView' in session
         ? readSessionOwnerMetadataView(session)
         : null;
       const resolvedServerId = normalizedServerId || directSession?.serverId || null;
-      const cacheKey = resolvedServerId
-        ? sessionAddressKey({ serverId: resolvedServerId, sessionId: normalizedSessionId })
-        : `legacy:${normalizedSessionId}`;
       const signature = [
         resolvedServerId ?? '',
         'metadataLayoutVersion' in session
@@ -439,7 +446,7 @@ export function useSessionForkSupportSource(
           : 0,
         buildSessionMetadataStabilitySignature(ownerMetadataView ?? session.metadata),
       ].join('\u0000');
-      const cached = sessionForkSupportSourceCache.get(cacheKey);
+      const cached = cache.current;
       if (cached?.signature === signature) return cached.value;
 
       const value: SessionForkSupportSource = {
@@ -452,7 +459,7 @@ export function useSessionForkSupportSource(
           : {}),
         serverId: resolvedServerId,
       };
-      sessionForkSupportSourceCache.set(cacheKey, { signature, value });
+      cache.current = { signature, value };
       return value;
     })
   );
@@ -600,10 +607,10 @@ export function useSessionListRenderable(id: string): SessionListRenderableSessi
 const ROW_PROGRESS_RENDERABLE_MIN_UPDATE_INTERVAL_MS = 30_000;
 
 const sessionListRowRenderableProjectionCache = new WeakMap<SessionListRenderableSession, SessionListRenderableSession>();
-const sessionListRowRenderableProjectionByKey = new Map<string, Readonly<{
+type SessionListRowRenderableProjection = Readonly<{
   source: SessionListRenderableSession;
   projected: SessionListRenderableSession;
-}>>();
+}>;
 
 function finiteTimestamp(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -698,49 +705,35 @@ function buildProjectedSessionListRowRenderable(renderable: SessionListRenderabl
   };
 }
 
-function resolveSessionListRowRenderableProjectionKey(
-  renderable: SessionListRenderableSession,
-  scopeKey: string | null | undefined,
-): string {
-  const normalizedScopeKey = typeof scopeKey === 'string' ? scopeKey.trim() : '';
-  return normalizedScopeKey || renderable.id;
-}
-
-function projectSessionListRowRenderable(
-  renderable: SessionListRenderableSession | null | undefined,
-  scopeKey?: string | null,
-): SessionListRenderableSession | null {
-  if (!renderable) return null;
-  const projectionKey = resolveSessionListRowRenderableProjectionKey(renderable, scopeKey);
-  const cached = sessionListRowRenderableProjectionCache.get(renderable);
-  if (cached) {
-    const keyedProjection = sessionListRowRenderableProjectionByKey.get(projectionKey);
-    if (keyedProjection?.source !== renderable || keyedProjection.projected !== cached) {
-      sessionListRowRenderableProjectionByKey.set(projectionKey, {
-        source: renderable,
-        projected: cached,
-      });
+function createSessionListRowRenderableProjector() {
+  // Progress reuse belongs to a mounted address, not a process-lifetime row
+  // inventory. The weak raw-row cache still shares projections across readers.
+  let previousProjection: SessionListRowRenderableProjection | null = null;
+  return (renderable: SessionListRenderableSession | null | undefined): SessionListRenderableSession | null => {
+    if (!renderable) {
+      previousProjection = null;
+      return null;
     }
-    return cached;
-  }
+    const cached = sessionListRowRenderableProjectionCache.get(renderable);
+    if (cached) {
+      previousProjection = { source: renderable, projected: cached };
+      return cached;
+    }
 
-  const previousProjection = sessionListRowRenderableProjectionByKey.get(projectionKey);
-  if (previousProjection && shouldReusePreviousProgressProjection({
-    previous: previousProjection.source,
-    next: renderable,
-    nowMs: Date.now(),
-  })) {
-    sessionListRowRenderableProjectionCache.set(renderable, previousProjection.projected);
-    return previousProjection.projected;
-  }
+    if (previousProjection && shouldReusePreviousProgressProjection({
+      previous: previousProjection.source,
+      next: renderable,
+      nowMs: Date.now(),
+    })) {
+      sessionListRowRenderableProjectionCache.set(renderable, previousProjection.projected);
+      return previousProjection.projected;
+    }
 
-  const projected = buildProjectedSessionListRowRenderable(renderable);
-  sessionListRowRenderableProjectionCache.set(renderable, projected);
-  sessionListRowRenderableProjectionByKey.set(projectionKey, {
-    source: renderable,
-    projected,
-  });
-  return projected;
+    const projected = buildProjectedSessionListRowRenderable(renderable);
+    sessionListRowRenderableProjectionCache.set(renderable, projected);
+    previousProjection = { source: renderable, projected };
+    return projected;
+  };
 }
 
 export function useSessionListRenderableWithServerScope(
@@ -762,10 +755,11 @@ export function useSessionListRenderableWithServerScope(
       ? sessionAddressKey({ serverId: effectiveServerId, sessionId: normalizedSessionId })
       : JSON.stringify(['legacy_unscoped_session', normalizedSessionId]);
   }, [effectiveServerId, normalizedSessionId]);
+  const projectSessionListRowRenderable = React.useMemo(createSessionListRowRenderableProjector, [projectionScopeKey]);
 
   const row = getStorage()(useShallow((state) => {
     if (!normalizedSessionId) {
-      return null;
+      return projectSessionListRowRenderable(null);
     }
 
     if (normalizedServerId) {
@@ -773,16 +767,14 @@ export function useSessionListRenderableWithServerScope(
       if (scoped && typeof scoped === 'object') {
         return projectSessionListRowRenderable(
           scoped[normalizedSessionId],
-          projectionScopeKey,
         );
       }
 
-      return null;
+      return projectSessionListRowRenderable(null);
     }
 
     return projectSessionListRowRenderable(
       readSessionListRowForServerId(state.sessionListRowsByServerId, activeServerId, normalizedSessionId, resolveScopeId),
-      projectionScopeKey,
     );
   }));
   const targetServerId = normalizedServerId ?? activeServerId;
@@ -1084,6 +1076,18 @@ export function useSessionListRowRenderablesForItems(
     return next.length === 0 ? (emptyArray as SessionListReachabilityItemKey[]) : next;
   }, [items]);
 
+  const previousProjectors = React.useRef(new Map<string, ReturnType<typeof createSessionListRowRenderableProjector>>());
+  const projectors = React.useMemo(() => {
+    // Keep progress history only for this mounted reader's current addresses.
+    // Removing an item drops its projector; missing rows clear it on selection.
+    const next = new Map<string, ReturnType<typeof createSessionListRowRenderableProjector>>();
+    for (const item of itemKeys) {
+      next.set(item.key, previousProjectors.current.get(item.key) ?? createSessionListRowRenderableProjector());
+    }
+    previousProjectors.current = next;
+    return next;
+  }, [itemKeys]);
+
   return getStorage()(useShallow((state) => {
     if (itemKeys.length === 0) return emptySessionListRowRenderablesByKey;
     const next = new Map<string, SessionListRenderableSession>();
@@ -1094,7 +1098,7 @@ export function useSessionListRowRenderablesForItems(
         itemKey.sessionId,
         resolveScopeId,
       );
-      const projected = projectSessionArchiveRow(projectSessionListRowRenderable(row, itemKey.key),
+      const projected = projectSessionArchiveRow(projectors.get(itemKey.key)!(row),
         readSessionArchivePending(state, { serverId: itemKey.serverId, sessionId: itemKey.sessionId }, resolveScopeId));
       if (!projected) continue;
       next.set(itemKey.key, projected);
@@ -1237,42 +1241,42 @@ export function useSessionFolderAssignmentsBySessionKey(): Record<string, string
   )));
 }
 
-type SessionOrganizationProjectionCacheEntry = Readonly<{
-  schemaVersionByServerId: StorageState['sessionOrganizationSchemaVersionByServerId'];
-  snapshotVersionByServerId: StorageState['sessionOrganizationSnapshotVersionByServerId'];
-  pinsBySessionKey: StorageState['sessionOrganizationPinsBySessionKey'];
-  foldersByFolderKey: StorageState['sessionOrganizationFoldersByFolderKey'];
-  folderAssignmentsBySessionKey: StorageState['sessionOrganizationFolderAssignmentsBySessionKey'];
-  tagsByTagKey: StorageState['sessionOrganizationTagsByTagKey'];
-  tagAssignmentsBySessionKey: StorageState['sessionOrganizationTagAssignmentsBySessionKey'];
-  attentionStandingsBySessionKey: StorageState['sessionOrganizationAttentionStandingsBySessionKey'];
-  orderEntriesByScopeKey: StorageState['sessionOrganizationOrderEntriesByScopeKey'];
-  labelsByLabelKey: StorageState['sessionOrganizationLabelsByLabelKey'];
-  value: SessionOrganizationProjection;
-}>;
+type SessionOrganizationProjectionCache = {
+  inputs: WeakMap<object, SessionOrganizationProjectionCache>;
+  projections?: Map<string, SessionOrganizationProjection>;
+};
 
-const sessionOrganizationProjectionCacheByServerId = new Map<string, SessionOrganizationProjectionCacheEntry>();
+// The tuple of admitted input identities owns shared projection reuse. Every
+// edge is weak: a different Home's projection cannot root obsolete full maps
+// after Session organization changes or Account/Home retirement.
+const sessionOrganizationProjectionCache: SessionOrganizationProjectionCache = { inputs: new WeakMap() };
 
 export function readSessionOrganizationProjectionCached(
   state: StorageState,
   serverId: string,
 ): SessionOrganizationProjection {
-  const cached = sessionOrganizationProjectionCacheByServerId.get(serverId);
-  if (
-    cached
-    && cached.schemaVersionByServerId === state.sessionOrganizationSchemaVersionByServerId
-    && cached.snapshotVersionByServerId === state.sessionOrganizationSnapshotVersionByServerId
-    && cached.pinsBySessionKey === state.sessionOrganizationPinsBySessionKey
-    && cached.foldersByFolderKey === state.sessionOrganizationFoldersByFolderKey
-    && cached.folderAssignmentsBySessionKey === state.sessionOrganizationFolderAssignmentsBySessionKey
-    && cached.tagsByTagKey === state.sessionOrganizationTagsByTagKey
-    && cached.tagAssignmentsBySessionKey === state.sessionOrganizationTagAssignmentsBySessionKey
-    && cached.attentionStandingsBySessionKey === state.sessionOrganizationAttentionStandingsBySessionKey
-    && cached.orderEntriesByScopeKey === state.sessionOrganizationOrderEntriesByScopeKey
-    && cached.labelsByLabelKey === state.sessionOrganizationLabelsByLabelKey
-  ) {
-    return cached.value;
+  let cache = sessionOrganizationProjectionCache;
+  for (const input of [
+    state.sessionOrganizationSchemaVersionByServerId,
+    state.sessionOrganizationSnapshotVersionByServerId,
+    state.sessionOrganizationPinsBySessionKey,
+    state.sessionOrganizationFoldersByFolderKey,
+    state.sessionOrganizationFolderAssignmentsBySessionKey,
+    state.sessionOrganizationTagsByTagKey,
+    state.sessionOrganizationTagAssignmentsBySessionKey,
+    state.sessionOrganizationAttentionStandingsBySessionKey,
+    state.sessionOrganizationOrderEntriesByScopeKey,
+    state.sessionOrganizationLabelsByLabelKey,
+  ]) {
+    let next = cache.inputs.get(input);
+    if (!next) {
+      next = { inputs: new WeakMap() };
+      cache.inputs.set(input, next);
+    }
+    cache = next;
   }
+  const cached = cache.projections?.get(serverId);
+  if (cached) return cached;
 
   const value = buildSessionOrganizationProjection({
     schemaVersionByServerId: state.sessionOrganizationSchemaVersionByServerId,
@@ -1286,19 +1290,8 @@ export function readSessionOrganizationProjectionCached(
     orderEntriesByScopeKey: state.sessionOrganizationOrderEntriesByScopeKey,
     labelsByLabelKey: state.sessionOrganizationLabelsByLabelKey,
   }, serverId);
-  sessionOrganizationProjectionCacheByServerId.set(serverId, {
-    schemaVersionByServerId: state.sessionOrganizationSchemaVersionByServerId,
-    snapshotVersionByServerId: state.sessionOrganizationSnapshotVersionByServerId,
-    pinsBySessionKey: state.sessionOrganizationPinsBySessionKey,
-    foldersByFolderKey: state.sessionOrganizationFoldersByFolderKey,
-    folderAssignmentsBySessionKey: state.sessionOrganizationFolderAssignmentsBySessionKey,
-    tagsByTagKey: state.sessionOrganizationTagsByTagKey,
-    tagAssignmentsBySessionKey: state.sessionOrganizationTagAssignmentsBySessionKey,
-    attentionStandingsBySessionKey: state.sessionOrganizationAttentionStandingsBySessionKey,
-    orderEntriesByScopeKey: state.sessionOrganizationOrderEntriesByScopeKey,
-    labelsByLabelKey: state.sessionOrganizationLabelsByLabelKey,
-    value,
-  });
+  cache.projections ??= new Map();
+  cache.projections.set(serverId, value);
   return value;
 }
 

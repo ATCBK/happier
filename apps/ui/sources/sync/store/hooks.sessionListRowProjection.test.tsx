@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 import * as rowLookup from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import renderer, { act } from 'react-test-renderer';
@@ -23,6 +23,7 @@ import {
     useSessionListReachabilityRenderablesForItems,
     useSessionListRowsByServerId,
     useSessionListRuntimePriorityRowKeysForItems,
+    useSessionForkSupportSource,
 } from './hooks';
 
 function buildActiveRenderable(overrides: Partial<SessionListRenderableSession> = {}): SessionListRenderableSession {
@@ -54,6 +55,65 @@ afterEach(() => {
 });
 
 describe('useSessionListRenderableWithServerScope row projection', () => {
+    it.each(['delete Sessions', 'retire Home'] as const)('releases full rows and fork metadata after %s', async (lifecycle) => {
+        const { Session: InspectorSession } = await import('node:inspector');
+        const previous = storage.getState();
+        // Also restore if initial hook acquisition throws before the inspector exists.
+        onTestFinished(() => storage.setState(previous));
+        const serverId = `retention-${lifecycle}`;
+        const count = lifecycle === 'retire Home' ? 1_000 : 32;
+        const ids = Array.from({ length: count }, (_, index) => `retired-${index}`);
+        const survivingHome = `${serverId}-survivor`;
+        const items: SessionListIndexItem[] = ids.map(sessionId => ({ type: 'session', serverId, sessionId }));
+        const retained = (() => {
+            const rows = ids.map(id => buildActiveRenderable({ id, metadata: {
+                path: `/workspace/${id}`, host: 'host', summaryText: 'retired data '.repeat(128),
+            } }));
+            storage.setState({ sessionListRowsByServerId: {
+                [serverId]: Object.fromEntries(rows.map(row => [row.id, row])),
+                [survivingHome]: { [ids[0]!]: buildActiveRenderable({ id: ids[0]! }) },
+            } });
+            return rows.flatMap(row => [new WeakRef<object>(row), new WeakRef<object>(row.metadata!)]);
+        })();
+        const hook = await renderHook(() => {
+            const bulk = useSessionListRowRenderablesForItems(items);
+            const survivor = {
+                row: useSessionListRenderableWithServerScope(survivingHome, ids[0]!),
+                fork: useSessionForkSupportSource(ids[0]!, survivingHome),
+            };
+            // This scale fixture has a fixed hook order throughout its lifetime.
+            const remaining = ids.reduce((total, id) => {
+                const row = useSessionListRenderableWithServerScope(serverId, id);
+                const fork = useSessionForkSupportSource(id, serverId);
+                return total + Number(Boolean(row || fork));
+            }, 0);
+            return { remaining, bulkCount: bulk.size, survivor };
+        });
+        const inspector = new InspectorSession();
+        inspector.connect();
+        try {
+            expect(hook.getCurrent()).toMatchObject({ remaining: count, bulkCount: count });
+            const survivor = hook.getCurrent().survivor;
+            await act(async () => {
+                if (lifecycle === 'retire Home') storage.getState().clearSessionListRowsForServerScope(serverId);
+                else for (const id of ids) storage.getState().deleteSession(id, serverId);
+            });
+            expect(hook.getCurrent()).toMatchObject({ remaining: 0, bulkCount: 0 });
+            expect(hook.getCurrent().survivor.row).toBe(survivor.row);
+            expect(hook.getCurrent().survivor.fork).toBe(survivor.fork);
+            // React may keep the previous selector snapshot until unmount.
+            await hook.unmount();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage',
+                error => error ? reject(error) : resolve()));
+            expect(retained.filter(reference => reference.deref() !== undefined).length,
+                'no removed full rows or fork metadata may remain rooted by projections').toBe(0);
+        } finally {
+            inspector.disconnect();
+            await hook.unmount();
+        }
+    });
+
     it('does not revisit Session row readers for Machine-only notifications', async () => {
         const previous = storage.getState();
         const serverId = 'machine-notification-home';
