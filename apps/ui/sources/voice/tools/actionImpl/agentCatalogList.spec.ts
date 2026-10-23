@@ -22,6 +22,7 @@ import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 
 let catalogHomeId = '';
 let accountHomes: Awaited<ReturnType<typeof serveAccountHomes>>;
@@ -109,6 +110,19 @@ function createProviderModelsProjection(freeformPolicy: Readonly<{
       }],
     }],
   };
+}
+
+function admitProviderModels(freeformPolicy: Parameters<typeof createProviderModelsProjection>[0] = {}): void {
+  // The exact Machine must publish its admitted Agent requirements. Account
+  // browsing declarations no longer stand in for that external registry fact.
+  machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
+    supported: true,
+    projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
+      claude: { id: 'claude', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
+        providerRequirements: readAccountAgentProviderRequirements('agent:happier.agent.claude/claude', { kind: 'account' }) },
+    } }),
+  });
+  describeProviderModelsMock.mockResolvedValue(createProviderModelsProjection(freeformPolicy));
 }
 
 installVoiceToolActionImplCommonModuleMocks();
@@ -245,7 +259,7 @@ describe('agent catalog voice tools', () => {
       supported: true,
       response: { ok: true, result: { availableModels: [{ id: 'native', name: 'Native' }], supportsFreeform: false } },
     });
-    describeProviderModelsMock.mockResolvedValue(createProviderModelsProjection());
+    admitProviderModels();
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 
     const result: any = await listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
@@ -267,7 +281,7 @@ describe('agent catalog voice tools', () => {
       supported: true,
       response: { ok: true, result: { availableModels: [{ id: 'native', name: 'Native' }], supportsFreeform: false } },
     });
-    describeProviderModelsMock.mockResolvedValue(createProviderModelsProjection(freeformPolicy));
+    admitProviderModels(freeformPolicy);
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 
     const result: any = await listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
@@ -335,7 +349,7 @@ describe('agent catalog voice tools', () => {
       supported: true,
       response: { ok: true, result: { availableModels: [{ id: 'native', name: 'Native' }], supportsFreeform: false } },
     });
-    describeProviderModelsMock.mockResolvedValue(createProviderModelsProjection());
+    admitProviderModels();
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 
     const enabledResult: any = await listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
