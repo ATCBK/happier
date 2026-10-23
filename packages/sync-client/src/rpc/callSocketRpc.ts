@@ -203,7 +203,9 @@ export async function callSocketRpc<R>(params: Readonly<{
       ...(workspaceSyncSourceExecution ? { workspaceSyncSourceExecution } : {}),
       ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
       ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
-      ...(requestId ? { requestId } : {}),
+      // requestId also opts into cancellation custody. Ordinary calls need an
+      // observational identity without changing their disconnect semantics.
+      ...(requestId ? { requestId } : { traceId: createSocketRpcRequestId() }),
       ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(authorization ? { authorization } : {}),

@@ -242,6 +242,8 @@ export type SocketRpcRequestPayload = Readonly<{
    * in-flight relay; the authenticated relay replaces it before target dispatch.
    */
   requestId?: string;
+  /** Payload-free diagnostics only; never grants cancellation or execution custody. */
+  traceId?: string;
   /** Cooperative cancel requests stop work but retain this call's own result ACK. */
   waitForResultOnCancel?: boolean;
   authorization?: SocketRpcAuthorizationContext;

@@ -18,7 +18,89 @@ import type { Socket } from 'socket.io-client';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 describe('RPC completion diagnostics', () => {
-    it('retains the admitted transport request root through asynchronous handler phases', async () => {
+    it.each([true, false])('joins received, manager admission and completion through real Home verification (admitted=%s)', async admitted => {
+        const logger = vi.fn();
+        const key = tweetnacl.sign.keyPair();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        // The authenticated Home HTTP answer is the only replaced admission boundary.
+        const network = vi.spyOn(axios, 'post').mockImplementation(async () => {
+            await held;
+            return { status: admitted ? 200 : 503, data: { v: 1, ok: true } };
+        });
+        const rpc = new RpcHandlerManager({ scopePrefix: 'never-log-machine', encryptionMode: 'plain', logger,
+            authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                machineId: 'never-log-machine', resolveCustodianAccountId: async () => 'never-log-owner',
+                resolveInstallationId: () => 'never-log-installation',
+                verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input,
+                    privateKey: key.secretKey, daemonToken: 'never-log-token', serverHttpBaseUrl: 'https://home.invalid' }),
+            }) });
+        let executions = 0;
+        rpc.registerHandler('demo', () => { executions += 1; return { ok: true, secret: 'never-log-result' }; });
+        const requestId = 'rpc_12345678-1234-4123-8123-123456789abc';
+        try {
+            const pending = rpc.handleRequest({ method: 'never-log-machine:demo', traceId: requestId,
+                params: { secret: 'never-log-input' }, machineAdmission: { actorAccountId: 'never-log-owner',
+                    custodianAccountId: 'never-log-owner', machineId: 'never-log-machine',
+                    installationId: 'never-log-installation', role: 'manage', encryptionMode: 'plain' } });
+            await vi.waitFor(() => expect(network).toHaveBeenCalledTimes(1));
+            expect(executions).toBe(0);
+            expect(logger.mock.calls).toEqual([['[RPC] Request received', { requestId, method: 'demo' }]]);
+            release();
+            const result = await pending;
+            expect(result).toMatchObject(admitted ? { ok: true } : { errorCode: RPC_ERROR_CODES.FORBIDDEN });
+            expect(executions).toBe(admitted ? 1 : 0);
+            expect(network).toHaveBeenCalledTimes(1);
+            const events = logger.mock.calls.filter(([message]) => /^\[RPC\] Request (received|admitted|completed)$/.test(message));
+            expect(events.map(([message]) => message)).toEqual(admitted
+                ? ['[RPC] Request received', '[RPC] Request admitted', '[RPC] Request completed']
+                : ['[RPC] Request received', '[RPC] Request completed']);
+            for (const [, metadata] of events) expect(metadata).toMatchObject({ method: 'demo', requestId });
+            expect(events.at(-1)?.[1]).toMatchObject({ outcomeCode: admitted ? 'ok' : RPC_ERROR_CODES.FORBIDDEN });
+            expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+        } finally { release(); network.mockRestore(); }
+    });
+
+    it('does not treat diagnostic trace identity as a cancellation request id', async () => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        const socket = createApiSessionSocketStub({ connected: true });
+        rpc.onSocketConnect(socket as unknown as Socket);
+        const traceId = 'rpc_12345678-1234-4123-8123-123456789abc';
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        let signal: AbortSignal | undefined;
+        rpc.registerHandler('demo', async (_input, context) => { signal = context?.signal; await pending; return { ok: true }; });
+        const result = rpc.handleRequest({ method: 'machine:demo', traceId, params: {} });
+        try {
+            await vi.waitFor(() => expect(signal).toBeDefined());
+            socket.trigger('rpc-cancel', { requestId: traceId });
+            expect(signal?.aborted).toBe(false);
+            release();
+            expect(await result).toEqual({ ok: true });
+            expect(logger.mock.calls.filter(([message]) => message === '[RPC] Request completed'))
+                .toEqual([['[RPC] Request completed', expect.objectContaining({ requestId: traceId, outcomeCode: 'ok' })]]);
+        } finally { release(); rpc.onSocketDisconnect(); }
+    });
+
+    it.each(['requestId', 'traceId'] as const)('keeps opaque %s hashed across all socket request phases', async field => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'never-log-scope', encryptionMode: 'plain', logger });
+        rpc.registerHandler('demo', () => ({ ok: true }));
+        const requestId = 'never-log-token/private\n';
+        await rpc.handleRequest({ method: 'never-log-scope:demo', [field]: requestId,
+            ...(field === 'traceId' ? { requestId: 'rpc_12345678-1234-4123-8123-123456789abc' } : {}),
+            params: { secret: 'never-log-payload' } });
+        const events = logger.mock.calls.filter(([message]) => /^\[RPC\] Request (received|admitted|completed)$/.test(message));
+        expect(events.map(([message]) => message)).toEqual([
+            '[RPC] Request received', '[RPC] Request admitted', '[RPC] Request completed',
+        ]);
+        const hashed = `sha256:${createHash('sha256').update(requestId).digest('hex')}`;
+        for (const [, metadata] of events) expect(metadata).toMatchObject({ requestId: hashed, method: 'demo' });
+        expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+    });
+
+    it.each(['requestId', 'traceId'] as const)('retains the admitted %s root through asynchronous handler phases', async field => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         const sink = vi.spyOn(fileLogger, 'warnLocalFile').mockImplementation(() => undefined);
         const requestId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
@@ -28,11 +110,21 @@ describe('RPC completion diagnostics', () => {
             return await timeWebLatencyPhase('session.outbox.deliver', async () => 42);
         });
         try {
-            expect(await rpc.handleRequest({ method: 'session:demo', requestId: `rpc_${requestId}`, params: {} })).toEqual(42);
+            expect(await rpc.handleRequest({ method: 'session:demo', [field]: `rpc_${requestId}`, params: {} })).toEqual(42);
             expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
                 phase: 'session.outbox.deliver', status: 'completed', requestId,
             }));
         } finally { sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
+
+    it('ignores malformed diagnostic trace metadata without changing request execution or its existing correlation', async () => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        rpc.registerHandler('demo', () => ({ ok: true }));
+        const requestId = 'rpc_12345678-1234-4123-8123-123456789abc';
+        // @ts-expect-error A malformed wire trace is diagnostic data, never request admission authority.
+        expect(await rpc.handleRequest({ method: 'machine:demo', traceId: null, requestId, params: {} })).toEqual({ ok: true });
+        for (const [, metadata] of logger.mock.calls) expect(metadata).toMatchObject({ requestId });
     });
     it.each([
         { phase: 'host_publication_rejected' },
@@ -297,7 +389,7 @@ describe('RPC completion diagnostics', () => {
         now = 145;
         release();
         await first;
-        expect(logger.mock.calls).toEqual(['relay-b', 'relay-a'].map((id, index) => [
+        expect(logger.mock.calls.filter(([message]) => message === '[RPC] Request completed')).toEqual(['relay-b', 'relay-a'].map((id, index) => [
             '[RPC] Request completed', {
                 method: 'demo', requestId: `sha256:${createHash('sha256').update(id).digest('hex')}`,
                 durationMs: index === 0 ? 0 : 45, outcomeCode: 'ok', callerClass: 'unattributed',
@@ -318,7 +410,7 @@ describe('RPC completion diagnostics', () => {
             callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'private-guest', custodianAccountId: 'private-owner',
                 machineId: 'machine', installationId: 'private-installation', role: 'use', encryptionMode: 'plain' } }))
             .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
-        expect(logger.mock.calls).toEqual([['[RPC] Request completed', {
+        expect(logger.mock.calls.filter(([message]) => message === '[RPC] Request completed')).toEqual([['[RPC] Request completed', {
             method: 'demo', requestId: 'rpc_12345678-1234-4123-8123-123456789abc', durationMs: 0,
             outcomeCode: RPC_ERROR_CODES.FORBIDDEN, callerClass: 'unadmitted', admissionPredicate: 'machine_installation',
             failedPhase: 'authorize_request', cancelled: false,
@@ -354,27 +446,30 @@ describe('RPC completion diagnostics', () => {
         await rpc.handleRequest({ method: 'machine:/home/never-log-path?token=never-log-token', params: {}, requestId: 'never-log-token\n' });
         rpc.registerHandler('demo', () => { throw new RpcError('never-log-error', 'never-log-secret-code'); });
         await rpc.handleRequest({ method: 'machine:demo', params: {} });
-        expect(logger.mock.calls).toEqual([
+        expect(logger.mock.calls.filter(([message]) => message === '[RPC] Request completed')).toEqual([
             ['[RPC] Request completed', expect.objectContaining({ method: '<unregistered>', outcomeCode: RPC_ERROR_CODES.METHOD_NOT_FOUND })],
             ['[RPC] Request completed', expect.objectContaining({ method: 'demo', outcomeCode: 'unclassified_error' })],
         ]);
         expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
     });
 
-    it('uses the existing encrypted call id and leaves its response echo unchanged', async () => {
+    it.each([false, true])('leaves the encrypted call id response echo unchanged (diagnostic trace=%s)', async traced => {
         const logger = vi.fn();
         const key = new Uint8Array(32).fill(7);
         const callId = '0123456789abcdef0123456789abcdef';
+        const traceId = 'rpc_12345678-1234-4123-8123-123456789abc';
         const content: SocketRpcContent = { mode: 'e2ee', cipher: {
             encryptRaw: async value => encodeBase64(encrypt(key, 'dataKey', value)),
             decryptRaw: async value => decrypt(key, 'dataKey', decodeBase64(value)),
         } };
         const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionKey: key, encryptionVariant: 'dataKey', logger });
         rpc.registerHandler('demo', () => ({ ok: true }));
-        const result = await rpc.handleRequest({ method: 'session:demo', params: await socketRpcCodec.encodeParams(content,
+        const result = await rpc.handleRequest({ method: 'session:demo', ...(traced ? { traceId } : {}), params: await socketRpcCodec.encodeParams(content,
             { secret: 'never-log-input' }, { method: 'session:demo', callId }) });
         expect(await socketRpcCodec.decodeResult(content, { ok: true, result }, callId)).toEqual({ ok: true });
-        expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({ requestId: callId, outcomeCode: 'ok' })]]);
+        expect(logger.mock.calls.filter(([message]) => message === '[RPC] Request completed'))
+            .toEqual([['[RPC] Request completed', expect.objectContaining({ requestId: traced ? traceId : callId, outcomeCode: 'ok' })]]);
+        expect(logger.mock.calls).toHaveLength(traced ? 3 : 1);
         expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
     });
 

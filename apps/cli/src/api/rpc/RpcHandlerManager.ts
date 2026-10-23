@@ -83,6 +83,8 @@ type RegistrationReadinessWaiter = Readonly<{
 
 type RequestDiagnostic = {
     requestId: string;
+    method: string;
+    transportCorrelated: boolean;
     outcomeCode: string;
     callerClass: 'unadmitted' | 'unattributed' | 'machine_custodian' | 'machine_guest' | 'session' | 'server_origin' | 'local';
     admissionPredicate: string;
@@ -276,9 +278,12 @@ export class RpcHandlerManager {
         request: RpcRequest,
     ): Promise<any> {
         const requestStartedAtMs = Date.now();
-        const traceRequestId = typeof request.requestId === 'string' ? request.requestId.replace(/^rpc_/u, '') : request.requestId;
-        return withWebLatencyTrace(traceRequestId, () => this.observeRequest(request.method, request.requestId,
-            diagnostic => this.dispatchRequest(request, diagnostic, requestStartedAtMs)));
+        // Diagnostic correlation never supplies cancellation or admission authority.
+        const trace = SocketRpcRequestIdSchema.safeParse(request.traceId);
+        const diagnosticId = trace.success ? trace.data : request.requestId;
+        const traceRequestId = typeof diagnosticId === 'string' ? diagnosticId.replace(/^rpc_/u, '') : diagnosticId;
+        return withWebLatencyTrace(traceRequestId, () => this.observeRequest(request.method, diagnosticId,
+            diagnostic => this.dispatchRequest(request, diagnostic, requestStartedAtMs, trace.success)));
     }
 
     private async observeRequest(
@@ -286,15 +291,22 @@ export class RpcHandlerManager {
     ): Promise<unknown> {
         const receivedAtMs = this.nowMs();
         const parsed = SocketRpcRequestIdSchema.safeParse(requestId);
+        const registeredMethod = this.handlers.has(method) ? this.readUnprefixedMethod(method) : null;
+        // Only registered declarations supply diagnostic names, never caller routes/scopes.
+        const safeMethod = registeredMethod === null ? '<unregistered>'
+            : /^[a-zA-Z0-9_.-]+$/.test(registeredMethod) ? registeredMethod : '<registered>';
         // The relay mints rpc_<UUID>. Opaque ids are correlated by digest, never copied as
         // text: the typed transport slot also accepts paths, credentials and LF.
         const diagnostic: RequestDiagnostic = {
+            method: safeMethod, transportCorrelated: !local && parsed.success,
             requestId: parsed.success ? /^(?:rpc_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parsed.data)
                 ? parsed.data : `sha256:${createHash('sha256').update(parsed.data).digest('hex')}` : randomUUID(),
             outcomeCode: 'unclassified_error', callerClass: local ? 'local' : 'unattributed', admissionPredicate: 'request_admission',
         };
-        const registeredMethod = this.handlers.has(method) ? this.readUnprefixedMethod(method) : null;
         try {
+            if (diagnostic.transportCorrelated) this.completionLogger('[RPC] Request received', {
+                method: diagnostic.method, requestId: diagnostic.requestId,
+            });
             const storageRead = registeredMethod === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET
                 || registeredMethod === RPC_METHODS.DAEMON_STORAGE_SCAN_GET
                 || registeredMethod === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST;
@@ -311,12 +323,8 @@ export class RpcHandlerManager {
             diagnostic.outcomeCode = readOutcomeCode(error, true);
             throw error;
         } finally {
-            // Only registered declarations can supply a name. Never record an
-            // arbitrary route or scope prefix supplied by a failed caller.
-            const safeMethod = registeredMethod === null ? '<unregistered>'
-                : /^[a-zA-Z0-9_.-]+$/.test(registeredMethod) ? registeredMethod : '<registered>';
             this.completionLogger('[RPC] Request completed', {
-                method: safeMethod, requestId: diagnostic.requestId,
+                method: diagnostic.method, requestId: diagnostic.requestId,
                 durationMs: Math.max(0, Math.round(this.nowMs() - receivedAtMs)),
                 outcomeCode: diagnostic.outcomeCode, callerClass: diagnostic.callerClass,
                 ...(diagnostic.admissionDenied || diagnostic.outcomeCode === RPC_ERROR_CODES.FORBIDDEN
@@ -340,7 +348,7 @@ export class RpcHandlerManager {
             phaseDurationsMs: { ...diagnostic.failure?.phaseDurationsMs, ...operation.phaseDurationsMs } };
     }
 
-    private async dispatchRequest(request: RpcRequest, diagnostic: RequestDiagnostic, requestStartedAtMs: number): Promise<unknown> {
+    private async dispatchRequest(request: RpcRequest, diagnostic: RequestDiagnostic, requestStartedAtMs: number, hasDiagnosticTrace: boolean): Promise<unknown> {
         // Admission captures its reply codec; later key adoption only affects new requests.
         const admittedContent = this.rpcContent;
         if (!admittedContent) {
@@ -718,7 +726,7 @@ export class RpcHandlerManager {
                 );
                 decryptedParams = decoded.params;
                 callId = decoded.callId;
-                if (request.requestId === undefined && callId !== null) diagnostic.requestId = callId;
+                if (!hasDiagnosticTrace && request.requestId === undefined && callId !== null) diagnostic.requestId = callId;
             } catch (error) {
                 return await respond(request, {
                     error: confidential ? 'confidential_continuation_failed' : error instanceof Error ? error.message : 'Unable to open RPC content',
@@ -947,6 +955,9 @@ export class RpcHandlerManager {
             // Call the handler
             nextPhase('handler');
             diagnostic.admissionPredicate = 'handler_admission';
+            if (diagnostic.transportCorrelated) this.completionLogger('[RPC] Request admitted', {
+                method: diagnostic.method, requestId: diagnostic.requestId, callerClass: diagnostic.callerClass,
+            });
             handlerExecutionId = this.beginHandlerExecution(
                 this.readUnprefixedMethod(request.method),
             );

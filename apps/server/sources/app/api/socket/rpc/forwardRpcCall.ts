@@ -124,6 +124,8 @@ export async function forwardRpcCall(params: Readonly<{
     machineAdmission?: SocketRpcMachineAdmissionContextV1;
     transportResponseEnvelopeVersion?: 1;
     callerSocketId?: string;
+    /** Home-minted observation only, independent of cancellation/signed request identity. */
+    traceId?: string;
     answeringClient?: SocketRpcAnsweringClientV1;
     callerSocket?: Pick<Socket, "data">;
     /** Trusted source continuation ceiling, never copied from inbound generic RPC fields. */
@@ -167,8 +169,9 @@ export async function forwardRpcCall(params: Readonly<{
 }>): Promise<RpcForwardResult> {
     const callStartedAt = Date.now();
     const lookupStartedAt = Date.now();
-    const correlation = params.cancellation && params.callerSocketId ? {
-        requestId: params.cancellation.targetRequestId,
+    const targetTraceId = params.traceId ?? params.cancellation?.targetRequestId;
+    const correlation = targetTraceId && params.callerSocketId ? {
+        requestId: targetTraceId,
         callerSocketId: params.callerSocketId,
     } : null;
     let methodRegistrationAbsent = false;
@@ -341,6 +344,7 @@ export async function forwardRpcCall(params: Readonly<{
             ...(params.originalActionEnvelope ? { originalActionEnvelope: params.originalActionEnvelope } : {}),
             timeoutMs,
             ...(targetRequestId ? { requestId: targetRequestId } : {}),
+            ...(params.traceId ? { traceId: params.traceId } : {}),
             ...(params.authorization ? { authorization: params.authorization } : {}),
             ...(params.machineAdmission ? { machineAdmission: params.machineAdmission } : {}),
             ...(params.transportResponseEnvelopeVersion === 1

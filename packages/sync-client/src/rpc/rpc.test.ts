@@ -45,6 +45,34 @@ afterEach(async () => {
   await destroy?.();
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+it.each(['plain', 'e2ee'] as const)('correlates each ordinary %s issuance without opting into cancellation', async mode => {
+  const socket = await setup();
+  const content = mode === 'plain' ? { mode: 'plain' } as const : cipher();
+  const packets: { traceId?: unknown; requestId?: unknown; timeoutMs?: unknown }[] = [];
+  let cancellations = 0;
+  server.sockets.sockets.forEach(remote => {
+    remote.on('rpc-cancel', () => { cancellations += 1; });
+    remote.on('rpc-call', async (packet, acknowledge) => {
+      packets.push(packet);
+      const decoded = await socketRpcCodec.decodeRequestParams(content, packet.params, packet.method);
+      acknowledge({ ok: true, result: await socketRpcCodec.encodeResponse(content, { echoed: decoded.params }, decoded.callId) });
+    });
+  });
+  for (const secret of ['private-first', 'private-second']) {
+    await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'read',
+      params: { secret }, content, timeoutMs: null })).resolves.toEqual({ echoed: { secret } });
+  }
+  expect(packets).toHaveLength(2);
+  const traceIds = packets.map(packet => packet.traceId);
+  for (const traceId of traceIds) expect(traceId).toEqual(expect.stringMatching(/^rpc_[A-Za-z0-9_-]+$/));
+  expect(new Set(traceIds).size).toBe(2);
+  expect(JSON.stringify(traceIds)).not.toContain('private-');
+  for (const packet of packets) {
+    expect(packet).not.toHaveProperty('requestId');
+    expect(packet.timeoutMs).toBeNull();
+  }
+  expect(cancellations).toBe(0);
+});
 it.each([undefined, null, 10_000])('settles an expired-heartbeat emit as notSent without retaining or replaying it (%s)', async timeoutMs => {
   const socket = await setup();
   const received: string[] = [];

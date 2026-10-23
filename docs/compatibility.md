@@ -1197,6 +1197,14 @@ new key or negotiation. It does not prevent request replay. Plain-mode accounts
 and reserved server-origin methods keep their existing contracts. See
 [encryption.md](encryption.md#encrypted-socket-rpc-routing-v03-development).
 
+Development requests may add optional `traceId` as transient diagnostic metadata
+when the existing cancellation/signed `requestId` is absent. It is safely
+ignorable: it carries no authority, cancellation, routing or result-custody
+meaning. Home replaces it with target-local diagnostic correlation; missing or
+malformed metadata does not change the operation. Existing authority envelopes
+and their closed schemas are unchanged. This adds no wire epoch, persisted data,
+mixed 0.2/0.3 stack support or rollback reader.
+
 ### Machine Session-log diagnostics (v0.3 development)
 
 Machine diagnostics register and call `daemon.session.log.tail`; `session.log.tail`

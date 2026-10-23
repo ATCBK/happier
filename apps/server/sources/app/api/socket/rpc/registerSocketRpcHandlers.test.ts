@@ -40,6 +40,8 @@ import {
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { getMachineSocketRoom } from '../../socketRooms';
 import * as logging from '@/utils/logging/log';
+import { callSocketRpc } from '@happier-dev/sync-client';
+import { createHash } from 'node:crypto';
 
 type RpcTargetEmitWithAck = (
     event: string,
@@ -258,6 +260,100 @@ function createRoomAwareIo() {
 }
 
 describe("registerSocketRpcHandlers", () => {
+    it('joins ordinary client issuance through Home without adding cancellation custody', async () => {
+        const log = vi.spyOn(logging, 'log').mockImplementation(() => {});
+        try {
+            machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null,
+                installationId: 'installation-1', kind: 'persistent' });
+            const method = `machine-1:${RPC_METHODS.MACHINES_VITALS_GET}`;
+            const { io, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
+            let targetTraceId: unknown;
+            const target = vi.fn(async (_event: string, packet: unknown) => {
+                expect(packet).not.toHaveProperty('requestId');
+                targetTraceId = Reflect.get(packet as object, 'traceId');
+                return { state: 'reporting' };
+            });
+            const timeout = vi.fn((_milliseconds: number, _options: unknown) => ({ emitWithAck: target }));
+            const daemon = createRoomAwareSocket({ id: 'daemon', data: { clientType: 'machine-scoped',
+                machineId: 'machine-1', verifiedMachineInstallationId: 'installation-1' },
+                timeout });
+            addToRoom(daemon.id, daemon);
+            registerSocketRpcHandlers({ userId: 'user-1', socket: daemon as unknown as Socket, io });
+            await triggerSocketHandler(daemon, SOCKET_RPC_EVENTS.REGISTER, { method });
+            const caller = createRoomAwareSocket({ id: 'reader', data: { clientType: 'user-scoped' } });
+            registerSocketRpcHandlers({ userId: 'user-1', socket: caller as unknown as Socket, io });
+            let callerTraceId: unknown;
+            // Only the socket network boundary is adapted: issuance, ingress,
+            // admission, discovery, forwarding and response decoding stay real.
+            const clientSocket = { connected: true, emit: vi.fn(), emitWithAck: async (event: string, packet: unknown) => {
+                expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
+                expect(packet).not.toHaveProperty('requestId');
+                callerTraceId = Reflect.get(packet as object, 'traceId');
+                const ack = vi.fn();
+                await triggerSocketHandler(caller, event, packet, ack);
+                return ack.mock.calls[0]?.[0];
+            } };
+            await expect(callSocketRpc({ socket: clientSocket, target: { kind: 'machine', id: 'machine-1' },
+                method: RPC_METHODS.MACHINES_VITALS_GET, params: { secret: 'never-log-input' }, content: { mode: 'plain' } }))
+                .resolves.toEqual({ state: 'reporting' });
+            expect(callerTraceId).toEqual(expect.stringMatching(/^rpc_/));
+            expect(targetTraceId).toEqual(expect.stringMatching(/^rpc_/));
+            expect(targetTraceId).not.toBe(callerTraceId);
+            const events = log.mock.calls.map(([metadata]) => metadata).filter(metadata => metadata.event);
+            const ownedPhases = new Set(['rpc-call-received', 'rpc-call-admitted', 'machine-rpc-relay-completed',
+                'rpc-target-lookup', 'rpc-target-issued', 'rpc-target-ack']);
+            expect(events.filter(metadata => ownedPhases.has(metadata.event) && metadata.requestId === callerTraceId).map(metadata => metadata.event)).toEqual([
+                'rpc-call-received', 'rpc-call-admitted', 'machine-rpc-relay-completed',
+            ]);
+            expect(events.filter(metadata => ownedPhases.has(metadata.event) && metadata.requestId === targetTraceId).map(metadata => metadata.event)).toEqual([
+                'rpc-target-lookup', 'rpc-target-issued', 'rpc-target-ack',
+            ]);
+            expect(events.find(metadata => metadata.event === 'machine-rpc-relay-completed')).toMatchObject({
+                requestId: callerTraceId, targetRequestId: targetTraceId,
+            });
+            await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CANCEL, { requestId: callerTraceId });
+            await triggerSocketHandler(caller, 'disconnect');
+            expect(daemon.emit.mock.calls.filter((call: readonly unknown[]) => call[0] === SOCKET_RPC_EVENTS.CANCEL)).toEqual([]);
+            expect(clientSocket.emit).not.toHaveBeenCalled();
+            expect(target).toHaveBeenCalledOnce();
+            expect(timeout.mock.calls[0]?.[1]).not.toHaveProperty('signal');
+            expect(JSON.stringify(events)).not.toContain('never-log');
+        } finally { log.mockRestore(); }
+    });
+    it.each(['opaque', 'malformed'] as const)('keeps %s diagnostic metadata out of authority and content logs', async kind => {
+        const log = vi.spyOn(logging, 'log').mockImplementation(() => {});
+        try {
+            machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null,
+                installationId: 'installation-1', kind: 'persistent' });
+            const method = `machine-1:${RPC_METHODS.MACHINES_VITALS_GET}`;
+            const { io, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
+            const effect = vi.fn(async (_event: string, packet: unknown) => {
+                expect(packet).not.toHaveProperty('requestId');
+                if (kind === 'opaque') expect(packet).toHaveProperty('traceId', expect.stringMatching(/^rpc_/));
+                else expect(packet).not.toHaveProperty('traceId');
+                return { state: 'reporting' };
+            });
+            const daemon = createRoomAwareSocket({ id: 'daemon', data: { clientType: 'machine-scoped',
+                machineId: 'machine-1', verifiedMachineInstallationId: 'installation-1' },
+                timeout: () => ({ emitWithAck: effect }) });
+            addToRoom(daemon.id, daemon);
+            registerSocketRpcHandlers({ userId: 'user-1', socket: daemon as unknown as Socket, io });
+            await triggerSocketHandler(daemon, SOCKET_RPC_EVENTS.REGISTER, { method });
+            const caller = createRoomAwareSocket({ id: 'reader', data: { clientType: 'user-scoped' } });
+            registerSocketRpcHandlers({ userId: 'user-1', socket: caller as unknown as Socket, io });
+            const opaqueId = 'never-log-token/path\nnever-log-secret';
+            const traceId = kind === 'opaque' ? opaqueId : { secret: 'never-log-secret' };
+            const ack = vi.fn();
+            await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, traceId, params: {} }, ack);
+            expect(ack).toHaveBeenCalledWith({ ok: true, result: { state: 'reporting' } });
+            expect(effect).toHaveBeenCalledOnce();
+            if (kind === 'opaque') expect(log).toHaveBeenCalledWith(expect.objectContaining({
+                event: 'machine-rpc-relay-completed',
+                requestId: `sha256:${createHash('sha256').update(opaqueId).digest('hex')}`,
+            }), 'Machine RPC relay completed');
+            expect(JSON.stringify(log.mock.calls)).not.toContain('never-log');
+        } finally { log.mockRestore(); }
+    });
     it.each(['machines.vitals.get', 'machines.guard.get', 'machines.storage.summary.get'])(
         'correlates admitted resource RPC diagnostics without logging content: %s', async (rpcMethod) => {
             const log = vi.spyOn(logging, 'log').mockImplementation(() => {});
@@ -283,7 +379,8 @@ describe("registerSocketRpcHandlers", () => {
                 const targetRequestId = effect.mock.calls[0]?.[1]?.requestId;
                 expect(targetRequestId).toEqual(expect.any(String));
                 expect(log).toHaveBeenCalledWith(expect.objectContaining({
-                    event: 'machine-rpc-relay-completed', method, requestId: 'resource-caller',
+                    event: 'machine-rpc-relay-completed', method,
+                    requestId: `sha256:${createHash('sha256').update('resource-caller').digest('hex')}`,
                     targetRequestId, targetSocketId: 'daemon',
                     durationMs: expect.any(Number), admissionMs: expect.any(Number), relayMs: expect.any(Number),
                 }), 'Machine RPC relay completed');

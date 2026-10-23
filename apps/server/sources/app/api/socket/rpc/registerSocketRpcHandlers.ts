@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from 'node:util';
 import { cancelRpcTarget } from './cancelRpcTarget';
 
@@ -1064,6 +1064,20 @@ export function registerSocketRpcHandlers(params: Readonly<{
 
     params.socket.on(SOCKET_RPC_EVENTS.CALL, async (data: unknown, callback?: (response: unknown) => void) => {
         const startedAt = Date.now();
+        const parsedRequestId = readOptionalSocketRpcRequestId(data);
+        // Diagnostics cannot opt a caller into cancellation. Keep requestId's
+        // existing admission/cleanup path, and ignore malformed trace metadata.
+        const parsedTraceId = parsedRequestId === undefined && data && typeof data === 'object' && !Array.isArray(data)
+            ? SocketRpcRequestIdSchema.safeParse((data as { traceId?: unknown }).traceId) : null;
+        const diagnosticOnly = parsedTraceId?.success === true;
+        const incomingTraceId = typeof parsedRequestId === 'string' ? parsedRequestId
+            : parsedTraceId?.success ? parsedTraceId.data : undefined;
+        // Opaque caller ids can contain private text. Match the daemon's
+        // diagnostic privacy boundary without changing the actual request key.
+        const callerTraceId = incomingTraceId === undefined ? undefined
+            : /^(?:rpc_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(incomingTraceId)
+                ? incomingTraceId : `sha256:${createHash('sha256').update(incomingTraceId).digest('hex')}`;
+        let targetTraceId: string | undefined;
         let method: string | null = null;
         let callerRequestId: string | undefined;
         let cancellation: ActiveSocketRpcCancellation | undefined;
@@ -1071,6 +1085,9 @@ export function registerSocketRpcHandlers(params: Readonly<{
         let forwardStartedAt: number | undefined;
         let forwardCompletedAt: number | undefined;
         try {
+            if (callerTraceId) log({ module: 'websocket-rpc', event: 'rpc-call-received',
+                requestId: callerTraceId, callerSocketId: params.socket.id,
+            }, 'RPC call received');
             // Runner socket compositions are restricted RPC receivers. A future
             // Runner-originated call needs its own explicit source authority;
             // target-side Machine classification cannot grant caller authority.
@@ -1091,7 +1108,6 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 }
                 viewer = current;
             }
-            const parsedRequestId = readOptionalSocketRpcRequestId(data);
             if (parsedRequestId === null) {
                 callback?.({
                     ok: false,
@@ -2049,10 +2065,17 @@ export function registerSocketRpcHandlers(params: Readonly<{
             const verifiedCallerGrant = verifiedExternalAction && 'grant' in verifiedExternalAction.binding
                 ? verifiedExternalAction.binding.grant : viewer?.principal.grant;
             forwardStartedAt = Date.now();
+            targetTraceId = diagnosticOnly ? `rpc_${randomUUID()}` : cancellation?.targetRequestId;
+            if (callerTraceId) log({ module: 'websocket-rpc', event: 'rpc-call-admitted',
+                requestId: callerTraceId, targetRequestId: targetTraceId,
+                callerSocketId: params.socket.id, method,
+                durationMs: forwardStartedAt - startedAt,
+            }, 'RPC call admitted to target lookup');
             const forwarded = await forwardRpcCall({
                 io: params.io,
                 targetUserId,
                 method,
+                ...(diagnosticOnly && targetTraceId ? { traceId: targetTraceId } : {}),
                 callParams,
                 ...(sessionAuthorization?.routeToSessionOwnerDaemon && !requesterApprovalMachine ? {
                     isTargetUnavailable: async () => !await resolveCurrentSessionMachineFromServer({
@@ -2221,15 +2244,16 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 error: error instanceof Error ? error.message : "Internal error",
             });
         } finally {
-            if (method && callerRequestId && (machineAdmission || parseMachineScopedRpcMethod(method))) {
-                log({ module: "websocket-rpc", event: "machine-rpc-relay-completed",
-                    method, requestId: callerRequestId, targetRequestId: cancellation?.targetRequestId,
+            if (callerTraceId) {
+                const machineCall = method && (machineAdmission || parseMachineScopedRpcMethod(method));
+                log({ module: "websocket-rpc", event: machineCall ? "machine-rpc-relay-completed" : "rpc-call-completed",
+                    method, requestId: callerTraceId, targetRequestId: targetTraceId ?? cancellation?.targetRequestId,
                     callerSocketId: params.socket.id, callerConnected: params.socket.connected === true,
                     targetSocketId: cancellation?.targetSocketId,
                     durationMs: Date.now() - startedAt,
                     admissionMs: (forwardStartedAt ?? Date.now()) - startedAt,
                     relayMs: forwardStartedAt === undefined ? null : (forwardCompletedAt ?? Date.now()) - forwardStartedAt,
-                }, "Machine RPC relay completed");
+                }, machineCall ? "Machine RPC relay completed" : "RPC call completed");
             }
             if (
                 callerRequestId

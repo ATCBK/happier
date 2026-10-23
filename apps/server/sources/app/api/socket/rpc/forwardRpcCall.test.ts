@@ -32,7 +32,10 @@ import { buildRpcMethodRoom } from './rpcMethodRoom';
 import { log } from '@/utils/logging/log';
 
 describe('forwardRpcCall', () => {
-    it.each(['received', 'disconnected'] as const)('joins target lookup, actual submission and %s ACK settlement without logging content', async status => {
+    it.each([
+        { status: 'received', cancellable: true }, { status: 'disconnected', cancellable: true },
+        { status: 'received', cancellable: false }, { status: 'disconnected', cancellable: false },
+    ] as const)('joins target lookup, submission and $status ACK without content (cancellable=$cancellable)', async ({ status, cancellable }) => {
         const io = new Server();
         const method = 'machine-1:daemon.vitals.get';
         const controller = new AbortController();
@@ -41,17 +44,24 @@ describe('forwardRpcCall', () => {
         let submitted!: () => void;
         const issued = new Promise<void>(resolve => { submitted = resolve; });
         const response = new Promise<unknown>((resolve, reject) => { acknowledge = resolve; rejectAcknowledgement = reject; });
-        const emitWithAck = vi.fn(() => { submitted(); return response; });
+        const emitWithAck = vi.fn((_event: string, _payload: unknown) => { submitted(); return response; });
         const target = { id: 'daemon-namespace', connected: true, data: {}, timeout: () => ({ emitWithAck }) };
         // Only the socket network boundary is synthetic; lookup, selection and forwarding are real.
         io.sockets.sockets.set(target.id, target as unknown as Socket);
         io.sockets.adapter.rooms.set(buildRpcMethodRoom({ userId: 'user-1', method }), new Set([target.id]));
         vi.mocked(log).mockClear();
         try {
-            const forwarded = forwardRpcCall({ io, targetUserId: 'user-1', method,
+            const input = { io, targetUserId: 'user-1', method,
                 callerSocketId: 'browser-namespace', callParams: { secret: 'private-request-content' },
-                cancellation: { targetRequestId: 'relay-trace-1', signal: controller.signal, onTargetSelected() {} } });
+                ...(cancellable
+                    ? { cancellation: { targetRequestId: 'relay-trace-1', signal: controller.signal, onTargetSelected() {} } }
+                    : { traceId: 'relay-trace-1' }),
+            };
+            const forwarded = forwardRpcCall(input);
             await issued;
+            expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REQUEST,
+                expect.objectContaining(cancellable ? { requestId: 'relay-trace-1' } : { traceId: 'relay-trace-1' }));
+            if (!cancellable) expect(emitWithAck.mock.calls[0]?.[1]).not.toHaveProperty('requestId');
             const events = () => vi.mocked(log).mock.calls.map(([facts]) => facts)
                 .filter(facts => typeof facts === 'object' && facts !== null && 'event' in facts);
             expect(events()).toEqual([
