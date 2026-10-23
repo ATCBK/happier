@@ -739,7 +739,12 @@ async function pressButtonWithAccessibleLabelFragment(fragment: string): Promise
 
 /** Choose one option of a field Select through the shared menu it opens. */
 async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promise<void> {
-  await pressButtonWithAccessibleLabelFragment(fieldLabel);
+  // The menu trigger itself, not a row whose name also mentions the field.
+  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]')).find((candidate) => (
+    candidate.getAttribute('aria-label')?.includes(fieldLabel)
+  ));
+  expect(trigger, `Expected a ${JSON.stringify(fieldLabel)} field menu trigger`).toBeDefined();
+  await act(async () => { trigger?.click(); });
   const option = await vi.waitFor(() => {
     const candidate = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
       .find((item) => item.textContent?.includes(optionLabel));
@@ -751,7 +756,7 @@ async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promi
 
 /** The current value a closed field Select states on its trigger. */
 function expectFieldValue(fieldLabel: string, optionLabel: string): void {
-  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]')).find((candidate) => (
+  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]')).find((candidate) => (
     candidate.getAttribute('aria-label')?.includes(fieldLabel)
   ));
   expect(trigger?.textContent ?? trigger?.getAttribute('aria-label')).toContain(optionLabel);

@@ -10096,16 +10096,6 @@ function ConnectionRow(props: Readonly<{
           t={props.t}
         />
       ) : null],
-    ['lifecycle', providerDependentOperationsAvailable ? (
-      <ConnectionLifecycleControls
-        key="lifecycle"
-        connection={props.connection}
-        resource={props.resource}
-        onSettled={props.onLifecycleSettled}
-        onRefresh={requestRefresh}
-        t={props.t}
-      />
-    ) : null],
     ['pollRetry', providerDependentOperationsAvailable ? (
       <ConnectionPollRetryControls
         key="pollRetry"
@@ -10144,6 +10134,17 @@ function ConnectionRow(props: Readonly<{
           t={props.t}
         />
       ) : null],
+    // Removing the connection is the one destructive control; it always comes last.
+    ['lifecycle', providerDependentOperationsAvailable ? (
+      <ConnectionLifecycleControls
+        key="lifecycle"
+        connection={props.connection}
+        resource={props.resource}
+        onSettled={props.onLifecycleSettled}
+        onRefresh={requestRefresh}
+        t={props.t}
+      />
+    ) : null],
   ];
   const recoveryControls = {
     recommended: controlElements.find(([control]) => control === recommendedControl)?.[1] ?? null,
@@ -10171,6 +10172,8 @@ function ConnectionRow(props: Readonly<{
           The connection's one recommended recovery leads its detail, drawn by the
           existing control that owns that Action; the other repairs stay quiet below.
         */}
+        {/* What needs the reader comes first, then its one recommended repair. */}
+        <ConnectionContinuityDisclosures connection={props.connection} t={props.t} />
         {recoveryControls.recommended}
         <ConnectionPolicyEditor
           connection={props.connection}
@@ -10369,7 +10372,6 @@ function ConnectionPolicyEditor(props: Readonly<{
           t={props.t}
         />
       ) : null}
-      <ConnectionContinuityDisclosures connection={props.connection} t={props.t} />
       {props.providerDependentOperationsAvailable ? (
         <ConnectionHistoryGapBaselineControls
           connection={props.connection}
@@ -12345,11 +12347,10 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                 : row.acceptedPartCount === 1
                   ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
                   : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount });
+              const acceptedFact = `${props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted')}: ${accepted}`;
               const facts = [
                 ...(mixed ? [deliveryDecisionStateLabel(row.state, props.t)] : []),
-                ...(row.state === 'archiveRecoverable' ? [] : [
-                  `${props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted')}: ${accepted}`,
-                ]),
+                ...(row.state === 'archiveRecoverable' || row.acceptedPartCount === 0 ? [] : [acceptedFact]),
                 ...(row.failedChunk === undefined ? [] : [
                   `${props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part')}: ${props.t(
                     'plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 },
@@ -12368,6 +12369,9 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                 >
                   <Stack gap="small">
                     <Text tone="secondary" value={deliveryDecisionExplanation(row.state, props.t)} />
+                    {row.state === 'archiveRecoverable' || row.acceptedPartCount > 0 ? null : (
+                      <Text tone="secondary" value={acceptedFact} />
+                    )}
                     {recommendation === undefined ? null : row.state === 'archiveRecoverable' ? (
                       // Not ambiguous: the provider proved no effect, so the recovery is to send again
                       // once the owner unarchived the destination.
