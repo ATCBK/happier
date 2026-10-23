@@ -1,4 +1,5 @@
 import { processGenerationProvesReuse } from '@happier-dev/cli-common/processInstance';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
     createLocalServiceInventoryEntryRemovedEvent,
@@ -21,7 +22,10 @@ export type LocalServiceInventorySubscriber = (event: LocalServiceInventoryRegis
 
 export type LocalServiceInventoryRegistry = Readonly<{
     getSnapshot(): NormalizedLocalServiceInventorySnapshot;
-    replaceSnapshot(snapshot: NormalizedLocalServiceInventorySnapshot): void;
+    replaceSnapshot(snapshot: NormalizedLocalServiceInventorySnapshot, options?: Readonly<{
+        /** A material launcher change shares this Machine's existing inventory watch. */
+        invalidate?: boolean;
+    }>): void;
     forgetEntry(input: Readonly<{
         inventoryId: string;
         updatedAt: number;
@@ -95,6 +99,14 @@ function attachStoredLabels(
     return labels.length > 0 ? { ...entry, labels } : entry;
 }
 
+function materialEntry(entry: NormalizedLocalServiceInventoryEntry) {
+    // Connection counts are private Guard observations, stripped by Inventory V1 egress.
+    const { lastSeenAt: _lastSeenAt, establishedConnections: _connections, endpoint, ...facts } = entry;
+    if (!endpoint) return facts;
+    const { probedAt: _probedAt, ...endpointFacts } = endpoint;
+    return { ...facts, endpoint: endpointFacts };
+}
+
 function inventoryFallbackKey(entry: Pick<NormalizedLocalServiceInventoryEntry, 'machineId' | 'address' | 'port' | 'protocol'>): string {
     return `${entry.machineId}:${entry.protocol}:${entry.address.kind}:${entry.address.host}:${entry.port}`;
 }
@@ -162,7 +174,7 @@ export function createLocalServiceInventoryRegistry(
         getSnapshot() {
             return snapshot;
         },
-        replaceSnapshot(nextSnapshot) {
+        replaceSnapshot(nextSnapshot, replaceOptions) {
             scannedEntries = nextSnapshot.entries;
             const visibleEntries = nextSnapshot.entries.filter((entry) => {
                 const fallbackKey = inventoryFallbackKey(entry);
@@ -176,11 +188,30 @@ export function createLocalServiceInventoryRegistry(
                 }
                 return false;
             });
+            const previousById = new Map(snapshot.entries.map(entry => [entry.id, entry]));
+            let entriesChanged = snapshot.entries.length !== visibleEntries.length;
+            const entries = visibleEntries.map((scanned, index) => {
+                const entry = attachStoredLabels(scanned, labels.labelsFor(scanned));
+                const previous = previousById.get(entry.id);
+                if (snapshot.entries[index]?.id !== entry.id) entriesChanged = true;
+                if (!previous || !isDeepStrictEqual(materialEntry(previous), materialEntry(entry))) {
+                    entriesChanged = true;
+                    return entry;
+                }
+                // Keep material nested identities; observations remain current for on-demand reads
+                // and, critically, for the scanner's next missing-listener deadline.
+                return { ...previous, lastSeenAt: entry.lastSeenAt, establishedConnections: entry.establishedConnections,
+                    ...(previous.endpoint && entry.endpoint ? { endpoint: { ...previous.endpoint, probedAt: entry.endpoint.probedAt } } : {}) };
+            });
+            const changed = replaceOptions?.invalidate === true || entriesChanged
+                || snapshot.machineId !== nextSnapshot.machineId || snapshot.refreshState !== nextSnapshot.refreshState
+                || !isDeepStrictEqual(snapshot.diagnostics, nextSnapshot.diagnostics);
             snapshot = {
                 ...nextSnapshot,
-                entries: visibleEntries.map((entry) => attachStoredLabels(entry, labels.labelsFor(entry))),
+                generatedAt: changed ? Math.max(nextSnapshot.generatedAt, snapshot.generatedAt + 1) : snapshot.generatedAt,
+                entries,
             };
-            publish(createLocalServiceInventorySnapshotEvent(snapshot));
+            if (changed) publish(createLocalServiceInventorySnapshotEvent(snapshot));
         },
         forgetEntry(input) {
             const target = snapshot.entries.find((entry) => entry.id === input.inventoryId);
@@ -197,7 +228,7 @@ export function createLocalServiceInventoryRegistry(
             forgottenFallbackKeys = nextForgotten;
             snapshot = {
                 ...snapshot,
-                generatedAt: input.updatedAt,
+                generatedAt: Math.max(input.updatedAt, snapshot.generatedAt + 1),
                 entries: snapshot.entries.filter((entry) => entry.id !== target.id),
             };
             publish(createLocalServiceInventoryEntryRemovedEvent(snapshot, target.id));
@@ -213,6 +244,7 @@ export function createLocalServiceInventoryRegistry(
             forgottenFallbackKeys = nextForgotten;
             snapshot = {
                 ...snapshot,
+                generatedAt: snapshot.generatedAt + 1,
                 entries: scannedEntries
                     .filter((entry) => !forgottenFallbackKeys.has(inventoryFallbackKey(entry)))
                     .map((entry) => attachStoredLabels(entry, labels.labelsFor(entry))),
@@ -234,6 +266,7 @@ export function createLocalServiceInventoryRegistry(
             const nextEntry = nextEntries.find((entry) => entry.id === input.inventoryId);
             snapshot = {
                 ...snapshot,
+                generatedAt: Math.max(input.updatedAt, snapshot.generatedAt + 1),
                 entries: nextEntries,
             };
             if (nextEntry) {

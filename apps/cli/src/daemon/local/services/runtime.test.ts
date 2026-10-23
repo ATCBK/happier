@@ -97,6 +97,147 @@ function buildSnapshot(
 }
 
 describe('createLocalServicesDaemonRuntime', () => {
+    it('keeps scans fresh without waking inventory or launcher readers for unchanged facts', async () => {
+        let observedAt = 1_000;
+        let port = 5173;
+        const scan = vi.fn(async () => ({
+            listeners: [{ address: '127.0.0.1', port, protocol: 'tcp' as const }],
+            processes: new Map(), workspaces: [], diagnostics: [],
+        }));
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, scan, runTargets: () => [], now: () => observedAt });
+        const cancellation = new AbortController();
+        try {
+            const first = await runtime.refreshInventoryNow();
+            let publications = 0;
+            let launcherReads = 0;
+            runtime.inventoryRegistry.subscribe(() => { publications++; });
+            const watched = runtime.inventoryRoutes.watchSnapshot({ sinceGeneratedAt: first.generatedAt, signal: cancellation.signal })
+                .then(async result => {
+                    if (result.changed) {
+                        launcherReads++;
+                        await runtime.launcherRoutes.getSnapshot({ scope: 'machine' });
+                    }
+                });
+            for (let index = 1; index <= 75; index++) {
+                observedAt += 10_000;
+                await runtime.refreshInventoryNow();
+            }
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect({ publications, launcherReads }).toEqual({ publications: 0, launcherReads: 0 });
+            expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(first.generatedAt);
+            expect(runtime.inventoryRegistry.getSnapshot().entries[0]?.lastSeenAt).toBe(observedAt);
+            const scanCount = scan.mock.calls.length;
+            await runtime.inventoryRoutes.getSnapshot();
+            await runtime.launcherRoutes.getSnapshot({ scope: 'machine' });
+            expect(scan).toHaveBeenCalledTimes(scanCount);
+            port = 5174;
+            observedAt += 10_000;
+            await runtime.refreshInventoryNow();
+            await watched;
+            expect({ publications, launcherReads }).toEqual({ publications: 1, launcherReads: 1 });
+        } finally { cancellation.abort(); await runtime.stop(); }
+    });
+
+    it('keeps native action freshness independent of a silent material generation', async () => {
+        let observedAt = 1_000;
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, now: () => observedAt, runTargets: () => [],
+            scan: async () => ({ listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
+                processes: new Map([[400, { pid: 400, ppid: 1, command: 'server', cwd: '/repo' }]]),
+                workspaces: [], diagnostics: [] }) });
+        try {
+            const first = await runtime.refreshInventoryNow();
+            const entry = first.entries[0];
+            if (!entry?.provenance?.process) throw new Error('Expected listener identity');
+            observedAt = 2_000;
+            // A mismatched identity must be rejected by the real native probe, before signalling.
+            const outcome = await runtime.terminateDetectedService({ now: observedAt,
+                entry: { ...entry, provenance: { process: { ...entry.provenance.process, pid: 401 } } },
+                request: { requestId: 'identity-check', action: 'terminate_detected', force: false,
+                    target: { kind: 'inventory_entry', machineId: 'machine-a', inventoryEntryId: entry.id } } });
+            expect(outcome).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
+            expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(first.generatedAt);
+        } finally { await runtime.stop(); }
+    });
+
+    it('preserves native discovery cadence across an unchanged watch window and reports disappearance on the next scan', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        let listenerPresent = true;
+        const scan = vi.fn(async () => ({ listeners: listenerPresent
+            ? [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const }] : [],
+            processes: new Map(), workspaces: [], diagnostics: [] }));
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', inventoryEnabled: () => true,
+            scan, runTargets: () => [] });
+        try {
+            const initial = await runtime.inventoryRoutes.getSnapshot();
+            const watch = () => runtime.inventoryRoutes.watchSnapshot({ sinceGeneratedAt: initial.generatedAt });
+            const first = watch();
+            await vi.advanceTimersByTimeAsync(25_000);
+            expect(await first).toEqual({ changed: false });
+            expect(scan).toHaveBeenCalledTimes(3);
+            listenerPresent = false;
+            const second = watch();
+            await vi.advanceTimersByTimeAsync(4_999);
+            expect(scan).toHaveBeenCalledTimes(3);
+            await vi.advanceTimersByTimeAsync(1);
+            const changed = await second;
+            expect(scan).toHaveBeenCalledTimes(4);
+            expect(changed.changed && changed.snapshot.entries[0]?.state).toBe('stale');
+        } finally { await runtime.stop(); vi.useRealTimers(); }
+    });
+
+    it('publishes declaration changes and endpoint-free managed start/stop without a listener change', async () => {
+        let observedAt = 1_000;
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            // Literal Project commands do not install plugin dependencies.
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const runTargets: import('./launch/runTargets').LocalServiceLauncherRunTarget[] = [];
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, now: () => observedAt, projectManagedServices: owner,
+            runTargets: () => runTargets,
+            scan: async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }) });
+        const workspace = { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 };
+        const declaration = { workspaceRefId: workspace.id, selection: { kind: 'manifest', name: 'worker' } } as const;
+        let publications = 0;
+        runtime.inventoryRegistry.subscribe(() => { publications++; });
+        const observe = async () => { observedAt += 10_000; await runtime.refreshInventoryNow(); };
+        try {
+            await observe();
+            expect(publications).toBe(1);
+            await observe();
+            expect(publications).toBe(1);
+            runTargets.push({ id: 'worker', cwd: workspace.rootPath, workspaceId: workspace.id,
+                workspace, declaration, title: 'worker' });
+            await observe();
+            expect(publications).toBe(2);
+            const handle = await owner.superviseProject({ workspace, declaration, cwd: workspace.rootPath,
+                serviceId: 'worker', specIdentity: 'worker', isCurrent: () => true,
+                requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
+                processSpec: { mode: { kind: 'managedSpawn', endpointNone: true } },
+                authorizeLaunch: async () => ({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+                    env: {}, release: async () => undefined }) });
+            await observe();
+            expect(publications).toBe(3);
+            expect((await runtime.launcherRoutes.getSnapshot({ scope: 'machine' })).targets).toEqual([
+                expect.objectContaining({ serviceState: 'running', endpointKind: 'none' }),
+            ]);
+            await observe();
+            expect(publications).toBe(3);
+            await handle.stop();
+            await observe();
+            expect(publications).toBe(4);
+            expect((await runtime.launcherRoutes.getSnapshot({ scope: 'machine' })).targets).toEqual([
+                expect.objectContaining({ id: 'worker', state: 'unavailable', actions: [] }),
+            ]);
+            await observe();
+            expect(publications).toBe(4);
+        } finally { await runtime.stop(); await owner.dispose(); }
+    });
+
     it('reads exact managed bindings while listener hydration is pending, keeping ordinary launcher reads fresh', async () => {
         let releaseScan!: () => void;
         const scanned = new Promise<void>(resolve => { releaseScan = resolve; });
@@ -255,7 +396,10 @@ describe('createLocalServicesDaemonRuntime', () => {
     it('does not scan for a passive Machine summary publisher without an inventory reader', async () => {
         vi.useFakeTimers();
         try {
-            const scan = vi.fn(async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }));
+            let listenerPresent = false;
+            const scan = vi.fn(async () => ({ listeners: listenerPresent
+                ? [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const }] : [],
+                processes: new Map(), workspaces: [], diagnostics: [] }));
             const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', inventoryEnabled: () => true, scan, refreshIntervalMs: 1_000 });
             expect(vi.getTimerCount()).toBe(0);
             await vi.advanceTimersByTimeAsync(3_000);
@@ -272,6 +416,9 @@ describe('createLocalServicesDaemonRuntime', () => {
             const watched = runtime.inventoryRoutes.watchSnapshot({
                 sinceGeneratedAt: runtime.inventoryRegistry.getSnapshot().generatedAt,
             });
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(runtime.inventoryRoutes.watcherCount()).toBe(1);
+            listenerPresent = true;
             await vi.advanceTimersByTimeAsync(1_000);
             expect((await watched).changed).toBe(true);
             expect(scan.mock.calls.length).toBeGreaterThan(1);
@@ -1007,12 +1154,12 @@ describe('createLocalServicesDaemonRuntime', () => {
             await vi.advanceTimersByTimeAsync(5_000);
             expect(scan).not.toHaveBeenCalled();
 
-            const parked = runtime.inventoryRoutes.watchSnapshot({});
+            const parked = runtime.inventoryRoutes.watchSnapshot({ sinceGeneratedAt: 0 });
             await Promise.resolve();
             await vi.advanceTimersByTimeAsync(1_000);
             expect(scan.mock.calls.length).toBeGreaterThanOrEqual(1);
 
-            // The watch is answered by the scan it enabled, and the loop idles again afterwards.
+            // The fresh initial scan closes the read/watch gap and leaves no parked demand.
             expect((await parked).changed).toBe(true);
             const scansWhileWatched = scan.mock.calls.length;
             await vi.advanceTimersByTimeAsync(5_000);

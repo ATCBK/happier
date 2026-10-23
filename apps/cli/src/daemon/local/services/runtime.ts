@@ -11,6 +11,7 @@ import type { createManagedServicesOwner } from '@/plugins/runtime/invocation/se
 import type { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
 import { localServiceFactsSnapshot } from '@/daemon/processes/ownership/resolveLocalServiceOwnership';
 import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadline';
+import { isDeepStrictEqual } from 'node:util';
 
 import { createLocalServiceInventoryAnnotationsFileStore } from './inventory/annotationsFile';
 import {
@@ -398,8 +399,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                     diagnostic,
                 });
             onNative(snapshot);
-            inventoryRegistry.replaceSnapshot(snapshot);
-            return snapshot;
+            return await publishInventorySnapshot(snapshot);
         }
 
         // Finish Account/workspace transports before measuring native sockets.
@@ -432,8 +432,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 diagnostics: [...result.diagnostics, ...workspaceDiagnostics],
             });
             onNative(snapshot);
-            inventoryRegistry.replaceSnapshot(snapshot);
-            return snapshot;
+            return await publishInventorySnapshot(snapshot);
         }
         const ownership = params.processOwnershipRuntime
             ? await params.processOwnershipRuntime.resolveSnapshot(localServiceFactsSnapshot(result.processes, generatedAt), result.listeners)
@@ -444,8 +443,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                     code: 'local_services_process_ownership_unavailable', severity: 'warning', message: ownership.reason,
                 }] });
             onNative(snapshot);
-            inventoryRegistry.replaceSnapshot(snapshot);
-            return snapshot;
+            return await publishInventorySnapshot(snapshot);
         }
         const snapshot = normalizeLocalServiceScan({
             machineId: params.machineId,
@@ -476,8 +474,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 enricher: params.pageTitleEnricher,
             });
         }
-        inventoryRegistry.replaceSnapshot(snapshotWithDiagnostics);
-        return snapshotWithDiagnostics;
+        return await publishInventorySnapshot(snapshotWithDiagnostics);
     };
 
     // Single-flight + coalesce manual refreshes onto one in-flight scan. The periodic loop
@@ -530,6 +527,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                     flight.nativePending = false;
                     rejectNative(error);
                 }
+                lastInventoryObservationAt = now();
                 inventoryRegistry.replaceSnapshot(nonAuthoritativeInventorySnapshot({
                     previous: inventoryRegistry.getSnapshot(),
                     machineId: params.machineId,
@@ -549,14 +547,15 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     };
 
     const scanIntervalMs = params.refreshIntervalMs ?? DEFAULT_LOCAL_SERVICE_CAPABILITIES.inventory.refreshIntervalMs;
+    // Discovery freshness is independent of the last material publication's watch cursor.
+    let lastInventoryObservationAt: number | null = null;
 
     // Only parked inventory readers demand periodic native/HTTP work. The Machine
     // summary publisher passively observes those refreshes; it is not a live reader.
     // Plain inventory reads stay fresh through the same single-flight owner.
     let activeInventoryWatchers = 0;
     const ensureFreshInventory = async (): Promise<void> => {
-        const snapshot = inventoryRegistry.getSnapshot();
-        if (snapshot.generatedAt > 0 && now() - snapshot.generatedAt < scanIntervalMs) {
+        if (lastInventoryObservationAt !== null && now() - lastInventoryObservationAt < scanIntervalMs) {
             return;
         }
         await refreshInventoryNow();
@@ -651,6 +650,18 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         resolveSessionWorkspacePaths,
         now,
     });
+    let publishedLauncherTargets: Awaited<ReturnType<typeof scannedLauncherFeed.getSnapshot>>['targets'] = [];
+    const publishInventorySnapshot = async (snapshot: NormalizedLocalServiceInventorySnapshot): Promise<NormalizedLocalServiceInventorySnapshot> => {
+        // Scan ticks also discover declarations and endpoint-free managed occurrences. Reuse
+        // the real launcher projection so suppressing observation metadata cannot hide those
+        // changes, or give a second implementation authority over its material fields.
+        const launcher = await scannedLauncherFeed.getSnapshot({ scope: 'machine' }, snapshot.entries);
+        const invalidate = !isDeepStrictEqual(publishedLauncherTargets, launcher.targets);
+        publishedLauncherTargets = launcher.targets;
+        inventoryRegistry.replaceSnapshot(snapshot, { invalidate });
+        lastInventoryObservationAt = snapshot.generatedAt;
+        return inventoryRegistry.getSnapshot();
+    };
     // The launcher folds inventory entries into its targets but never watches, so it is the one
     // reader that could observe an unscanned inventory once the loop follows watchers. It demands
     // freshness through the same coalescing single flight instead of owning a second cadence.
@@ -684,7 +695,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     // raw platform `scan`: a terminate would otherwise stack its own machine-wide scans on top
     // of the inventory loop's instead of awaiting the in-flight one.
     const terminateDetectedService = createTerminateDetectedService(
-        createOsProcessControl({ refreshInventory: refreshInventoryNow }),
+        createOsProcessControl({ refreshInventory: () => refreshInventoryNow({ stage: 'native' }) }),
     );
     const actionRoutes = createLocalServiceActionRoutes({
         machineId: params.machineId,

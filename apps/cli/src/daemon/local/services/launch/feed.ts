@@ -25,7 +25,8 @@ export type LocalServiceLauncherFeedSnapshotRequest = Readonly<{
 }>;
 
 export type LocalServiceLauncherFeed = Readonly<{
-    getSnapshot(request?: LocalServiceLauncherFeedSnapshotRequest): Promise<LocalServiceLauncherSnapshotV1>;
+    getSnapshot(request?: LocalServiceLauncherFeedSnapshotRequest,
+        inventoryEntries?: readonly NormalizedLocalServiceInventoryEntry[]): Promise<LocalServiceLauncherSnapshotV1>;
 }>;
 
 export type LocalServiceRunTargetsProvider =
@@ -165,7 +166,7 @@ export function createLocalServiceLauncherFeed(
     // PID tombstone that could hide a fresh listener after process reuse.
     const cachedInventoryOwners = new WeakMap<NonNullable<NormalizedLocalServiceInventoryEntry['provenance']>, string>();
     return {
-        async getSnapshot(request) {
+        async getSnapshot(request, observedInventoryEntries) {
             if (request?.projection === 'managed_bindings' && !input.projectManagedServices) {
                 throw Object.assign(new Error('Project Service binding owner is unavailable'), {
                     code: 'project_service_bindings_unavailable',
@@ -187,7 +188,9 @@ export function createLocalServiceLauncherFeed(
             // Complete bindings read cached listener evidence without waiting for discovery.
             // Both projections must retain the same managed identity and preview presentation.
             const runTargets = bindingsOnly ? [] : await resolveRunTargets(input.runTargets, input.onRunTargetsError);
-            const inventoryEntries = input.inventoryRegistry.getSnapshot().entries;
+            // The scan publisher projects this same observation before deciding whether to wake
+            // readers. Ordinary reads use the registry's annotated, visible inventory.
+            const inventoryEntries = observedInventoryEntries ?? input.inventoryRegistry.getSnapshot().entries;
             const snapshot = buildLocalServiceLauncherSnapshot({
                 machineId: input.machineId,
                 sessionId,

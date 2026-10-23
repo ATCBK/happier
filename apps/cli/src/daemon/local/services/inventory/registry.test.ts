@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalServiceInventoryUpdateEventV1Schema } from '@happier-dev/protocol/local/services/inventory';
 import { createLocalServiceInventoryAnnotationsFileStore } from './annotationsFile';
+import { normalizeLocalServiceScan } from './scanner';
+import { createLocalServiceInventoryRoutes } from './routes';
 
 import {
     createLocalServiceInventoryRegistry,
@@ -50,6 +52,90 @@ const snapshot = {
 } as const;
 
 describe('createLocalServiceInventoryRegistry', () => {
+    it('keeps observation metadata readable without publications or watch wakes for unchanged scans', async () => {
+        const registry = createLocalServiceInventoryRegistry();
+        const endpoint = { scheme: 'http', host: '127.0.0.1', port: 5173, probeState: 'ready', probedAt: 1_000 } as const;
+        registry.replaceSnapshot({ ...snapshot, entries: [{ ...snapshot.entries[0], endpoint }] });
+        const generation = registry.getSnapshot().generatedAt;
+        let publications = 0;
+        registry.subscribe(() => { publications++; });
+        const routes = createLocalServiceInventoryRoutes({ registry });
+        const cancellation = new AbortController();
+        let wakes = 0;
+        const watched = routes.watchSnapshot({ sinceGeneratedAt: generation, signal: cancellation.signal })
+            .then(result => { if (result.changed) wakes++; });
+        for (let index = 1; index <= 75; index++) {
+            const observedAt = 1_000 + index * 10_000;
+            registry.replaceSnapshot({ ...snapshot, generatedAt: observedAt,
+                entries: [{ ...snapshot.entries[0], lastSeenAt: observedAt, endpoint: { ...endpoint, probedAt: observedAt } }] });
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+        cancellation.abort();
+        await watched;
+        expect({ publications, wakes }).toEqual({ publications: 0, wakes: 0 });
+        expect(registry.getSnapshot()).toMatchObject({ generatedAt: generation,
+            entries: [{ lastSeenAt: 751_000, endpoint: { probedAt: 751_000 } }] });
+    });
+
+    it('uses the latest silent observation for disappearance, gone and removal deadlines', () => {
+        const registry = createLocalServiceInventoryRegistry();
+        const observe = (now: number, present: boolean) => registry.replaceSnapshot(normalizeLocalServiceScan({
+            machineId: 'machine-a', now, previous: registry.getSnapshot(), staleAfterMs: 30_000,
+            listeners: present ? [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' }] : [],
+            processes: new Map(), workspaces: [],
+        }));
+        observe(1_000, true);
+        let publications = 0;
+        registry.subscribe(() => { publications++; });
+        observe(31_000, true);
+        observe(41_000, false);
+        expect(registry.getSnapshot().entries[0]).toMatchObject({ state: 'stale', lastSeenAt: 31_000 });
+        observe(60_999, false);
+        expect(registry.getSnapshot().entries[0]?.state).toBe('stale');
+        observe(61_000, false);
+        expect(registry.getSnapshot().entries[0]?.state).toBe('gone');
+        observe(90_999, false);
+        expect(registry.getSnapshot().entries).toHaveLength(1);
+        observe(91_000, false);
+        expect(registry.getSnapshot().entries).toEqual([]);
+        expect(publications).toBe(3);
+    });
+
+    it('keeps private connection observations current without publishing them on the public inventory watch', () => {
+        const registry = createLocalServiceInventoryRegistry();
+        registry.replaceSnapshot(snapshot);
+        let publications = 0;
+        registry.subscribe(() => { publications++; });
+        for (const establishedConnections of [0, 2, null]) {
+            registry.replaceSnapshot({ ...snapshot, entries: [{ ...snapshot.entries[0], establishedConnections }] });
+            expect(registry.getSnapshot().entries[0]?.establishedConnections).toBe(establishedConnections);
+        }
+        expect(publications).toBe(0);
+    });
+
+    it('advances the watch cursor for label, Forget and Undo mutations between a read and a watch', async () => {
+        const registry = createLocalServiceInventoryRegistry();
+        registry.replaceSnapshot(snapshot);
+        const routes = createLocalServiceInventoryRoutes({ registry });
+        const watchAfter = async (mutate: () => void) => {
+            const sinceGeneratedAt = registry.getSnapshot().generatedAt;
+            mutate();
+            const cancellation = new AbortController();
+            const pending = routes.watchSnapshot({ sinceGeneratedAt, signal: cancellation.signal });
+            // A missed publication would park; cancel it so the regression fails without waiting for liveness.
+            cancellation.abort();
+            expect(await pending).toMatchObject({ changed: true });
+        };
+        await watchAfter(() => { registry.applyLabelPatch({ inventoryId: 'entry-1', text: 'Web', source: 'user', updatedAt: 1_000 }); });
+        let undoKey = '';
+        await watchAfter(() => {
+            const result = registry.forgetEntry({ inventoryId: 'entry-1', updatedAt: 1_000 });
+            if (!result.ok) throw new Error('Expected known entry');
+            undoKey = result.undoKey;
+        });
+        await watchAfter(() => { registry.undoForget(undoKey); });
+    });
+
     it.each(['process', 'unattributed'] as const)('restores extended stored annotations and writes canonical %s suppression data', (kind) => {
         const dir = mkdtempSync(join(tmpdir(), 'happier-inventory-extensions-'));
         try {
@@ -257,7 +343,7 @@ describe('createLocalServiceInventoryRegistry', () => {
             expect(() => registry.forgetEntry({ inventoryId: 'entry-1', updatedAt: 3_000 })).toThrow();
             registry.replaceSnapshot(snapshot);
             expect(registry.getSnapshot().entries).toEqual(snapshot.entries);
-            expect(events).toHaveLength(1); // Only the later census, no acknowledged mutation.
+            expect(events).toHaveLength(0); // Neither the failed mutation nor the unchanged census publishes.
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

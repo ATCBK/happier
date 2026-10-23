@@ -11,7 +11,7 @@ import type { NormalizedLocalServiceInventorySnapshot } from './scanner';
 export type LocalServiceInventoryWatchResult = ParkWatchResult<NormalizedLocalServiceInventorySnapshot>;
 
 export type LocalServiceInventoryRoutes = Readonly<{
-    /** Latest published observation, without waiting for a scan or HTTP presentation. */
+    /** Latest observation, including silent timestamp updates, without awaiting a new scan. */
     readCurrentSnapshot(): NormalizedLocalServiceInventorySnapshot;
     getSnapshot(): Promise<NormalizedLocalServiceInventorySnapshot>;
     refreshSnapshot(): Promise<NormalizedLocalServiceInventorySnapshot>;
