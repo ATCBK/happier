@@ -45,10 +45,10 @@ export const AGENT_STARTUP_FAILURE_PREVIEWS = {
   agent_startup_transport_failed: 'Agent startup transport failed',
   agent_startup_invalid_state: 'Agent startup encountered invalid local runtime state',
   agent_startup_failed: 'Agent startup failed',
-  AGENT_RESUME_PROVIDER_STATE_MISSING: 'The native Agent state needed to resume is missing',
+  AGENT_RESUME_PROVIDER_STATE_MISSING: 'The native agent state needed to resume is missing',
   codex_refresh_free_auth_unsupported: 'Agent startup authentication is unavailable',
-  plugin_services_managed_provider_authority_unavailable: 'Access to the shared Provider is unavailable. Check the Gateway and its Machine connection, then retry the Session.',
-  provider_endpoint_unavailable: 'The Provider endpoint is unavailable. Check the Gateway and its Machine connection, then retry the Session.',
+  plugin_services_managed_provider_authority_unavailable: 'Access to the shared provider is unavailable. Check the Gateway and its machine connection, then retry the session.',
+  provider_endpoint_unavailable: 'The provider endpoint is unavailable. Check the Gateway and its machine connection, then retry the session.',
 } as const;
 export type AgentStartupFailureCode = keyof typeof AGENT_STARTUP_FAILURE_PREVIEWS;
 
@@ -65,12 +65,12 @@ export const TEAM_CREDENTIAL_FAILURE_PREVIEW = 'Shared Team credential refused t
  * may cross startup diagnostic and launch-result boundaries. */
 export const SESSION_PREPARATION_FAILURE_PREVIEWS = {
   ...Object.fromEntries(ProviderBrokerAdmissionFailureCodeV1Schema.options.map(code => [code, TEAM_CREDENTIAL_FAILURE_PREVIEW])) as Record<ProviderBrokerAdmissionFailureCodeV1, string>,
-  plugin_mcp_preparation_unavailable: 'Plugin MCP preparation is unavailable. Check the target Machine, then retry the Session.',
-  agent_runtime_daemon_service_generation_not_current: 'The runner Agent generation is no longer current. Retry the Session on the target Machine.',
-  native_agent_privileged_effect_authority_unavailable: 'Runner daemon authority is unavailable. Check the target Machine, then retry the Session.',
-  native_agent_privileged_effect_outcome_unknown: 'Runner daemon preparation could not be confirmed. Check the Session and target Machine before retrying.',
-  skills_unavailable: 'Skill delivery is unavailable. Check the target Machine, then retry the Session.',
-  team_credential_provider_selection_not_current: 'The selected Team provider is unavailable. Review the Team model selection, then retry the Session.',
+  plugin_mcp_preparation_unavailable: 'Plugin MCP preparation is unavailable. Check the target machine, then retry the session.',
+  agent_runtime_daemon_service_generation_not_current: 'The runner agent generation is no longer current. Retry the session on the target machine.',
+  native_agent_privileged_effect_authority_unavailable: 'Runner daemon authority is unavailable. Check the target machine, then retry the session.',
+  native_agent_privileged_effect_outcome_unknown: 'Runner daemon preparation could not be confirmed. Check the session and target machine before retrying.',
+  skills_unavailable: 'Skill delivery is unavailable. Check the target machine, then retry the session.',
+  team_credential_provider_selection_not_current: 'The selected Team provider is unavailable. Review the Team model selection, then retry the session.',
 } as const;
 export type SessionPreparationFailureCode = keyof typeof SESSION_PREPARATION_FAILURE_PREVIEWS;
 
