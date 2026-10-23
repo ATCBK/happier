@@ -1078,8 +1078,8 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     const apply = (profileId: string) => runtime.runtimeAuth.apply({ serviceId: service.localId,
       authGeneration: { credential: buildConnectedCodexCredential(profileId), credentialRevision: 'csr_abcdefghijklmnopqrstuv',
         forcedWorkspaceId: 'acct_target', selection: { kind: 'profile', serviceId: service.localId, profileId } } });
-    const usage = (turnId: string) => emitNotification('thread/tokenUsage/updated', { threadId: 'thread-1', turnId,
-      tokenUsage: { last: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } } });
+    const usage = (turnId: string) => emitNotification('rawResponse/completed', { threadId: 'thread-1', turnId,
+      responseId: `response-${events.length}`, usage: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } });
     try {
       expect(await apply('account-a')).toMatchObject({ ok: true });
       await runtime.send({ v: 1, text: 'first' }, { turnId: 'host-first' });
