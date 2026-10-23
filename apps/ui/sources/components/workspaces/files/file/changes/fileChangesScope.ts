@@ -1,10 +1,11 @@
 import { FileChangesScopeSchema, type FileChangesScope } from '@happier-dev/protocol/scm';
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
-export function fileChangesScopeOfComparison(comparison: SessionScmReviewComparison | undefined): FileChangesScope | null {
-    if (!comparison) return null;
-    if (comparison.kind === 'turnCheckpoint') return comparison.turnId ? { kind: 'turn', turnId: comparison.turnId } : null;
-    return comparison.kind === 'session' || comparison.kind === 'workingTree' ? { kind: comparison.kind } : null;
+export function fileChangesScopeOfComparison(comparison: unknown): FileChangesScope | null {
+    if (!comparison || typeof comparison !== 'object' || Array.isArray(comparison)) return null;
+    const source = comparison as Record<string, unknown>;
+    if (source.kind === 'turnCheckpoint') return readFileChangesScope({ kind: 'turn', turnId: source.turnId });
+    return source.kind === 'session' || source.kind === 'workingTree' ? readFileChangesScope(source) : null;
 }
 
 export function fileChangesComparisonOfScope(scope: FileChangesScope): SessionScmReviewComparison {
@@ -25,11 +26,14 @@ export function resolveFileChangesScope(input: Readonly<{
     storedScope?: unknown;
     initialChanges?: SessionScmReviewComparison;
     sessionId?: string | null;
+    latestTurnId?: string | null;
 }>) {
     const current = readFileChangesScope(input.storedScope) ?? fileChangesScopeOfComparison(input.initialChanges)
         ?? (input.sessionId ? { kind: 'session' as const } : { kind: 'workingTree' as const });
     const openingScope = fileChangesScopeOfComparison(input.initialChanges);
     const selector = openingScope && JSON.stringify(openingScope) === JSON.stringify(current)
         ? input.initialChanges! : fileChangesComparisonOfScope(current);
-    return { current, selector, capture: current.kind !== 'workingTree' };
+    const turnId = current.kind === 'turn' ? current.turnId
+        : openingScope?.kind === 'turn' ? openingScope.turnId : input.latestTurnId ?? null;
+    return { current, selector, capture: current.kind !== 'workingTree', turnId };
 }

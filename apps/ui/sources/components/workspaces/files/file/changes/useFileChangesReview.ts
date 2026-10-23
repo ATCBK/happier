@@ -106,7 +106,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
       : null;
   const live = current.kind === 'workingTree';
   const unifiedDiff = live ? params.liveDiff : capturedDiff;
-  const turnId = current.kind === 'turn' ? current.turnId : latestTurnId;
+  const turnId = changes.turnId;
   const turnNumber = useSessionTurnNumber(sessionId, scope.serverId, turnId);
   const machineName = reachability.machineName;
 

@@ -1,10 +1,16 @@
 import * as React from 'react';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { buildWorkspaceFileViewPatch, readWorkspaceFileView, type WorkspaceFileView } from './workspaceFileView';
+import { readSessionScmReviewTarget } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 /** Memory belongs to the existing file tab; this hook only binds its reader and patch writer. */
 export function useWorkspaceFileView(pane: AppPaneScopeApi, tabKey: string) {
     const tabState = pane.scopeState?.details.tabState[tabKey];
+    const resource = pane.scopeState?.details.tabs.find(tab => tab.key === tabKey)?.resource;
+    const initialChanges = React.useMemo(() => {
+        const record = resource && typeof resource === 'object' ? resource as Readonly<{ changes?: unknown }> : null;
+        return readSessionScmReviewTarget({ comparison: record?.changes }).comparison;
+    }, [resource]);
     const current = React.useMemo(() => ({ tabKey, tabState, patch: pane.patchDetailsTabState }), [pane.scopeId, tabKey]);
     current.tabState = tabState;
     current.patch = pane.patchDetailsTabState;
@@ -15,5 +21,5 @@ export function useWorkspaceFileView(pane: AppPaneScopeApi, tabKey: string) {
         target.tabState = next;
         target.patch(target.tabKey, next);
     }, [current]);
-    return { view: React.useMemo(() => readWorkspaceFileView(tabState), [tabState]), patchView };
+    return { view: React.useMemo(() => readWorkspaceFileView(tabState), [tabState]), initialChanges, patchView };
 }

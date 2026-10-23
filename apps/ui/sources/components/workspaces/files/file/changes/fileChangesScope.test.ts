@@ -16,4 +16,10 @@ describe('File Changes selection policy', () => {
         expect(resolveFileChangesScope({ storedScope: { kind: 'turn', turnId: 'turn-8' } }))
             .toMatchObject({ current: { kind: 'turn', turnId: 'turn-8' }, capture: true });
     });
+    it('keeps an explicitly opened turn available when another scope is selected', () => {
+        const initialChanges = { kind: 'turnCheckpoint' as const, turnId: 'turn-original' };
+        expect(resolveFileChangesScope({ sessionId: 's', initialChanges, storedScope: { kind: 'session' }, latestTurnId: 'turn-latest' }))
+            .toMatchObject({ current: { kind: 'session' }, turnId: 'turn-original' });
+        expect(resolveFileChangesScope({ sessionId: 's', latestTurnId: 'turn-latest' }).turnId).toBe('turn-latest');
+    });
 });
