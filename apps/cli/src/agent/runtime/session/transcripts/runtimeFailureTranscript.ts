@@ -2,7 +2,10 @@ import type { AgentSessionRuntimeEvent, SessionRuntimeIssueV1 } from '@happier-d
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { classifyPrimarySessionRuntimeIssue } from '../errors/classifyPrimarySessionRuntimeIssue';
 import { isForegroundTurnRuntimeTranscriptEvent } from '../events/runtimeTranscriptScope';
-import { commitRequiredRuntimeTranscriptMessage, type RuntimeTranscriptProjectionSession } from './projectRuntimeTranscriptEvent';
+import { commitRequiredRuntimeTranscriptMessage, commitRuntimeTurnFailureMarker,
+  type RuntimeTranscriptProjectionSession, type RuntimeTranscriptProjectionResult } from './projectRuntimeTranscriptEvent';
+
+type FailureMarkerReceipt = NonNullable<Extract<RuntimeTranscriptProjectionResult, { projected: true }>['terminalSourceMessage']>;
 
 type RuntimeFailureEvent = Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' | 'input-rejected' }>;
 type RuntimeFailureProjectionSubject = Extract<AgentSessionRuntimeEvent, {
@@ -32,12 +35,12 @@ export function createRuntimeFailureTranscriptProjector(params: Readonly<{
   session: RuntimeTranscriptProjectionSession;
   provider: ACPProvider;
   providerName: string;
-}>): (event: RuntimeFailureProjectionEvent) => Promise<void> | null {
+}>): (event: RuntimeFailureProjectionEvent, terminalSourceMessage?: FailureMarkerReceipt) => Promise<FailureMarkerReceipt | null> | null {
   const projectedDiagnostics = new Set<string>();
-  const projectedLifecycleMarkers = new Set<string>();
+  const projectedLifecycleMarkers = new Map<string, FailureMarkerReceipt>();
   let lastAssistantMessage: Readonly<{ turnId: string; text: string }> | null = null;
 
-  return event => {
+  return (event, terminalSourceMessage) => {
     if (event.sessionId !== params.session.sessionId) return null;
     if (event.kind === 'transcript-message-committed' && event.role === 'assistant' && isForegroundTurnRuntimeTranscriptEvent(event)) {
       lastAssistantMessage = { turnId: event.turnId, text: event.text.trim() };
@@ -78,14 +81,17 @@ export function createRuntimeFailureTranscriptProjector(params: Readonly<{
         }
       }
       // A pre-acceptance rejection has no turn. Never invent a failed-turn marker.
-      if (event.kind === 'turn-failed' && !projectedLifecycleMarkers.has(event.turnId)) {
-        await commitRequiredRuntimeTranscriptMessage({
-          session: params.session, provider: params.provider,
-          body: { type: 'turn_failed', id: event.turnId }, localId: `${event.turnId}:turn_failed`, meta,
-          provenance: { kind: 'non_dependent', source: 'background' }, eventKind: event.kind,
+      if (event.kind === 'turn-failed') {
+        const previous = projectedLifecycleMarkers.get(event.turnId);
+        if (previous) return previous;
+        const receipt = terminalSourceMessage ?? await commitRuntimeTurnFailureMarker({
+          session: params.session, provider: params.provider, event, meta,
+          provenance: { kind: 'non_dependent', source: 'background' },
         });
-        projectedLifecycleMarkers.add(event.turnId);
+        projectedLifecycleMarkers.set(event.turnId, receipt);
+        return receipt;
       }
+      return null;
     })();
   };
 }

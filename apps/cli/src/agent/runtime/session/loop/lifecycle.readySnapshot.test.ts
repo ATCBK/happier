@@ -60,7 +60,12 @@ describe('host ready after a provider successor starts', () => {
     { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: true, combinedCard: false, rejectDiff: false },
     { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: true, rejectDiff: false },
     { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: true, rejectDiff: true },
-  ])('preserves host results across preview retirement=$retirePreview, receipt omission=$omitReceipt and eager startup=$eagerStartup/$hostAnswer (combined card=$combinedCard, reject Diff=$rejectDiff)', async ({ hostAnswer, eagerStartup, retirePreview, omitReceipt, combinedCard, rejectDiff }) => {
+    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false, failure: 'native' },
+    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false, failure: 'prompt' },
+    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false, failure: 'strict_resume' },
+  ])('preserves host results across preview retirement=$retirePreview, receipt omission=$omitReceipt and eager startup=$eagerStartup/$hostAnswer (combined card=$combinedCard, reject Diff=$rejectDiff, failure=$failure)', async (scenario) => {
+    const { hostAnswer, eagerStartup, retirePreview, omitReceipt, combinedCard, rejectDiff } = scenario;
+    const failure = 'failure' in scenario && scenario.failure;
     const checkpointRoot = combinedCard ? await mkdtemp(join(tmpdir(), 'happier-host-turn-card-')) : null;
     if (checkpointRoot) {
       const git = promisify(execFileCallback);
@@ -125,6 +130,7 @@ describe('host ready after a provider successor starts', () => {
     const transcriptRows: Array<{ id: string; localId: string; seq: number; createdAt: number; updatedAt: number;
       content: { t: 'plain'; v: ReturnType<typeof buildAcpAgentMessageEnvelope> } }> = [];
     const committedAssistantSeqs = new Map<string, number>();
+    const failureMarkerSeqs = new Map<string, number>();
     const acceptedUserSeqs = new Map<string, number>();
     const pendingReceipts = new Map<string, () => void>();
     const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
@@ -146,6 +152,7 @@ describe('host ready after a provider successor starts', () => {
       async send(request) {
         providerDispatchCount += 1;
         hostTurnIds.push(request.delivery.turnId);
+        if (failure === 'prompt') throw new Error('Prompt dispatch failed before a native turn');
         const answer = providerDispatchCount === 1 ? hostAnswer : secondHostAnswer;
         emit({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
         emit({ kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' });
@@ -156,7 +163,9 @@ describe('host ready after a provider successor starts', () => {
           emit({ kind: 'tool-result', turnId: request.delivery.turnId, toolCallId: 'edit', output: { status: 'completed' } });
         }
         if (answer) emit({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: answer });
-        emit({ kind: 'turn-complete', turnId: request.delivery.turnId });
+        emit(failure ? { kind: 'turn-failed', turnId: request.delivery.turnId,
+          diagnostic: { code: 'empty_failure', severity: 'error', message: 'Failed before any assistant output' } }
+          : { kind: 'turn-complete', turnId: request.delivery.turnId });
         const successorTurnId = `provider-successor-${providerDispatchCount}`;
         emit({ kind: 'turn-start', turnId: successorTurnId, startedBy: 'provider' });
         emit({ kind: 'transcript-message-committed', turnId: successorTurnId, messageId: `successor-answer-${providerDispatchCount}`,
@@ -212,6 +221,11 @@ describe('host ready after a provider successor starts', () => {
         agentMessages.push(body);
         if (rejectDiff && body.type === 'tool-call' && body.name === 'Diff') return { persisted: false as const, delivered: false as const };
         const extracted = extractAssistantTextSnapshotFromAcpMessage(providerId, body);
+        if (body.type === 'turn_failed') {
+          const seq = ++observedSeq;
+          failureMarkerSeqs.set(body.id, seq);
+          return { persisted: true as const, delivered: true as const, committedSequence: seq };
+        }
         if (extracted) {
           const seq = ++observedSeq;
           transcriptRows.push({ id: `reply-${seq}`, localId: options.localId, seq, createdAt: seq, updatedAt: seq,
@@ -259,6 +273,7 @@ describe('host ready after a provider successor starts', () => {
         runtimeActivityApplicability: 'not_applicable', machineMetadata: { host: 'test', platform: 'linux', happyCliVersion: '0.0.0-test', homeDir: '/tmp', happyHomeDir: '/tmp/happier', happyLibDir: '/tmp/happier/lib' },
         loadTerminalDisplay: async () => () => null, shouldRenderTerminalDisplay: () => false, formatPromptErrorMessage: String,
         ...(combinedCard ? {} : { lifecycleHooks: { createCheckpointLifecycle: () => ({}) } }),
+        ...(failure === 'strict_resume' ? { onAfterStart: () => { throw new Error('Native resume startup failed'); } } : {}),
         publishHostRuntimeEvent: event => metadataPublication?.observeRuntimeEvent(event),
       },
       api: { push: () => ({
@@ -284,16 +299,21 @@ describe('host ready after a provider successor starts', () => {
       setActiveAgentCompositionToolSelection() {}, happyMcpServerStop() {}, reconnectionHandle: null, startupCoordinator: null,
       runtimeState, setAbortRequestedCallback() {},
       transitionModelSelection: async selection => ({ ok: true, status: 'already_active', activeSelection: selection }),
-      initialResumeId: '',
+      initialResumeId: failure === 'strict_resume' ? 'unavailable-native-session' : '',
       deps: {
         runPermissionModePromptLoopFn: input => runPermissionModePromptLoop({ ...input, shouldExit: () => ready, getAbortSignal: () => controller.signal }),
         sendReadyWithPushNotificationFn: async input => {
           readyPreviews.push(input.assistantPreviewText);
-          expect(input.completedTurn).toEqual((omitReceipt || rejectDiff) && readyPreviews.length === 1 ? undefined
+          expect(input.completedTurn).toEqual(failure || ((omitReceipt || rejectDiff) && readyPreviews.length === 1) ? undefined
             : { turnId: hostTurnIds[readyPreviews.length - 1] });
           await sendReadyWithPushNotification(input);
           thinkingAtReady.push(runtimeState.thinking);
           if (providerDispatchCount > 0) emit({ kind: 'turn-complete', turnId: `provider-successor-${providerDispatchCount}` });
+          if (failure) {
+            ready = true;
+            controller.abort();
+            return;
+          }
           if (readyPreviews.length === 1) {
             secondHostSeq = ++observedSeq;
             queue.push({ text: 'second host input', localId: 'host-input-2', userMessageSeq: secondHostSeq }, { permissionMode: 'default' });
@@ -321,7 +341,24 @@ describe('host ready after a provider successor starts', () => {
       });
     }
     try {
-      await runSessionLoopLifecycle({ ...params, runtime: runtimeForLoop });
+      const running = runSessionLoopLifecycle({ ...params, runtime: runtimeForLoop });
+      if (failure === 'strict_resume') await expect(running).rejects.toThrow('Native resume startup failed');
+      else await running;
+      if (failure) {
+        const failed = terminalMutations.find(mutation => mutation.action === 'fail');
+        expect(failed).toBeDefined();
+        const turnId = failed!.turnId;
+        const failureSeq = failureMarkerSeqs.get(turnId);
+        expect(failureSeq).toBeTypeOf('number');
+        expect(terminalMutations).toContainEqual(expect.objectContaining({ action: 'fail', turnId }));
+        expect(inputAnchors.get(turnId)).toMatchObject({ endSeqInclusive: failureSeq, finalAssistantMessageSeq: null });
+        expect(agentMessages.filter(body => body.type === 'turn_failed')).toHaveLength(1);
+        if (failure === 'native') {
+          expect(inputAnchors.get(turnId)).toMatchObject({ startUserMessageSeq: 1 });
+          expect(failureSeq).toBeLessThan(committedAssistantSeqs.get('SUCCESSOR_ANSWER')!);
+        } else expect(inputAnchors.get(turnId)).toMatchObject({ startSeqInclusive: failureSeq });
+        return;
+      }
       if (rejectDiff) {
         expect(terminalMutations).toContainEqual(expect.objectContaining({ action: 'fail', turnId: hostTurnIds[0],
           issue: expect.objectContaining({ code: 'runtime_transcript_required_admission_failed' }) }));

@@ -269,6 +269,36 @@ function commitRuntimeTurnCancellation(
   });
 }
 
+/** The one typed failed-turn marker writer for native output and host failures. */
+export async function commitRuntimeTurnFailureMarker(params: Readonly<{
+  session: RuntimeTranscriptProjectionSession;
+  provider: ACPProvider;
+  event: Pick<Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>, 'turnId' | 'agentTurnId' | 'emittedAtMs'>;
+  meta?: Record<string, unknown>;
+  provenance?: SessionTranscriptObservationProvenanceV1;
+  admission?: CommittedTranscriptAdmission;
+}>) {
+  const markerId = params.event.agentTurnId ?? params.event.turnId;
+  const localId = `${markerId}:turn_failed`;
+  const result = await commitRequiredRuntimeTranscriptMessage({
+    session: params.session, provider: params.provider,
+    body: { type: 'turn_failed', id: markerId }, localId,
+    meta: params.meta ?? { source: 'runtime', runtimeEventKind: 'turn-failed', runtimeTurnId: params.event.turnId },
+    createdAt: params.event.emittedAtMs, updatedAt: params.event.emittedAtMs,
+    provenance: params.provenance ?? { kind: 'non_dependent', source: 'external' },
+    eventKind: 'turn-failed',
+    ...(params.admission === undefined ? {} : { admission: params.admission }),
+  });
+  const committed = result.committedSequence === undefined ? await result.whenCommitted : null;
+  const committedSequence = committed?.committedSequence ?? result.committedSequence;
+  const personalFollow = committed?.personalFollow ?? result.personalFollow;
+  return { localId,
+    ...(committedSequence === undefined ? {} : { committedSequence }),
+    ...(personalFollow ? { personalFollow } : {}),
+    ...(result.whenCommitted ? { whenCommitted: result.whenCommitted } : {}),
+  };
+}
+
 /** Foreground calls retain correction custody until their native result arrives. */
 export function createRuntimeTranscriptProjector(): (
   params: Parameters<typeof projectRuntimeTranscriptEvent>[0] & Readonly<{ priorProjection?: Promise<void> }>,
@@ -976,23 +1006,11 @@ async function projectRuntimeTranscriptEventNow(
       });
     }
     if (params.provider && params.session.requiresDurableTurnCompletionMarker === true) {
-      const markerId = event.agentTurnId ?? event.turnId;
-      await commitRequiredRuntimeTranscriptMessage({
-        session: params.session,
-        provider: params.provider,
-        body: { type: 'turn_failed', id: markerId },
-        localId: `${markerId}:turn_failed`,
-        meta: {
-          source: 'runtime',
-          runtimeEventKind: event.kind,
-          runtimeTurnId: event.turnId,
-        },
-        createdAt: event.emittedAtMs,
-        updatedAt: event.emittedAtMs,
-        provenance: { kind: 'non_dependent', source: 'external' },
-        eventKind: event.kind,
+      const marker = await commitRuntimeTurnFailureMarker({
+        session: params.session, provider: params.provider, event,
         ...(params.admission === undefined ? {} : { admission: params.admission }),
       });
+      return { projected: true, kind: event.kind, terminalSourceMessage: marker };
     }
     return { projected: true, kind: event.kind };
   }

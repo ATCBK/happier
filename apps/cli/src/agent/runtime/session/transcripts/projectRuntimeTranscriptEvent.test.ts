@@ -499,13 +499,14 @@ describe('projectRuntimeTranscriptEvent', () => {
     );
   });
 
-  it('persists typed failure evidence when a Run turn fails without streamed output', async () => {
+  it('returns the deferred committed failure anchor when a Run turn fails without streamed output', async () => {
     const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
     const session = {
       sessionId: 'session-1',
       requiresDurableTurnCompletionMarker: true as const,
-      enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
+      enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const,
+        whenCommitted: Promise.resolve({ localId: 'turn-empty:turn_failed', committedSequence: 42 }) })),
     };
     const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({
       provider: 'claude',
@@ -520,7 +521,8 @@ describe('projectRuntimeTranscriptEvent', () => {
         kind: 'turn-failed', sessionId: 'session-1', emittedAtMs: 3, turnId: 'turn-empty',
         diagnostic: { code: 'provider_error', severity: 'error' },
       }),
-    })).resolves.toEqual({ projected: true, kind: 'turn-failed' });
+    })).resolves.toMatchObject({ projected: true, kind: 'turn-failed',
+      terminalSourceMessage: { localId: 'turn-empty:turn_failed', committedSequence: 42 } });
 
     expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'claude',

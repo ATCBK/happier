@@ -413,6 +413,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     userLocalIds: Set<string>;
     hasAssistantText?: true;
     finalAssistantMessageSeq?: number;
+    failureMessageSeq?: number;
     startSeqExclusive?: number;
   }>();
   const pendingInputSettlementsByLocalId = new Map<string, Promise<void>>();
@@ -494,8 +495,34 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             );
       }
 
+      let terminalStatusOverride: 'failed' | undefined;
+      if (transcriptAdmissionFailure && mutation.action === 'complete') {
+        const { transcriptAnchors: _uncommittedAnchors, ...base } = mutation;
+        mutation = { ...base, mutationId: `${mutation.mutationId}:transcript-custody-failed`, action: 'fail',
+          issue: { v: 1, scope: 'primary_session', status: 'failed',
+            code: 'runtime_transcript_required_admission_failed', source: 'stream_error', occurredAt: mutation.observedAt,
+            ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
+            ...(mutation.agentTurnId ? { agentTurnId: mutation.agentTurnId } : {}),
+            sanitizedPreview: 'Required transcript output could not be stored durably' } };
+        terminalStatusOverride = 'failed';
+        transcriptAdmissionFailure = null;
+      }
       try {
         const turnState = 'turnId' in mutation ? readTurnTranscriptState(mutation.turnId) : null;
+        if (mutation.action === 'fail' && turnState?.failureMessageSeq === undefined) {
+          // Prompt dispatch and strict-resume failures can enter the lifecycle
+          // directly, without a native transcript event. They use the same
+          // diagnostic/terminal writer and exact committed marker receipt.
+          const marker = await runtimeFailureTranscriptProjector({
+            kind: 'turn-failed', sessionId: mutation.sessionId, turnId: mutation.turnId,
+            sequence: 0, emittedAtMs: mutation.observedAt,
+            ...(mutation.agentTurnId ? { agentTurnId: mutation.agentTurnId } : {}),
+            diagnostic: { code: mutation.issue.code, severity: 'error',
+              ...(mutation.issue.sanitizedPreview ? { message: mutation.issue.sanitizedPreview } : {}),
+              details: { v: 1, source: mutation.issue.source, occurredAt: mutation.issue.occurredAt } },
+          });
+          if (turnState && marker?.committedSequence !== undefined) turnState.failureMessageSeq = marker.committedSequence;
+        }
         // Join the existing Pending write before reading its acknowledged-row
         // projection. A settled attempt is ordering, not invented commit evidence.
         await Promise.all([...turnState?.userLocalIds ?? []]
@@ -510,19 +537,20 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           : [];
         const startUserMessageSeq = userMessageSeqs[0];
         const finalAssistantMessageSeq = turnState?.finalAssistantMessageSeq ?? null;
+        const failureMessageSeq = mutation.action === 'fail' ? turnState?.failureMessageSeq : undefined;
         // Context-only turns have no user row. Their turn-start frontier
         // still bounds the reply; a non-null final anchor requires that range.
         const startSeqInclusive = startUserMessageSeq ?? (finalAssistantMessageSeq === null
-          ? undefined
+          ? failureMessageSeq
           : turnState?.startSeqExclusive != null
             ? turnState.startSeqExclusive + 1
             : finalAssistantMessageSeq);
-        const observedSeq = params.session.getLastObservedMessageSeq?.();
+        const observedSeq = mutation.action === 'fail' ? failureMessageSeq : params.session.getLastObservedMessageSeq?.();
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
           ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
         if ((transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait')
-          && (startSeqInclusive !== undefined || finalAssistantMessageSeq !== null)) {
+          && (mutation.action === 'fail' || startSeqInclusive !== undefined || finalAssistantMessageSeq !== null)) {
           await enqueueTerminalMutation({
             v: mutation.v, sessionId: mutation.sessionId,
             mutationId: `${mutation.mutationId}:input-anchors`, observedAt: mutation.observedAt,
@@ -530,27 +558,11 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             action: 'append_transcript_anchors', turnId: mutation.turnId,
             transcriptAnchors: {
               ...(startUserMessageSeq !== undefined ? { startUserMessageSeq, userMessageSeqs } : {}),
-              ...(startSeqInclusive !== undefined ? { startSeqInclusive, endSeqInclusive: Math.max(...endSeqs) } : {}),
+              ...(startSeqInclusive !== undefined ? { startSeqInclusive } : {}),
+              endSeqInclusive: mutation.action === 'fail' ? failureMessageSeq ?? null : Math.max(...endSeqs),
               finalAssistantMessageSeq,
             },
           });
-        }
-        if (transcriptAdmissionFailure && mutation.action === 'complete') {
-          const { transcriptAnchors: _uncommittedAnchors, ...base } = mutation;
-          await enqueueTerminalMutation({
-            ...base,
-            mutationId: `${mutation.mutationId}:transcript-custody-failed`,
-            action: 'fail',
-            issue: {
-              v: 1, scope: 'primary_session', status: 'failed',
-              code: 'runtime_transcript_required_admission_failed', source: 'stream_error', occurredAt: mutation.observedAt,
-              ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
-              ...(mutation.agentTurnId ? { agentTurnId: mutation.agentTurnId } : {}),
-              sanitizedPreview: 'Required transcript output could not be stored durably',
-            },
-          });
-          retireTurnTranscriptState(mutation.turnId);
-          return { terminalStatusOverride: 'failed' as const };
         }
         if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
         const settledMutation: RuntimeSessionTurnMutationV1 =
@@ -571,6 +583,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         if ('turnId' in mutation) {
           retireTurnTranscriptState(mutation.turnId);
         }
+        if (terminalStatusOverride) return { terminalStatusOverride };
       } catch (error) {
         logger.debug(`${params.config.uiLogPrefix} Runtime terminal turn mutation failed`, {
           error: 'runtime_terminal_turn_mutation_failed',
@@ -788,7 +801,12 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             observeAgentStreamToken,
             uiLogPrefix: params.config.uiLogPrefix,
           });
-          await runtimeFailureTranscriptProjector(parsedRuntimeEvent.data);
+          const failureMarker = await runtimeFailureTranscriptProjector(parsedRuntimeEvent.data,
+            projectionResult?.projected ? projectionResult.terminalSourceMessage : undefined);
+          if (projectionTurnId && parsedRuntimeEvent.data.kind === 'turn-failed'
+            && failureMarker?.committedSequence !== undefined) {
+            readTurnTranscriptState(projectionTurnId).failureMessageSeq = failureMarker.committedSequence;
+          }
         }
       } catch (error) {
         transcriptProjectionError ??= error;
