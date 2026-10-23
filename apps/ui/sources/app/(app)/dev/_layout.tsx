@@ -21,7 +21,6 @@ export default function DevRouteLayout(): React.ReactElement | null {
     const routeOptions = React.useMemo<Readonly<Record<string, ExtendedStackNavigationOptions>>>(() => ({
         changes: { headerShown: false },
         track: { headerShown: false },
-        'ask-sheet': { headerShown: false },
         artifacts: rootOptions['artifacts/index'],
         index: { headerTitle: t('navigation.developerTools') },
         'list-demo': { headerTitle: t('navigation.listComponentsDemo') },
