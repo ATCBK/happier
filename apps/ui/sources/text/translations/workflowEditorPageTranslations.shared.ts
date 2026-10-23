@@ -65,7 +65,7 @@ export const en = {
         retryLoading: "Retry loading",
         openWorkflow: ({ workflow }: { workflow: string }) => `Open ${workflow}`,
         selfRef: ({ workflow }: { workflow: string }) => `${workflow} runs this workflow, so it can't run inside it.`,
-        maxFromInput: ({ name }: { name: string }) => `From input · ${name}`,
+        fromInput: ({ name }: { name: string }) => `From input · ${name}`,
         useInput: ({ name }: { name: string }) => `Use input ${name}`,
     },
     backToRun: 'Back to run',

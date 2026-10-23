@@ -13,7 +13,7 @@ export const en = {
     unnamed: 'Happier member', open: 'Open Collaboration', conversations: 'Discussions',     accessUnavailable: 'Session access unavailable',
     accessUnavailableReason: 'This Home doesn’t support sharing Sessions with people.',
         discussion: {
-        openAnchor: ({ name }: { name: string }) => `Open ${name}`, reply: { readUpTo: "Read the discussion up to the question", passed: ({ name }: { name: string }) => `${name} passed`, failed: ({ name }: { name: string }) => `${name} couldn’t answer`, cancelled: ({ name }: { name: string }) => `${name} stopped before answering` }, 
+        openAnchor: ({ name }: { name: string }) => `Open ${name}`, reply: { readUpTo: "Read the discussion up to the question", passed: "Passed", failed: "Couldn’t answer", cancelled: "Stopped before answering", stopped: "Stopped before finishing" }, 
         quote: discussionQuoteCopy.en,
         controls: discussionControlsCopy.en,
         attribution: discussionAttributionCopy.en,

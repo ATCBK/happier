@@ -199,6 +199,10 @@ export const publicIdentity: PublicIdentityTranslations = {
         invalid_stored_content: 'No se pudo leer tu página pública. Vuelve a publicarla.',
         asset_unavailable: 'La imagen de tu página no está en este dispositivo. Elígela de nuevo.',
         usage_unavailable: 'Tu uso no se puede leer en este dispositivo ahora mismo.',
+        no_eligible_personal_usage: 'Aún no hay uso personal apto para compartir. Los perfiles públicos excluyen el uso de Team y el historial cuya pertenencia personal no se puede confirmar.',
+        source_time_unavailable: 'No está disponible la hora de observación de tu uso. Inténtalo de nuevo cuando se pueda leer la fuente.',
+        period_unavailable: 'Tu período de uso no está disponible. Elige un período e inténtalo de nuevo.',
+        invalid_snapshot: 'No se pudo preparar tu uso para compartirlo. Inténtalo de nuevo.',
         usage_query_result_invalid: 'Tu uso llegó incompleto. Inténtalo de nuevo.',
         project_visibility_unavailable:
           'No se pudo confirmar que un proyecto es público. Se queda fuera de tu página.',

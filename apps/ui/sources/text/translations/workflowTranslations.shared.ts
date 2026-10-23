@@ -398,7 +398,7 @@ export const en = {
         retryLoadingSessions: 'Try again',
         noSessionsYet: 'No session can be continued yet.',
         savedSession: 'Saved session',
-        sessionNoLongerAvailable: 'Session no longer available',
+        unavailableSession: 'Unavailable session',
         sessionGone: 'It can’t be continued anymore. Choose another session.',
         sessionNotHere: 'It can’t be continued here. Choose another session.',
         continuingKeepsAgentAndFolder: 'Continuing keeps the Agent and folder of that conversation. A different Agent or folder needs a separate conversation.',

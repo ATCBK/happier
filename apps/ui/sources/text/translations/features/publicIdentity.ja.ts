@@ -199,6 +199,10 @@ export const publicIdentity: PublicIdentityTranslations = {
         invalid_stored_content: '公開ページを読み取れませんでした。もう一度公開してください。',
         asset_unavailable: 'ページの画像がこのデバイスにありません。もう一度選んでください。',
         usage_unavailable: '現在、このデバイスでは利用状況を読み取れません。',
+        no_eligible_personal_usage: '共有できる個人の利用状況はまだありません。公開プロフィールでは、Team の利用状況と、個人のものと確認できない履歴を除外します。',
+        source_time_unavailable: '利用状況の観測時刻を取得できません。ソースを読み取れるようになってから、もう一度お試しください。',
+        period_unavailable: '利用状況の期間を取得できません。期間を選んで、もう一度お試しください。',
+        invalid_snapshot: '共有用の利用状況を準備できませんでした。もう一度お試しください。',
         usage_query_result_invalid: '利用状況が不完全な状態で返されました。もう一度お試しください。',
         project_visibility_unavailable:
           'プロジェクトが公開であることを確認できませんでした。ページには載せません。',

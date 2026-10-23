@@ -29,6 +29,9 @@ export const en = {
         bodyReady: 'A description is ready; your text is kept until you use it',
         useBody: 'Use description',
         keepMine: 'Keep mine',
+        bodyUnknown: 'This description may not have started',
+        bodyUnknownReason: 'Happier couldn’t confirm that the machine received the request.',
+        checkAgain: 'Check again',
     },
     failure: {
         authFailed: ({ provider }: ProviderArgs) => `${provider} didn’t accept the sign-in from this machine`,

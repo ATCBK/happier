@@ -239,7 +239,8 @@ export type SkillAddTranslation = Readonly<{
   groupPicks: string;
   groupSource: (params: Readonly<{ source: string }>) => string;
   noMatch: (params: Readonly<{ query: string }>) => string;
-  nothingHere: string;
+  emptyTitle: string;
+  emptyBody: string;
   clear: string;
   add: string;
   inLibrary: string;
@@ -324,7 +325,9 @@ const enSkillAdd: SkillAddTranslation = {
   groupPicks: 'Happier picks',
   groupSource: ({ source }) => `From ${source}`,
   noMatch: ({ query }) => `No skills match “${query}”`,
-  nothingHere: 'Nothing to browse here yet',
+  emptyTitle: 'No skills to browse yet',
+  emptyBody:
+    'The registries you use don’t list any skills right now. Add a registry from the menu above, or write a skill of your own.',
   clear: 'Clear',
   add: 'Add',
   inLibrary: 'In your library',
@@ -610,7 +613,9 @@ const caSkillAdd: SkillAddTranslation = {
   groupPicks: 'Selecció de Happier',
   groupSource: ({ source }) => `De ${source}`,
   noMatch: ({ query }) => `Cap habilitat coincideix amb «${query}»`,
-  nothingHere: 'Encara no hi ha res per explorar aquí',
+  emptyTitle: 'Encara no hi ha habilitats per explorar',
+  emptyBody:
+    'Els registres que fas servir no llisten cap habilitat ara mateix. Afegeix un registre des del menú de dalt o escriu una habilitat pròpia.',
   clear: 'Neteja',
   add: 'Afegeix',
   inLibrary: 'A la teva biblioteca',
@@ -841,7 +846,9 @@ const deSkillAdd: SkillAddTranslation = {
   groupPicks: 'Happier-Auswahl',
   groupSource: ({ source }) => `Von ${source}`,
   noMatch: ({ query }) => `Keine Skills passen zu „${query}“`,
-  nothingHere: 'Hier gibt es noch nichts zu entdecken',
+  emptyTitle: 'Noch keine Skills zu entdecken',
+  emptyBody:
+    'Die Registries, die Sie nutzen, listen derzeit keine Skills. Fügen Sie über das Menü oben eine Registry hinzu oder schreiben Sie selbst einen Skill.',
   clear: 'Leeren',
   add: 'Hinzufügen',
   inLibrary: 'In deiner Bibliothek',
@@ -1066,7 +1073,9 @@ const esSkillAdd: SkillAddTranslation = {
   groupPicks: 'Selección de Happier',
   groupSource: ({ source }) => `De ${source}`,
   noMatch: ({ query }) => `Ninguna habilidad coincide con «${query}»`,
-  nothingHere: 'Aún no hay nada que explorar aquí',
+  emptyTitle: 'Aún no hay habilidades que explorar',
+  emptyBody:
+    'Los registros que usas no listan ninguna habilidad por ahora. Añade un registro desde el menú de arriba o escribe una habilidad propia.',
   clear: 'Borrar',
   add: 'Añadir',
   inLibrary: 'En tu biblioteca',
@@ -1295,7 +1304,9 @@ const frSkillAdd: SkillAddTranslation = {
   groupPicks: 'Sélection Happier',
   groupSource: ({ source }) => `De ${source}`,
   noMatch: ({ query }) => `Aucun skill ne correspond à « ${query} »`,
-  nothingHere: 'Rien à parcourir ici pour l’instant',
+  emptyTitle: 'Aucune skill à parcourir pour l’instant',
+  emptyBody:
+    'Les registres que vous utilisez ne listent aucune skill pour le moment. Ajoutez un registre depuis le menu ci-dessus ou écrivez votre propre skill.',
   clear: 'Effacer',
   add: 'Ajouter',
   inLibrary: 'Dans votre bibliothèque',
@@ -1517,7 +1528,9 @@ const itSkillAdd: SkillAddTranslation = {
   groupPicks: 'Scelte di Happier',
   groupSource: ({ source }) => `Da ${source}`,
   noMatch: ({ query }) => `Nessuna skill corrisponde a «${query}»`,
-  nothingHere: 'Non c’è ancora niente da esplorare qui',
+  emptyTitle: 'Ancora nessuna skill da esplorare',
+  emptyBody:
+    'I registri che usi non elencano alcuna skill al momento. Aggiungi un registro dal menu qui sopra oppure scrivi una skill tua.',
   clear: 'Cancella',
   add: 'Aggiungi',
   inLibrary: 'Nella tua libreria',
@@ -1742,7 +1755,9 @@ const jaSkillAdd: SkillAddTranslation = {
   groupPicks: 'Happier のおすすめ',
   groupSource: ({ source }) => `${source} から`,
   noMatch: ({ query }) => `「${query}」に一致するスキルはありません`,
-  nothingHere: 'ここにはまだ探せるものがありません',
+  emptyTitle: '探せるスキルはまだありません',
+  emptyBody:
+    '使用中のレジストリには、今のところスキルがありません。上のメニューからレジストリを追加するか、自分でスキルを書いてみましょう。',
   clear: 'クリア',
   add: '追加',
   inLibrary: 'ライブラリにあります',
@@ -1988,7 +2003,9 @@ const plSkillAdd: SkillAddTranslation = {
   groupPicks: 'Wybór Happier',
   groupSource: ({ source }) => `Z ${source}`,
   noMatch: ({ query }) => `Żadna umiejętność nie pasuje do „${query}”`,
-  nothingHere: 'Nie ma tu jeszcze nic do przeglądania',
+  emptyTitle: 'Nie ma jeszcze umiejętności do przeglądania',
+  emptyBody:
+    'Używane rejestry nie zawierają teraz żadnych umiejętności. Dodaj rejestr z menu powyżej albo napisz własną umiejętność.',
   clear: 'Wyczyść',
   add: 'Dodaj',
   inLibrary: 'W Twojej bibliotece',
@@ -2217,7 +2234,9 @@ const ptSkillAdd: SkillAddTranslation = {
   groupPicks: 'Seleção do Happier',
   groupSource: ({ source }) => `De ${source}`,
   noMatch: ({ query }) => `Nenhuma habilidade corresponde a “${query}”`,
-  nothingHere: 'Ainda não há nada para explorar aqui',
+  emptyTitle: 'Ainda não há habilidades para explorar',
+  emptyBody:
+    'Os registos que você usa não listam nenhuma habilidade neste momento. Adicione um registo no menu acima ou escreva uma habilidade sua.',
   clear: 'Limpar',
   add: 'Adicionar',
   inLibrary: 'Na sua biblioteca',
@@ -2470,7 +2489,9 @@ const ruSkillAdd: SkillAddTranslation = {
   groupPicks: 'Выбор Happier',
   groupSource: ({ source }) => `Из ${source}`,
   noMatch: ({ query }) => `Нет скиллов по запросу «${query}»`,
-  nothingHere: 'Здесь пока нечего просматривать',
+  emptyTitle: 'Пока нет скиллов для просмотра',
+  emptyBody:
+    'В используемых вами реестрах сейчас нет скиллов. Добавьте реестр через меню выше или напишите скилл сами.',
   clear: 'Очистить',
   add: 'Добавить',
   inLibrary: 'В вашей библиотеке',
@@ -2711,7 +2732,9 @@ const zhHansSkillAdd: SkillAddTranslation = {
   groupPicks: 'Happier 精选',
   groupSource: ({ source }) => `来自 ${source}`,
   noMatch: ({ query }) => `没有与“${query}”匹配的技能`,
-  nothingHere: '这里暂时没有可浏览的内容',
+  emptyTitle: '暂时没有可浏览的技能',
+  emptyBody:
+    '你使用的注册表目前没有列出任何技能。可以从上方菜单添加注册表，或自己编写一个技能。',
   clear: '清除',
   add: '添加',
   inLibrary: '已在你的资料库',
@@ -2923,7 +2946,9 @@ const zhHantSkillAdd: SkillAddTranslation = {
   groupPicks: 'Happier 精選',
   groupSource: ({ source }) => `來自 ${source}`,
   noMatch: ({ query }) => `沒有符合「${query}」的技能`,
-  nothingHere: '這裡暫時沒有可瀏覽的內容',
+  emptyTitle: '暫時沒有可瀏覽的技能',
+  emptyBody:
+    '你使用的登錄庫目前沒有列出任何技能。可以從上方選單新增登錄庫，或自行撰寫一個技能。',
   clear: '清除',
   add: '新增',
   inLibrary: '已在你的資料庫',

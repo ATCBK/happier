@@ -18938,6 +18938,8 @@ const enUsage = {
       sourceKindNotAdded: "Not added",
       coverageFailed: ({ sources }: { sources: string | number }) => `Couldn't read ${sources}. Showing what arrived.`,
       coveragePending: ({ sources }: { sources: string | number }) => `Still reading ${sources}`,
+      coverageWitnessed: ({ sources }: { sources: string | number }) => `Not every session's ${sources} could be read. Showing what arrived.`,
+      coverageFailedWitnessed: ({ sources, witnessed }: { sources: string | number; witnessed: string | number }) => `Couldn't read ${sources} or every session's ${witnessed}. Showing what arrived.`,
       coveragePartial: ({ sources }: { sources: string | number }) => `Partial ${sources}: some history is missing`,
       oldestSourceUpdate: ({ time }: { time: string }) => `Oldest source update ${time}`,
       coverageReason_missing_baseline: 'Earlier counter history is missing',
@@ -19627,7 +19629,7 @@ const enUsage = {
       atOnceCount: ({ count }: { count: string | number }) => `${count} at once`,
       upToAtOnce: ({ count }: { count: string | number }) => `Up to ${count} at once`,
       minutes: ({ count }: { count: string | number }) => `${count} min`,
-      daysCount: ({ count }: { count: string | number }) => `${count} days`,
+      daysCount: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'day' : 'days'}`,
       daysOf: ({ count, total }: { count: string | number; total: string | number }) => `${count} of ${total} days`,
       dayStreak: ({ count }: { count: string | number }) => `${count}-day streak`,
       levelNone: "No activity",
@@ -19655,11 +19657,11 @@ const enUsage = {
       spansColumn: "Worked",
       busyHoursColumn: "Busy hours",
       skyA11y: ({ metric, count }: { metric: string; count: string | number }) => `Sky of days: ${metric} for each of ${count} days`,
-      skyCaptionAgent: ({ metric }: { metric: string }) => `Colour is the agent that led the day on ${metric}; a tie shows both, and a day with no known agent stays a ring. Higher, larger and brighter is a bigger day. Faint lines join runs of five days or more; the soft band is the 7-day average.`,
-      skyCaptionIntensity: "Higher, larger and brighter is a busier day. Faint lines join runs of five days or more; the soft band is the 7-day average.",
+      skyCaptionAgent: ({ metric, runs, band }: { metric: string; runs: boolean; band: boolean }) => `Colour is the agent that led the day on ${metric}; a tie shows both, and a day with no known agent stays a ring. Higher, larger and brighter is a bigger day.${runs && band ? ' Faint lines join runs of five days or more; the soft band is the 7-day average.' : runs ? ' Faint lines join runs of five days or more.' : band ? ' The soft band is the 7-day average.' : ''}`,
+      skyCaptionIntensity: ({ runs, band }: { runs: boolean; band: boolean }) => `Higher, larger and brighter is a busier day.${runs && band ? ' Faint lines join runs of five days or more; the soft band is the 7-day average.' : runs ? ' Faint lines join runs of five days or more.' : band ? ' The soft band is the 7-day average.' : ''}`,
       streakBestOngoing: ({ count }: { count: string | number }) => `${count}-day streak · best this period, still going`,
-      streakBest: ({ count }: { count: string | number }) => `Best · ${count} days`,
-      streakNow: ({ count }: { count: string | number }) => `Now · ${count} days`,
+      streakBest: ({ count }: { count: string | number }) => `Best · ${count} ${Number(count) === 1 ? 'day' : 'days'}`,
+      streakNow: ({ count }: { count: string | number }) => `Now · ${count} ${Number(count) === 1 ? 'day' : 'days'}`,
       streakShort: ({ count }: { count: string | number }) => `${count}-day streak`,
       streakShortBest: ({ count }: { count: string | number }) => `${count}-day streak · best`,
       tideA11y: ({ metric }: { metric: string }) => `Week tide: ${metric} for each weekday hour, one wave per weekday`,
@@ -19718,7 +19720,7 @@ const enUsage = {
       planetLightRest: "Rests at half light",
       planetHaloNote: "Widens with the most work run at once (of 8)",
       planetHaloRest: "No halo",
-      planetTrailNote: ({ count }: { count: string | number }) => `Lengthens toward the best this period, ${count} days`,
+      planetTrailNote: ({ count }: { count: string | number }) => `Lengthens toward the best this period, ${count} ${Number(count) === 1 ? 'day' : 'days'}`,
       planetTrailNoteNoBest: "Lengthens with each day of the current streak",
       planetTrailRest: "No trail",
       steeringA11y: "Steering by agent: accepted steers by hour of the day for each agent; dots are permission answers from a phone",
@@ -21220,6 +21222,7 @@ const enSettingsPlugins = {
     unreachableHome: ({ home }: { home: string }) => `Can't reach ${home}`,
     unreachableThisHome: "Can't reach this Home",
     chooseAnother: 'Choose another',
+    chooseMachine: 'Choose a machine',
     clear: 'Clear selection',
     locked: 'Machine details are locked. Choose another machine.',
     missing: 'No longer found. Choose another machine.',
@@ -21378,6 +21381,24 @@ const enSettingsPlugins = {
     repository: 'Source code',
     support: 'Support',
     pluginPage: 'Plugin page',
+    addsLine: {
+      agent: "Coding agents you can start sessions with",
+      skills: "Instructions your agents can follow",
+      machines: "More machines to run sessions on",
+      providers: "More models for your agents",
+      scmHostingProviders: "Pull requests and issues from a code host",
+      scmBackends: "Another way to track your changes",
+      languageServers: "Code intelligence for more languages",
+      roles: "Ready-made roles for your agents",
+      workflows: "Multi-step work you can run",
+      inputTypes: "New kinds of input in the composer",
+      mcp: "Tools your agents can call",
+      connectedAccounts: "Sign-in to an outside service",
+      voice: "Voices and speech models",
+      composer: "Extra controls in the composer",
+      pluginUi: "Its own panels in the app",
+      pluginBrowser: "Pages it can open and work in",
+    },
   },
   discoverTitle: 'Discover plugins',
   discoverSearchLabel: 'Search plugins',
@@ -22182,7 +22203,12 @@ export const en: TranslationStructure = {
             failed: "Couldn’t make it a coordinator. Nothing changed.",
             waitingApproval: "Waiting for your approval in Inbox.",
             partialApproval: "Some steps wait for your approval in Inbox; the rest is done.",
-            partial: ({ count }: { count: number }) => `${count} steps didn’t finish; the rest is done. Try again to finish them.`,
+            partial: ({ count }: { count: number }) => count === 1
+                ? '1 step didn’t finish; the rest is done. Try again to finish it.'
+                : `${count} steps didn’t finish; the rest is done. Try again to finish them.`,
+            stopTurn: "Stop its current turn",
+            stopTurnDescription: "It’s still working. Ending the turn lets the role apply.",
+            roleHeldNote: "Everything else is done. Retry to apply the role.",
             done: ({ name }: { name: string }) => `${name} is now a coordinator`,
         },
         menu: {
@@ -23156,6 +23182,9 @@ type EnglishNamespaces27 = TranslationOverlay<
         readonly waitingApproval: string;
         readonly partialApproval: string;
         readonly partial: (params: { count: number }) => string;
+        readonly stopTurn: string;
+        readonly stopTurnDescription: string;
+        readonly roleHeldNote: string;
         readonly done: (params: { name: string }) => string;
       };
       readonly menu: {

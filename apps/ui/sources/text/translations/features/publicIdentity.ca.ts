@@ -199,6 +199,10 @@ export const publicIdentity: PublicIdentityTranslations = {
         invalid_stored_content: 'No s’ha pogut llegir la teva pàgina pública. Torna-la a publicar.',
         asset_unavailable: 'La imatge de la teva pàgina no és en aquest dispositiu. Torna-la a triar.',
         usage_unavailable: 'El teu ús no es pot llegir en aquest dispositiu ara mateix.',
+        no_eligible_personal_usage: 'Encara no hi ha ús personal apte per compartir. Els perfils públics exclouen l’ús de Team i l’historial del qual no es pot confirmar la pertinença personal.',
+        source_time_unavailable: 'L’hora d’observació del teu ús no està disponible. Torna-ho a provar quan es pugui llegir la font.',
+        period_unavailable: 'El teu període d’ús no està disponible. Tria un període i torna-ho a provar.',
+        invalid_snapshot: 'No s’ha pogut preparar el teu ús per compartir-lo. Torna-ho a provar.',
         usage_query_result_invalid: 'El teu ús ha arribat incomplet. Torna-ho a provar.',
         project_visibility_unavailable:
           'No s’ha pogut confirmar que un projecte és públic. Es queda fora de la teva pàgina.',

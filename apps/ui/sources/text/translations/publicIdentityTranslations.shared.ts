@@ -213,6 +213,10 @@ export const publicIdentityEn = {
         asset_unavailable:
           'Your page’s picture isn’t on this device. Choose it again.',
         usage_unavailable: 'Your usage can’t be read on this device right now.',
+        no_eligible_personal_usage: "No eligible personal usage to share yet. Public profiles exclude Team usage and history whose personal ownership can't be established.",
+        source_time_unavailable: 'The observation time for your usage is unavailable. Try again when the source can be read.',
+        period_unavailable: 'Your usage period is unavailable. Choose a period and try again.',
+        invalid_snapshot: 'Your usage couldn’t be prepared for sharing. Try again.',
         usage_query_result_invalid:
           'Your usage came back incomplete. Try again.',
         project_visibility_unavailable:
