@@ -30,7 +30,7 @@ function project(row: Parameters<typeof createSessionRecordFixture>[0], nowMs = 
 
 describe('projectCliSessionAwarenessV1', () => {
   it('shows the current blocking usage issue specifically with recovery disabled', () => {
-    expect(project({ encryptionMode: 'plain', metadata: '{}', active: true, activeAt: NOW_MS,
+    expect(project({ id: 'usage-limited', encryptionMode: 'plain', metadata: '{}', active: true, activeAt: NOW_MS,
       latestTurnStatus: 'failed', latestTurnStatusObservedAt: NOW_MS,
       lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: NOW_MS },
     }).operational.primary).toBe('usage_limited');
