@@ -127,6 +127,10 @@ function BoundForm(
   const availability = useSessionCollaborationAvailability(
     binding.scope.serverId,
   );
+  const availabilityRef = React.useRef(availability);
+  React.useLayoutEffect(() => {
+    availabilityRef.current = availability;
+  }, [availability]);
   const sourceSession = props.source.message.session;
   const [sourceTitle] = useSessionDisplayTitles(
     React.useMemo(() => [sourceSession], [sourceSession]),
@@ -135,7 +139,8 @@ function BoundForm(
   const [controller] = React.useState(() =>
     createDiscussionSecondOpinionController({
       scope: binding.scope,
-      availability,
+      // The retained client reads the current decision without replacing draft/retry custody.
+      get availability() { return availabilityRef.current; },
       source: props.source,
       draft: {
         title: discuss
@@ -195,7 +200,7 @@ function BoundForm(
   // Discuss… previews at once (people only); a second opinion previews per chosen reviewer set.
   React.useEffect(() => {
     if (discuss) void controller.preview();
-  }, [controller, discuss]);
+  }, [controller, discuss, availability]);
   const ask = async (sourceAccess?: 'quote_only') => {
     const draft = snapshot.draft;
     const reviewersFor = sourceAccess
