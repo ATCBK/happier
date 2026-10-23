@@ -28,6 +28,7 @@ import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLi
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import type { startDaemonControlServer } from '@/daemon/controlServer';
 import { buildCodexAppServerConfigOverrides, assignInjectedServerKeys } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/config/overrides';
 import { resolveClaudeLaunchSettingsOverlayArgs } from '../../../../../packages/plugins/claude/src/agent/runtime/launchSettings';
@@ -188,14 +189,18 @@ it.each([false, true])('delivers an external plugin through the daemon runner br
   await source.retire?.();
 }, 180_000);
 
-it('carries a closed MCP startup refusal through requester Home, runner exit and the original launch operation', async () => {
+it.each(['plugin_mcp_preparation_unavailable', 'team_credential_provider_selection_not_current'])(
+  'carries the closed startup refusal %s through requester Home, runner exit and the original launch operation', async code => {
   const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control);
   h.tracked.stopRequestedAtMs = Date.now();
   const refusal = await h.dispatch({ kind: 'mcp.plugin.prepare', preparationId: 'b0848cfe-730b-4a8d-9904-615950c78503',
     directory: h.cwd, catalog: { bindings: [] } });
   if (refusal.ok) throw new Error('Expected real daemon MCP refusal');
-  const issue = SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
-    error: new PluginError({ code: refusal.error.code, message: 'PRIVATE_BODY' }), occurredAt: 100 }));
+  const error = code === 'team_credential_provider_selection_not_current'
+    ? new SessionTeamCredentialLaunchUnavailableError()
+    : new PluginError({ code: refusal.error.code, message: 'PRIVATE_BODY' });
+  const issue = SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, occurredAt: 100 }));
+  expect(issue.code).toBe(code);
   // Only Home HTTP and physical child exit are substituted. The requester
   // reader, native-open waiter, launch adapter and operation store stay real.
   h.tracked.childProcess = new ChildProcess();
@@ -210,7 +215,7 @@ it('carries a closed MCP startup refusal through requester Home, runner exit and
       metadata: JSON.stringify({ machineId: 'machine' }), dataEncryptionKey: null, share: null,
       latestTurnStatus: 'failed', lastRuntimeIssue: { ...issue,
         ...(scenario === 'stale' ? { occurredAt: 0 } : {}),
-        ...(scenario === 'unknown' ? { code: 'plugin_mcp_preparation_unavailable_PRIVATE' } : {}),
+        ...(scenario === 'unknown' ? { code: `${code}_PRIVATE` } : {}),
       } }) } };
   });
   const scope = { accountId: 'requester', machineId: 'machine' };
@@ -234,7 +239,7 @@ it('carries a closed MCP startup refusal through requester Home, runner exit and
       const projected = SessionSpawnNewResultV1Schema.parse(projectSessionSpawnFailure({ errorCode: 'SPAWN_FAILED',
         errorMessage: 'Session launch failed', errorDetail: result.errorDetail }));
       expect(projected, outcome).toMatchObject({ type: 'error', code: 'spawn_failed', launchError: {
-        code: outcome === 'current' ? 'plugin_mcp_preparation_unavailable' : 'SPAWN_FAILED',
+        code: outcome === 'current' ? code : 'SPAWN_FAILED',
       } });
       expect(JSON.stringify([snapshot, projected])).not.toContain('PRIVATE');
     } finally { operations.runner.cancel(scope, outcome); }
