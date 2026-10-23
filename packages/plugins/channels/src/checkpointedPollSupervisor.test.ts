@@ -71,6 +71,54 @@ function backgroundContext(
 }
 
 describe('Checkpointed poll supervisor', () => {
+  it('parks a permanent poll failure for a settled minute and recovers on a Collection change with attributable logs', async () => {
+    vi.useFakeTimers();
+    const generation = new AbortController();
+    const listeners: Array<() => void> = [];
+    let failing = true;
+    const get = vi.fn(async () => {
+      if (failing) throw new PluginError({ code: 'plugin_collection_invalid_value',
+        message: 'private payload must never be logged', retryable: false });
+      return null;
+    });
+    const logger = { warn: vi.fn() };
+    const context = backgroundContext(generation.signal, undefined, logger);
+    const collection = {
+      get,
+      query: async (request: Readonly<{ prefix?: readonly unknown[] }>) => ({
+        rows: request.prefix?.[0] === 'connection' ? connectionRows(1) : [], changeCursor: 1,
+      }),
+      watch: (_request: unknown, notify: () => void) => {
+        listeners.push(notify);
+        return { dispose() {} };
+      },
+    };
+    const supervisor = createIngressSupervisor();
+    const run = supervisor.run({ ...context, services: { ...context.services,
+      storage: { account: { collection: () => collection } },
+      events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } },
+    } as unknown as PluginServices });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledExactlyOnceWith('[Channels] ingress supervisor work failed', {
+        boundary: 'poll', code: 'plugin_collection_invalid_value', retryable: false,
+        connectionId: 'connection-1', collectionId: 'channel-state',
+      });
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private payload');
+      // The broad Collection invalidation includes checkpoint/census repair,
+      // not only edits selected by the connection and binding index watches.
+      failing = false;
+      listeners[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      generation.abort(); await run; await supervisor.dispose(); vi.useRealTimers();
+    }
+  });
+
   it.each([0, 1])('performs no idle periodic reads with %i enabled socket connections and wakes on collection invalidation', async (count) => {
     vi.useFakeTimers();
     const generation = new AbortController();
@@ -504,7 +552,7 @@ describe('Checkpointed poll supervisor', () => {
     expect(logger.warn).toHaveBeenNthCalledWith(
       3,
       '[Channels] ingress supervisor work failed',
-      { boundary: 'poll' },
+      { boundary: 'poll', connectionId: 'connection-1', collectionId: 'channel-state' },
     );
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret');
     await supervisor.dispose();

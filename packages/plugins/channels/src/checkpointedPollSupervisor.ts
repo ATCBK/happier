@@ -101,10 +101,12 @@ function logIngressSupervisorFailure(
   context: BackgroundServiceContext,
   boundary: 'due-work' | 'retention' | 'connection-discovery' | 'poll',
   error: unknown,
+  connectionId?: string,
 ): void {
   if (isInactiveSupervisorCollectionFailure(error)) return;
   context.services.logger.warn('[Channels] ingress supervisor work failed', {
     boundary,
+    ...(connectionId === undefined ? {} : { connectionId, collectionId: CHANNEL_STATE_COLLECTION.id }),
     ...(classifySupervisorFailure(error) ?? {}),
   });
 }
@@ -188,7 +190,9 @@ export function createIngressSupervisor(
     // The first wake owns the startup pass: there is no earlier sweep to pace.
     let nextRetentionSweepAt = 0;
     const wake = createSupervisorWake(supervisorController.signal);
-    const pollDeadlines = new Map<string, number>();
+    // null parks a permanent boundary failure until stored input changes;
+    // Infinity remains an ordinary ineligible connection awaiting its watch.
+    const pollDeadlines = new Map<string, number | null>();
     const observations: Array<{ dispose(): void }> = [];
     // The polls this generation started and has not yet seen settle, keyed by
     // connection. It is the whole of the concurrency contract: a key that is
@@ -205,6 +209,11 @@ export function createIngressSupervisor(
       try {
         const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
         observations.push(collection.watch({ kind: 'collection' }, () => {
+          // A checkpoint/census repair can unblock a failed poll without
+          // changing the connection or binding index watched below.
+          for (const [id, deadline] of pollDeadlines) {
+            if (deadline === null) pollDeadlines.delete(id);
+          }
           retentionInvalidated = true;
           nextRetentionSweepAt = 0;
           wake.wake();
@@ -319,6 +328,7 @@ export function createIngressSupervisor(
             // serial sweep, so the last connection waited for every earlier round trip before it was
             // polled again, and due work and retention below waited with it.
             if (inFlightPollsByConnectionId.has(connectionId)) continue;
+            if (pollDeadlines.get(connectionId) === null) continue;
             const deadline = Math.max(pollDeadlines.get(connectionId) ?? 0, retryAt ?? 0);
             if (deadline > now) {
               pollDeadlines.set(connectionId, deadline);
@@ -338,9 +348,10 @@ export function createIngressSupervisor(
                 }
               } catch (error) {
                 if (supervisorController.signal.aborted) return;
-                logIngressSupervisorFailure(workerContext, 'poll', error);
+                logIngressSupervisorFailure(workerContext, 'poll', error, connectionId);
                 if (pollDeadlines.has(connectionId)) {
-                  pollDeadlines.set(connectionId, clock.now() + reconciliationIntervalMs);
+                  pollDeadlines.set(connectionId, classifySupervisorFailure(error)?.retryable === false
+                    ? null : clock.now() + reconciliationIntervalMs);
                 }
               }
             })();
@@ -371,7 +382,7 @@ export function createIngressSupervisor(
             logIngressSupervisorFailure(workerContext, 'due-work', error);
             recoveryAt = clock.now() + reconciliationIntervalMs;
           }
-          const deadlines = [...pollDeadlines.values()].filter(Number.isFinite);
+          const deadlines = [...pollDeadlines.values()].filter((value): value is number => value !== null && Number.isFinite(value));
           if (retentionPass === null && Number.isFinite(nextRetentionSweepAt)) deadlines.push(nextRetentionSweepAt);
           if (dueAt !== undefined) deadlines.push(dueAt);
           if (recoveryAt !== undefined) deadlines.push(recoveryAt);
