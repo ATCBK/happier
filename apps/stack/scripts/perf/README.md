@@ -87,7 +87,12 @@ browser cache enabled. Neither mode changes freshness, approvals or revocation.
 
 Every journey explicitly selects `--capture-mode=timing|counts`. Timing sets a
 pre-document diagnostic override at the canonical telemetry owner and leaves the
-React fiber hook OFF. Counts turns store telemetry and the fiber hook ON. Both
+React fiber hook OFF. Counts turns store telemetry and the fiber hook ON, but
+the existing pre-document counts override suppresses admission of the JS-thread-
+lag sampler at its canonical owner. No 50ms sample or periodic sampler flush
+timer runs; ordinary telemetry outside a capture is unchanged. Reload the app
+after installing the override, before settling. The separately reported sampler
+trace line must show zero proven fires, not a slice-subtracted substitute for OFF. Both
 record CPU/network/long-task observations; count-run durations are never timing
 evidence. The bundle records requested mode and observed enablement. An older UI
 that cannot attest enablement fails with `RELOAD NEEDED`; only the orchestrator
@@ -143,6 +148,14 @@ spans, not PostgreSQL physical-query counts (one Prisma operation may emit
 multiple SQL statements). `db.transaction.*` phases are counted separately,
 not added to those operation attempts; total DB phase records remain available.
 Server spans correlate by diagnostic request ID.
+
+The isolated stress observer's physical SQL counter is informational. A failed
+probe records `null` and an unavailable reason, not zero. A delta requires valid,
+nondecreasing in-window endpoints with unchanged reset/eviction metadata; outer
+setup/finalization probes do not define that delta. Missing or reset SQL evidence
+leaves an explicit bundle gap without discarding browser/CPU evidence. Container,
+image and daemon identity checks still fail closed.
+
 UI/server correlation uses returned request IDs where present, otherwise the
 time window. Daemon diagnostics expose control completions, external Action
 stages and latency spans; these are distinguished from browser RPC calls and
@@ -291,6 +304,22 @@ contains interval-unioned task, style/layout/paint and GC summaries; nested
 durations must not be added. Missing marks or dropped trace data fail closed.
 The 2 GiB diagnostic trace buffer replaces Chrome's observed insufficient
 200 MiB default; it is not a product resource limit.
+
+Counts mode also enables sync telemetry's otherwise default-off 50ms JS lag
+sampler. With `--profiling`, `profiling.json` reports its proven timer slices
+separately at `trace.instrumentation.jsThreadLagSampler`, including its summary
+flush, GC overlap and residual task occupancy/long tasks/GC. Loaded Metro factory
+locations are resolved before measurement; a direct sampler module URL also
+supplies ownership. Missing proof or dropped trace data is unavailable, not
+zero cost. Other 50ms timers and whole tasks containing unrelated callbacks are
+not assigned to the sampler. The counts probe stays enabled.
+
+The residual is arithmetic subtraction of observed slices, **not a sampler-off
+counterfactual**: induced GC outside callbacks, altered scheduling and other
+diagnostic overhead remain. Raw summaries and J13 assertions are unchanged;
+residuals never waive a failing idle gate or certify production CPU. Aggregate
+component commit counts overlap, and neither those counts nor Scheduler Update
+measures record the subscription cause of every renderer commit.
 
 The pre-document `PerformanceObserver` preserves React's U+200B component
 measures before `webReactPerformanceMeasures.ts` clears them. Only name, timing

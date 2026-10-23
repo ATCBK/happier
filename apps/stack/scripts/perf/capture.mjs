@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { SourceMap } from 'node:module';
 import { connectPage } from './cdp.mjs';
 import { frameKey, normalizeProfileSamples, requestFingerprint, safeUrl, summarizeNetwork, summarizeProfile } from './analysis.mjs';
-import { summarizeHeapProfile, summarizeMainThreadTrace } from './profiling.mjs';
+import { summarizeHeapProfile, summarizeMainThreadTrace, summarizeJsThreadLagSampler } from './profiling.mjs';
 
 const TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing', 'disabled-by-default-v8.cpu_profiler'];
 const frameProjection = frame => ({ functionName: frame.functionName, scriptId: frame.scriptId,
@@ -27,18 +27,20 @@ function traceProjection(event) {
 
 function fullTrace(cdp, directory, measurementDurationMs) {
   let stream, file, completion, acceptComplete, fileDone, count = 0, writeError, started = false, terminal;
+  let samplerSources = [];
   const summaryEvents = [];
   cdp.on('Tracing.dataCollected', ({ value }) => {
     if (!started || writeError) return;
     for (const event of value) {
       const safe = traceProjection(event);
       stream.write(`${count++ ? ',' : ''}${JSON.stringify(safe)}\n`);
-      if (/^(?:happier-perf:|RunTask$|ThreadControllerImpl::RunTask$|MessageLoop::RunTask$|ThreadPool_RunTask$|Layout$|UpdateLayoutTree$|RecalculateStyles$|PrePaint$|Paint|CompositeLayers$|Layerize$|UpdateLayerTree$|TimerFire$|FireAnimationFrame$|EventDispatch$|WebSocket|RunMicrotasks$)|GC|GarbageCollect/.test(event.name)) summaryEvents.push(safe);
+      if (/^(?:happier-perf:|RunTask$|ThreadControllerImpl::RunTask$|MessageLoop::RunTask$|ThreadPool_RunTask$|Layout$|UpdateLayoutTree$|RecalculateStyles$|PrePaint$|Paint|CompositeLayers$|Layerize$|UpdateLayerTree$|TimerFire$|FunctionCall$|FireAnimationFrame$|EventDispatch$|WebSocket|RunMicrotasks$)|GC|GarbageCollect/.test(event.name)) summaryEvents.push(safe);
     }
   });
   cdp.on('Tracing.tracingComplete', result => acceptComplete?.(result));
   return {
-    async start() {
+    async start(sources = []) {
+      samplerSources = sources;
       file = createWriteStream(join(directory, 'trace.json.gz'), { mode: 0o600 });
       stream = createGzip(); stream.pipe(file);
       fileDone = new Promise(resolve => { file.once('finish', resolve); file.once('error', error => { writeError = error; resolve(); }); stream.once('error', error => { writeError = error; resolve(); }); });
@@ -63,10 +65,43 @@ function fullTrace(cdp, directory, measurementDurationMs) {
       const end = summaryEvents.find(event => event.name === 'happier-perf:end');
       const endUs = Number.isFinite(measurementDurationMs) ? Math.min(end?.ts, start?.ts + measurementDurationMs * 1000) : end?.ts;
       const summary = summarizeMainThreadTrace(summaryEvents, { startUs: start?.ts, endUs, pid: start?.pid, tid: start?.tid });
+      const sampler = result.dataLossOccurred === false
+        ? summarizeJsThreadLagSampler(summaryEvents, summary, samplerSources)
+        : { available: false, unavailableReason: 'complete-trace-required', counterfactual: false };
       return terminal = { artifact: 'trace.json.gz', categories: TRACE_CATEGORIES, eventCount: count,
-        dataLossOccurred: result.dataLossOccurred, summary };
+        dataLossOccurred: result.dataLossOccurred, summary,
+        instrumentation: { jsThreadLagSampler: { ...sampler, sourceRanges: samplerSources } } };
     },
   };
+}
+
+// Resolve only this canonical module, outside the measured window. Generated
+// locations are evidence; no bundle-line constants or 50ms cadence heuristic.
+async function jsThreadLagSamplerSources(cdp) {
+  function loadedFactory() {
+    const modules = globalThis.__r?.getModules?.();
+    if (!modules) return;
+    for (const [, module] of modules) {
+      if (module.isInitialized && module.factory
+        && /(?:^|\/)sync\/runtime\/performance\/jsThreadLagTelemetry\.[jt]s$/.test(String(module.verboseName ?? '').replaceAll('\\', '/'))) return module.factory;
+    }
+  }
+  let objectId;
+  try {
+    const factory = await cdp.send('Runtime.evaluate', { expression: `(${loadedFactory.toString()})()` });
+    objectId = factory.result?.objectId;
+    if (factory.exceptionDetails || !objectId) return [];
+    const [properties, lines] = await Promise.all([
+      cdp.send('Runtime.getProperties', { objectId, ownProperties: true }),
+      cdp.send('Runtime.callFunctionOn', { objectId, functionDeclaration: 'function() { return this.toString().split("\\n").length; }', returnByValue: true }),
+    ]);
+    const location = properties.internalProperties?.find(row => row.name === '[[FunctionLocation]]')?.value?.value;
+    const count = lines.result?.value;
+    if (!location || !Number.isInteger(location.lineNumber) || !Number.isInteger(count) || count < 1) return [];
+    // CDP locations are zero-based; timeline FunctionCall lines are one-based.
+    return [{ scriptId: location.scriptId, startLine: location.lineNumber + 1, endLine: location.lineNumber + count + 1 }];
+  } catch { return []; } // The summary reports missing source proof, never zero cost.
+  finally { if (objectId) await cdp.send('Runtime.releaseObject', { objectId }).catch(() => {}); }
 }
 
 // Counts-only diagnostic budget: retain at most eight async scheduling hops.
@@ -285,12 +320,13 @@ export async function startCapture(options) {
         await cdp.send('Network.setCacheDisabled', { cacheDisabled: options.cache === 'cold' });
         if (options.cache === 'cold') await cdp.send('Network.clearBrowserCache');
         if (options.profiling) {
+          const samplerSources = await jsThreadLagSamplerSources(cdp);
           await cdp.send('HeapProfiler.enable');
           // One MiB allocation sampling retains function attribution without
           // the oversized CDP serialization observed at finer sampling.
           await cdp.send('HeapProfiler.startSampling', { samplingInterval: 1048576, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }); heapStarted = true;
           await cdp.send('Profiler.setSamplingInterval', { interval: 10000 });
-          await trace.start();
+          await trace.start(samplerSources);
         }
         startMs = Date.now(); recording = true;
         await cdp.send('Profiler.start'); profileStarted = true;

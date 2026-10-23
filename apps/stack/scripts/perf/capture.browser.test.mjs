@@ -10,21 +10,27 @@ import { gzipSync } from 'node:zlib';
 import { runQaBrowserWorker } from '../utils/dev_targets/qa_browser.mjs';
 import { startCapture } from './capture.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { createStressHostObserver } from './stress-host.mjs';
+import { runPerformanceCli } from './perf.mjs';
 
 test('counts capture retains async request issuers; timing and cleanup remain uninstrumented', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-perf-browser-' });
-  // The real sampler implementation runs in Chrome. Only the Metro registry
-  // and telemetry sink are fixture boundaries; callback locations are real CDP.
+  // Both real owners run in Chrome. Only the Metro registry is a bundler
+  // fixture boundary; enablement, sampling and callback locations stay real.
+  const telemetrySource = stripTypeScriptTypes(await readFile(new URL('../../../ui/sources/sync/runtime/syncPerformanceTelemetry.ts', import.meta.url), 'utf8'))
+    .replace(/^export /gm, '');
+  const telemetryBundle = `(() => { ${telemetrySource}
+    globalThis.fixtureTelemetry = syncPerformanceTelemetry;
+    installSyncPerformanceTelemetryGlobal(syncPerformanceTelemetry);
+  })();`;
   const samplerSource = stripTypeScriptTypes(await readFile(new URL('../../../ui/sources/sync/runtime/performance/jsThreadLagTelemetry.ts', import.meta.url), 'utf8'))
     .replace('export function createJsThreadLagTelemetry', 'function createJsThreadLagTelemetry');
   const samplerBundle = `globalThis.fixtureFactory = function(global) { ${samplerSource}
-    global.fixtureLag = createJsThreadLagTelemetry({telemetry:global.__HAPPIER_SYNC_PERFORMANCE__});
+    global.fixtureLag = createJsThreadLagTelemetry({telemetry:global.fixtureTelemetry});
   }; globalThis.__r = {getModules: () => new Map([[1, {isInitialized:true,
     verboseName:'apps/ui/sources/sync/runtime/performance/jsThreadLagTelemetry.ts',factory:fixtureFactory}]])};
   fixtureFactory(globalThis);`;
   const html = `<!doctype html><div data-testid="session-list-view-options-trigger">Shell</div><script>
-    globalThis.__HAPPIER_SYNC_PERFORMANCE__ = { isEnabled: () => globalThis.__HAPPIER_PERF_CAPTURE_MODE__ === 'counts',
-      reset() {}, markScenario() {}, count() {}, flush() { return {events: []}; } };
     function defaultRuntimeFetch() { return fetch('/probe?token=never-save').then(response => response.text()); }
     function issuingOperation() { return new Promise(resolve => setTimeout(() => {
       const start = performance.now(); while (performance.now() - start < 80) {}
@@ -32,9 +38,12 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       performance.clearMeasures('\u200bFixture'); resolve();
     }, 0)).then(defaultRuntimeFetch); }
     function showWelcome() { document.body.innerHTML = '<div data-testid="welcome-decision-panel">Welcome</div>'; }
-  </script><script src="/metro-fixture.bundle"></script>`;
+  </script><script src="/telemetry-fixture.js"></script><script src="/metro-fixture.bundle"></script>`;
   const probeBody = 'never-save response é'.repeat(256);
   const server = createServer((req, res) => {
+    if (req.url === '/telemetry-fixture.js') {
+      res.setHeader('content-type', 'application/javascript'); res.end(telemetryBundle); return;
+    }
     if (req.url === '/metro-fixture.bundle') {
       res.setHeader('content-type', 'application/javascript'); res.end(samplerBundle); return;
     }
@@ -62,6 +71,15 @@ test('counts capture retains async request issuers; timing and cleanup remain un
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${endpoint.port}`, { timeout: 0 });
   context = await browser.newContext();
   const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  const ordinary = await page.evaluate(() => {
+    fixtureTelemetry.configure({ enabled: true });
+    const started = fixtureLag.start(), duplicate = fixtureLag.start(), running = fixtureLag.isRunning();
+    fixtureLag.stop();
+    return { started, duplicate, running, stopped: !fixtureLag.isRunning() };
+  });
+  assert.deepEqual(ordinary, { started: true, duplicate: false, running: true, stopped: true },
+    'ordinary telemetry outside a capture retains its sampler lifecycle');
   for (const captureMode of ['counts', 'timing']) {
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const discovery = await (await fetch(`http://127.0.0.1:${endpoint.port}/json/list`)).json();
@@ -70,8 +88,21 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       profiling: true, outputDir: fixture.root });
     let cleanup;
     try {
+      // The telemetry constructor reads the pre-document capture override,
+      // exactly as journey preparation reloads the real app before measuring.
+      await page.reload();
       await capture.begin();
-      await page.evaluate(async () => { fixtureLag.start(); await new Promise(resolve => setTimeout(resolve, 180)); });
+      const admission = await page.evaluate(async () => {
+        const started = fixtureLag.start();
+        fixtureTelemetry.count('fixture.counts-preserved');
+        fixtureTelemetry.registerStorageNotificationSource();
+        fixtureTelemetry.recordStoreNotification({ machines: 1 }, { machines: 0 });
+        await new Promise(resolve => setTimeout(resolve, 180));
+        return { started, running: fixtureLag.isRunning(), counts: fixtureTelemetry.isEnabled() };
+      });
+      assert.equal(admission.counts, captureMode === 'counts', 'disabling the sampler must not disable counts telemetry');
+      assert.equal(admission.started, false, 'capture modes must not admit the lag sampler');
+      assert.equal(admission.running, false);
       await page.evaluate(() => issuingOperation());
       await page.evaluate(() => showWelcome());
       const result = await capture.finish();
@@ -89,8 +120,11 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       assert.ok(!JSON.stringify(result).includes('never-save'), 'query, response and arbitrary page text stay excluded');
       const sampler = result.profiling.trace.instrumentation.jsThreadLagSampler;
       assert.equal(sampler.available, true, 'loaded Metro factory locations must prove timer ownership');
-      assert.equal(sampler.timerFireCount > 0, captureMode === 'counts', 'counts telemetry enables the real sampler; timing does not');
-      assert.equal(sampler.timerSliceMs > 0, captureMode === 'counts');
+      assert.equal(sampler.timerFireCount, 0, 'counts must retain attribution without admitting sampler timers');
+      assert.equal(sampler.timerSliceMs, 0);
+      assert.equal(result.react.diagnostics.storeNotifications.length, 1, 'the real root-notification tap remains active');
+      assert.deepEqual(result.react.diagnostics.storeNotifications[0].changedKeys, ['machines']);
+      assert.equal(result.telemetry.some(summary => summary.events.some(event => event.name === 'fixture.counts-preserved')), captureMode === 'counts');
       assert.equal(sampler.counterfactual, false);
       assert.ok(sampler.withoutSamplerSlices.mainThreadBusyMs <= sampler.observed.mainThreadBusyMs);
       if (captureMode === 'timing') {
@@ -121,4 +155,47 @@ test('counts capture retains async request issuers; timing and cleanup remain un
   assert.equal(cleanup.asyncCallStackDepth, 0, 'abort without finish must disable async tracing too');
   assert.equal(cleanup.freshDocumentOffAttestation.storeTelemetry, false);
   assert.equal(cleanup.freshDocumentOffAttestation.fiberHook, false);
+
+  const sql = (calls, statsReset = 'stable') => ({ calls, statsReset, dealloc: 0 });
+  for (const scenario of [
+    { id: 'outer-unavailable', samples: [null, null, sql(10), sql(13), sql(20)], expected: 3 },
+    { id: 'window-unavailable', samples: [sql(0), sql(3), null, sql(13), sql(20)], expected: null },
+    { id: 'window-reset', samples: [sql(0), sql(3), sql(10), sql(13, 'reset'), sql(20, 'reset')], expected: null },
+    { id: 'window-eviction', samples: [sql(0), sql(3), sql(10), { ...sql(13), dealloc: 1 }, { ...sql(20), dealloc: 1 }], expected: null },
+    { id: 'window-decrease', samples: [sql(0), sql(3), sql(10), sql(2), sql(4)], expected: null },
+    { id: 'valid-zero', samples: Array.from({ length: 5 }, () => sql(0)), expected: 0 },
+  ]) await t.test(`optional SQL: ${scenario.id}`, async () => {
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    const output = fixture.path(scenario.id), previousExitCode = process.exitCode;
+    let sampleIndex = 0;
+    try {
+      await runPerformanceCli(['journey', scenario.id, '--session=PROF-SQL-fixture', '--cache=warm', '--ui-mode=export',
+        '--capture-mode=timing', `--cdp=http://127.0.0.1:${endpoint.port}`, `--page-id=${pageId}`, `--url=${page.url()}`,
+        '--home-selector=[data-testid="session-list-view-options-trigger"]', `--out=${output}`], {
+        definition: { id: scenario.id, intent: 'Optional SQL evidence must not erase browser capture', steps: [{ op: 'idle', ms: 10 }] },
+        startHostObserver: () => createStressHostObserver({
+          context: { composeProjectName: 'happier-stress-perf-test', uiDir: fixture.root,
+            containers: [{ id: 'owned-api', image: 'sha256:fixture' }], postgresContainerId: 'owned-postgres' },
+          // Docker inspection and psql are OS/database boundaries. Both the
+          // observer and journey/collector beneath them remain real.
+          inspect: async () => [{ Id: 'owned-api', Image: 'sha256:fixture',
+            Config: { Labels: { 'com.docker.compose.project': 'happier-stress-perf-test' } }, State: { Running: true } }],
+          sqlStatements: async () => {
+            const value = scenario.samples[Math.min(sampleIndex++, scenario.samples.length - 1)];
+            if (value === null) throw new Error('private SQL failure diagnostic');
+            return value;
+          },
+        }),
+      });
+    } finally { process.exitCode = previousExitCode; }
+    const bundle = JSON.parse(await readFile(`${output}/bundle.json`, 'utf8'));
+    assert.notEqual(bundle.status, 'FAILED', 'unavailable/reset informational SQL must not discard the capture');
+    assert.equal(bundle.counts.sqlStatements, scenario.expected);
+    assert.equal(bundle.gaps.some(reason => /SQL/.test(reason)), scenario.expected === null);
+    assert.ok(!JSON.stringify(bundle).includes('private SQL failure diagnostic'));
+    assert.ok(JSON.parse(await readFile(`${output}/cpu.cpuprofile`, 'utf8')).nodes.length > 0,
+      'optional SQL gaps must retain the actual CPU-profile artifact');
+    assert.equal(JSON.parse(await readFile(`${output}/host-observer.json`, 'utf8')).status, 'CLOSED');
+    assert.equal(JSON.parse(await readFile(`${output}/cleanup.json`, 'utf8')).status, 'CLEANED');
+  });
 });

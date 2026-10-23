@@ -46,6 +46,25 @@ test('sampler attribution is unavailable without proof, never inferred from a 50
   assert.equal(result.withoutSamplerSlices.mainThreadBusyMs, 100);
 });
 
+test('sampler subtraction shares begin/end parsing, window clipping and nested GC unions', () => {
+  const event = (name, ph, ts, data) => ({ name, ph, ts, pid: 1, tid: 1, args: { data } });
+  const events = [event('RunTask', 'B', -1000), event('TimerFire', 'B', 0),
+    event('FunctionCall', 'B', 1000, { url: 'https://app.test/sync/runtime/performance/jsThreadLagTelemetry.ts' }),
+    event('MajorGC', 'B', 2000), { ...event('MinorGC', 'X', 3000), dur: 10000 },
+    event('MajorGC', 'E', 14000), event('FunctionCall', 'E', 30000),
+    event('TimerFire', 'E', 40000), event('RunTask', 'E', 80000)];
+  const window = { startUs: 0, endUs: 100000, pid: 1, tid: 1 };
+  const result = summarizeJsThreadLagSampler(events, window);
+  assert.equal(result.observed.mainThreadBusyMs, 80);
+  assert.equal(result.observed.longTaskCount, 1);
+  assert.equal(result.gcInsideSamplerMs, 12, 'nested GC must not be added twice');
+  assert.equal(result.withoutSamplerSlices.mainThreadBusyMs, 40);
+  assert.equal(result.withoutSamplerSlices.longTaskCount, 0);
+  assert.equal(result.withoutSamplerSlices.gcMs, 0);
+  const incomplete = summarizeJsThreadLagSampler([...events, event('FunctionCall', 'B', 90000)], window);
+  assert.equal(incomplete.available, false, 'an incomplete trace cannot supply a zero-cost claim');
+});
+
 test('trace work is clipped to the explicit main thread/window and nested work is unioned', () => {
   const event = (name, ts, dur, extra = {}) => ({ name, ph: 'X', ts, dur, pid: 7, tid: 9, ...extra });
   const result = summarizeMainThreadTrace([

@@ -18,6 +18,38 @@ const traceLimitations = [
   'Style/layout/paint and GC are separately unioned categories and may overlap task or trigger totals.',
 ];
 
+function mainThreadSpans(events, { startUs, endUs, pid, tid }) {
+  const spans = [], stack = [];
+  let incomplete = false;
+  const append = (event, end) => spans.push({ name: event.name, data: event.args?.data,
+    eventType: event.args?.data?.type, originalStart: event.ts, originalEnd: end,
+    start: event.ts, end });
+  for (const event of events.filter(event => event.pid === pid && event.tid === tid && Number.isFinite(event.ts))
+    .sort((a, b) => a.ts - b.ts)) {
+    if (event.ph === 'B') stack.push(event);
+    else if (event.ph === 'E') {
+      const begin = stack.pop();
+      if (begin) append(begin, event.ts);
+      else if (event.ts >= startUs && event.ts <= endUs) incomplete = true;
+    } else if (event.ph === 'X' && Number.isFinite(event.dur) && event.dur >= 0) append(event, event.ts + event.dur);
+  }
+  if (stack.some(event => event.ts < endUs)) incomplete = true;
+  return { incomplete, clipped: spans.filter(span => span.end > startUs && span.start < endUs)
+    .map(span => ({ ...span, originalDuration: span.end - span.start,
+      start: Math.max(startUs, span.start), end: Math.min(endUs, span.end) }))
+    .sort((a, b) => a.start - b.start || b.end - a.end) };
+}
+
+function taskEnvelopes(spans) {
+  const tasks = [];
+  for (const span of spans.filter(span => taskName.test(span.name))) {
+    // Nested RunTask records describe the same occupied thread interval.
+    if (tasks.length && span.start >= tasks.at(-1).start && span.end <= tasks.at(-1).end) continue;
+    tasks.push({ ...span, trigger: 'unattributed', priority: Infinity });
+  }
+  return tasks;
+}
+
 export function summarizeMainThreadTrace(events, { startUs, endUs, pid, tid } = {}) {
   const durationMs = (endUs - startUs) / 1000;
   const empty = { available: false, startUs, endUs, pid, tid, durationMs,
@@ -25,30 +57,8 @@ export function summarizeMainThreadTrace(events, { startUs, endUs, pid, tid } = 
     maxTaskMs: null, styleLayoutPaintMs: null, gcMs: null, triggerRows: [], limitations: traceLimitations };
   if (!Array.isArray(events) || !Number.isFinite(startUs) || !Number.isFinite(endUs)
     || endUs <= startUs || pid === undefined || tid === undefined) return { ...empty, unavailableReason: 'explicit-thread-window-required' };
-  const spans = [], stack = [];
-  let incomplete = false;
-  for (const event of events.filter(event => event.pid === pid && event.tid === tid && Number.isFinite(event.ts))
-    .sort((a, b) => a.ts - b.ts)) {
-    if (event.ph === 'B') stack.push(event);
-    else if (event.ph === 'E') {
-      const begin = stack.pop();
-      if (begin) spans.push({ name: begin.name, eventType: begin.args?.data?.type, start: begin.ts, end: event.ts });
-      else if (event.ts >= startUs && event.ts <= endUs) incomplete = true;
-    } else if (event.ph === 'X' && Number.isFinite(event.dur) && event.dur >= 0) {
-      spans.push({ name: event.name, eventType: event.args?.data?.type, start: event.ts, end: event.ts + event.dur });
-    }
-  }
-  if (stack.some(event => event.ts < endUs)) incomplete = true;
-  const clipped = spans.filter(span => span.end > startUs && span.start < endUs)
-    .map(span => ({ ...span, originalDuration: span.end - span.start,
-      start: Math.max(startUs, span.start), end: Math.min(endUs, span.end) }))
-    .sort((a, b) => a.start - b.start || b.end - a.end);
-  const tasks = [];
-  for (const span of clipped.filter(span => taskName.test(span.name))) {
-    // Nested RunTask records describe the same occupied thread interval.
-    if (tasks.length && span.start >= tasks.at(-1).start && span.end <= tasks.at(-1).end) continue;
-    tasks.push({ ...span, trigger: 'unattributed', priority: Infinity });
-  }
+  const { clipped, incomplete } = mainThreadSpans(events, { startUs, endUs, pid, tid });
+  const tasks = taskEnvelopes(clipped);
   if (incomplete || !tasks.length) return { ...empty,
     unavailableReason: incomplete ? 'incomplete-thread-events' : 'task-envelopes-unavailable' };
   let taskIndex = 0;
@@ -79,6 +89,71 @@ export function summarizeMainThreadTrace(events, { startUs, endUs, pid, tid } = 
     gcMs: unionDuration(clipped.filter(span => gcName.test(span.name))) / 1000,
     triggerRows: [...triggers.values()].map(({ intervals, ...row }) => ({ ...row, ms: unionDuration(intervals) / 1000 }))
       .sort((a, b) => b.ms - a.ms), limitations: traceLimitations };
+}
+
+// Sources are proven generated locations from the loaded Metro factory, or a
+// direct module URL. A cadence/name/neighboring task is never ownership proof.
+export function summarizeJsThreadLagSampler(events, window, sources = []) {
+  const observed = summarizeMainThreadTrace(events, window);
+  const limitations = [
+    'Only proven direct TimerFire callback slices are subtracted; enclosing task overhead remains.',
+    'This is observed slice arithmetic, not a sampler-off counterfactual: induced GC elsewhere, displaced work and other diagnostic overhead remain.',
+    'Residual long-task durations subtract in-window overlap from original envelopes; they are not newly observed continuous tasks.',
+    'Raw J13 acceptance uses the unmodified trace summary, never this residual.',
+  ];
+  const unavailable = reason => ({ available: false, unavailableReason: reason, counterfactual: false, observed, limitations });
+  if (!observed.available) return unavailable(observed.unavailableReason);
+  const { clipped } = mainThreadSpans(events, window);
+  const calls = clipped.filter(span => span.name === 'FunctionCall')
+    .sort((a, b) => a.originalStart - b.originalStart || b.originalEnd - a.originalEnd);
+  if (!calls.length) return unavailable('function-call-trace-unavailable');
+  const directUrl = data => /(?:^|\/)jsThreadLagTelemetry\.[jt]s(?:[?#]|$)/.test(data?.url ?? '');
+  const ranges = sources.filter(source => typeof source.scriptId === 'string'
+    && Number.isInteger(source.startLine) && Number.isInteger(source.endLine) && source.endLine > source.startLine);
+  if (!ranges.length && !calls.some(call => directUrl(call.data))) return unavailable('sampler-source-proof-unavailable');
+  const owned = clipped.filter(span => span.name === 'TimerFire').filter(timer => {
+    let low = 0, high = calls.length;
+    while (low < high) { const mid = (low + high) >>> 1;
+      if (calls[mid].originalStart < timer.originalStart) low = mid + 1; else high = mid;
+    }
+    // The first contained FunctionCall is the timer's direct callback, not an
+    // arbitrary nested invocation of a sampler helper in some other callback.
+    let first;
+    for (let index = low; index < calls.length && calls[index].originalStart < timer.originalEnd; index++) {
+      if (calls[index].originalEnd <= timer.originalEnd) { first = calls[index]; break; }
+    }
+    const data = first?.data;
+    return directUrl(data) || ranges.some(source => data?.scriptId === source.scriptId
+      && data.lineNumber >= source.startLine && data.lineNumber < source.endLine);
+  });
+  const merged = [];
+  for (const span of owned) {
+    if (merged.length && span.start <= merged.at(-1).end) merged.at(-1).end = Math.max(merged.at(-1).end, span.end);
+    else merged.push({ start: span.start, end: span.end });
+  }
+  const intersections = span => {
+    const rows = [];
+    let low = 0, high = merged.length;
+    while (low < high) { const mid = (low + high) >>> 1;
+      if (merged[mid].end <= span.start) low = mid + 1; else high = mid;
+    }
+    for (let index = low; index < merged.length && merged[index].start < span.end; index++) {
+      rows.push({ start: Math.max(span.start, merged[index].start), end: Math.min(span.end, merged[index].end) });
+    }
+    return rows;
+  };
+  const overlap = span => unionDuration(intersections(span));
+  const tasks = taskEnvelopes(clipped), gc = clipped.filter(span => gcName.test(span.name));
+  // Intersection of overlapping GC/task intervals is unioned as well.
+  const intersected = spans => unionDuration(spans.flatMap(intersections));
+  const taskOverlapMs = intersected(tasks) / 1000, gcInsideSamplerMs = intersected(gc) / 1000;
+  const mainThreadBusyMs = observed.mainThreadBusyMs - taskOverlapMs;
+  return { available: true, counterfactual: false, observed, timerFireCount: owned.length,
+    timerSliceMs: unionDuration(merged) / 1000, taskOverlapMs, gcInsideSamplerMs,
+    withoutSamplerSlices: { mainThreadBusyMs, busyFraction: mainThreadBusyMs / observed.durationMs,
+      longTaskCount: tasks.filter(task => task.originalDuration - overlap(task) > 50000).length,
+      maxTaskMs: tasks.reduce((maximum, task) => Math.max(maximum, (task.end - task.start - overlap(task)) / 1000), 0),
+      gcMs: observed.gcMs - gcInsideSamplerMs }, limitations };
 }
 
 export function summarizeHeapProfile(profile, symbols = new Map()) {
