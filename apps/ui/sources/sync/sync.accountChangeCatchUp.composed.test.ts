@@ -18,6 +18,7 @@ import {
     AUTHORING_MEMORY_ROUTE_V1,
     AuthoringMemoryListResponseV1Schema,
     projectLegacySessionAccessCapabilitiesV1,
+    resolveSessionFollowActionRequest,
     type NormalizedPluginCollectionUiQueryDescriptorV1,
     type PluginCollectionUiQueryRequestV1,
 } from '@happier-dev/protocol';
@@ -154,6 +155,7 @@ async function restoreTestAccount(options: {
     credentials?: AuthCredentials;
     accountMode?: 'plain' | 'e2ee';
     draftsEnabled?: boolean;
+    followingEnabled?: boolean;
     onRequest?: (path: string) => void;
     runtimeRequest?: (path: string, init?: RequestInit) => Response | undefined;
 } = {}): Promise<void> {
@@ -173,7 +175,8 @@ async function restoreTestAccount(options: {
             }
             if (path === '/health') return jsonResponse({});
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
-                features: { sessions: { drafts: { enabled: options.draftsEnabled === true } } },
+                features: { sessions: { drafts: { enabled: options.draftsEnabled === true },
+                    ...(options.followingEnabled === undefined ? {} : { enabled: true, following: { enabled: options.followingEnabled } }) } },
             }));
             if (path === '/v1/account/encryption') return jsonResponse({ mode: options.accountMode ?? 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return jsonResponse({
@@ -375,7 +378,64 @@ describe('sync AccountChange catch-up projection', () => {
         vi.unstubAllGlobals();
     });
 
-    it('publishes concurrent exact Session list projections as one store update before their reads settle', async () => {
+    it('settles an exact Run in detail and rail once after held catch-up without reading unrelated wakes', async () => {
+        const runtime = await prepareAccountChangeWakeSchedulingHarness();
+        const { storage } = await import('./domains/state/storageStore');
+        const { captureActiveServerAccountScopeLifetime } = await import('./domains/scope/activeServerAccountScope');
+        const { createWorkflowDefinitionFixture, createWorkflowRunListStorageFixture, createWorkflowRunSummaryFixture } = await import('@/dev/testkit/fixtures/workflowRunFixtures');
+        const { workflowRunRowFromSummary } = await import('./store/domains/workflowRuns');
+        const { useWorkflowRun, useWorkflowRunRows } = await import('./store/hooks');
+        const { subscribeVisibleWorkflowRunListInvalidation } = await import('./domains/workflows/workflowRunListInvalidation');
+        const { refreshWorkflowRunById } = await import('./engine/workflows/refreshWorkflowRun');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Expected restored Run Account lifetime');
+        const running = createWorkflowRunSummaryFixture({ ownerAccountId: ACCOUNT_ID, origin: { kind: 'direct' } });
+        const failed = createWorkflowRunSummaryFixture({ ...running, state: 'failed', revision: 11, workflowCustodyState: 'settled' });
+        const response = await createWorkflowRunListStorageFixture({ runs: [failed], definition: createWorkflowDefinitionFixture({
+            blocks: [{ kind: 'wait', id: 'confirm', document: { text: 'Continue', references: [], attachments: [] } }],
+        }) });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(running)], lifetime.scope);
+        const hook = await renderHook(() => ({ detail: useWorkflowRun(running.id), rail: useWorkflowRunRows([running.id]) }));
+        const reads: Promise<void>[] = [];
+        const unsubscribe = subscribeVisibleWorkflowRunListInvalidation({ lifetime, runId: running.id,
+            isVisibleWindowLoaded: () => true,
+            invalidate: ({ summaryCurrent }) => {
+                if (!summaryCurrent) reads.push(refreshWorkflowRunById(running.id, { accountLifetime: lifetime, fence: lifetime }));
+            },
+        });
+        let runReads = 0;
+        domainHttp.mockImplementation(async ({ url }) => {
+            if (new URL(url).pathname === '/v3/automations/runs/workflow-storage') {
+                runReads++;
+                return jsonResponse(response);
+            }
+            return Response.json({}, { status: 404 });
+        });
+        const gate = createDeferred<void>();
+        let catchUpRequested = false;
+        changesResponse.mockImplementationOnce(async () => {
+            catchUpRequested = true;
+            await gate.promise;
+            return { changes: [{ cursor: 1, changedAt: 1, kind: 'account', entityId: `workflow-run:${running.id}`,
+                hint: { revision: 11 } }], nextCursor: 1 };
+        });
+        try {
+            await act(async () => runtime.handleUpdate(accountChangeWake('run-failed')));
+            await vi.waitFor(() => expect(catchUpRequested).toBe(true));
+            for (let index = 0; index < 100; index++) await runtime.handleUpdate(accountChangeWake(`unrelated-${index}`));
+            expect(runReads).toBe(0);
+            expect(hook.getCurrent().detail?.summary).toMatchObject({ state: 'running', revision: 1 });
+            await act(async () => { gate.resolve(); await runtime.resumeInFlight; await Promise.all(reads); });
+            expect(hook.getCurrent().detail?.summary).toMatchObject({ state: 'failed', revision: 11 });
+            expect(hook.getCurrent().rail[0]?.summary).toMatchObject({ state: 'failed', revision: 11 });
+            expect(runReads).toBe(1);
+        } finally {
+            gate.resolve(); await runtime.resumeInFlight; await Promise.allSettled(reads);
+            unsubscribe(); await hook.unmount();
+        }
+    });
+
+    it('publishes concurrent exact Session list projections as one store update without a publication timer', async () => {
         const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
             refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
         };
@@ -401,20 +461,32 @@ describe('sync AccountChange catch-up projection', () => {
             await runtime.refreshSessionListRowProjection(scope.serverId, id);
             expect(storage.getState().sessionListRowsByServerId[scope.serverId]?.[id]).toBeDefined();
         });
+        let publicationTimersFrozen = false;
         try {
             await waitForHomeGovernance(() => expect(requested).toBe(ids.length));
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            publicationTimersFrozen = true;
             responses.resolve();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(publications).toBe(1);
+            await vi.runAllTimersAsync();
             await Promise.all(reads);
             expect(publications).toBe(1);
             for (const id of ids) expect(storage.getState().sessions[id]).toBeUndefined();
-        } finally { responses.resolve(); await Promise.allSettled(reads); unsubscribe(); }
+        } finally {
+            responses.resolve();
+            if (publicationTimersFrozen) await vi.runAllTimersAsync();
+            await Promise.allSettled(reads);
+            vi.useRealTimers();
+            unsubscribe();
+        }
     });
 
     it.each(['scope', 'account', 'same-home-retirement', 'other-home-retirement'] as const)(
         'rechecks exact Session list projection publication after %s', async change => {
         const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
             refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
-            sessionListRowProjectionPublications: { getPendingCount(): number; flush(): void };
+            readySessionListRowProjections: { getPendingCount(): number };
         };
         const { storage } = await import('./domains/state/storage');
         const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
@@ -424,23 +496,33 @@ describe('sync AccountChange catch-up projection', () => {
         domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === `/v2/sessions/${id}`
             ? jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) })
             : Response.json({}, { status: 404 }));
-        vi.useFakeTimers();
+        const scheduled = createDeferred<VoidFunction>();
+        const dispatchMicrotask = globalThis.queueMicrotask;
+        let intercepted = false;
+        const scheduler = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation(callback => {
+            if (!intercepted && runtime.readySessionListRowProjections.getPendingCount() > 0) {
+                intercepted = true;
+                scheduled.resolve(callback);
+            } else dispatchMicrotask(callback);
+        });
+        let publish: VoidFunction | undefined;
         const read = runtime.refreshSessionListRowProjection(scope.serverId, id).then(() => 'applied', () => 'refused');
         try {
             // The publication phase, rather than a guessed elapsed interval, is
             // the point at which a retirement must still withdraw a completed read.
-            await vi.waitFor(() => expect(runtime.sessionListRowProjectionPublications.getPendingCount()).toBe(1), { interval: 1 });
+            publish = await scheduled.promise;
             if (change === 'scope') runtime.disconnectServer();
             else if (change === 'account') {
                 const { invalidateAccountEncryptionModeCache } = await import('./api/account/apiAccountEncryptionMode');
                 invalidateAccountEncryptionModeCache({ serverId: scope.serverId, reason: 'scope-reset' });
             }
             else storage.getState().deleteSession(id, change === 'same-home-retirement' ? scope.serverId : 'another-home');
-            runtime.sessionListRowProjectionPublications.flush();
+            publish();
+            publish = undefined;
             expect(await read).toBe(change === 'other-home-retirement' ? 'applied' : 'refused');
             expect(Boolean(storage.getState().sessionListRowsByServerId[scope.serverId]?.[id]))
                 .toBe(change === 'other-home-retirement');
-        } finally { runtime.sessionListRowProjectionPublications.flush(); await read; vi.useRealTimers(); }
+        } finally { scheduler.mockRestore(); publish?.(); await read; }
     });
 
     it('publishes a ready exact Session list projection while another read remains pending', async () => {
@@ -1396,6 +1478,89 @@ describe('sync AccountChange catch-up projection', () => {
         } finally {
             releaseProfile.resolve();
             dispose();
+        }
+    });
+
+    it('keeps Follow and private-rule reads at zero for 1,000 unrelated Account arrivals, then refreshes a real Follow change', async () => {
+        await restoreTestAccount({ followingEnabled: true });
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { InboxExecutionRunSourceBoundary, useInboxExecutionRunSource } = await import('@/hooks/inbox/useInboxExecutionRunSource');
+        const { useSessionAutoFollowPreferences } = await import('@/components/sessions/follow/useSessionAutoFollowPreferences');
+        const { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } = await import('@happier-dev/protocol/sessions/follow/changes');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { publishHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
+        const serverId = getActiveServerAccountScope()!.serverId;
+        const reads = { follows: 0, rules: 0, preferences: 0 };
+        const preferencesPath = resolveSessionFollowActionRequest('follow.preferences.get', {}).path;
+        let assigned = true;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const path = new URL(url).pathname;
+            if (path === '/v1/auth/ping') return jsonResponse({});
+            if (path === '/v2/account/session-follows') { reads.follows++; return jsonResponse({ follows: [] }); }
+            if (path === '/v2/account/session-follow-rules') { reads.rules++; return jsonResponse({ rules: [] }); }
+            if (path === preferencesPath) {
+                reads.preferences++;
+                return jsonResponse({ assigned, direct: false, team: false, group: false });
+            }
+            return Response.json({}, { status: 404 });
+        });
+        const hook = await renderHook(() => ({ runs: useInboxExecutionRunSource(), preferences: useSessionAutoFollowPreferences(serverId) }),
+            { wrapper: ({ children }) => React.createElement(InboxExecutionRunSourceBoundary, { children }) });
+        const releaseChanges = createDeferred<void>();
+        const changesStarted = createDeferred<void>();
+        try {
+            await waitForHomeGovernance(() => {
+                expect(hook.getCurrent().runs).toMatchObject({ loading: false, failed: false });
+                expect(hook.getCurrent().preferences.displayed?.assigned).toBe(true);
+            });
+            const baseline = { ...reads };
+            expect(baseline).toEqual({ follows: 1, rules: 0, preferences: 1 });
+            changesResponse.mockResolvedValue({ changes: [], nextCursor: 1 }).mockImplementationOnce(async () => {
+                changesStarted.resolve(); await releaseChanges.promise;
+                return { changes: [{ cursor: 1, kind: 'machine', entityId: 'unrelated-machine', changedAt: 1, hint: null }], nextCursor: 1 };
+            });
+            await act(async () => runtime.handleUpdate(accountChangeWake('unrelated-first')));
+            await waitForHomeGovernance(() => expect(changesResponse).toHaveBeenCalled());
+            await changesStarted.promise;
+            await act(async () => {
+                for (let index = 1; index < 1_000; index++) await runtime.handleUpdate(accountChangeWake(`unrelated-${index}`));
+            });
+            expect(reads).toEqual(baseline);
+            releaseChanges.resolve();
+            await waitForHomeGovernance(() => expect(runtime.resumeInFlight).toBeNull());
+            expect(reads).toEqual(baseline);
+
+            assigned = false;
+            changesResponse.mockResolvedValue({ changes: [], nextCursor: 2 }).mockResolvedValueOnce({ changes: [{
+                cursor: 2, kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
+                changedAt: 2, hint: null,
+            }], nextCursor: 2 });
+            await act(async () => runtime.handleUpdate(accountChangeWake('follow-mutated')));
+            await waitForHomeGovernance(() => {
+                expect(runtime.resumeInFlight).toBeNull();
+                expect(hook.getCurrent().runs).toMatchObject({ loading: false, failed: false });
+                expect(hook.getCurrent().preferences.displayed?.assigned).toBe(false);
+            });
+            expect(reads).toEqual({ follows: baseline.follows + 1, rules: baseline.rules, preferences: baseline.preferences + 1 });
+
+            // A truly unqualified/reconnect or access wake is not an unrelated fact.
+            for (const detail of [{}, { source: 'connected' as const }, { changeKinds: ['share'] as const }]) {
+                const before = { ...reads };
+                await act(async () => publishHomeAccountChange(serverId, undefined, detail));
+                await waitForHomeGovernance(() => expect(reads).toEqual({ follows: before.follows + 1,
+                    rules: before.rules, preferences: before.preferences + 1 }));
+                await waitForHomeGovernance(() => expect(hook.getCurrent().runs.loading).toBe(false));
+            }
+            const beforeRetirement = { ...reads };
+            const { storage } = await import('./domains/state/storage');
+            await act(async () => storage.getState().clearProfileScope());
+            await act(async () => publishHomeAccountChange(serverId, [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID], { changeKinds: ['account'] }));
+            expect(hook.getCurrent().runs.entries).toEqual([]);
+            expect(hook.getCurrent().preferences.displayed).toBeNull();
+            expect(reads).toEqual(beforeRetirement);
+        } finally {
+            releaseChanges.resolve(); await runtime.resumeInFlight; await hook.unmount();
         }
     });
 
