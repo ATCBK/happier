@@ -78,7 +78,7 @@ const loader = createPdfDocumentLoader({
             viewer = createPdfCanvasViewer({ container: container(), document: next, scale: scaleFor(), signal, createTextLayer: textLayer,
                 onPageChange: page => { send({ type: 'page', page }); emit('happier-pdf-page', page); },
                 onError: () => send({ type: 'state', state: 'error' }),
-                onReaderMove: () => position?.readerMoved(), onLocationChange: value => { const latest = position?.locationChanged(value); if (latest) send({ type: 'location', ...latest }); },
+                onReaderMove: () => position?.readerMoved(), onLocationChange: value => position?.locationChanged(value),
                 onPagesInit: count => position?.pagesInit(count), onPagesLoaded: count => position?.pagesLoaded(count),
                 onScaleChange: value => { zoom = value; emit('happier-pdf-zoom', value); },
             });

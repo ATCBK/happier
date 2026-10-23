@@ -140,11 +140,14 @@ export function createPdfCanvasViewer(input: Readonly<{
     };
     for (const event of ['pointerdown', 'wheel', 'touchstart']) container.addEventListener(event, () => input.onReaderMove?.(), { signal: listeners.signal, passive: true });
     let currentPage = 0;
+    // The location is the tab's view memory: report it when a scroll settles, every frame only where the engine has no scrollend.
+    const settles = 'onscrollend' in container;
     container.addEventListener('scroll', () => {
         const next = pageAt(container.scrollTop + container.clientHeight / 3);
         if (currentPage !== next) { currentPage = next; input.onPageChange?.(next); }
-        input.onLocationChange?.(position());
+        if (!settles) input.onLocationChange?.(position());
     }, { signal: listeners.signal });
+    if (settles) container.addEventListener('scrollend', () => input.onLocationChange?.(position()), { signal: listeners.signal });
     const viewer = {
         ready,
         getViewPosition: position,

@@ -108,6 +108,15 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
   const [scale, setScale] = React.useState<number | null>(null);
   const latest = React.useRef(props);
   latest.current = props;
+  const positionRef = React.useRef<ReturnType<typeof createPdfViewPosition> | null>(null);
+  // The tab holds one place for every viewer of it: one written by another viewer (the phone page) moves this one there.
+  const tabPage = props.position?.page;
+  const tabTop = props.position?.top;
+  const tabLeft = props.position?.left;
+  React.useEffect(() => {
+    if (tabPage === undefined || tabTop === undefined || tabLeft === undefined) return;
+    positionRef.current?.adopt({ page: tabPage, top: tabTop, left: tabLeft });
+  }, [tabLeft, tabPage, tabTop]);
   const progress = preview.status === 'loading' ? preview.progress : undefined;
   const byteLength = preview.status === 'loaded' ? preview.byteLength : undefined;
   const mimeType = preview.status === 'loaded' ? preview.mimeType : undefined;
@@ -161,10 +170,12 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
       };
     };
     const attach = (next: PDFDocumentProxy | null, signal?: AbortSignal) => {
-      if (viewerRef.current)
+      // A viewer laid out at no height (its page hidden at another width) has no place of its own to keep.
+      if (viewerRef.current && (element()?.clientHeight ?? 0) > 0)
         position?.locationChanged(viewerRef.current.getViewPosition());
       position?.dispose();
       position = null;
+      positionRef.current = null;
       viewerRef.current?.dispose();
       viewerRef.current = null;
       setDocument(next);
@@ -186,6 +197,7 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
             restore: (value) => viewerRef.current?.restorePosition(value),
             persist: (value) => latest.current.onPositionChange?.(value),
           });
+          positionRef.current = position;
           const viewer = createPdfCanvasViewer({
             container,
             document: next,
