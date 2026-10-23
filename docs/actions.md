@@ -2934,6 +2934,15 @@ Their required result custody does not request a prompt: no surface, including
 Agent, MCP, CLI or plugins, asks by default. Explicit Action approval settings
 still apply.
 
+Session-bound Agent tools default `machineId` and `rootPath` to the calling
+Session's Machine and workspace through the shared Action tool-context owner.
+Discovery makes those fields optional only when the host supplies them. The
+same defaults cover semantic rename/code-action previews and applies, workspace
+file search/replace, and the Machine field of Processes. Explicit targets win;
+another Machine requires an explicit root. File paths and reviewed edit operands
+remain explicit, and sessionless calls retain their required scope fields.
+This changes no approval policy: normalized scope is captured before approval.
+
 Queries use disk text, not an editor buffer, and successful semantic results
 include `fileHash`. Unsaved editor changes are refused with
 `unsaved_editor_changes` and the current `diskHash`. Position-bearing Actions
