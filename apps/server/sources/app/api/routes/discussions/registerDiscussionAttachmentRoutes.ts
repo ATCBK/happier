@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { readFile, rm } from 'node:fs/promises';
 import { z } from 'zod/mini';
 import { encodeBase64 } from 'privacy-kit';
-import { DISCUSSION_HTTP_PATHS_V1 } from '@happier-dev/protocol/discussions/api';
+import { DISCUSSION_HTTP_PATHS_V1, DiscussionErrorResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import { DiscussionAttachmentReadRequestV1Schema, DiscussionAttachmentReadResponseV1Schema } from '@happier-dev/protocol/discussions/attachments';
 import type { DiscussionAttachmentUploadRequestV1 } from '@happier-dev/protocol/discussions/attachmentsUpload';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
@@ -22,7 +22,16 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import type { DiscussionFailureCode } from '@/app/discussions/serviceTypes';
 import type { Fastify } from '../../types';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { log } from '@/utils/logging/log';
+
+/** The Discussion family's typed failure statuses, each carrying its Protocol error body. */
+const DiscussionAttachmentErrorResponses = {
+    400: DiscussionErrorResponseV1Schema,
+    403: DiscussionErrorResponseV1Schema,
+    404: DiscussionErrorResponseV1Schema,
+    409: DiscussionErrorResponseV1Schema,
+} as const;
 
 class DiscussionUploadRefusal extends Error {
     constructor(readonly code: DiscussionFailureCode) { super(code); }
@@ -63,9 +72,12 @@ async function admitUpload(accountId: string, authentication: SessionAccessAuthe
 }
 
 /** Streamed bytes are a representation of create/post/reply, never an alternate append authority. */
-export function registerDiscussionAttachmentRoutes(app: Fastify, statusForFailure: (error: DiscussionFailureCode) => number,
+export function registerDiscussionAttachmentRoutes(app: Fastify,
+    statusForFailure: (error: DiscussionFailureCode) => keyof typeof DiscussionAttachmentErrorResponses,
     errorHandler: (error: FastifyError, request: FastifyRequest, reply: FastifyReply) => unknown): void {
-    app.register(async scoped => {
+    app.register(async plugin => {
+        // A registered scope does not inherit the parent's schema type provider.
+        const scoped = plugin.withTypeProvider<ZodTypeProvider>();
         const routes = createServerFeatureGatedRouteApp(scoped, 'sessions.conversations', process.env, { error: 'discussions_unavailable' });
         const rateLimit = resolveApiHotEndpointRateLimit(process.env, 'session.discussions');
         const config = readFiniteTransferConfig(process.env);
@@ -75,7 +87,7 @@ export function registerDiscussionAttachmentRoutes(app: Fastify, statusForFailur
         scoped.addContentTypeParser(DISCUSSION_UPLOAD_CONTENT_TYPE_V1, (_request, payload, done) => done(null, payload));
         routes.get(DISCUSSION_HTTP_PATHS_V1.attachment, { preHandler: scoped.authenticate, config: { allowApiToken: true, rateLimit }, errorHandler,
             schema: { params: DiscussionAttachmentReadRequestV1Schema, querystring: z.strictObject({ throughSeq: z.optional(z.coerce.number().check(z.int(), z.nonnegative())) }),
-                response: { 200: DiscussionAttachmentReadResponseV1Schema } },
+                response: { 200: DiscussionAttachmentReadResponseV1Schema, ...DiscussionAttachmentErrorResponses } },
         }, async (request, reply) => {
             const result = await readDiscussionAttachment({ ...request.params, ...request.query, actorAccountId: request.userId,
                 authentication: readSessionAccessAuthenticationFromRequest(request) });
@@ -152,7 +164,7 @@ export function registerDiscussionAttachmentRoutes(app: Fastify, statusForFailur
                         for await (const chunk of chunks) for (let offset = 0; offset < chunk.byteLength; offset += config.chunkSizeBytes) {
                             if (canceled) throw new Error('Discussion upload canceled');
                             const written = await lifecycle.writeUploadTransferChunk({ uploadId: opened.uploadId, index: chunkIndex++,
-                                contentBase64: encodeBase64(chunk.subarray(offset, offset + config.chunkSizeBytes)) });
+                                contentBase64: encodeBase64(new Uint8Array(chunk.subarray(offset, offset + config.chunkSizeBytes))) });
                             if (!written.success) throw new Error('Discussion upload chunk refused');
                         }
                         const finalized = await lifecycle.finalizeUploadTransferSession({ uploadId: opened.uploadId });

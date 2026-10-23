@@ -131,7 +131,7 @@ export async function readDiscussionAttachment(input: Reader): Promise<Discussio
     const result = await readSnapshotWithCurrentAdmission({ capture: tx => captureAttachmentInTx(tx, input), materialize: async captured => {
         if (!captured.ok) return captured;
         try {
-            const bytes = privacyKit.encodeBase64(await openDiscussionAttachmentBytes(captured.value.row));
+            const bytes = privacyKit.encodeBase64(new Uint8Array(await openDiscussionAttachmentBytes(captured.value.row)));
             const content: BinaryBlobStoredContentV1 = captured.value.mode === 'plain' ? { t: 'plain', v: bytes } : { t: 'encrypted', c: bytes };
             return discussionSuccess({ ...captured.value, content });
         } catch { return discussionFailure('discussion_content_unavailable'); }
