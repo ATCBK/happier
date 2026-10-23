@@ -328,15 +328,15 @@ const groupLabelMenuStyle: ViewStyle = {
   paddingTop: HAPPIER_MENU_ROW_METRICS.paddingVerticalPx + HAPPIER_MENU_ROW_METRICS.sectionPaddingVerticalPx,
   paddingBottom: HAPPIER_MENU_ROW_METRICS.sectionPaddingVerticalPx,
 };
-const groupLabelLeadStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 };
+const groupLabelLeadStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 };
 const groupLabelMarkStyle: ViewStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
 // The disclosure's lead: glyph, title, count and chevron are one press target that hugs its content.
-const groupLabelDisclosureStyle: ViewStyle = { ...groupLabelLeadStyle, gap: 4, alignSelf: 'stretch' };
+const groupLabelDisclosureStyle: HappierPortableStyle = { ...groupLabelLeadStyle, gap: 4, alignSelf: 'stretch' };
 const groupLabelDisclosureMarkStyle: ViewStyle = { ...groupLabelMarkStyle, marginRight: 4 };
 const groupLabelSpacerStyle: ViewStyle = { flex: 1, minWidth: 8 };
 const groupLabelActionsStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 2 };
 const groupLabelActionsHiddenStyle: ViewStyle = { opacity: 0 };
-const groupLabelChevronStyle: ViewStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
+const groupLabelChevronStyle: HappierPortableStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
 const markStyle: ViewStyle = {
   width: HAPPIER_COLLECTION_LIST_METRICS.markSize,
   height: HAPPIER_COLLECTION_LIST_METRICS.markSize,

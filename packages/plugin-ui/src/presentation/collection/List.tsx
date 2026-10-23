@@ -1267,7 +1267,7 @@ export function HappierListItem({
         // A grid row lays its cells out in a row, so its hairline is an overlay on the row's foot rather than
         // a third flex cell (which collapsed to no width and left Collection page sheets undivided).
         <HappierDivider color={pageSection.rowDividerColor} style={isGridRow
-          ? { height: happierPageRowDividerWidth(), position: 'absolute', start: 0, end: 0, bottom: 0, ...pageRowDividerInset }
+          ? { height: happierPageRowDividerWidth(), position: 'absolute', left: 0, right: 0, bottom: 0, ...pageRowDividerInset }
           : { height: happierPageRowDividerWidth(), ...pageRowDividerInset }} />
       ) : behavior.dividerVisible && resolvedTheme ? (
         <HappierDivider color={resolvedTheme.colors.border} />
