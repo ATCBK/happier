@@ -110,13 +110,13 @@ export function createGuardWatch(input: GuardWatchInput) {
         + (read.terminalRows?.length ?? 0) - (terminals?.length ?? 0),
       leftBehind: { ...read.view.leftBehind, footprintBytes: null } };
   };
-  const read = async (freshness: 'fresh' | 'shared', signal?: AbortSignal): Promise<Read> => {
+  const read = async (signal?: AbortSignal): Promise<Read> => {
     const combined = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
     assertAvailable(combined);
     let result!: Read;
     await waitForChangeOrDeadline({ signal: combined, waitForChange: async () => {
       if (input.policy.read().status !== 'ready') throw new GuardViewUnavailableError('policy_unavailable');
-      const ownership = await input.ownership.readOwners({ freshness });
+      const ownership = await input.ownership.readOwners({ freshness: 'shared' });
       // The shared native read stays live, but a cancelled observer must not start its successor.
       assertAvailable(combined);
       const [capturedFacts, activity] = await Promise.all([input.readFacts(ownership, combined), input.activityLog.list({ range: 'today' })]);
@@ -191,7 +191,7 @@ export function createGuardWatch(input: GuardWatchInput) {
         const signal = observation?.signal;
         if (!signal) return;
         try {
-          const next = await read('shared', signal);
+          const next = await read(signal);
           if (signal.aborted) continue;
           for (const watcher of watchers) {
             const view = { ...project(next, watcher.requester), otherMemoryGuards: watcher.view.otherMemoryGuards };
@@ -228,7 +228,7 @@ export function createGuardWatch(input: GuardWatchInput) {
   } });
   return {
     async readView(requester: GuardViewRequester, signal?: AbortSignal): Promise<MachineGuardViewV1> {
-      const next = await read('fresh', signal);
+      const next = await read(signal);
       assertAvailable(signal);
       return { ...project(next, requester), otherMemoryGuards: otherMemoryGuards(next.facts) };
     },
@@ -239,7 +239,7 @@ export function createGuardWatch(input: GuardWatchInput) {
         throw new GuardViewUnavailableError('wrong_target');
       }
       let next: Read;
-      try { next = await read('fresh', signal); }
+      try { next = await read(signal); }
       catch (error) {
         if (signal?.aborted || stopped) return { changed: false };
         throw error;

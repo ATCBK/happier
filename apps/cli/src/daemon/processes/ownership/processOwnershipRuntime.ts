@@ -34,12 +34,23 @@ export function createProcessOwnershipRuntime(input: Readonly<{
             processCount: snapshot.rows.length, rootCount: roots.length, requesterAttribution: options.requesterAttribution ?? 'recover' });
         return { status: 'ok' as const, snapshot, roots, rows };
     };
+    const inFlight = new Map<string, Promise<Awaited<ReturnType<typeof readOwners>>>>();
+    async function readOwners(request: Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[] }> & ProcessOwnershipReadOptions) {
+        const snapshot = await observe('census_request', () => census({ freshness: request.freshness, scope: 'all', fields: request.fields }));
+        if (snapshot.status !== 'ok') return snapshot;
+        return resolveSnapshot(snapshot, undefined, request);
+    }
     return {
         resolveSnapshot,
-        async readOwners(request: Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[] }> & ProcessOwnershipReadOptions) {
-            const snapshot = await observe('native_census', () => census({ freshness: request.freshness, scope: 'all', fields: request.fields }));
-            if (snapshot.status !== 'ok') return snapshot;
-            return resolveSnapshot(snapshot, undefined, request);
+        readOwners(request: Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[] }> & ProcessOwnershipReadOptions) {
+            if (request.freshness === 'fresh') return readOwners(request);
+            const key = JSON.stringify([request.fields ? [...new Set(request.fields)].sort() : null,
+                request.requesterAttribution ?? 'recover']);
+            const current = inFlight.get(key);
+            if (current) return current;
+            const pending = readOwners(request).finally(() => { if (inFlight.get(key) === pending) inFlight.delete(key); });
+            inFlight.set(key, pending);
+            return pending;
         },
         async readProcessMetrics(pids: readonly number[]) {
             return census({ freshness: 'shared', scope: 'all', pids, fields: ['memory', 'cpuTimeUs'] });
