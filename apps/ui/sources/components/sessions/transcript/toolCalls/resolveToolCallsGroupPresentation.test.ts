@@ -80,4 +80,22 @@ describe('hidden tool group presentation', () => {
         expect(shouldShowToolCallsGroupStatusIndicator({ showToolCalls: false, status: 'permission_denied' })).toBe(true);
         expect(shouldShowToolCallsGroupStatusIndicator({ showToolCalls: true, status: 'running' })).toBe(true);
     });
+
+    it('summarises a group holding a call whose Action approval was declined as refused, not completed', () => {
+        const ok = createToolCallMessageFixture({ id: 'ok', tool: { ...createToolCallMessageFixture({ id: 'x' }).tool, state: 'completed' } });
+        const declinedCall = createToolCallMessageFixture({ id: 'm-declined', tool: { ...ok.tool, id: 'call-declined', state: 'completed' } });
+        const approvalRequests = (status: 'rejected' | 'canceled' | 'open') => [{
+            artifact: { id: 'approval-1', header: {} } as never,
+            approval: {
+                v: 1, status, createdAtMs: 1, updatedAtMs: 2, createdBy: { surface: 'agent', sessionId: 's1' },
+                actionId: 'mcp.servers.signIn.start', actionArgs: {}, summary: 'Sign in',
+                origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: 'call-declined' },
+            },
+        }] as never;
+        const group = { toolMessages: [ok, declinedCall], sessionId: 's1' } as const;
+        expect(groupStatus({ ...group, approvalRequests: approvalRequests('rejected') })).toBe('refused');
+        expect(groupStatus({ ...group, approvalRequests: approvalRequests('canceled') })).toBe('refused');
+        expect(groupStatus({ ...group, approvalRequests: approvalRequests('open') })).toBe('completed');
+        expect(groupStatus({ ...group })).toBe('completed');
+    });
 });

@@ -90,6 +90,8 @@ export const ToolCallsGroupRowWithSessionCommon = React.memo(function ToolCallsG
     const summary = resolveToolCallsGroupSummary({
         showToolCalls: props.toolChromeCommon.showToolCalls,
         toolMessages: toolMessagesForSession,
+        approvalRequests: props.approvalRequests,
+        sessionId: props.sessionId,
     });
 
     const createdAt = toolMessagesForSession[0]?.createdAt ?? Date.now();

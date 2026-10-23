@@ -440,4 +440,42 @@ describe('ToolTimelineRow (permission pending)', () => {
         expect(errorStatus?.props.accessible).toBe(true);
         expect(errorStatus?.props.accessibilityLabel).toBe('Filesystem unavailable');
     });
+
+    it.each(['rejected', 'canceled'] as const)('marks a completed call whose Action approval was %s as blocked in its own words', async (status) => {
+        const tool: any = {
+            id: 'tool-declined',
+            name: 'writeTextFile',
+            state: 'completed',
+            input: { path: './notes.txt', content: 'hello' },
+            createdAt: 1,
+            startedAt: 1,
+            completedAt: 2,
+            description: null,
+            result: null,
+        };
+        const screen = await renderWithSessionTranscriptSource(
+            <ToolTimelineRow
+                tool={tool}
+                metadata={null}
+                sessionId="s1"
+                messageId="m-declined"
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                approvalRequests={[{
+                    artifact: { id: 'approval-declined', header: {} } as any,
+                    approval: {
+                        v: 1,
+                        status,
+                        createdAtMs: 1,
+                        updatedAtMs: 2,
+                        createdBy: { surface: 'agent', sessionId: 's1' },
+                        actionId: 'mcp.servers.signIn.start',
+                        actionArgs: { serverId: 'srv' },
+                        summary: 'Sign in',
+                        origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: 'tool-declined' },
+                    },
+                }]}
+            />, createTestSessionTranscriptSource({ loadSidechain: (sidechainId) => ensureSidechainMessagesLoadedMock('s1', sidechainId) }),);
+
+        expect(screen.findByTestId('tool-timeline-row-permission-blocked')?.props.accessibilityLabel).toBe(`approvals.status.${status}`);
+    });
 });

@@ -9,6 +9,9 @@ export type ToolStatusIndicatorKind =
     | 'error'
     | 'none';
 
+/** How the person answered the Action approval that belongs to this call, when they declined it. */
+export type DeclinedApprovalDisposition = 'rejected' | 'canceled';
+
 const resultFailureByResultRoot = new WeakMap<object, boolean>();
 
 function parseStructuredResultText(value: string): unknown | null {
@@ -92,7 +95,15 @@ function hasToolResultFailure(tool: ToolCall): boolean {
     return hasFailure;
 }
 
-export function resolveToolStatusIndicatorKind(tool: ToolCall): ToolStatusIndicatorKind {
+/**
+ * `declinedApproval` is the matched approval's disposition (the approval is a separate artifact, not part
+ * of the call): a call the person declined reads as blocked, never as a completed success. A real
+ * execution failure still reads as an error.
+ */
+export function resolveToolStatusIndicatorKind(
+    tool: ToolCall,
+    declinedApproval: DeclinedApprovalDisposition | null = null,
+): ToolStatusIndicatorKind {
     const permissionStatus = tool.permission?.status;
     if (permissionStatus === 'denied' || permissionStatus === 'canceled') return 'permission_blocked';
     if (permissionStatus === 'pending' && tool.state === 'running') return 'permission_pending';
@@ -103,7 +114,8 @@ export function resolveToolStatusIndicatorKind(tool: ToolCall): ToolStatusIndica
         return hasToolResultFailure(tool) ? 'error' : 'none';
     }
     if (tool.state === 'completed') {
-        return hasToolResultFailure(tool) ? 'error' : 'completed';
+        if (hasToolResultFailure(tool)) return 'error';
+        return declinedApproval ? 'permission_blocked' : 'completed';
     }
     return 'none';
 }

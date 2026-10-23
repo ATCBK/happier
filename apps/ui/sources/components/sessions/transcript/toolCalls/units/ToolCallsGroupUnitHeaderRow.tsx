@@ -17,10 +17,12 @@ import {
     ToolCallsGroupHeaderChrome,
     ToolCallsGroupUnitRowFrame,
 } from './toolCallsGroupChrome';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import type { ToolCallsGroupUnitRowCommonProps } from './unitRowProps';
 
 type ToolCallsGroupUnitHeaderRowProps = ToolCallsGroupUnitRowCommonProps & Readonly<{
     toolMessages: ToolCallMessage[];
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     expanded: boolean;
     setExpanded: (expanded: boolean) => void;
 }>;
@@ -53,6 +55,8 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
         showToolCalls: props.toolChromeCommon.showToolCalls,
         toolMessages: props.toolMessages,
         permissionDisabledReason: props.interaction.permissionDisabledReason,
+        approvalRequests: props.approvalRequests,
+        sessionId: props.sessionId,
     });
 
     if (props.toolMessages.length === 0) return null;

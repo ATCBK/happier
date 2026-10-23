@@ -45,7 +45,7 @@ import { Typography } from '@/constants/Typography';
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, hasDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
@@ -203,6 +203,19 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
     }, []);
 
     const normalizedToolName = headerModel.normalizedToolName;
+    const matchingApprovalRequests = React.useMemo(() => {
+        const requests = props.approvalRequests ?? [];
+        if (requests.length === 0) return [];
+        return requests.filter((request) => doesApprovalMatchToolCall({
+            request,
+            sessionId,
+            messageId,
+            tool: toolForRendering,
+            normalizedToolName,
+        }));
+    }, [messageId, normalizedToolName, props.approvalRequests, sessionId, toolForRendering]);
+    const declinedApproval = readDeclinedApprovalAtCall(matchingApprovalRequests);
+    const declinedApprovalShown = declinedApproval !== null;
     let knownTool = headerModel.knownTool;
     const routeMessageId = React.useMemo(() => {
         return buildToolCallMessageRouteId({
@@ -330,7 +343,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
         isToolUseError = true;
     }
 
-    const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    const statusKind = resolveToolStatusIndicatorKind(toolForRendering, declinedApproval);
     // A typed refusal is the product working as designed: quiet ink, not the failure rose.
     const isRefusal = statusKind === 'error' && resolveToolActionFailure(toolForRendering)?.outcome === 'refused';
     if (statusKind === 'permission_blocked') {
@@ -395,18 +408,6 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
         ? 'transcript'
         : resolvePermissionPromptSurface(permissionPromptSurface);
     const showPermissionPromptsInTranscript = resolvedPermissionPromptSurface === 'transcript';
-    const matchingApprovalRequests = React.useMemo(() => {
-        const requests = props.approvalRequests ?? [];
-        if (requests.length === 0) return [];
-        return requests.filter((request) => doesApprovalMatchToolCall({
-            request,
-            sessionId,
-            messageId,
-            tool: toolForRendering,
-            normalizedToolName,
-        }));
-    }, [messageId, normalizedToolName, props.approvalRequests, sessionId, toolForRendering]);
-    const declinedApprovalShown = hasDeclinedApprovalAtCall(matchingApprovalRequests);
     const approvalLocation = React.useMemo(
         () => buildApprovalToolCallLocation({ messageId }),
         [messageId],

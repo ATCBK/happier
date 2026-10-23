@@ -42,4 +42,17 @@ describe('resolveToolStatusIndicatorKind', () => {
 
         parseSpy.mockRestore();
     });
+
+    it('reads a completed call whose matched Action approval was declined as blocked, never as completed', () => {
+        const tool = createCompletedTool({ content: [{ type: 'text', text: '' }] });
+        expect(resolveToolStatusIndicatorKind(tool)).toBe('completed');
+        expect(resolveToolStatusIndicatorKind(tool, 'rejected')).toBe('permission_blocked');
+        expect(resolveToolStatusIndicatorKind(tool, 'canceled')).toBe('permission_blocked');
+    });
+
+    it('keeps a real execution failure an error even when its approval was declined', () => {
+        const failed = createCompletedTool({ tool_use_result: 'Error: spawn failed' });
+        expect(resolveToolStatusIndicatorKind(failed, 'rejected')).toBe('error');
+        expect(resolveToolStatusIndicatorKind({ ...failed, state: 'error' }, 'canceled')).toBe('error');
+    });
 });

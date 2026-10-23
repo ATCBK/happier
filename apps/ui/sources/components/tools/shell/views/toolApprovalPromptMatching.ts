@@ -1,6 +1,7 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { readHappierActionToolPayload } from '@happier-dev/protocol/actions/happierActionToolResult';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import type { DeclinedApprovalDisposition } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 
 function stableSerialize(value: unknown): string | null {
@@ -53,8 +54,28 @@ export function doesApprovalMatchToolCall(params: Readonly<{
 }
 
 /** A declined request (rejected or canceled) at this call: its card says what was asked and that the person said no. */
-export function hasDeclinedApprovalAtCall(requests: readonly OpenApprovalArtifactForSession[]): boolean {
-    return requests.some(({ approval }) => approval.status === 'rejected' || approval.status === 'canceled');
+export function readDeclinedApprovalAtCall(requests: readonly OpenApprovalArtifactForSession[]): DeclinedApprovalDisposition | null {
+    for (const { approval } of requests) {
+        if (approval.status === 'rejected' || approval.status === 'canceled') return approval.status;
+    }
+    return null;
+}
+
+/** The declined disposition of the approvals that belong to one transcript call, for surfaces that show no card. */
+export function readDeclinedApprovalAtToolCall(params: Readonly<{
+    requests: readonly OpenApprovalArtifactForSession[] | undefined;
+    sessionId: string | undefined;
+    messageId: string | undefined;
+    tool: ToolCall;
+}>): DeclinedApprovalDisposition | null {
+    if (!params.requests || params.requests.length === 0) return null;
+    return readDeclinedApprovalAtCall(params.requests.filter((request) => doesApprovalMatchToolCall({
+        request,
+        sessionId: params.sessionId,
+        messageId: params.messageId,
+        tool: params.tool,
+        normalizedToolName: params.tool.name,
+    })));
 }
 
 /** The call's raw output as text, for the Technical details of the declined card that replaces it in the row. */

@@ -3,6 +3,8 @@ import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/derive
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
 import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
+import { readDeclinedApprovalAtToolCall } from '@/components/tools/shell/views/toolApprovalPromptMatching';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 
 export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'refused' | 'permission_denied' | 'permission_canceled';
@@ -20,6 +22,9 @@ export function resolveToolCallsGroupSummary(params: Readonly<{
     toolMessages: readonly ToolCallMessage[];
     permissionDisabledReason?: TranscriptPermissionDisabledReason;
     showToolCalls?: boolean;
+    /** The Session's approvals: a call whose Action approval the person declined is a refusal, never a success. */
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
+    sessionId?: string;
 }>): ToolCallsGroupSummary {
     let failed = 0;
     let refused = 0;
@@ -32,7 +37,13 @@ export function resolveToolCallsGroupSummary(params: Readonly<{
             tool: projectReviewToolMessage(message).tool,
             permissionDisabledReason: params.permissionDisabledReason,
         });
-        const kind = resolveToolStatusIndicatorKind(tool);
+        const declinedApproval = readDeclinedApprovalAtToolCall({
+            requests: params.approvalRequests,
+            sessionId: params.sessionId,
+            messageId: message.id,
+            tool,
+        });
+        const kind = resolveToolStatusIndicatorKind(tool, declinedApproval);
         if (kind === 'running' || kind === 'permission_pending') sawRunning = true;
         if (kind === 'error') {
             // A refused call is the product saying no, not a break: it outranks nothing that failed.
@@ -45,7 +56,9 @@ export function resolveToolCallsGroupSummary(params: Readonly<{
         }
         if (kind === 'permission_blocked') {
             if (tool.permission?.status === 'denied') sawPermissionDenied = true;
-            else sawPermissionCanceled = true;
+            else if (tool.permission?.status === 'canceled') sawPermissionCanceled = true;
+            // A declined Action approval has no permission request: the Action was refused by the person.
+            else refused += 1;
         }
     }
     const status: ToolCallsGroupStatus =

@@ -51,7 +51,8 @@ import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOut
 import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
 import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, hasDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
+import { formatApprovalStatusLabel } from '@/components/approvals/approvalStatusLabel';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
 import {
@@ -216,6 +217,20 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
     const onPress = primaryTapAction === 'open' ? handleOpen : handleToggleExpand;
 
     const normalizedToolName = headerModel.normalizedToolName;
+    const matchingApprovalRequests = React.useMemo(
+        () => (props.approvalRequests ?? []).filter((request) =>
+            doesApprovalMatchToolCall({
+                request,
+                sessionId: props.sessionId,
+                messageId: props.messageId,
+                tool: toolForRendering,
+                normalizedToolName,
+            }),
+        ),
+        [normalizedToolName, props.approvalRequests, props.messageId, props.sessionId, toolForRendering],
+    );
+    const declinedApproval = readDeclinedApprovalAtCall(matchingApprovalRequests);
+    const declinedApprovalShown = declinedApproval !== null;
     const title = headerModel.title;
     const subtitle = headerModel.subtitle;
     const statusText = headerModel.statusText;
@@ -313,7 +328,7 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
 
     const [headerActions, setHeaderActions] = React.useState<React.ReactNode | null>(null);
     const showTaskRunningIndicator = isSubAgentTranscriptTool;
-    const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    const statusKind = resolveToolStatusIndicatorKind(toolForRendering, declinedApproval);
     const actionFailure = statusKind === 'error' ? resolveToolActionFailure(toolForRendering) : null;
     // A refusal is the product working as designed: its mark stays in the quiet ink, never the failure rose.
     const isRefusal = actionFailure?.outcome === 'refused';
@@ -322,7 +337,9 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
             ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error'))
             : statusKind === 'permission_blocked'
                 ? (
-                    resolveToolPermissionTerminalErrorMessage({
+                    // A declined Action approval has no permission request: it says how the person answered it.
+                    (!toolForRendering.permission && declinedApproval ? formatApprovalStatusLabel(declinedApproval) : null)
+                    ?? resolveToolPermissionTerminalErrorMessage({
                         tool: toolForRendering,
                         metadata: props.metadata,
                         permissionDisabledReason: interaction.permissionDisabledReason,
@@ -405,19 +422,6 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
             />
         ) : null;
 
-    const matchingApprovalRequests = React.useMemo(
-        () => (props.approvalRequests ?? []).filter((request) =>
-            doesApprovalMatchToolCall({
-                request,
-                sessionId: props.sessionId,
-                messageId: props.messageId,
-                tool: toolForRendering,
-                normalizedToolName,
-            }),
-        ),
-        [normalizedToolName, props.approvalRequests, props.messageId, props.sessionId, toolForRendering],
-    );
-    const declinedApprovalShown = hasDeclinedApprovalAtCall(matchingApprovalRequests);
     const approvalCards = React.useMemo(() => {
         if (matchingApprovalRequests.length === 0) return null;
         const location = buildApprovalToolCallLocation({ messageId: props.messageId });

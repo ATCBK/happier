@@ -615,6 +615,7 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                             metadata={metadata}
                             interaction={interaction}
                             toolMessages={messages.filter((message): message is ToolCallMessage => message.kind === 'tool-call')}
+                            approvalRequests={approvalRequests}
                             expanded={item.expanded}
                             setExpanded={(expanded: boolean) => setToolCallsGroupExpanded({
                                 toolCallsGroupId: headerGroupId,
