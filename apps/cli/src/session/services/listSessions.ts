@@ -17,7 +17,7 @@ import { getSessionTranscript } from './getSessionTranscript';
 import type { SemanticTranscriptItem } from './transcript/semanticTranscriptItem';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { projectCliSessionAwarenessV1 } from '@/cli/output/session/sessionAwareness';
-import { projectCliSessionListFilterFactsV1, readCliSessionListTagAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
+import { projectCliSessionListFilterFactsV1, readCliSessionListOrganizationAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
 import { mapWithConcurrency } from '@/utils/async/mapWithConcurrency';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SessionAwarenessListResultV1, SessionListQueryV1, SessionListViewV1 } from '@happier-dev/protocol';
@@ -25,6 +25,7 @@ import { matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListS
 import type { FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { createSessionProjectKeyResolverV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { tryDecryptSessionOwnerMetadataView, tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 
 const LIST_SESSION_PREVIEW_TEXT_LIMIT = 200;
@@ -319,6 +320,8 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   const rowModels: CliSessionRowModel[] = [];
   let botFilterUnavailableCount = 0;
   let projectFilterUnavailableCount = 0;
+  const sessionProjectKeyResolver = params.project || params.filterCandidates
+    ? createSessionProjectKeyResolverV1(params.workspaceRefs) : undefined;
   const appendPageRows = (rawRows: typeof initialPage.sessions) => {
     for (const rawRow of rawRows) {
       if (allowedSessionIds && !allowedSessionIds.has(rawRow.id)) continue;
@@ -329,10 +332,10 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
         if (candidateFilters.every(filter => matchSessionListStartedByV1(filter.startedBy, startedBy) === 'miss')) continue;
       }
       if (params.project) {
-        if (readSessionAccessProjectionRoleV1(rawRow) !== 'owner') continue;
+        if (!rawRow.projectKey && readSessionAccessProjectionRoleV1(rawRow) !== 'owner') continue;
         const match = matchSessionProjectFilterV1(tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
           accountEncryptionMode: accountEncryptionCurrentness.mode, rawSession: rawRow }), params.project.serverId,
-          params.project, params.workspaceRefs);
+          params.project, params.workspaceRefs, { projectKey: rawRow.projectKey, sessionProjectKeyResolver });
         if (match === 'unavailable') projectFilterUnavailableCount += 1;
         if (match !== 'match') continue;
       }
@@ -438,7 +441,7 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   if (params.filterCandidates) {
     const projection = params.filterCandidates;
     const nowMs = Date.now();
-    const assignments = await readCliSessionListTagAssignmentsV1({ credentials: params.credentials,
+    const assignments = await readCliSessionListOrganizationAssignmentsV1({ credentials: params.credentials,
       serverId: projection.serverId, sessionIds: limitedRows.map(row => row.id), filters: projection.filters ?? [],
       resolveAuthorizationHeaders: params.resolveAuthorizationHeaders, signal: params.signal });
     for (const row of limitedRows) {
@@ -447,7 +450,9 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
       projection.collect({ source: { kind: 'session', sessionId: row.id }, facts: projectCliSessionListFilterFactsV1({
         credentials: params.credentials, accountEncryption: accountEncryptionCurrentness, row: rawRow, nowMs,
         serverId: projection.serverId, viewerAccountId: projection.viewerAccountId, workspaceRefs: params.workspaceRefs,
-        preparedFacts: { workspaceRefs: params.workspaceRefs, tagIds: assignments?.get(row.id) },
+        workspaceContext: { sessionProjectKeyResolver },
+        preparedFacts: { workspaceRefs: params.workspaceRefs, tagIds: assignments?.get(row.id)?.tagIds,
+          folderId: assignments?.get(row.id)?.folderId },
       }) });
     }
   }

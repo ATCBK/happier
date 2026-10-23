@@ -8,7 +8,7 @@ import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
 import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
-import { readCliSessionListTagAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
+import { readCliSessionListOrganizationAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
 import {
   SessionAwarenessListResultV1Schema,
   encodeV2SessionListCursorV1,
@@ -82,8 +82,8 @@ describe('listSessions', () => {
         ownerAccountId: 'owner', origin: { kind: 'run_step', runId: 'workflow' }, metadata: unrelated })),
       createSessionRecordFixture({ id: 'foreign', ownerAccountId: 'other', origin: { kind: 'none' }, metadata: unrelated,
         share: { accessLevel: 'view', canApprovePermissions: false } }),
-      createSessionRecordFixture({ id: 'matching', ownerAccountId: 'owner', origin: { kind: 'none' }, metadata: matching }),
-      createSessionRecordFixture({ id: 'unknown', ownerAccountId: 'owner', origin: undefined, metadata: matching }),
+      createSessionRecordFixture({ id: 'matching', ownerAccountId: 'owner', origin: { kind: 'none' }, metadata: matching, projectKey: 'payments' }),
+      createSessionRecordFixture({ id: 'unknown', ownerAccountId: 'owner', origin: undefined, metadata: matching, projectKey: 'payments' }),
     ];
     for (let offset = 0; offset < rows.length; offset += SESSION_LIST_PAGE_MAX_LIMIT) {
       const end = offset + SESSION_LIST_PAGE_MAX_LIMIT;
@@ -169,11 +169,11 @@ describe('listSessions', () => {
       schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
     } } } as never).mockResolvedValueOnce({ status: 403, data: { error: 'forbidden' } } as never);
     try {
-      const assignments = await readCliSessionListTagAssignmentsV1({ credentials, serverId: 'home', sessionIds,
+      const assignments = await readCliSessionListOrganizationAssignmentsV1({ credentials, serverId: 'home', sessionIds,
         filters: [normalizeSessionListFilterV1({ tagIds: [{ serverId: 'home', tagId: 'tag-1' }] })],
         resolveAuthorizationHeaders: () => ({ 'signed-assignment': 'requester' }),
       });
-      expect(assignments?.get('session-0')).toEqual([]);
+      expect(assignments?.get('session-0')).toEqual({ folderId: null, tagIds: [] });
       expect(assignments?.has(sessionIds.at(-1)!)).toBe(false);
       expect(assignments?.size).toBe(SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS);
     } finally { get.mockRestore(); }
@@ -182,8 +182,8 @@ describe('listSessions', () => {
   it.each(['summary', 'awareness'] as const)('narrows Project %s from real opened owner metadata, not recipient or path guesses', async view => {
     const project = { serverId: 'home-a', projectKey: 'anchor' };
     fetchSessionsPage.mockResolvedValue({ sessions: [
-      createSessionRecordFixture({ id: 'own', metadata: encryptedMetadata({ path: '/repo', projectId: 'anchor' }) }),
-      createSessionRecordFixture({ id: 'other', metadata: encryptedMetadata({ path: '/repo', projectId: 'other' }) }),
+      createSessionRecordFixture({ id: 'own', projectKey: 'anchor', metadata: encryptedMetadata({ path: '/repo', projectId: 'anchor' }) }),
+      createSessionRecordFixture({ id: 'other', projectKey: 'other', metadata: encryptedMetadata({ path: '/repo', projectId: 'other' }) }),
       createSessionRecordFixture({ id: 'locked', metadata: 'unreadable-ciphertext' }),
       createSessionRecordFixture({ id: 'checkout', metadata: encryptedMetadata({ path: '/repo', workspaceId: 'accepted' }) }),
       createSessionRecordFixture({ id: 'recipient', share: { accessLevel: 'view', canApprovePermissions: false },
@@ -210,10 +210,12 @@ describe('listSessions', () => {
     const nextAttentionCursor = encodeV2SessionListCursorV1('attention-other');
     const continuation = strict ? { attentionNextCursor: null, attentionHasNext: false } : {};
     fetchPage.mockResolvedValueOnce({ sessions: [createSessionRecordFixture({ id: 'other',
+      projectKey: 'other',
       metadata: encryptedMetadata({ path: '/repo', projectId: 'other' }) })],
       nextCursor: attention ? null : nextCursor, hasNext: !attention, ...continuation,
       ...(attention ? { attentionNextCursor: nextAttentionCursor, attentionHasNext: true } : {}) });
     fetchPage.mockResolvedValueOnce({ sessions: [createSessionRecordFixture({ id: 'later',
+      projectKey: match ? 'anchor' : 'other',
       metadata: encryptedMetadata({ path: '/repo', projectId: match ? 'anchor' : 'other' }) })],
       nextCursor: null, hasNext: false, ...continuation });
     const { listSessions } = await import('./listSessions');

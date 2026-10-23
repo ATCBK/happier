@@ -16,6 +16,25 @@ const projectFilter = normalizeSessionListFilterV1({ homeServerIds: ['home'],
 const tagFilter = normalizeSessionListFilterV1({ homeServerIds: ['home'], tagIds: [{ serverId: 'home', tagId: 'bob-tag' }] });
 
 describe('current CLI Session filter facts', () => {
+  it('projects authorized Machine, Agent, Owner and Updated facts without supplemental reads', () => {
+    const facts = projectCliSessionListFilterFactsV1({ credentials,
+      accountEncryption: createAccountEncryptionCurrentnessFixture(), row: { ...row, updatedAt: 123,
+        metadata: JSON.stringify({ machineId: 'alice-machine', flavor: 'codex' }) },
+      nowMs: 200, serverId: 'home', viewerAccountId: 'bob' });
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible',
+      machines: { include: [{ serverId: 'home', machineId: 'alice-machine' }], exclude: [] },
+      agents: { include: ['agent:happier.agent.codex/codex'], exclude: [] },
+      owners: { include: [{ serverId: 'home', accountId: 'bob' }], exclude: [] }, updated: { op: 'after', atMs: 100 } });
+    expect(matchSessionListFilterV1(filter, facts, 'daemonRule')).toBe('match');
+    expect(matchSessionListFilterV1({ ...filter, machines: { include: [{ serverId: 'another-home', machineId: 'alice-machine' }], exclude: [] } }, facts, 'daemonRule')).toBe('miss');
+    const locked = projectCliSessionListFilterFactsV1({ credentials,
+      accountEncryption: createAccountEncryptionCurrentnessFixture(), row: { ...row, metadata: 'locked' },
+      nowMs: 200, serverId: 'home', viewerAccountId: 'bob' });
+    expect(locked.machine).toBeUndefined();
+    expect(locked.agent).toBeUndefined();
+    expect(matchSessionListFilterV1(normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible',
+      machines: { include: [], exclude: [{ serverId: 'home', machineId: 'alice-machine' }] } }), locked, 'daemonRule')).toBe('unavailable');
+  });
   it.each([undefined, ''])('treats readable pathless metadata as a Project miss (path=%s)', path => {
     const facts = projectCliSessionListFilterFactsV1({ credentials,
       accountEncryption: createAccountEncryptionCurrentnessFixture(),

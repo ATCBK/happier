@@ -24,14 +24,14 @@ const all = normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: [
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 
 function boundary(serverId = ref.serverId, extraRows: readonly ReturnType<typeof createPlainProjectAccountRefRow>[] = []) {
-  const state = { projectKey: 'bob-project', tagIds: ['bob-tag'], unavailable: false };
+  const state = { projectKey: 'bob-project', tagIds: ['bob-tag'], folderId: 'section-a' as string | null, unavailable: false };
   // Only Account HTTP is substituted; row admission, snapshots and matching stay real.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
     if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 0 } } as never;
     expect(url).toMatch(/^https:\/\/bob-home\.test\/v2\/session-organization\?/);
     expect(config?.headers?.Authorization).toBe(`Bearer ${bob.token}`);
     if (state.unavailable) return { status: 503, data: { error: 'unavailable' } } as never;
-    return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [],
+    return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: state.folderId ? [{ sessionId: row.id, folderId: state.folderId }] : [],
       tags: [], tagAssignments: [{ sessionId: row.id, tagIds: state.tagIds }], orderEntries: [], labels: [] } } } as never;
   });
   const post = vi.spyOn(axios, 'post').mockImplementation(async (url, _body, config) => {
@@ -50,6 +50,31 @@ function input(filters = [project('bob-project'), tag('bob-tag')]) {
 }
 
 describe('captured Account current filter facts', () => {
+  it('uses the published Project relationship with zero private Project reads even when owner metadata is unavailable', async () => {
+    const { get, post } = boundary();
+    const facts = await readCliSessionListFilterFactsV1({ ...input([project('bob-project')]),
+      row: { ...row, projectKey: 'bob-project', metadata: 'unavailable' } });
+    expect(matchSessionListFilterV1(project('bob-project'), facts!)).toBe('match');
+    expect(post).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+  });
+  it('reads Section-only demand from one existing placement batch, preserving missing versus known-empty', async () => {
+    const { state, get, post } = boundary();
+    const section = normalizeSessionListFilterV1({ ...all, sections: { include: [{ serverId: 'home', sectionId: 'section-a' }], exclude: [] } });
+    const facts = await readCliSessionListFilterFactsV1(input([section]));
+    expect(facts?.section).toEqual({ serverId: 'home', sectionId: 'section-a' });
+    expect(matchSessionListFilterV1(section, facts!, 'daemonRule')).toBe('match');
+    expect(get.mock.calls.filter(([url]) => new URL(url).pathname === '/v2/session-organization')).toHaveLength(1);
+    expect(post).not.toHaveBeenCalled();
+    state.folderId = null;
+    const empty = await readCliSessionListFilterFactsV1(input([section]));
+    expect(empty?.section).toBeNull();
+    expect(matchSessionListFilterV1(section, empty!, 'daemonRule')).toBe('miss');
+    state.unavailable = true;
+    const unavailable = await readCliSessionListFilterFactsV1(input([section]));
+    expect(unavailable?.section).toBeUndefined();
+    expect(matchSessionListFilterV1(section, unavailable!, 'daemonRule')).toBe('unavailable');
+  });
   it('does not read supplemental Project or tag facts for predicates already excluded by known Session facts', async () => {
     const { get, post } = boundary();
     const excluded = normalizeSessionListFilterV1({ ...project('bob-project'), show: 'runs',
