@@ -210,7 +210,7 @@ export function createWorkflowDefinitionActions(params: Readonly<{
       do {
         let page: Awaited<ReturnType<Store['list']>>;
         try {
-          page = await params.artifactStore.list({ limit: 500, cursor, includeBody: true });
+          page = await params.artifactStore.list({ limit: 500, cursor, kind: 'workflow-definition.v1', coarseKind: 'other', includeBody: true });
         } catch (error) {
           if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'invalid_cursor') {
             throw Object.assign(new Error('workflow_definition_cursor_invalid'), { code: 'invalid_input' });

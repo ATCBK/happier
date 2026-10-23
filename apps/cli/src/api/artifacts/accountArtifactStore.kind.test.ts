@@ -57,11 +57,10 @@ describe('Account Artifact coarse kind transport', () => {
     expect(page.items.map(item => item.artifactId)).toEqual(['skill-0']);
     expect(page.coverage).toBe('complete');
     expect(page.nextCursor).toBe(encodeAccountArtifactListCursor({ artifactId: 'skill-0', updatedAt: 501 }));
-    expect(queries).toHaveLength(2);
-    expect(queries[1].get('cursor')).toBe(encodeAccountArtifactListCursor({ artifactId: 'skill-499', updatedAt: 2 }));
+    expect(queries).toHaveLength(1);
   });
 
-  it('restarts the full scan while unclassified rows remain before applying the caller limit', async () => {
+  it('continues the full-inventory keyset while unclassified rows remain', async () => {
     const known = row('known', skillHeader, 1);
     const older = row('unclassified', skillHeader, 502);
     const fullRows = [older, ...Array.from({ length: 499 }, (_, i) => row(`other-${i}`, { kind: 'ordinary.v1' }, 501 - i)), known];
@@ -76,7 +75,7 @@ describe('Account Artifact coarse kind transport', () => {
     const first = await artifacts.list({ coarseKind: 'skill', limit: 1 });
     expect(first.items.map(item => item.artifactId)).toEqual(['unclassified']);
     expect(first.coverage).toBe('complete');
-    expect(kinds).toEqual(['skill', null, null]);
+    expect(kinds).toEqual(['skill', null]);
     const next = await artifacts.list({ coarseKind: 'skill', limit: 1, cursor: first.nextCursor });
     expect(next.items.map(item => item.artifactId)).toEqual(['known']);
     expect(next.nextCursor).toBeUndefined();

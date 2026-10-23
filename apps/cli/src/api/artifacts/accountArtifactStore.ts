@@ -1214,7 +1214,7 @@ export function createAccountArtifactStore(params: Readonly<{
       const readAccountMode = () => accountMode ??= params.getAccountEncryptionMode({ usage: 'identity', signal: options?.signal });
       const result = await listArtifactHeadersV1({ options,
         readPage: page => store.list(page, readAccountMode), encodeCursor: encodeAccountArtifactListCursor,
-        ...(options?.kind && options.includeBody ? { readBodies: (items: readonly AccountArtifactHeader[]) => readListBodies(items, options.signal, readAccountMode) } : {}) });
+        ...((options?.kind || options?.headerFilter) && options.includeBody ? { readBodies: (items: readonly AccountArtifactHeader[]) => readListBodies(items, options.signal, readAccountMode) } : {}) });
       options?.signal?.throwIfAborted();
       if (accountMode && result.items.some(item => item.access === 'owner' && Object.hasOwn(item, 'body'))) {
         const mode = await accountMode;

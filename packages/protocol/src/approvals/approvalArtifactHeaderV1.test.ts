@@ -10,6 +10,7 @@ import {
 } from './approvalArtifactHeaderV1.js';
 import { ExecutionRunHostActionApprovalRequestV1Schema } from './executionRunHostActionApprovalRequestV1.js';
 import { TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1.js';
+import { listArtifactHeadersV1 } from '../artifacts/artifactListSelectionV1.js';
 
 describe('approval Artifact header correspondence', () => {
   const builtIn = ApprovalRequestV2Schema.parse({
@@ -94,6 +95,41 @@ describe('approval Artifact header correspondence', () => {
     expect(second.nextCursor).toBeNull();
     const filtered = await listApprovalArtifactsV1({ ...store, limit: 1, actionId: 'action.invoke' });
     expect(filtered.items.map(item => item.artifactId)).toEqual(['plugin-target']);
+  });
+
+  it('opens only matching approval bodies across a large mixed inventory', async () => {
+    const open = ApprovalRequestV2Schema.parse({ ...builtIn, status: 'open', decision: undefined,
+      actionId: 'session.message.send', actionArgs: { sessionId: 'session-1', message: 'Other Action' },
+      executionOriginV1: { ...builtIn.executionOriginV1, actionId: 'session.message.send' },
+    });
+    const rows = [
+      ...Array.from({ length: 1000 }, (_, index) => ({ artifactId: `unrelated-${index}`, updatedAt: 4,
+        header: { kind: 'prompt_doc.v2', title: 'Unrelated' }, body: 'private unrelated content' })),
+      ...Array.from({ length: 1000 }, (_, index) => ({ artifactId: `other-action-${index}`, updatedAt: 3,
+        header: buildApprovalRequestArtifactHeaderV1(open), body: JSON.stringify(open) })),
+      { artifactId: 'target', updatedAt: 2, header: buildTargetActionApprovalArtifactHeaderV1(target), body: JSON.stringify(target) },
+      { artifactId: 'selected', updatedAt: 1, header: buildApprovalRequestArtifactHeaderV1(builtIn), body: JSON.stringify(builtIn) },
+    ];
+    let bodyReads = 0;
+    const result = await listApprovalArtifactsV1({ actionId: builtIn.actionId, status: 'executing', limit: 1,
+      readPage: options => listArtifactHeadersV1({ options, encodeCursor: item => item.artifactId,
+        readPage: async physical => {
+          const start = physical?.cursor ? rows.findIndex(row => row.artifactId === physical.cursor) + 1 : 0;
+          const items = rows.slice(start, start + (physical?.limit ?? 500));
+          if (physical?.includeBody) bodyReads += items.length;
+          return { items: items.map(({ body, ...row }) => ({ ...row, createdAt: 1,
+            ...(physical?.includeBody ? { body } : {}) })),
+            ...(start + items.length < rows.length ? { nextCursor: items.at(-1)!.artifactId } : {}) };
+        },
+        readBodies: async items => {
+          bodyReads += items.length;
+          return items.map(item => ({ ...item, body: rows.find(row => row.artifactId === item.artifactId)!.body }));
+        },
+      }),
+      read: async artifactId => { bodyReads++; return rows.find(row => row.artifactId === artifactId) ?? null; },
+    });
+    expect(result.items.map(item => item.artifactId)).toEqual(['selected']);
+    expect(bodyReads).toBe(1);
   });
 
   const host = ExecutionRunHostActionApprovalRequestV1Schema.parse({

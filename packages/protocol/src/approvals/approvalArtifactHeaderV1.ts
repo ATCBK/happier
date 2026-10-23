@@ -2,6 +2,7 @@ import { StoredApprovalRequestSchema, type ApprovalRequest } from './approvalReq
 import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import { ActionIdSchema, type ActionId } from '../actions/actionIds.js';
 import type { ApprovalQueueListItemV1, ApprovalQueueListResultV1 } from '../actions/executor/types.js';
+import type { ArtifactListSelectionOptionsV1 } from '../artifacts/artifactListSelectionV1.js';
 export { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import {
   StoredExecutionRunHostActionApprovalRequestV1Schema,
@@ -224,7 +225,7 @@ export async function listApprovalArtifactsV1(params: Readonly<{
   cursor?: string | null;
   limit?: number | null;
   serverId?: string | null;
-  readPage: (options: Readonly<{ limit: number; includeBody: true; cursor?: string }>) => Promise<Readonly<{
+  readPage: (options: ArtifactListSelectionOptionsV1 & Readonly<{ limit: number; includeBody: true }>) => Promise<Readonly<{
     items: readonly ApprovalListArtifactV1[];
     nextCursor?: string;
   }>>;
@@ -239,7 +240,13 @@ export async function listApprovalArtifactsV1(params: Readonly<{
   do {
     // A source page must fit the remaining result capacity. Advancing its
     // cursor after consuming only a prefix would silently skip valid matches.
-    const page = await params.readPage({ limit: maxItems - items.length, includeBody: true, ...(cursor ? { cursor } : {}) });
+    const page = await params.readPage({ limit: maxItems - items.length, includeBody: true,
+      headerFilter: header => {
+        if (header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn && header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction) return false;
+        // Approval status can change between the header page and hydration.
+        // Keep that filter at the fresh, body-authoritative read below.
+        return !params.actionId || (header.kind === APPROVAL_ARTIFACT_KINDS_V1.targetAction ? 'action.invoke' : header.actionId) === params.actionId;
+      }, ...(cursor ? { cursor } : {}) });
     for (const artifact of page.items) {
       if (items.length >= maxItems) break;
       if (artifact.header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn

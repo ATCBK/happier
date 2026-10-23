@@ -4,6 +4,8 @@ import { throwIfAborted } from '../abortSignal.js';
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
   coarseKind?: ArtifactCoarseKindV1;
+  /** Keyholding host selection over admitted private headers; never a wire filter. */
+  headerFilter?: (header: Readonly<Record<string, unknown>>) => boolean;
   sort?: 'updated_desc' | 'created_desc' | 'title_asc'; includeBody?: boolean; signal?: AbortSignal;
 }>;
 
@@ -24,7 +26,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   throwIfAborted(options?.signal);
   // The incumbent /v1/artifacts route admits at most 500 structural rows per request.
   if (!options || (options.limit !== undefined && options.limit <= 500
-    && options.search === undefined && options.kind === undefined && options.coarseKind === undefined
+    && options.search === undefined && options.kind === undefined && options.coarseKind === undefined && !options.headerFilter
     && (options.sort === undefined || options.sort === 'updated_desc'))) {
     const page = await params.readPage(options);
     throwIfAborted(options?.signal);
@@ -32,8 +34,18 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   }
   const all: T[] = [];
   let coverage: 'complete' | 'partial' = 'complete';
-  let cursor: string | undefined;
+  // The transport keyset is updatedAt-desc / id-desc. Only other orderings
+  // need a complete header view before applying their logical cursor.
+  const updatedOrder = options.sort === undefined || options.sort === 'updated_desc';
+  let cursor = updatedOrder ? options.cursor : undefined;
   let coarseKind = options.coarseKind;
+  const search = options.search?.trim().toLocaleLowerCase();
+  const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
+  const matches = (item: T) => (!options.kind || item.header.kind === options.kind)
+    && (!options.headerFilter || options.headerFilter(item.header))
+    && (coarseKind !== undefined || !options.coarseKind || deriveArtifactCoarseKindV1(item.header) === options.coarseKind)
+    && (!search || title(item).toLocaleLowerCase().includes(search));
+  let hasMorePhysicalRows = false;
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
       ...(coarseKind ? { coarseKind } : {}),
@@ -50,34 +62,32 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
       coarseKind = undefined;
       all.length = 0;
       coverage = 'complete';
-      cursor = undefined;
+      cursor = updatedOrder ? options.cursor : undefined;
       continue;
     }
     if (page.coverage === 'partial') coverage = 'partial';
-    all.push(...page.items);
+    all.push(...page.items.filter(matches));
     cursor = page.nextCursor;
+    hasMorePhysicalRows = cursor !== undefined;
+    if (updatedOrder && options.limit !== undefined && all.length >= options.limit) break;
     if (!cursor) break;
   } while (true);
-  const search = options.search?.trim().toLocaleLowerCase();
-  const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
-  const unclassifiedScanKind = coarseKind === undefined ? options.coarseKind : undefined;
-  const matchesKind = (item: T) => (!options.kind || item.header.kind === options.kind)
-    && (!unclassifiedScanKind || deriveArtifactCoarseKindV1(item.header) === unclassifiedScanKind);
-  const matching = all.filter(matchesKind);
-  // Open selected bodies before sorting/cursors so a fresh read keeps content and revisions aligned.
-  const selected = options.includeBody && params.readBodies ? await params.readBodies(matching) : matching;
-  throwIfAborted(options.signal);
-  const items = selected.filter(item => matchesKind(item)
-    && (!search || title(item).toLocaleLowerCase().includes(search)));
-  items.sort((left, right) => {
+  const compare = (left: T, right: T) => {
     const primary = options.sort === 'title_asc' ? title(left).localeCompare(title(right))
       : options.sort === 'created_desc' ? right.createdAt - left.createdAt : right.updatedAt - left.updatedAt;
-    return primary || left.artifactId.localeCompare(right.artifactId);
-  });
-  const index = options.cursor ? items.findIndex(item => params.encodeCursor(item) === options.cursor) : -1;
-  if (options.cursor && index < 0) throw Object.assign(new Error('artifact_list_cursor_invalid'), { code: 'invalid_cursor' });
-  const pageItems = options.limit === undefined ? items.slice(index + 1) : items.slice(index + 1, index + 1 + options.limit);
+    return primary || (updatedOrder ? right.artifactId.localeCompare(left.artifactId) : left.artifactId.localeCompare(right.artifactId));
+  };
+  all.sort(compare);
+  const index = !updatedOrder && options.cursor ? all.findIndex(item => params.encodeCursor(item) === options.cursor) : -1;
+  if (!updatedOrder && options.cursor && index < 0) throw Object.assign(new Error('artifact_list_cursor_invalid'), { code: 'invalid_cursor' });
+  const pageItems = options.limit === undefined ? all.slice(index + 1) : all.slice(index + 1, index + 1 + options.limit);
+  // Only this page needs content. Recheck fresh returned headers rather than
+  // attaching a new body to the earlier header/revision or disclosing a kind
+  // that changed during the read. Continuation uses the structural frontier.
+  const selected = options.includeBody && params.readBodies && pageItems.length > 0 ? await params.readBodies(pageItems) : pageItems;
+  throwIfAborted(options.signal);
+  const items = selected.filter(matches).sort(compare);
   const last = pageItems.at(-1);
-  return { items: pageItems, coverage, ...(last && index + 1 + pageItems.length < items.length
+  return { items, coverage, ...(last && (hasMorePhysicalRows || index + 1 + pageItems.length < all.length)
     ? { nextCursor: params.encodeCursor(last) } : {}) };
 }
