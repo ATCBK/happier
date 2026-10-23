@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ca = {
+    session_access_encryption_prepare: "Prepara l’accés xifrat a la sessió",
+    session_access_encryption_reprepare: "Torna a preparar l’accés xifrat a la sessió per a una persona",
+    session_access_layout_update: "Actualitza el format de compartició d’una sessió antiga",
     workspace_files_link_get: "Obtén l’enllaç del fitxer de l’espai de treball",
     code_definition_get: "Ves a la definició",
     code_references_list: "Cerca referències",
@@ -278,6 +281,7 @@ export const ca = {
     browser_context_annotation_attachComment: "Adjunta un comentari a l'anotació del navegador",
     browser_context_annotation_attachStroke: "Adjunta un traç a l'anotació del navegador",
     browser_context_annotation_attachStyleIntent: "Adjunta la intenció d'estil a l'anotació del navegador",
+    browser_context_annotation_attachDraft: "Adjunta l'esborrany d'anotació del navegador",
     browser_context_attachToComposer: "Adjunta el context del navegador al redactor",
     browser_context_attachToAgentTurn: "Adjunta el context del navegador al torn de l'agent",
     browser_context_clear: "Esborra el context del navegador",

@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ru = {
+    session_access_encryption_prepare: "Подготовить зашифрованный доступ к сеансу",
+    session_access_encryption_reprepare: "Повторно подготовить зашифрованный доступ к сеансу для одного человека",
+    session_access_layout_update: "Обновить формат общего доступа старого сеанса",
     workspace_files_link_get: "Получить ссылку на файл рабочей области",
     code_definition_get: "Перейти к определению",
     code_references_list: "Найти ссылки",
@@ -278,6 +281,7 @@ export const ru = {
     browser_context_annotation_attachComment: "Прикрепить комментарий к аннотации браузера",
     browser_context_annotation_attachStroke: "Прикрепить штрих к аннотации браузера",
     browser_context_annotation_attachStyleIntent: "Прикрепить пожелание по стилю к аннотации браузера",
+    browser_context_annotation_attachDraft: "Прикрепить черновик аннотации браузера",
     browser_context_attachToComposer: "Прикрепить контекст браузера к сообщению",
     browser_context_attachToAgentTurn: "Прикрепить контекст браузера к ходу агента",
     browser_context_clear: "Очистить контекст браузера",

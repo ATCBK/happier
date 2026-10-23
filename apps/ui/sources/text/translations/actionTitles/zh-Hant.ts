@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHant = {
+    session_access_encryption_prepare: "準備工作階段加密存取",
+    session_access_encryption_reprepare: "為一位使用者重新準備工作階段加密存取",
+    session_access_layout_update: "更新舊工作階段的共用格式",
     workspace_files_link_get: "取得工作區檔案連結",
     code_definition_get: "移至定義",
     code_references_list: "尋找參照",
@@ -278,6 +281,7 @@ export const zhHant = {
     browser_context_annotation_attachComment: "附加瀏覽器標註留言",
     browser_context_annotation_attachStroke: "附加瀏覽器標註筆畫",
     browser_context_annotation_attachStyleIntent: "附加瀏覽器標註樣式意圖",
+    browser_context_annotation_attachDraft: "附加瀏覽器標註草稿",
     browser_context_attachToComposer: "將瀏覽器上下文附加至輸入框",
     browser_context_attachToAgentTurn: "將瀏覽器上下文附加至代理程式回合",
     browser_context_clear: "清除瀏覽器上下文",

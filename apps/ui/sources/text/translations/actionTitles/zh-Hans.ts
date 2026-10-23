@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHans = {
+    session_access_encryption_prepare: "准备会话加密访问",
+    session_access_encryption_reprepare: "为一位用户重新准备会话加密访问",
+    session_access_layout_update: "更新旧会话的共享格式",
     workspace_files_link_get: "获取工作区文件链接",
     code_definition_get: "转到定义",
     code_references_list: "查找引用",
@@ -278,6 +281,7 @@ export const zhHans = {
     browser_context_annotation_attachComment: "附加浏览器标注评论",
     browser_context_annotation_attachStroke: "附加浏览器标注笔画",
     browser_context_annotation_attachStyleIntent: "附加浏览器标注样式意图",
+    browser_context_annotation_attachDraft: "附加浏览器标注草稿",
     browser_context_attachToComposer: "将浏览器上下文附加到输入框",
     browser_context_attachToAgentTurn: "将浏览器上下文附加到代理轮次",
     browser_context_clear: "清除浏览器上下文",

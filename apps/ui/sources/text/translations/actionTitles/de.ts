@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const de = {
+    session_access_encryption_prepare: "Verschlüsselten Sitzungszugriff vorbereiten",
+    session_access_encryption_reprepare: "Verschlüsselten Sitzungszugriff für eine Person erneut vorbereiten",
+    session_access_layout_update: "Freigabeformat einer älteren Sitzung aktualisieren",
     workspace_files_link_get: "Link zur Arbeitsbereichsdatei abrufen",
     code_definition_get: "Zur Definition",
     code_references_list: "Referenzen suchen",
@@ -278,6 +281,7 @@ export const de = {
     browser_context_annotation_attachComment: "Kommentar zur Browser-Anmerkung hinzufügen",
     browser_context_annotation_attachStroke: "Zeichnung zur Browser-Anmerkung hinzufügen",
     browser_context_annotation_attachStyleIntent: "Gestaltungswunsch zur Browser-Anmerkung hinzufügen",
+    browser_context_annotation_attachDraft: "Browser-Anmerkungsentwurf anhängen",
     browser_context_attachToComposer: "Browserkontext an das Eingabefeld anhängen",
     browser_context_attachToAgentTurn: "Browserkontext an Agent-Beitrag anhängen",
     browser_context_clear: "Browserkontext leeren",

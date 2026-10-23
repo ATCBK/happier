@@ -1,6 +1,9 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ja = {
+    session_access_encryption_prepare: "セッションへの暗号化アクセスを準備",
+    session_access_encryption_reprepare: "一人のユーザーのセッション暗号化アクセスを再準備",
+    session_access_layout_update: "過去のセッションの共有形式を更新",
     workspace_files_link_get: "ワークスペースのファイルリンクを取得",
     code_definition_get: "定義に移動",
     code_references_list: "参照を検索",
@@ -278,6 +281,7 @@ export const ja = {
     browser_context_annotation_attachComment: "ブラウザーの注釈コメントを添付",
     browser_context_annotation_attachStroke: "ブラウザーの手描き注釈を添付",
     browser_context_annotation_attachStyleIntent: "ブラウザーの注釈にスタイルの意図を添付",
+    browser_context_annotation_attachDraft: "ブラウザーの注釈の下書きを添付",
     browser_context_attachToComposer: "ブラウザーのコンテキストを入力欄に添付",
     browser_context_attachToAgentTurn: "ブラウザーのコンテキストをエージェントのターンに添付",
     browser_context_clear: "ブラウザーのコンテキストを消去",
