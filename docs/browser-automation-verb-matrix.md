@@ -58,6 +58,12 @@ Machine target; it does not interpret the lack of a local diagnostics producer a
 unavailability. The runtime CLI admits the same diagnostics family through the canonical Action
 surface policy.
 
+In development source, the Diagnostics drawer acquires daemon snapshots only while open and
+presented. Closing it releases the read subscription; local and daemon collectors keep their
+existing lifetimes. Opening or reopening acquires the daemon's existing ring (by default,
+1,000 events per view and 5,000 per Machine snapshot), with no promise of history beyond that
+ring. Agent snapshot Actions read the daemon store directly and do not require an open drawer.
+
 Exact-Machine control and automation also use that transport when the managed view has no mounted
 client presentation. Mounting a daemon-owned view does not transfer execution to the client; its
 host projects returned control events through its existing reducer. In-app engines such as an
