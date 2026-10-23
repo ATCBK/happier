@@ -194,7 +194,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission and the Team lock precede authority/access reads; audience rechecks cover discovery races. */ });
+        }), { transactionClass: "teams.archive", isolationLevel: "ReadCommitted" /* Exclusive complete Account admission and the Team lock precede authority/access reads; audience rechecks cover discovery races. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });

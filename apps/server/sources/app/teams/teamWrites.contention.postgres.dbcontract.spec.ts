@@ -462,7 +462,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         }
     });
 
-    it.each(["restore", "resource_delete"] as const)("attributes the real %s route's idle Account holder", async kind => {
+    it.each(["archive", "restore", "resource_delete"] as const)("attributes the real %s route's idle Account holder", async kind => {
         const input = await fixture(kind);
         let requestId: string | undefined;
         const previousTrace = process.env.HAPPIER_WEB_LATENCY_TRACE;
@@ -497,9 +497,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
             });
             expect(response.statusCode, response.body).toBe(200);
             await input.verify(response.json());
-            expect(requestId).toMatch(/^[0-9a-f-]{36}$/u);
+            expect(requestId).toMatch(/^req-[0-9a-z]+$/iu);
             expect(names).toEqual([{
-                application_name: `${kind === "restore" ? "teams.restore" : "teams.credentials.delete"}:${requestId}`,
+                application_name: `${kind === "resource_delete" ? "teams.credentials.delete" : `teams.${kind}`}:${requestId}`,
                 state: "idle in transaction",
             }]);
         } finally {
