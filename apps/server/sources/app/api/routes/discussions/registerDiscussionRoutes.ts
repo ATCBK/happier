@@ -34,6 +34,7 @@ import { DiscussionAttentionQueryV1Schema, DiscussionAttentionResponseV1Schema }
 import { readDiscussionAttention } from '@/app/discussions/attentionFacts';
 import { DiscussionSettingsSetRequestV1Schema, DiscussionSettingsResponseV1Schema } from '@happier-dev/protocol/discussions/settings';
 import { getDiscussionSettings, setDiscussionSettings } from '@/app/discussions/settings';
+import { registerDiscussionAttachmentRoutes } from './registerDiscussionAttachmentRoutes';
 
 /**
  * The typed result → HTTP mapping.
@@ -110,6 +111,7 @@ const PresentUserDiscussionErrorResponses = {
  * route never re-implements or relaxes them.
  */
 export function registerDiscussionRoutes(app: Fastify) {
+    registerDiscussionAttachmentRoutes(app, statusForDiscussionFailure, discussionRouteErrorHandler);
     const discussionsApp = createServerFeatureGatedRouteApp(
         app,
         "sessions.conversations",

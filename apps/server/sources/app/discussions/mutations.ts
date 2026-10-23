@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
-import { DiscussionMessageContentV1Schema, DiscussionProducerV1Schema, DiscussionProducerV1StoredSchema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1, type DiscussionProducerV1 } from '@happier-dev/protocol/discussions/content';
+import { DiscussionMessageContentV1Schema, DiscussionProducerV1Schema, DiscussionProducerV1StoredSchema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1, readDiscussionAttachmentReferencesV1, type DiscussionProducerV1 } from '@happier-dev/protocol/discussions/content';
+import type { BinaryBlobReferenceV1 } from '@happier-dev/protocol/storage/binaryBlobV1';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema, type DiscussionCreateRequestV1, type DiscussionCreateResponseV1, type DiscussionDetailsResponseV1, type DiscussionPostRequestV1, type DiscussionPostResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import type { DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
@@ -29,6 +30,7 @@ import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/wo
 import type { WorkflowDiscussionOriginV1 } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
 import { workflowInvocationObservationRunWhere } from '@/app/workflows/workflowRunAccess';
 import { SessionMessageDiscussionReplyReturnV1Schema, type SessionMessageDiscussionReplyReturnV1, type SessionMessageReplyProgressV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { admitDiscussionAttachmentsInTx, bindDiscussionAttachmentsInTx, type PreparedDiscussionAttachmentWrite } from './attachmentService';
 
 type Actor = Readonly<{ actorAccountId: string; authentication: SessionAccessAuthentication }>;
 type ExactDiscussion = Actor & Readonly<{ discussionId: string }>;
@@ -37,6 +39,7 @@ type Intent = Readonly<{
     localId: string; content: StrictSessionStoredMessageContentEnvelope; mentionedAccountIds: readonly string[];
     mentionedSessionIds: readonly string[];
     docEditProposal: boolean;
+    plainAttachmentReferences: readonly BinaryBlobReferenceV1[] | null;
     replyTarget?: DiscussionReplyTargetV1; evidence: SessionMutationEqualityEvidenceV1;
 }>;
 type InvalidIntent = Readonly<{ error: 'discussion_invalid_content' | 'discussion_encryption_mode_mismatch' | 'discussion_invalid_mention' }>;
@@ -51,7 +54,8 @@ function messageIntent(mode: StorageMode, request: DiscussionPostRequestV1): Int
         ...(request.replyTarget ? { replyTarget: request.replyTarget } : {}) };
     if (request.content.t === 'encrypted') {
         return request.requestEqualityEvidenceV1?.kind === 'e2eeTag'
-            ? { ...base, docEditProposal: request.docEditProposal === true, evidence: request.requestEqualityEvidenceV1 } : { error: 'discussion_invalid_content' };
+            ? { ...base, docEditProposal: request.docEditProposal === true, plainAttachmentReferences: null,
+                evidence: request.requestEqualityEvidenceV1 } : { error: 'discussion_invalid_content' };
     }
     const content = DiscussionMessageContentV1Schema.safeParse(request.content.v);
     if (!content.success) return { error: 'discussion_invalid_content' };
@@ -59,8 +63,10 @@ function messageIntent(mode: StorageMode, request: DiscussionPostRequestV1): Int
     if (request.docEditProposal && !docEditProposal) return { error: 'discussion_invalid_content' };
     const mentions = readDiscussionMentionedParticipantIdsV1(content.data);
     if (!isDeepStrictEqual(mentions.mentionedSessionIds, sessionIds)) return { error: 'discussion_invalid_mention' };
-    return { ...base, docEditProposal, mentionedAccountIds: [...new Set([...ids, ...mentions.mentionedAccountIds])], evidence: { kind: 'plainDigest', digest: computeSessionMutationEqualityPlainDigestV1(
-        serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content: content.data, mentionedAccountIds: ids, mentionedSessionIds: sessionIds, ...(request.replyTarget ? { replyTarget: request.replyTarget } : {}) }),
+    return { ...base, docEditProposal, plainAttachmentReferences: readDiscussionAttachmentReferencesV1(content.data),
+        mentionedAccountIds: [...new Set([...ids, ...mentions.mentionedAccountIds])], evidence: { kind: 'plainDigest', digest: computeSessionMutationEqualityPlainDigestV1(
+        serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content: content.data, mentionedAccountIds: ids, mentionedSessionIds: sessionIds,
+            attachments: request.attachments, ...(request.replyTarget ? { replyTarget: request.replyTarget } : {}) }),
     ) } };
 }
 
@@ -76,6 +82,7 @@ function creationEvidence(mode: StorageMode, request: DiscussionCreateRequestV1)
         ...(request.anchor ? { anchor: request.anchor } : {}), ...(request.participants ? { participants: request.participants } : {}),
         firstMessage: { localId: request.firstMessage.localId, content: content.data, mentionedAccountIds: request.firstMessage.mentionedAccountIds,
             mentionedSessionIds: request.firstMessage.mentionedSessionIds,
+            attachments: request.firstMessage.attachments,
             ...(request.firstMessage.replyTarget ? { replyTarget: request.firstMessage.replyTarget } : {}) },
     })) };
 }
@@ -123,6 +130,7 @@ async function publishChangedInTx(tx: Tx, discussionId: string, accessChanged = 
 
 type DiscussionCreationInput = Actor & Readonly<{
     request: DiscussionCreateRequestV1; producer?: DiscussionProducerV1;
+    preparedAttachments?: readonly PreparedDiscussionAttachmentWrite[];
 }>;
 
 /** One census serves creation's prepared entry and in-transaction recheck. */
@@ -199,6 +207,9 @@ export async function createDiscussionInTx(tx: Tx, input: DiscussionCreationInpu
             || !equalEvidence(existing.creationEqualityEvidenceV1, evidence) || !equalEvidence(first.requestEqualityEvidenceV1, intent.evidence)
             || !equalProducer(first.producerV1, producer)
             || (first.docEditProposalDispositionV1 != null) !== intent.docEditProposal) return discussionFailure('discussion_idempotency_conflict');
+        if (!await admitDiscussionAttachmentsInTx(tx, { ownerAccountId: context.ownerAccountId, mode: context.storageMode,
+            request: request.firstMessage, plainReferences: intent.plainAttachmentReferences,
+            existingMessageId: first.id })) return discussionFailure('discussion_idempotency_conflict');
         const failure = validateDiscussionStoredMessage(first, context.storageMode);
         if (failure) return discussionFailure(failure);
         const sources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: existing.id, messages: [first] });
@@ -225,6 +236,9 @@ export async function createDiscussionInTx(tx: Tx, input: DiscussionCreationInpu
     const evidence = creationEvidence(mode, request);
     if ('error' in intent) return discussionFailure(intent.error);
     if ('error' in evidence) return discussionFailure(evidence.error);
+    if (!await admitDiscussionAttachmentsInTx(tx, { ownerAccountId: input.actorAccountId, mode,
+        request: request.firstMessage, plainReferences: intent.plainAttachmentReferences,
+        prepared: input.preparedAttachments })) return discussionFailure('discussion_invalid_content');
     if (intent.replyTarget?.kind === 'message') return discussionFailure('discussion_invalid_reply_target');
     const readers = new Set([input.actorAccountId, ...initial.value.participantAccountIds]);
     if (intent.mentionedAccountIds.some(id => !readers.has(id))) return discussionFailure('discussion_invalid_mention');
@@ -279,6 +293,7 @@ export async function createDiscussionInTx(tx: Tx, input: DiscussionCreationInpu
     if (!addressed.ok) throw new DiscussionCreationRejectedError(addressed.error);
     const first = await insertMessageInTx(tx, { discussionId: row.id, actorAccountId: input.actorAccountId, seq: 1,
         intent, producer, at: now, ...addressed.value });
+    await bindDiscussionAttachmentsInTx(tx, first.id, input.preparedAttachments);
     await tx.discussion.update({ where: { id: row.id }, data: { messageSeq: 1 } });
     // Initial attachment already queues C1's after-commit source hint; its
     // receiver observes this committed seq1, never the uncommitted empty head.
@@ -388,6 +403,7 @@ async function admitAddressedParticipantsInTx(tx: Tx, input: ExactDiscussion & R
  * exact input on every inTx attempt before invoking this prepared-only writer. */
 export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     request: DiscussionPostRequestV1; producer?: DiscussionProducerV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
+    preparedAttachments?: readonly PreparedDiscussionAttachmentWrite[];
     draftReview?: { artifactId: string; decidingAccountId: string };
     terminalReturn?: true;
     /** Protected installed-Machine custody, never accepted from public authored requests. */
@@ -472,6 +488,9 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
         if (existing.authorAccountId !== input.actorAccountId || !equalEvidence(existing.requestEqualityEvidenceV1, intent.evidence)
             || !equalProducer(existing.producerV1, producer)
             || (existing.docEditProposalDispositionV1 != null) !== intent.docEditProposal) return discussionFailure('discussion_idempotency_conflict');
+        if (!await admitDiscussionAttachmentsInTx(tx, { ownerAccountId: context.ownerAccountId, mode: context.storageMode,
+            request: parsed.data, plainReferences: intent.plainAttachmentReferences,
+            existingMessageId: existing.id })) return discussionFailure('discussion_idempotency_conflict');
         const failure = validateDiscussionStoredMessage(existing, context.storageMode);
         if (failure) return discussionFailure(failure);
         // An opaque equality tag cannot make caller-supplied metadata the
@@ -488,6 +507,9 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
     if (!context.keyReadiness) return discussionFailure('discussion_content_unavailable');
     if (context.access.level === 'view') return discussionFailure('discussion_post_denied');
     if (discussion.archivedAt) return discussionFailure('discussion_archived');
+    if (!await admitDiscussionAttachmentsInTx(tx, { ownerAccountId: context.ownerAccountId, mode: context.storageMode,
+        request: parsed.data, plainReferences: intent.plainAttachmentReferences,
+        prepared: input.preparedAttachments })) return discussionFailure('discussion_invalid_content');
     const readable = await filterAccountsWithCurrentDiscussionReadAccessInTx(tx, { discussionId: discussion.id, accountIds: intent.mentionedAccountIds });
     if (intent.mentionedAccountIds.some(id => !readable.has(id))) return discussionFailure('discussion_invalid_mention');
     const addressed = await admitAddressedParticipantsInTx(tx, { ...input, authentication, producer, intent,
@@ -503,6 +525,7 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
     const at = new Date();
     const allocated = await tx.discussion.update({ where: { id: discussion.id }, data: { messageSeq: { increment: 1 }, lastMessageAt: at }, select: { messageSeq: true } });
     const message = await insertMessageInTx(tx, { discussionId: discussion.id, actorAccountId: input.actorAccountId, seq: allocated.messageSeq, intent, producer, at, ...addressed.value });
+    await bindDiscussionAttachmentsInTx(tx, message.id, input.preparedAttachments);
     // C3 already admitted the destinations whose executable Follow facts changed,
     // including watchers. Other attachments consume no new fact from this post.
     if (addressed.value.addressedSessionIds.length) await invalidateSessionRelationProjectionsInTx(tx, addressed.value.addressedSessionIds);

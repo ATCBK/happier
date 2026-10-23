@@ -1417,6 +1417,28 @@ composed flow; missing or disabled support fails closed as `discussions_unavaila
 This is an in-progress 0.3 development contract, not a public release or a claim of completed
 package, database-reconciliation or loaded-runtime validation.
 
+The development `attachment` content part carries the shared file/folder payload,
+with private leaf references and explicit relative paths/empty directories. A byte
+upload is an alternate representation of the existing create/post/reply operation:
+`POST /v1/discussions/upload`, content type
+`application/vnd.happier.discussion-upload-v1`, contains one strict metadata line
+followed by exactly its declared ordered byte segments. The ordinary Action guard
+and message transaction still own admission and commit. No separate message writer,
+upload-reservation Discussion, file ACL or attachment key is created. Metadata exposes
+structural IDs, envelope kinds and stored lengths, not names or plaintext hashes.
+The per-leaf boundary derives from the existing attachment-upload size preference
+and its supported maximum; there is no new Discussion count or aggregate quota.
+
+`GET /v1/discussions/:discussionId/messages/:messageId/attachments/:blobId`
+returns the explicit plain/encrypted byte envelope under current exact-message
+admission, optionally narrowed by `throughSeq`. The invoking host opens and verifies
+length/hash before `discussion.attachment.read` returns its semantic bytes/descriptor
+result. It never advances read state. Process-local source handles are private
+invocation operands, not public arbitrary-path operands. Existing trusted Agent
+publication and signed/delegated mutation transports refuse a leaf-bearing write
+when they cannot admit its byte/source representation; they neither drop the file
+nor relabel the post as Account-authored.
+
 The Discussion owns its access and lifecycle. An optional Session/message, Doc or Task anchor grants no
 source access and imposes no parent archive or deletion cascade. Each read and mutation resolves
 current Discussion grants in the transaction through the shared resource-grant policy. Human

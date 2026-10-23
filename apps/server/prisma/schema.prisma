@@ -1984,11 +1984,24 @@ model DiscussionMessage {
     discussion                Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
     authorAccount             Account? @relation(fields: [authorAccountId], references: [id], onDelete: SetNull)
     mentions                  DiscussionMessageMention[]
+    attachments               DiscussionAttachment[]
 
     @@unique([discussionId, localId])
     @@unique([discussionId, seq])
     @@index([discussionId, seq(sort: Desc)])
     @@index([authorAccountId, createdAt])
+}
+
+/// Immutable private bytes inherit authority and lifetime from the committed message.
+model DiscussionAttachment {
+    blobId          String @id
+    messageId       String
+    storageKey      String @unique
+    encryptionMode  String
+    storedSizeBytes BigInt
+    message         DiscussionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+    @@index([messageId])
 }
 
 /// "This Account was mentioned for attention." The row grants no access, implies

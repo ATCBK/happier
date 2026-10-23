@@ -212,16 +212,24 @@ async function readSelectedDiscussionMessageInTx(tx: Tx, input: Reader & ExactDi
     return projected.ok ? discussionSuccess(projected.value.messages[0]!) : projected;
 }
 
-/** Internal exact read retains its typed absence result and supplied transaction. */
-export async function readDiscussionMessageInTx(tx: Tx, input: Reader & Readonly<{
-    discussionId: string; messageId: string;
-}>): Promise<DiscussionResult<DiscussionMessageV1>> {
+/** Exact message disclosure and its admitted resource facts share one context acquisition. */
+export async function readDiscussionMessageWithContextInTx(tx: Tx, input: Reader & Readonly<{
+    discussionId: string; messageId: string; throughSeq?: number;
+}>): Promise<DiscussionResult<Readonly<{ message: DiscussionMessageV1; context: DiscussionContext }>>> {
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
         accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure('discussion_not_found');
     const selected = await readSelectedDiscussionMessageInTx(tx, { ...input, context });
     if (!selected.ok) return selected;
-    return selected.value === null ? discussionFailure('discussion_not_found') : discussionSuccess(selected.value);
+    return selected.value === null ? discussionFailure('discussion_not_found') : discussionSuccess({ message: selected.value, context });
+}
+
+/** Internal exact read retains its typed absence result and supplied transaction. */
+export async function readDiscussionMessageInTx(tx: Tx, input: Reader & Readonly<{
+    discussionId: string; messageId: string;
+}>): Promise<DiscussionResult<DiscussionMessageV1>> {
+    const read = await readDiscussionMessageWithContextInTx(tx, input);
+    return read.ok ? discussionSuccess(read.value.message) : read;
 }
 
 /** Candidate grants narrow before paging; current admission still decides every returned row. */

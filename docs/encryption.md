@@ -2163,6 +2163,18 @@ need no fabricated encryption material. Inner title/message schemas remain under
 logic. Resource grants and recipient envelopes consume the same policy owner as
 Artifacts, with Discussion-specific persistence.
 
+The development attachment arm composes the shared Session attachment payload:
+files and folder trees retain their relative paths and explicit empty directories.
+Names, MIME, plaintext sizes, hashes and tree metadata stay inside the Discussion
+content envelope. Each physical leaf is a Home-private object bound to its committed
+message, not a sender-Machine path, public URL or independently shared Artifact.
+Encrypted leaves use the same Discussion DEK through the extracted binary codec;
+Plain Accounts need no client encryption material. Artifact and Discussion byte
+envelopes, framing, private storage and rejected-candidate custody share their
+existing owners. Exact reads qualify Discussion, message and blob, and re-admit
+current Discussion and quoted-source access, key, mode and locator after private IO.
+History/list projections acquire metadata only.
+
 The development CLI Discussion adapter admits its local Account material against
 live Account currentness using Protocol's existing fingerprint converter:
 currentness uses `aemk1_…`, while resource recipient bindings use
@@ -2202,6 +2214,17 @@ grants and archive state stay intact. Exact replay matches the committed content
 and envelopes without another write or invalidation. The final Account mutation
 refuses resources left in the wrong mode; the legacy empty-only PATCH requires
 the canonical migration for Accounts with Discussions.
+
+Attachment-aware conversion inventories every retained physical leaf, including
+archived Discussions. The client verifies opened bytes against the sealed descriptor
+and stages resealed bytes privately. The existing signed Account transaction checks
+the complete binding census, prepared source/target bytes and recipient fingerprints,
+then changes message envelopes, DEKs, leaf locators and modes atomically. Old objects
+retain rejected-cleanup custody until private deletion succeeds. Account erasure
+captures committed leaf locators through the current Discussion owner as well as
+pending upload custody; deleting a recipient does not delete another owner's files.
+Empty directories have no fake byte object to convert or erase. These are development
+source contracts, not a claim of completed database or loaded-runtime validation.
 
 Development Doc passage threads use a plaintext reply target containing only
 `{kind:'doc_passage',doc:{ref,revision}}`: the qualified Artifact reference and

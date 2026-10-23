@@ -562,7 +562,7 @@ async function captureAccountErasureBlobLocatorsInTx(
     tx: Tx,
     accountId: string,
 ): Promise<AccountErasureBlobLocators> {
-    const [uploadedFiles, privatePetAssets, privateArtifactBlobs] = await Promise.all([
+    const [uploadedFiles, privatePetAssets, privateArtifactBlobs, privateDiscussionAttachments] = await Promise.all([
         tx.uploadedFile.findMany({
             where: { accountId },
             select: { id: true, path: true, reuseKey: true },
@@ -577,6 +577,8 @@ async function captureAccountErasureBlobLocatorsInTx(
             where: { artifact: { accountId } }, select: { id: true, storageKey: true },
             orderBy: [{ storageKey: 'asc' }, { id: 'asc' }],
         }),
+        tx.discussionAttachment.findMany({ where: { message: { discussion: { ownerAccountId: accountId } } },
+            select: { blobId: true, storageKey: true }, orderBy: [{ storageKey: 'asc' }, { blobId: 'asc' }] }),
     ]);
     return Object.freeze({
         publicFiles: Object.freeze(uploadedFiles.filter(row => !isAccountPrivateFileUpload(row))
@@ -584,6 +586,7 @@ async function captureAccountErasureBlobLocatorsInTx(
         privatePetAssets: Object.freeze(privatePetAssets.map(({ id, objectKey }) => Object.freeze({ id, objectKey }))),
         privateFiles: Object.freeze([
             ...privateArtifactBlobs.map(({ id, storageKey }) => Object.freeze({ id, objectKey: storageKey })),
+            ...privateDiscussionAttachments.map(({ blobId, storageKey }) => Object.freeze({ id: blobId, objectKey: storageKey })),
             ...uploadedFiles.filter(isAccountPrivateFileUpload).map(({ id, path }) => Object.freeze({ id, objectKey: path })),
         ]),
     });

@@ -440,7 +440,13 @@ describe("account encryption migration .7 SQLite matrix", () => {
         const recipientBinding = createSignedAccountContentBinding();
         const recipient = await db.account.create({ data: { encryptionMode: 'e2ee', ...recipientBinding } });
         const title = { t: 'plain' as const, v: { v: 1, title: 'Retained Discussion' } };
-        const content = { t: 'plain' as const, v: { v: 1, parts: [{ t: 'text', text: 'Retained answer' }] } };
+        const attachmentId = randomUUID();
+        const attachmentBytes = Uint8Array.of(0, 255, 19);
+        const attachmentReference = { blobId: attachmentId, mime: 'application/octet-stream', sizeBytes: attachmentBytes.length,
+            sha256: createHash('sha256').update(attachmentBytes).digest('hex') };
+        const content = { t: 'plain' as const, v: { v: 1, parts: [{ t: 'text', text: 'Retained answer' },
+            { t: 'attachment', attachment: { kind: 'folder', id: randomUUID(), name: 'Tree',
+                entries: [{ relativePath: 'nested/file.bin', file: attachmentReference }], directories: ['empty', 'nested'] } }] } };
         const row = await db.discussion.create({ data: { ownerAccountId: owner.id, createdByAccountId: owner.id,
             creationLocalId: randomUUID(), creationEqualityEvidenceV1: { kind: 'plainDigest', digest: 'A'.repeat(43) },
             encryptionMode: 'plain', dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER), titleContent: title,
@@ -448,6 +454,13 @@ describe("account encryption migration .7 SQLite matrix", () => {
             messages: { create: { localId: randomUUID(), seq: 1, authorAccountId: owner.id, content,
                 requestEqualityEvidenceV1: { kind: 'plainDigest', digest: 'B'.repeat(43) } } },
             accountGrants: { create: { accountId: recipient.id, accessLevel: 'view', createdByAccountId: owner.id } } }, include: { messages: true } });
+        const { prepareDiscussionAttachmentWrite, completeDiscussionAttachmentCandidateCustodyInTx } = await import('@/app/discussions/attachmentService');
+        const preparedAttachment = await prepareDiscussionAttachmentWrite({ accountId: owner.id, blobId: attachmentId,
+            content: { t: 'plain', v: privacyKit.encodeBase64(attachmentBytes) } });
+        await inTx(async tx => {
+            await tx.discussionAttachment.create({ data: { ...preparedAttachment.row, messageId: row.messages[0]!.id } });
+            await completeDiscussionAttachmentCandidateCustodyInTx(tx, preparedAttachment);
+        });
         const app = createTestApp();
         const headers = { 'x-test-user-id': owner.id, ...currentCompatibilityHeaders() };
         const encryptedKey = privacyKit.encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(7),
@@ -461,6 +474,19 @@ describe("account encryption migration .7 SQLite matrix", () => {
                 const inventory = DiscussionAccountEncryptionInventoryV1Schema.parse(inventoryResponse.json());
                 expect(inventory.items.map(item => item.discussionId)).toEqual([row.id]);
                 const source = inventory.items[0]!;
+                expect(source.messages[0]!.attachments).toEqual([expect.objectContaining({ blobId: attachmentId,
+                    encryptionMode: toMode === 'e2ee' ? 'plain' : 'e2ee' })]);
+                const { openDiscussionAttachmentBytes } = await import('@/app/discussions/attachmentService');
+                const { stageDiscussionAttachmentAccountEncryptionConversion } = await import('@/app/discussions/attachmentEncryptionConversion');
+                const sourceAttachment = await db.discussionAttachment.findUniqueOrThrow({ where: { blobId: attachmentId } });
+                const sourceBytes = await openDiscussionAttachmentBytes(sourceAttachment);
+                const targetBytes = toMode === 'plain' ? attachmentBytes : new Uint8Array(32 + attachmentBytes.length).fill(17);
+                const targetAttachmentContent = toMode === 'plain'
+                    ? { t: 'plain' as const, v: privacyKit.encodeBase64(targetBytes) }
+                    : { t: 'encrypted' as const, c: privacyKit.encodeBase64(targetBytes) };
+                const attachment = { blobId: attachmentId, expectedContentSha256: createHash('sha256').update(sourceBytes).digest('hex'),
+                    content: await stageDiscussionAttachmentAccountEncryptionConversion({ accountId: owner.id,
+                        discussionId: row.id, messageId: row.messages[0]!.id, blobId: attachmentId, content: targetAttachmentContent }) };
                 const current = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
                 const fingerprints = deriveAccountEncryptionMigrationKeyFingerprints(current);
                 const request = { toMode, expectedAccountVersion: current.seq,
@@ -473,7 +499,7 @@ describe("account encryption migration .7 SQLite matrix", () => {
                         expectedTitleContent: source.titleContent, titleContent: toMode === 'plain' ? title : { t: 'encrypted' as const, c: 'sealed-title' },
                         dataEncryptionKey: toMode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER : encryptedKey,
                         messages: source.messages.map(message => ({ id: message.id, expectedContent: message.content,
-                            content: toMode === 'plain' ? content : { t: 'encrypted' as const, c: 'sealed-message' } })),
+                            content: toMode === 'plain' ? content : { t: 'encrypted' as const, c: 'sealed-message' }, attachments: [attachment] })),
                         recipientKeyEnvelopes: toMode === 'plain' ? [] : [{ recipientAccountId: recipient.id, encryptedDataKey: recipientKey,
                             recipientContentPublicKeyFingerprint: source.recipients.recipients.find(item => item.recipientAccountId === recipient.id)!.contentPublicKeyFingerprint! }] }] } };
                 const payload = toMode === 'e2ee' ? signPlainToE2eeRequest({ accountId: owner.id, signingSecretKey: signing.secretKey,
@@ -482,6 +508,9 @@ describe("account encryption migration .7 SQLite matrix", () => {
                 if (toMode === 'e2ee') {
                     const item = request.discussions.items[0]!;
                     for (const discussions of [undefined, { items: [{ ...item, messages: [] }] },
+                        { items: [{ ...item, messages: item.messages.map(message => ({ ...message, attachments: [] })) }] },
+                        { items: [{ ...item, messages: item.messages.map(message => ({ ...message, attachments: [{ ...attachment,
+                            expectedContentSha256: '0'.repeat(64) }] })) }] },
                         { items: [{ ...item, recipientKeyEnvelopes: [] }] },
                         { items: [{ ...item, expectedTitleContent: { t: 'plain' as const, v: { v: 1, title: 'Stale source' } } }] }]) {
                         const { discussions: _completeCensus, ...withoutDiscussions } = request;
@@ -493,6 +522,13 @@ describe("account encryption migration .7 SQLite matrix", () => {
                         expect(await db.account.findUniqueOrThrow({ where: { id: owner.id } })).toMatchObject({ encryptionMode: 'plain' });
                         expect(await db.discussion.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ encryptionMode: 'plain', titleContent: title });
                     }
+                    await db.account.update({ where: { id: recipient.id }, data: createSignedAccountContentBinding() });
+                    try {
+                        const staleRecipient = await app.inject(options);
+                        expect(staleRecipient.statusCode, staleRecipient.body).toBe(400);
+                        expect((await db.discussionAttachment.findUniqueOrThrow({ where: { blobId: attachmentId } })).storageKey).toBe(sourceAttachment.storageKey);
+                        expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).encryptionMode).toBe('plain');
+                    } finally { await db.account.update({ where: { id: recipient.id }, data: recipientBinding }); }
                 }
                 const response = await app.inject(options);
                 expect(response.statusCode, response.body).toBe(200);
@@ -502,6 +538,10 @@ describe("account encryption migration .7 SQLite matrix", () => {
                         seq: 1, localId: row.messages[0]!.localId, requestEqualityEvidenceV1: row.messages[0]!.requestEqualityEvidenceV1 })],
                     accountGrants: [expect.objectContaining({ accountId: recipient.id, accessLevel: 'view' })] });
                 expect(committed.keyEnvelopes).toHaveLength(toMode === 'e2ee' ? 1 : 0);
+                const committedAttachment = await db.discussionAttachment.findUniqueOrThrow({ where: { blobId: attachmentId } });
+                expect(committedAttachment).toMatchObject({ messageId: row.messages[0]!.id, encryptionMode: toMode });
+                expect(committedAttachment.storageKey).not.toBe(sourceAttachment.storageKey);
+                expect(await openDiscussionAttachmentBytes(committedAttachment)).toEqual(targetBytes);
                 const accessed = await getDiscussion({ discussionId: row.id, actorAccountId: recipient.id,
                     authentication: createPresentUserSessionAccessAuthentication() });
                 expect(accessed).toMatchObject({ ok: true, value: { discussion: { encryptionMode: toMode, keyReadiness: true } } });

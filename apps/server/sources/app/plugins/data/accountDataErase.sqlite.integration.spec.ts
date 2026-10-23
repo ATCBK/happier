@@ -3,9 +3,11 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as blobFiles from '@/storage/blob/files';
 import type { Prisma } from "@prisma/client";
+import * as privacyKit from 'privacy-kit';
 import {
     ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION,
     PluginAccountDataEraseServerOutputV1Schema,
+    ARTIFACT_PLAIN_DATA_KEY_MARKER,
 } from "@happier-dev/protocol";
 
 import { pluginDataRoutes } from "@/app/api/routes/plugins/data/pluginDataRoutes";
@@ -236,6 +238,52 @@ describe("plugin Account data erasure", () => {
             accountId: "missing-plugin-data-account",
             pluginId: PLUGIN_ID,
         }))).resolves.toEqual({ status: "account-not-found" });
+    });
+
+    it('erases owned archived Discussion bytes privately and preserves foreign bytes when a recipient is erased', async () => {
+        const { deleteAccountForErasure } = await import('./accountDataErase');
+        await createPlainAccount('attachment-owner');
+        await createPlainAccount('attachment-recipient');
+        const discussion = await db.discussion.create({ data: { ownerAccountId: 'attachment-owner', createdByAccountId: 'attachment-owner',
+            creationLocalId: 'erasure-discussion', encryptionMode: 'plain', dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            titleContent: { t: 'plain', v: { v: 1, title: 'Archived' } }, lastMessageAt: new Date(), archivedAt: new Date(),
+            creationEqualityEvidenceV1: { kind: 'plainDigest', digest: 'A'.repeat(43) },
+            messages: { create: { localId: 'erasure-message', seq: 1, authorAccountId: 'attachment-owner',
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'File' }] } },
+                requestEqualityEvidenceV1: { kind: 'plainDigest', digest: 'B'.repeat(43) } } },
+            accountGrants: { create: { accountId: 'attachment-recipient', accessLevel: 'view', createdByAccountId: 'attachment-owner' } },
+        }, include: { messages: true } });
+        const blobId = 'a70dc166-a682-42cf-a1bf-09cc07dadcaa';
+        const storageKey = `discussions/${blobId}/retained`;
+        await db.discussionAttachment.create({ data: { blobId, messageId: discussion.messages[0]!.id,
+            storageKey, encryptionMode: 'plain', storedSizeBytes: 7n } });
+        const rejectedKey = `discussions/${blobId}/rejected`;
+        await db.uploadedFile.create({ data: { accountId: 'attachment-owner', path: rejectedKey,
+            reuseKey: 'discussion-attachment-rejected-v1:retained' } });
+        const stagedKey = `discussions/${blobId}/staged`;
+        await db.uploadedFile.create({ data: { accountId: 'attachment-owner', path: stagedKey,
+            reuseKey: `discussion-attachment-conversion-v1:${blobId}:e2ee:35` } });
+        const removePrivate = vi.spyOn(blobFiles, 'deletePrivateFile').mockResolvedValue(undefined);
+        const removePublic = vi.spyOn(blobFiles, 'deletePublicFile').mockResolvedValue(undefined);
+        expect(await deleteAccountForErasure({ accountId: 'attachment-recipient' })).toEqual({ status: 'deleted' });
+        expect(removePrivate).not.toHaveBeenCalled();
+        expect(await db.discussionAttachment.count()).toBe(1);
+        const pending = await db.uploadedFile.create({ data: { accountId: 'attachment-owner',
+            path: `discussions/${blobId}/writing`, reuseKey: `discussion-attachment-writing-v1:${blobId}` } });
+        expect(await deleteAccountForErasure({ accountId: 'attachment-owner' })).toMatchObject({ status: 'failed', code: 'account_erasure_blob_delete_failed' });
+        expect((await db.account.findUniqueOrThrow({ where: { id: 'attachment-owner' } })).status).toBe('active');
+        expect(removePrivate).not.toHaveBeenCalled();
+        await db.uploadedFile.delete({ where: { id: pending.id } });
+        removePrivate.mockRejectedValueOnce(new Error('Private storage unavailable'));
+        expect(await deleteAccountForErasure({ accountId: 'attachment-owner' })).toMatchObject({ status: 'failed', code: 'account_erasure_blob_delete_failed' });
+        expect(await db.discussionAttachment.count()).toBe(1);
+        expect(await db.uploadedFile.count({ where: { accountId: 'attachment-owner', path: rejectedKey } })).toBe(1);
+        removePrivate.mockResolvedValue(undefined);
+        expect(await deleteAccountForErasure({ accountId: 'attachment-owner' })).toEqual({ status: 'deleted' });
+        expect(removePrivate).toHaveBeenCalledWith(storageKey);
+        expect(removePrivate).toHaveBeenCalledWith(rejectedKey);
+        expect(removePrivate).toHaveBeenCalledWith(stagedKey);
+        expect(removePublic).not.toHaveBeenCalled();
     });
 
     it('reviews retained native custody before the existing authenticated plugin data erase mutates either data destination', async () => {

@@ -66,6 +66,8 @@ import {
 } from "@/app/artifacts/artifactWriteService";
 import { prepareArtifactAccountEncryptionConversionBlobs } from '@/app/artifacts/artifactEncryptionConversionBlobService';
 import { cleanupRejectedArtifactBlobUploads } from '@/app/artifacts/artifactBlobService';
+import { prepareDiscussionAttachmentAccountEncryptionConversions } from '@/app/discussions/attachmentEncryptionConversion';
+import { cleanupRejectedDiscussionAttachmentUploads } from '@/app/discussions/attachmentService';
 import {
     matchAccountJsonKvEncryptionMigrationPostStateInTx,
     AccountJsonKvEncryptionMigrationConflictError,
@@ -951,6 +953,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
 
         try {
             const preparedArtifactBlobs = await prepareArtifactAccountEncryptionConversionBlobs({ accountId: userId, directive: artifacts });
+            const preparedDiscussionAttachments = await prepareDiscussionAttachmentAccountEncryptionConversions({ accountId: userId, directive: discussions });
             const result = await inTx(async (tx) => {
                 const fence =
                     await acquireAccountEncryptionTransitionCoordinatorFenceInTx(
@@ -1156,6 +1159,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         });
                     const discussionsPostState = await matchDiscussionAccountEncryptionMigrationPostStateInTx(tx, {
                         accountId: userId, toMode, directive: replayRequest.discussions,
+                        preparedAttachments: preparedDiscussionAttachments,
                     });
                     const sessionsPostState =
                         await matchSessionAccountEncryptionMigrationPostStateInTx({
@@ -1810,6 +1814,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
 
                 const discussionMigration = await migrateDiscussionAccountEncryptionInTx(tx, {
                     accountId: userId, fromMode: currentMode, toMode, directive: discussions,
+                    preparedAttachments: preparedDiscussionAttachments,
                 });
                 if (discussionMigration.status !== 'applied') {
                     throw new AccountEncryptionMigrationDomainRejectedError('discussions', discussionMigration.status);
@@ -2026,6 +2031,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
             }
             // Activation has committed. A failed physical delete retains exact retry custody, not a failed mode change.
             await cleanupRejectedArtifactBlobUploads(userId).catch(error => request.log.error({ err: error }, 'Artifact conversion cleanup retained for retry'));
+            await cleanupRejectedDiscussionAttachmentUploads(userId).catch(error => request.log.error({ err: error }, 'Discussion conversion cleanup retained for retry'));
             return reply.send(AccountEncryptionMigrateSuccessResponseSchema.parse({
                 success: true,
                 mode: result.mode,
