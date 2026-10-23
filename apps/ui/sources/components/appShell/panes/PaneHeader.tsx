@@ -153,6 +153,8 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
             if (joined && items.length > 0) items[items.length - 1]!.push(fact);
             else items.push([fact]);
         });
+        // The final fact's own trailing words (who wrote it, a copy control) wrap with that fact, inside the row.
+        if (props.lineEnd) items[items.length - 1]!.push(<React.Fragment key="lineEnd">{props.lineEnd}</React.Fragment>);
         return (
             <View style={[styles.line, styles.largeLine]}>
                 <View
@@ -170,7 +172,6 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
                         ))}
                     </View>
                 </View>
-                {props.lineEnd}
             </View>
         );
     }

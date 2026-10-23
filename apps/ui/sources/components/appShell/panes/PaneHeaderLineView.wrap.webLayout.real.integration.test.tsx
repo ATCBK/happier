@@ -38,7 +38,7 @@ const FACTS = [
   '55.8 KB',
 ] as const;
 
-async function measureLargeLine(width: number) {
+async function measureLargeLine(width: number, lineEnd?: React.ReactNode) {
   const { PaneHeaderLineView } = await import('./PaneHeader');
   const { Text } = await import('@/components/ui/text/Text');
   host = document.createElement('div');
@@ -55,13 +55,14 @@ async function measureLargeLine(width: number) {
             leadingSeparated: true,
             segments: FACTS,
           }}
+          lineEnd={lineEnd}
         />
       </View>,
     );
   });
   return measureWebLayout(host, {
     viewport: { width: Math.max(width, 400), height: 300 },
-    texts: ['·', 'assets', ...FACTS],
+    texts: ['·', 'assets', 'by Codex 3m ago', ...FACTS],
   });
 }
 
@@ -117,5 +118,17 @@ describe("a phone header's wrapped facts, as a browser lays them out", () => {
         .textRects('·')
         .filter((dot) => dot.right > layout.rect('header.subtitle').left + 0.5),
     ).toHaveLength(FACTS.length);
+  });
+
+  it('wraps the final fact\'s own trailing words with it, never floating them beside the facts', async () => {
+    const { Text } = await import('@/components/ui/text/Text');
+    const layout = await measureLargeLine(300, <Text>by Codex 3m ago</Text>);
+    const clip = layout.rect('header.subtitle');
+    const last = layout.textRects(FACTS[FACTS.length - 1]!)[0]!;
+    const byline = layout.textRects('by Codex 3m ago')[0]!;
+    // It reads after the last fact on that fact's line, inside the wrapped row.
+    expect(sameLine(byline, last)).toBe(true);
+    expect(byline.left).toBeGreaterThanOrEqual(last.right - 0.5);
+    expect(byline.right).toBeLessThanOrEqual(clip.right + 0.5);
   });
 });
