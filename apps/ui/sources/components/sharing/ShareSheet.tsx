@@ -30,6 +30,11 @@ export type ShareSheetProps<TRow extends ShareGrantRowModel> = Readonly<{
     /** A host's explicit navigation intent opens a row without replacing the sheet or its state. */
     openRowRequest?: Readonly<{ key: string }>;
     testID: string;
+    /**
+     * A floating host's bound for the sheet's list. The list owns its own scroll (SelectionList contract), so a
+     * popover passes its height here and keeps its own surface unscrolled instead of nesting a second scroller.
+     */
+    maxHeight?: number;
 }>;
 
 /**
@@ -114,7 +119,9 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
             autoFocusInputOnWeb={presentation === 'compact'} autoFocusInputOnNative={false}
             surface={presentation === 'inline' ? 'none' : undefined}
             bodyFooter={presentation !== 'compact' && !directoryKind ? <ShareHelp adapter={adapter} testID={`${idPrefix}${adapter.namespace}-help`} /> : undefined}
-            fillAvailableSpace={presentation === 'full'} heightBehavior={presentation === 'full' ? 'content' : 'stabilizedContentHeight'}
+            fillAvailableSpace={presentation === 'full'}
+            {...(props.maxHeight === undefined ? { heightBehavior: presentation === 'full' ? 'content' as const : 'stabilizedContentHeight' as const }
+                : { maxHeight: props.maxHeight, heightBehavior: 'fixedToMaxHeight' as const })}
             pagination={source ? { hasMore: source.hasMore, loadingMore: source.loadingMore, requestKey: source.cursor,
                 error: source.error?.message, onEndReached: () => actions.loadMore(source.kind), onRetry: () => actions.retryDirectory(source.kind),
                 loadingLabel: t('common.loading'), moreLabel: t('shareSheet.browseAll'), retryLabel: t('common.retry'),
