@@ -1,9 +1,11 @@
+import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installTimerCensus } from '@/dev/testkit/performance/timerCensus';
 import { formatNextScheduledRun, readNextScheduledRunRefreshAtMs } from '@/components/workflows/triggers/formatTriggerSummary';
-import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
+import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs, readShortRelativeTimeRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 
 import {
     createSessionListRuntimeClock,
@@ -12,6 +14,7 @@ import {
     useSessionListRuntimeDeadlineNowMs,
     useSessionListRuntimeNowMs,
     useSessionListRuntimeWake,
+    type SessionListRuntimeClock,
 } from './sessionListRuntimeClock';
 
 afterEach(() => {
@@ -30,6 +33,38 @@ function useClockConsumer(params: {
 }
 
 describe('sessionListRuntimeClock', () => {
+    it('does not invoke 128 old-date subscribers or read their snapshots for ten recent-label boundaries', async () => {
+        vi.useFakeTimers();
+        const now = Date.parse('2026-09-30T12:00:00.000Z');
+        vi.setSystemTime(now);
+        const clock = createSessionListRuntimeClock();
+        let oldCallbacks = 0, oldSnapshotReads = 0;
+        // Observation-only forwarding adapter: all decisions, snapshots and
+        // physical timer scheduling remain in this one real canonical clock.
+        const oldClock: SessionListRuntimeClock = {
+            ...clock,
+            getNowMs: () => { oldSnapshotReads += 1; return clock.getNowMs(); },
+            subscribe: listener => clock.subscribe(() => { oldCallbacks += 1; listener(); }),
+            subscribeWake: (token, listener) => clock.subscribeWake(token, () => { oldCallbacks += 1; listener(); }),
+        };
+        const nextOldBoundary = () => now + 86_400_000;
+        function OldDate() { return String(useSessionListRuntimeDeadlineNowMs(nextOldBoundary, true, oldClock)); }
+        function RecentDate(props: { at: number }) {
+            const next = React.useCallback((at: number) => readShortRelativeTimeRefreshAtMs(props.at, at), [props.at]);
+            return String(useSessionListRuntimeDeadlineNowMs(next, true, clock));
+        }
+        const screen = await renderScreen(<>{Array.from({ length: 128 }, (_, index) => <OldDate key={index} />)}
+            <RecentDate at={now - 50_000} /><RecentDate at={now - 20_000} /></>);
+        oldCallbacks = 0; oldSnapshotReads = 0;
+        for (const step of [10_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 20_000]) {
+            await act(async () => { vi.advanceTimersByTime(step); });
+        }
+        expect(oldCallbacks).toBe(0);
+        expect(oldSnapshotReads).toBe(0);
+        expect(vi.getTimerCount()).toBe(1);
+        await act(async () => screen.tree.unmount());
+        expect(vi.getTimerCount()).toBe(0);
+    });
     it('keeps distant display deadlines within the platform timer range without expiring them early', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000);
@@ -45,6 +80,22 @@ describe('sessionListRuntimeClock', () => {
             await flushHookEffects({ advanceTimersMs: target - Date.now(), cycles: 1, turns: 2 });
             expect(status.getCurrent()).toBe(target);
         } finally { await status.unmount(); timers.mockRestore(); }
+    });
+    it('retains one canonical instant for local-only observers, then refreshes after their last unsubscribe', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const clock = createSessionListRuntimeClock();
+        const next = (nowMs: number) => nowMs < 2_000 ? 2_000 : null;
+        const status = await renderHook(() => useSessionListRuntimeDeadlineNowMs(next, true, clock));
+        await flushHookEffects({ advanceTimersMs: 1_000, cycles: 1, turns: 2 });
+        expect(status.getCurrent()).toBe(2_000);
+        expect(vi.getTimerCount()).toBe(0);
+        vi.setSystemTime(5_000);
+        expect(clock.getNowMs()).toBe(2_000);
+        await status.unmount();
+        vi.setSystemTime(50_000);
+        expect(clock.getNowMs()).toBe(50_000);
+        expect(vi.getTimerCount()).toBe(0);
     });
     it('keeps settled Home row observers timer-free until a named consumer requests a deadline', async () => {
         vi.useFakeTimers();

@@ -18,11 +18,22 @@ const { removeServerProfile, upsertServerProfile } = await import('@/sync/domain
 afterEach(async () => { await standardCleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('Approval context age leaf', () => {
-    it('advances a retained offline Home age without a source update or parent repaint', async () => {
+    it('advances a retained offline Home age only at its display boundary without a source update or parent repaint', async () => {
         const now = Date.parse('2026-09-30T12:00:00.000Z');
         vi.useFakeTimers({ now });
+        let clockFires = 0;
+        const timeout = globalThis.setTimeout, interval = globalThis.setInterval;
+        const ownsTimer = () => /[\\/](agentActivityClock|sessionListRuntimeClock)\.ts:/.test(new Error().stack ?? '');
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+            const owned = ownsTimer();
+            return timeout(() => { if (owned) clockFires += 1; callback(...args); }, delay);
+        });
+        vi.spyOn(globalThis, 'setInterval').mockImplementation((callback, delay, ...args) => {
+            const owned = ownsTimer();
+            return interval(() => { if (owned) clockFires += 1; callback(...args); }, delay);
+        });
         const facts = buildSessionContextFacts({ address: { serverId: 'home', sessionId: 'session' },
-            homeName: 'Home', homeObservation: { phase: 'offline', lastSuccessAt: now - 60_000 } });
+            homeName: 'Home', homeObservation: { phase: 'offline', lastSuccessAt: now - 3_570_000 } });
         const context = projectSessionContextPresentation(facts);
         const paints = vi.fn();
         function Parent() {
@@ -31,12 +42,17 @@ describe('Approval context age leaf', () => {
                 context={context} contextFacts={facts} homeName="Home" requesterAgentId={null} requesterSurface="" />;
         }
         const screen = await renderScreen(<Parent />);
-        expect(screen.getTextContent()).toContain('Last updated 1m');
+        expect(screen.getTextContent()).toContain('Last updated 59m');
         const before = paints.mock.calls.length;
-        await act(async () => { vi.advanceTimersByTime(60_000); });
-        expect(screen.getTextContent()).toContain('Last updated 2m');
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        expect(screen.getTextContent()).toContain('Last updated 1h');
+        await act(async () => { vi.advanceTimersByTime(270_000); });
+        expect(clockFires).toBe(1);
         expect(screen.getTextContent()).toContain('session.homeFreshness.offline');
         expect(paints.mock.calls.length).toBe(before);
+        await screen.update(<ApprovalSessionContextCard session={null} sessionName={null} machine={null} serverId="home"
+            context={context} homeName="Home" requesterAgentId={null} requesterSurface="" />);
+        expect(vi.getTimerCount()).toBe(0);
     });
 });
 

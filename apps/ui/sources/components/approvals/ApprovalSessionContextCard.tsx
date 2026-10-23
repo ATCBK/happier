@@ -12,6 +12,7 @@ import {
     resolveSessionContextLine,
     projectSessionContextPresentation,
     resolveSessionHomeLastUpdatedLabel,
+    readSessionHomeLastUpdatedLabelRefreshAtMs,
     type SessionContextFacts,
     type SessionContextPresentation,
 } from '@/sync/domains/session/presentation/sessionContextPresentation';
@@ -22,7 +23,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { readApprovalSessionEndpointLabels } from './approvalEndpointLabels';
-import { useWorkClockSnapshot } from '@/components/sessions/agents/presentation/agentActivityClock';
+import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import type { ApprovalSessionReadingStatus } from './useApprovalSessionReading';
 import {
     describeApprovalAgent,
@@ -36,15 +38,15 @@ const ApprovalContextLine = React.memo(function ApprovalContextLine(props: Reado
     facts?: SessionContextFacts | null;
     showWorkspace: boolean;
 }>) {
-    const snapshotAt = React.useCallback((nowMs: number) => {
-        const context = props.facts ? projectSessionContextPresentation({ ...props.facts, freshness: {
-            ...props.facts.freshness,
-            lastUpdatedLabel: resolveSessionHomeLastUpdatedLabel(props.facts.freshness, nowMs),
-        } }) : props.context;
-        return resolveSessionContextLine(context ? { segments: context.segments.filter((segment) => segment.kind !== 'home') } : null,
-            { showWorkspace: props.showWorkspace });
-    }, [props.context, props.facts, props.showWorkspace]);
-    const line = useWorkClockSnapshot(snapshotAt);
+    const readNextRefresh = React.useCallback((nowMs: number) => props.facts
+        ? readSessionHomeLastUpdatedLabelRefreshAtMs(props.facts.freshness, nowMs) : null, [props.facts]);
+    const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, useHostActivelyViewed());
+    const context = props.facts ? projectSessionContextPresentation({ ...props.facts, freshness: {
+        ...props.facts.freshness,
+        lastUpdatedLabel: resolveSessionHomeLastUpdatedLabel(props.facts.freshness, nowMs),
+    } }) : props.context;
+    const line = resolveSessionContextLine(context ? { segments: context.segments.filter((segment) => segment.kind !== 'home') } : null,
+        { showWorkspace: props.showWorkspace });
     return line ? <Text style={styles.homeLabel}>{line}</Text> : null;
 });
 

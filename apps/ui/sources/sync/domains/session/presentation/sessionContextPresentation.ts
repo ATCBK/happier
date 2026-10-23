@@ -269,19 +269,33 @@ export function readSessionHomeLastUpdatedRefreshAtMs(
     observation: SessionListHomeObservation | null | undefined,
     nowMs: number,
 ): number | null {
-    const freshness = resolveFreshness(observation);
+    return readSessionHomeLastUpdatedLabelRefreshAtMs(resolveFreshness(observation), nowMs);
+}
+
+function readSessionHomeLastUpdatedAt(
+    freshness: Pick<SessionHomeFreshnessPresentation, 'state' | 'lastSuccessAt'>,
+): number | null {
     if (freshness.state === 'current' || freshness.state === 'unknown' || freshness.lastSuccessAt === null) return null;
-    return readShortRelativeTimeRefreshAtMs(freshness.lastSuccessAt, nowMs);
+    return freshness.lastSuccessAt;
+}
+
+/** The same display boundary for callers that already hold the canonical freshness facts. */
+export function readSessionHomeLastUpdatedLabelRefreshAtMs(
+    freshness: Pick<SessionHomeFreshnessPresentation, 'state' | 'lastSuccessAt'>,
+    nowMs: number,
+): number | null {
+    const atMs = readSessionHomeLastUpdatedAt(freshness);
+    return atMs === null ? null : readShortRelativeTimeRefreshAtMs(atMs, nowMs);
 }
 
 export function resolveSessionHomeLastUpdatedLabel(
     freshness: Pick<SessionHomeFreshnessPresentation, 'state' | 'lastSuccessAt'>,
     nowMs: number | null | undefined,
 ): string | null {
-    if (freshness.state === 'current' || freshness.state === 'unknown') return null;
-    if (freshness.lastSuccessAt === null) return null;
+    const atMs = readSessionHomeLastUpdatedAt(freshness);
+    if (atMs === null) return null;
     if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return null;
-    const ago = formatShortRelativeTimeAt(freshness.lastSuccessAt, nowMs);
+    const ago = formatShortRelativeTimeAt(atMs, nowMs);
     return ago ? t('session.homeFreshness.lastUpdated', { ago }) : null;
 }
 

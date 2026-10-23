@@ -1,5 +1,7 @@
 import * as React from 'react';
-import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTimeAt, readShortRelativeTimeRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
+import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 /**
  * One shared one-second tick for every running agent clock on screen.
@@ -41,16 +43,10 @@ export function useAgentActivityClockNow(): number {
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-const subscribeFrozen = () => () => {};
-
-/** One shared clock; a leaf subscribes to its displayed snapshot, not every elapsed second. */
-export function useWorkClockSnapshot<T extends string | number | null>(snapshotAt: (nowMs: number) => T, fixedNowMs?: number): T {
-    const snapshot = React.useCallback(() => snapshotAt(fixedNowMs ?? nowMs), [fixedNowMs, snapshotAt]);
-    return React.useSyncExternalStore(fixedNowMs === undefined ? subscribe : subscribeFrozen, snapshot, snapshot);
-}
-
-/** Relative dates share the live clock, but repaint only when their displayed words change. */
+/** Relative leaves request only their next displayed age; hidden/fixed snapshots request nothing. */
 export function useWorkRelativeTime(timestamp: number, fixedNowMs?: number): string {
-    const snapshotAt = React.useCallback((clockMs: number) => formatShortRelativeTimeAt(timestamp, clockMs), [timestamp]);
-    return useWorkClockSnapshot(snapshotAt, fixedNowMs);
+    const readNextRefresh = React.useCallback((clockMs: number) => readShortRelativeTimeRefreshAtMs(timestamp, clockMs), [timestamp]);
+    const activelyViewed = useHostActivelyViewed();
+    const clockMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, activelyViewed && fixedNowMs === undefined);
+    return formatShortRelativeTimeAt(timestamp, fixedNowMs ?? clockMs);
 }

@@ -14,6 +14,7 @@ import {
     projectSessionContextPresentation,
     resolveSessionContextLine,
     readSessionHomeLastUpdatedRefreshAtMs,
+    readSessionHomeLastUpdatedLabelRefreshAtMs,
 } from './sessionContextPresentation';
 
 function makeAwareness(params: Readonly<{
@@ -59,6 +60,16 @@ describe('sessionContextPresentation', () => {
         expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'error', lastSuccessAt: 1_000 }, 91_000)).toBe(121_000);
         expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'ready', lastSuccessAt: 1_000 }, 91_000)).toBeNull();
         expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'offline', lastSuccessAt: null }, 91_000)).toBeNull();
+        for (const [homeObservation, boundary] of [
+            [{ phase: 'offline', lastSuccessAt: 1_000 }, 121_000],
+            [{ phase: 'error', lastSuccessAt: 1_000 }, 121_000],
+            [{ phase: 'ready', lastSuccessAt: 1_000 }, null],
+            [{ phase: 'offline', lastSuccessAt: null }, null],
+            [{ phase: 'offline', lastSuccessAt: 92_000 }, 92_000],
+        ] as const) {
+            const facts = buildSessionContextFacts({ address: { serverId: 'home', sessionId: 'session' }, homeObservation });
+            expect(readSessionHomeLastUpdatedLabelRefreshAtMs(facts.freshness, 91_000)).toBe(boundary);
+        }
     });
     it('uses the canonical Home label rather than a relay-derived profile or caller name', () => {
         const host = 'happier-agent-qa-orc.localhost:3017';
