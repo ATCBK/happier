@@ -1,8 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { vi } from 'vitest';
+import { onTestFailed, vi } from 'vitest';
 import axios from 'axios';
+import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { SESSION_FOLLOW_HTTP_PATHS_V1, SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
+import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 import { ProviderConnectionIdSchema, type AccountEncryptionCurrentnessResponse, type SessionExecutionRunBrokerAuthorityRequestV1, type SessionExecutionRunBrokerAuthorityResponseV1 } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import { reloadConfiguration } from '@/configuration';
@@ -26,6 +29,7 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import { admitRequesterSessionBootstrap, type RequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { createRequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null,
   resolveRunAuthority: null as ((request: SessionExecutionRunBrokerAuthorityRequestV1, signal?: AbortSignal) => SessionExecutionRunBrokerAuthorityResponseV1 | Promise<SessionExecutionRunBrokerAuthorityResponseV1>) | null,
@@ -66,24 +70,28 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: async (in
   status: 'current', executionRunId: input.request.executionRunId, occurrenceId: input.request.expectedOccurrenceId,
   parentSessionId: 'parent-session', intent: 'review', runtimeState: 'idle', teamCredentialProviderModel: null,
 }) }));
-vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, infoFile: () => {}, warn: () => {}, error: () => {} } }));
+vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, infoFile: () => {}, warn: () => {}, warnLocalFile: () => {}, error: () => {} } }));
 
 /** A genuine installed Agent/Provider and live daemon service dispatcher for
  * consumer delivery tests. No source projection, runtime owner or token is
  * fabricated by this fixture. */
-export async function createAttachedManagedRunFixture(input: Readonly<{ directory?: string; issuedRequester?: boolean;
+export async function createAttachedManagedRunFixture(input: Readonly<{ directory?: string; issuedRequester?: boolean; coldProviderCatalog?: boolean;
   resolveRunAuthority?(request: SessionExecutionRunBrokerAuthorityRequestV1, signal?: AbortSignal): SessionExecutionRunBrokerAuthorityResponseV1 | Promise<SessionExecutionRunBrokerAuthorityResponseV1>;
   browserStartup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
-    'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'> & Readonly<{
+    'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'
+    | 'resolveCurrentMachineExecutionOriginContext'> & Readonly<{
       readMachineMemory?: () => import('@happier-dev/protocol').MachineVitalsSampleV1['memory'] | null;
     }>;
 }> = {}) {
+  let preparationPhase = 'managed Run fixture';
+  onTestFailed(() => { console.info('Attached managed Run fixture phase:', preparationPhase); });
   boundary.resolveRunAuthority = input.resolveRunAuthority ?? null;
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-attached-managed-run-'));
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR']);
   env.patch({ HAPPIER_HOME_DIR: join(directory, 'home') });
   reloadConfiguration();
   const fixture = await createManagedRunLaunchFixture({ directory, controller: pluginReloadController, physicalGateway: true });
+  preparationPhase = 'initial Provider authorization';
   const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.fixture`;
   const credentials: StoredCredentials = { token, encryption: null };
   const snapshot = { ...fixture.snapshot, scopeKey: resolveAccountSettingsScopeKey(credentials) };
@@ -92,11 +100,12 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
   let requester: RequesterSessionRuntimeContext | null = null;
   let machineAdmissionCurrent = true;
   let restoreHome: (() => void) | null = null;
+  let requesterChannel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>> | null = null;
   const sourceDiagnostics: { stage: string; error: string | null } = { stage: 'not_opened', error: null };
   let releaseAuthorization: (() => void | Promise<void>) | null = null;
   const cleanup = async () => {
     boundary.refusedCapabilityRoot = '';
-    try { await requester?.dispose(); await daemon?.stopControlServer(); await releaseAuthorization?.(); await fixture.cleanup(); }
+    try { await requester?.dispose(); await requesterChannel?.close(); await daemon?.stopControlServer(); await releaseAuthorization?.(); await fixture.cleanup(); }
     finally {
       restoreHome?.();
       resetActiveAccountSettingsSnapshotForTests(); env.restore(); reloadConfiguration(); boundary.control = null; boundary.resolveRunAuthority = null;
@@ -131,6 +140,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
     const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
     const spawnResourceCleanupByPid = new Map<number, () => void | Promise<void>>();
     const connectedServiceRuntimeRegistry = new ConnectedServiceRuntimeRegistry();
+    preparationPhase = 'daemon control composition';
     daemon = await startDaemonSessionControlRuntime({ machineId: fixture.machineId, serverId: 'home', serverBaseUrl: 'https://home.test',
       ...input.browserStartup,
       externalActionAccountId: 'account', credentials, api: {} as never,
@@ -173,14 +183,26 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: async () => {},
       requestShutdown: () => {}, processEnv: { NODE_ENV: 'test' } });
     if (input.issuedRequester) {
+      preparationPhase = 'requester bootstrap';
       const issuedToken = `e30.${Buffer.from(JSON.stringify({ sub: 'account', jti: 'issued-requester' })).toString('base64url')}.fixture`;
       const home = vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
         if (new URL(url).origin !== 'https://home.test') throw new Error('Unexpected requester Home');
         if (config?.headers?.Authorization !== `Bearer ${issuedToken}`) throw new Error('Wrong requester credential');
         const path = new URL(url).pathname;
+        if (path === SESSION_FOLLOW_HTTP_PATHS_V1.preferences) return { status: 200,
+          data: SessionAutoFollowPreferencesResponseSchema.parse({ ...DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1,
+            runReportPolicy: { preset: 'important' } }) };
         if (path.endsWith('/profile')) return { status: 200, data: { id: 'account' } };
         if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } };
         if (path === '/v1/artifacts') return { status: 200, data: [] };
+        if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+          status: 'present', revision: 1, content: { t: 'plain', v: fixture.snapshot.providerConnectionsCatalog?.status === 'ready'
+            ? fixture.snapshot.providerConnectionsCatalog.catalog : null },
+        } };
+        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
         if (path === '/v4/connect/qualified/accounts') return { status: 200, data: {
           service: { pluginId: fixture.gateway!.pluginId, localId: 'accounts' }, accounts: [{
             ref: { service: { pluginId: fixture.gateway!.pluginId, localId: 'accounts' }, accountId: 'upstream-account' },
@@ -191,6 +213,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
         return { status: 200, data: { content: { t: 'plain', v: fixture.snapshot.settings }, version: 1 } };
       });
       restoreHome = () => home.mockRestore();
+      requesterChannel = await createRequesterCurrentnessSocketHarness();
       const admission = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: issuedToken } },
         existingSessionId: 'parent-session', boundary: { serverId: 'home', serverHttpBaseUrl: 'https://home.test', happyHomeDir: fixture.happyHomeDir },
         context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account',
@@ -198,9 +221,10 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
           verifyMachineAdmissionCurrent: async () => machineAdmissionCurrent } });
       if (!admission) throw new Error('Expected actual requester bootstrap admission');
       const catalog = fixture.snapshot.providerConnectionsCatalog;
-      if (!catalog || !await admission.admitted.savedSecretOperationContext.commitProviderConnectionsCatalog({
+      if (!input.coldProviderCatalog && (!catalog || !await admission.admitted.savedSecretOperationContext.commitProviderConnectionsCatalog({
         expectedSettingsVersion: admission.admitted.accountSettingsContext.settingsVersion, catalog,
-      })) throw new Error('Expected owned Provider catalog admission');
+      }))) throw new Error('Expected owned Provider catalog admission');
+      preparationPhase = 'requester runtime';
       requester = await createRequesterSessionRuntimeContext({ bootstrap: admission.admitted,
         activeServerDir: fixture.happyHomeDir, connectedServicesMaterializationBaseDir: join(fixture.happyHomeDir, 'issued-connected-services'),
         resolveQualifiedConnectedAccountV4Support: () => 'advertised', coordinatorInput: {
@@ -215,6 +239,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       tracked.requesterWorkAttributionV1 = requester.bootstrap.attribution;
     }
     const service = boundary.control?.agentRuntimeDaemonServices;
+    preparationPhase = 'ready';
     if (!service) throw new Error('Expected genuine private service dispatcher');
     const signal = new AbortController().signal;
     const runner = { pid: process.pid, processStartTimeMs: 1, processCommandHash: 'a'.repeat(64), snapshotIdentity: 'fixture-runner' };
@@ -234,6 +259,9 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
         restore: () => { boundary.refusedCapabilityRoot = ''; },
         readBlockedPaths: () => [...boundary.blockedCapabilityPaths],
       },
+      resolveRunReportPolicy: createSessionRunReportPolicyReader({ serverId: 'home', serverHttpBaseUrl: 'https://home.test',
+        accountId: 'account', readCredentials: async () => requester?.bootstrap.credentials ?? null,
+        isCurrent: async () => await requester?.isCurrent() ?? false }),
       requester, sourceDiagnostics, withdrawRequesterAdmission: () => { machineAdmissionCurrent = false; }, cleanup };
   } catch (error) { await cleanup(); throw error; }
 }

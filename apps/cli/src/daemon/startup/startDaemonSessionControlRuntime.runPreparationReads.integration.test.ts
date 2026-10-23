@@ -20,6 +20,7 @@ it('shares requester observations within each Run authority read and rechecks au
   const readCounts = () => {
     const paths = vi.mocked(axios.get).mock.calls.map(([url]) => new URL(String(url)).pathname);
     return { profile: paths.filter(path => path.endsWith('/profile')).length,
+      accounts: paths.filter(path => path === '/v4/connect/qualified/accounts').length,
       catalog: paths.filter(path => path === '/v1/account/entity-rows/provider-connections').length,
       history: paths.filter(path => path === '/v2/account/settings/history').length };
   };
@@ -40,9 +41,12 @@ it('shares requester observations within each Run authority read and rechecks au
     const after = readCounts();
     // Thirteen Run witnesses each retain a fresh entry and post-RPC fence.
     // The two Account-context acquisitions each share their nested read.
-    // Before this correction these same phases issued 86 Profile reads.
-    expect({ profile: after.profile - before.profile, catalog: after.catalog - before.catalog,
-      history: after.history - before.history, runReads }).toEqual({ profile: 71, catalog: 1, history: 0, runReads: 13 });
+    // Each purpose read shares only its requester entry observation with the
+    // nested Connected Account admission. The post-read fence remains fresh.
+    // Previously ten such entries repeated Profile reads (71 total).
+    expect({ profile: after.profile - before.profile, accounts: after.accounts - before.accounts,
+      catalog: after.catalog - before.catalog, history: after.history - before.history, runReads })
+      .toEqual({ profile: 61, accounts: 11, catalog: 1, history: 0, runReads: 13 });
     // Revocation during the RPC must defeat its otherwise-current Run answer,
     // not just the next request after the preparation checkpoint has ended.
     withdrawDuringRunRead = fixture.withdrawRequesterAdmission;
