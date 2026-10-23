@@ -12,6 +12,8 @@ import {
     signRunnerClaimV1,
     signRunnerMachineContentKeyBindingV1,
     wrapApiTokenEncryptionAccessV1,
+    type ExternalActionExecutionAuthorizationV1,
+    type ExternalActionTargetV1,
 } from "@happier-dev/protocol";
 import {
     EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
@@ -45,6 +47,13 @@ type TestRpcHandler = (
     input: unknown,
     context?: Readonly<{ signal: AbortSignal; authorization?: unknown }>,
 ) => unknown | Promise<unknown>;
+
+type TestExecutionAuthorizationInput = Readonly<{
+    authorization: ExternalActionExecutionAuthorizationV1;
+    effectActionId: string;
+    target: ExternalActionTargetV1;
+    signal?: AbortSignal;
+}>;
 
 type TestSdkClient = Readonly<{
     actions: Readonly<{
@@ -362,9 +371,9 @@ describe("protected SDK Session-targeted transport dispatch to a restricted Runn
         machinesRoutes(app);
         startSocket(app);
         registerExternalActionRoutes(app);
-        let actionHttpRequests = 0;
+        let actionDispatchHttpRequests = 0;
         app.addHook("onRequest", async (request) => {
-            if (request.url.startsWith("/v1/actions/")) actionHttpRequests += 1;
+            if (request.url === "/v1/actions/session.message.send") actionDispatchHttpRequests += 1;
         });
         const endpoint = await home.listen({ host: "127.0.0.1", port: 0 });
 
@@ -379,6 +388,15 @@ describe("protected SDK Session-targeted transport dispatch to a restricted Runn
                 options: unknown,
             ) => void;
         }>("../../../../../cli/src/rpc/handlers/externalAction");
+        const { verifyExternalActionExecutionAuthorizationCurrent } = await importTestModule<{
+            verifyExternalActionExecutionAuthorizationCurrent: (
+                input: TestExecutionAuthorizationInput & Readonly<{
+                    privateKey: Uint8Array;
+                    installationId: string;
+                    serverHttpBaseUrl: string;
+                }>,
+            ) => Promise<boolean>;
+        }>("../../../../../cli/src/api/externalActionExecutionAuthorization");
         const { connect } = await importTestModule<{
             connect: (options: Readonly<{ endpoint: string; token: string }>) => TestSdkClient;
         }>("../../../../../../packages/sdk/src/connect");
@@ -404,7 +422,16 @@ describe("protected SDK Session-targeted transport dispatch to a restricted Runn
             machineId,
             sessionId,
             currentServerId: serverIdentityId,
+            currentServerHttpBaseUrl: endpoint,
             resolveAccountId: async () => account.id,
+            resolveInstallationId: () => installationId,
+            verifyExecutionAuthorization: (input: TestExecutionAuthorizationInput) =>
+                verifyExternalActionExecutionAuthorizationCurrent({
+                    ...input,
+                    privateKey: installationSigning.secretKey,
+                    installationId,
+                    serverHttpBaseUrl: endpoint,
+                }),
             resolveTarget: async ({ target }: { target?: unknown }) => target ?? null,
             resolveEncryption: async () => ({
                 serverIdentityId,
@@ -494,7 +521,7 @@ describe("protected SDK Session-targeted transport dispatch to a restricted Runn
                 { target: { kind: "session", sessionId } },
             );
             expect(result).toEqual({ status: "accepted", localId });
-            expect(actionHttpRequests).toBe(1);
+            expect(actionDispatchHttpRequests).toBe(1);
             expect(executionCount).toBe(1);
             await expect(db.sessionPendingMessage.findUnique({
                 where: { sessionId_localId: { sessionId, localId } },

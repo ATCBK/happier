@@ -1,7 +1,11 @@
 import Fastify from "fastify";
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from "vitest";
 
 import type { LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
+import { LocalServicePublicPreviewCreateFailureV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
 import { registerLocalServiceRoutes } from "./registerRoutes";
@@ -84,7 +88,7 @@ function createRecordingTunnel(recorder: UpstreamRecorder): LocalServicePreviewT
     };
 }
 
-async function buildPublicPreviewApp(recorder: UpstreamRecorder) {
+async function buildPublicPreviewApp(recorder: UpstreamRecorder, env: NodeJS.ProcessEnv = {}) {
     const app = Fastify({ logger: false });
     // The shared bearer preHandler; the public DATA plane is deliberately unauthenticated, so the
     // stub only needs to establish the actor identity the CONTROL routes read.
@@ -94,7 +98,7 @@ async function buildPublicPreviewApp(recorder: UpstreamRecorder) {
     };
 
     registerLocalServiceRoutes(app as never, {
-        env: publicPreviewEnv(),
+        env: { ...publicPreviewEnv(), ...env },
         authorizeSessionAccess: async () => true,
         openTunnel: async () => createRecordingTunnel(recorder),
     });
@@ -127,6 +131,30 @@ async function createExposure(app: Awaited<ReturnType<typeof buildPublicPreviewA
 }
 
 describe("public local-service exposure data plane (composed Fastify)", () => {
+    it('reports an unavailable durable audit sink as availability failure without creating an exposure', async () => {
+        const scratch = await mkdtemp(join(tmpdir(), 'happier-fx89-audit-'));
+        const parentFile = join(scratch, 'not-a-directory');
+        await writeFile(parentFile, 'occupied');
+        const app = await buildPublicPreviewApp({ writes: [] }, {
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__AUDIT_SINK: 'jsonl_file',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__AUDIT_LOG_PATH: join(parentFile, 'audit.jsonl'),
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_AUDIT_SINK: '0',
+        });
+        try {
+            const created = await createExposure(app);
+            expect(created.statusCode).toBe(503);
+            expect(created.json()).toEqual({ error: 'public_preview_unavailable', reasonCode: 'audit_sink_unavailable' });
+            expect(LocalServicePublicPreviewCreateFailureV1Schema.safeParse(created.json()).success).toBe(true);
+            const status = await app.inject({ method: 'POST', url: '/v1/local-services/public/status',
+                payload: { machineId: preview.machineId, sessionId: preview.sessionId, previewId: preview.previewId } });
+            expect(status.statusCode).toBe(200);
+            expect(status.json().snapshot.exposures).toEqual([]);
+        } finally {
+            await app.close();
+            await rm(scratch, { recursive: true, force: true });
+        }
+    });
+
     it("mints the exposure on an isolated per-exposure origin, never the API origin", async () => {
         const recorder: UpstreamRecorder = { writes: [] };
         const app = await buildPublicPreviewApp(recorder);

@@ -12,6 +12,13 @@ import { mintPeerTcpTunnelRelayAuthorizationV2 } from "@/app/machines/peer/media
 import { registerPeerTcpTunnelRelaySocketHandler } from "./registerRelay";
 import { createPeerTcpTunnelRelayBridge } from "./relayBridge";
 import { createRelayTestCoordinator } from "./relayCoordinator.testkit";
+import { TEST_MACHINE_INSTALLATION_ID } from '../../../../testkit/machineAdmissionPersistenceBoundary';
+
+// Persistence is the boundary; the real relay must still check current Machine admission.
+vi.mock('@/storage/db', async () => {
+    const { createMachineAdmissionPersistenceBoundary } = await import('../../../../testkit/machineAdmissionPersistenceBoundary');
+    return { db: createMachineAdmissionPersistenceBoundary('user-1').db };
+});
 
 type EmitCall = Readonly<{
     room: string;
@@ -175,7 +182,7 @@ describe("createPeerTcpTunnelRelayBridge.createTransport.send", () => {
         const machineHandlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
         registerPeerTcpTunnelRelaySocketHandler("user-1", {
             id: "machine-socket-1",
-            data: { clientType: "machine-scoped", machineId: "machine-1" },
+            data: { clientType: "machine-scoped", machineId: "machine-1", verifiedMachineInstallationId: TEST_MACHINE_INSTALLATION_ID },
             on: (event, handler) => machineHandlers.set(event, handler),
             emit: () => undefined,
         }, {

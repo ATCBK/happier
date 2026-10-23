@@ -27,6 +27,7 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '
 import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { forwardRpcCall } from '@/app/api/socket/rpc/forwardRpcCall';
+import { resolveRpcForwardTimeoutMs } from '@/app/api/socket/rpc/rpcForwardTimeout';
 import type { Server } from 'socket.io';
 import * as logging from '@/utils/logging/log';
 
@@ -173,11 +174,21 @@ describe('local service preview routes', () => {
                 supportsCurrentProtocol: true, supportsPluginDataProtocol: false, supportsSessionAccessWitnessProtocol: false,
                 supportsMachinePoolChangeProtocol: false, supportsSavedSecretResourceChangeProtocol: false,
                 outcome: 'accepted', declaration: { v: 1, protocolVersion: 2 }, upgradeRequired: null } },
-            timeout: () => ({ emitWithAck: async (_event: string, raw: unknown) => {
+            timeout: (timeoutMs: number) => ({ emitWithAck: async (_event: string, raw: unknown) => {
                 const request = raw as Record<string, unknown>;
                 calls.push(request);
                 const params = request.params as { kind: string };
-                if (params.kind === 'wait_retirement') { await retirement; return { v: 1, kind: 'retired', instanceId: 'instance_1' }; }
+                if (params.kind === 'wait_retirement') {
+                    // Socket.IO is the boundary: honor its ACK deadline rather than returning
+                    // an immortal promise that hides the production registration timeout.
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    try {
+                        await Promise.race([retirement, new Promise<never>((_resolve, reject) => {
+                            timer = setTimeout(() => reject(new Error('operation has timed out')), timeoutMs);
+                        })]);
+                    } finally { clearTimeout(timer); }
+                    return { v: 1, kind: 'retired', instanceId: 'instance_1' };
+                }
                 return { v: 1, kind: 'admitted', instanceId: 'instance_1', serviceTarget: target, starterAccountId: 'starter_1', endpoint: preview.target };
             } }) };
         const room = { timeout: () => room, fetchSockets: async () => [socket] };
@@ -197,6 +208,7 @@ describe('local service preview routes', () => {
         const closeHooks: Array<() => Promise<void>> = [];
         const app = Object.assign(createFakeRouteApp(), { addHook(_name: string, hook: () => Promise<void>) { closeHooks.push(hook); } });
         registerLocalServiceRoutes(app as never, { env, runtimes });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         try {
             const reply = createReplyStub();
             await getRouteHandler(app, 'POST', '/v1/local-services/preview')({ userId: 'viewer_1', body: resource }, reply);
@@ -204,6 +216,12 @@ describe('local service preview routes', () => {
             expect(reply.send.mock.calls[0]?.[0]).toMatchObject({ resource: { serviceTarget: target, owner: { kind: 'user', id: 'starter_1' } } });
             expect(calls[0]).toMatchObject({ authorization: { kind: 'localServices.preview.admission.serverOrigin' },
                 machineAdmission: { actorAccountId: 'viewer_1', custodianAccountId: 'user_1', installationId: 'installation_1' } });
+            await new Promise<void>(resolve => setImmediate(resolve));
+            const ordinaryDeadline = resolveRpcForwardTimeoutMs();
+            if (ordinaryDeadline === null) throw new Error('Fixture requires the ordinary finite Home RPC deadline');
+            await vi.advanceTimersByTimeAsync(ordinaryDeadline + 1);
+            expect(runtimes.preview.resolvePreview(resource.previewId)).toEqual(resource);
+            vi.useRealTimers();
             const publicReply = createReplyStub();
             await getRouteHandler(app, 'POST', '/v1/local-services/public')({ userId: 'viewer_1', body: { machineId: resource.machineId,
                 previewId: resource.previewId, serviceTarget: target, mode: 'secret_link', ttlMs: 60_000,
@@ -258,6 +276,7 @@ describe('local service preview routes', () => {
             retire();
             for (const hook of closeHooks) await hook();
             eventRouter.clearIo();
+            vi.useRealTimers();
         }
     });
 

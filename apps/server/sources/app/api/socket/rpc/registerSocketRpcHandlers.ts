@@ -94,6 +94,7 @@ import { RPC_REGISTERED_METHODS_SOCKET_DATA_KEY, readSocketRegisteredRpcMethods 
 import { getMachineSocketRoom } from "../../socketRooms";
 import { isWorkflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 import { isMountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
+import { readSocketRoomSnapshot } from '../socketRoomDiscovery';
 
 const MAX_RPC_METHOD_NAME_LENGTH = 512;
 const MACHINE_VISIBLE_CLIENT_RPC_METHODS = new Set<string>([
@@ -837,9 +838,10 @@ async function hydrateMachineScopedRpcAvailabilityForSocket(params: Readonly<{
     });
     if (state !== "available") return;
 
-    const sockets = await params.io.in(`user:${params.userId}`).fetchSockets();
+    const snapshot = await readSocketRoomSnapshot({ io: params.io, room: `user:${params.userId}` });
     const methods = new Set<string>();
-    for (const socket of sockets) {
+    // Reconnect hints advertise positive registrations, never complete absence.
+    for (const socket of snapshot.sockets) {
         for (const method of readSocketRegisteredRpcMethods(socket) ?? []) {
             const parsed = parseMachineScopedRpcMethod(method);
             if (parsed?.machineId === machineId) {

@@ -20,6 +20,8 @@ export type SocketRoomBroadcastOperator = Readonly<{
 
 export type SocketRoomEmitter = Readonly<{
     to: (room: string | string[]) => SocketRoomBroadcastOperator;
+    /** Native API servers expose the local-only operator for receiving-node qualification. */
+    local?: LocalSocketRoomEmitter;
     /** Headless Redis publishers defer protected delivery to each receiving socket-server node. */
     sessionDeliveryMode?: "forward_only";
     forwardCredentialQualifiedSessionDelivery?: (

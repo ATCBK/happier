@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Server, Socket } from "socket.io";
+import type { Socket } from "socket.io";
 
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from "@happier-dev/protocol/rpc";
 import { CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION, MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -13,7 +13,7 @@ import { db } from "@/storage/db";
 import { createAccountTokenForTests, createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 
-import { createAuthenticatedFakeSocket, createFakeSocket, triggerSocketHandler } from "../../testkit/socketHarness";
+import { createAuthenticatedFakeSocket, createFakeSocket, createSocketRoomDiscoveryHarness, triggerSocketHandler } from "../../testkit/socketHarness";
 import { registerSocketRpcHandlers } from "./registerSocketRpcHandlers";
 import { dispatchMachineAccessLossCustody } from '@/app/machines/machineAccessCustody';
 import { removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
@@ -101,8 +101,7 @@ describe("Session RPC final access admission on SQLite", () => {
             }
             return room === target.id || room === `rpc:${owner.id}:${method}` ? [target] : [];
         };
-        const io = { in: (room: string) => ({ fetchSockets: async () => peers(room),
-            timeout: () => ({ fetchSockets: async () => peers(room) }) }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(peers);
         registerSocketRpcHandlers({ userId: owner.id, socket: source as unknown as Socket, io, sessionPublisherPresence: presence });
         const origin = { v: 1 as const, caller: { kind: 'session' as const, sessionId: session.id, starterDepth: 0, turnDepth: 1 },
             sourceTurnId: 'admitted-turn', requestId: 'skill-read', callerPermissionMode: 'read-only' as const,
@@ -163,8 +162,7 @@ describe("Session RPC final access admission on SQLite", () => {
             timeout: () => ({ emitWithAck: effect }) };
         // Socket.IO is the transport boundary; SQLite authorization, server stamp,
         // encrypted CLI codec, registration and SCM scope admission execute in process.
-        const io = { in: () => ({ timeout: () => ({ fetchSockets: async () => [target] }),
-            fetchSockets: async () => [target] }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async () => [target]);
         const caller = createFakeSocket({ data: { clientType: "user-scoped", authAuthority: "present_user",
             authTokenAuthenticationEvidence: [] } });
         registerSocketRpcHandlers({ userId: owner.id, socket: caller as unknown as Socket, io });
@@ -275,8 +273,7 @@ describe("Session RPC final access admission on SQLite", () => {
             machineId: machine.id, verifiedMachineInstallationId: machine.installationId, accountStoredContentCompatibility },
             timeout: () => ({ emitWithAck: effect }) };
         let connected = false;
-        const io = { in: () => ({ fetchSockets: async () => connected ? [target] : [],
-            timeout: () => ({ fetchSockets: async () => connected ? [target] : [] }) }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async () => connected ? [target] : []);
         const read = (accountId: string) => {
             const caller = createCaller();
             registerSocketRpcHandlers({ userId: accountId, socket: caller as unknown as Socket, io });
@@ -339,7 +336,7 @@ describe("Session RPC final access admission on SQLite", () => {
         const daemon = { id: 'fx14-operation-daemon', data: { clientType: 'machine-scoped', userId: owner.id, machineId: machine.id,
             verifiedMachineInstallationId: machine.installationId, accountStoredContentCompatibility }, timeout: () => ({ emitWithAck: effect }) };
         const read = (room: string) => room === daemon.id || room === `rpc:${owner.id}:${method}` ? [daemon] : [];
-        const io = { in: (room: string) => ({ timeout: () => ({ fetchSockets: async () => read(room) }), fetchSockets: async () => read(room) }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async room => read(room));
         const caller = createCaller();
         registerSocketRpcHandlers({ userId: actor.id, socket: caller as unknown as Socket, io });
         const call = async (operationId: string) => {
@@ -372,10 +369,8 @@ describe("Session RPC final access admission on SQLite", () => {
         const target = { id: "owner-machine-daemon", data: { clientType: "machine-scoped", userId: owner.id,
             machineId: machine.id, verifiedMachineInstallationId: machine.installationId, accountStoredContentCompatibility },
             timeout: vi.fn(() => ({ emitWithAck: effect })) };
-        const io = { in: (room: string) => ({
-            timeout: () => ({ fetchSockets: async () => room === `rpc:${owner.id}:${method}` || room === target.id ? [target] : [] }),
-            fetchSockets: async () => room === target.id ? [target] : [],
-        }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async room =>
+            room === `rpc:${owner.id}:${method}` || room === target.id ? [target] : []);
         const caller = createCaller();
         registerSocketRpcHandlers({ userId: owner.id, socket: caller as unknown as Socket, io });
         const callback = vi.fn();
@@ -412,9 +407,7 @@ describe("Session RPC final access admission on SQLite", () => {
             }
             return room === `rpc:${owner.id}:${method}` || room === target.id ? [target] : [];
         };
-        const io = { in: vi.fn((room: string) => ({
-            timeout: vi.fn(() => ({ fetchSockets: () => readTargets(room) })), fetchSockets: () => readTargets(room),
-        })) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(readTargets);
         const caller = createCaller();
         registerSocketRpcHandlers({ userId: actor.id, socket: caller as unknown as Socket, io });
         const call = async () => {
@@ -463,7 +456,7 @@ describe("Session RPC final access admission on SQLite", () => {
             if (room === target.id && duringLatest) { const mutation = duringLatest; duringLatest = undefined; await mutation(); }
             return room === target.id || room === `rpc:${owner.id}:${method}` ? [target] : [];
         };
-        const io = { in: (room: string) => ({ timeout: () => ({ fetchSockets: () => read(room) }), fetchSockets: () => read(room) }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(read);
         eventRouter.setIo(io, { forwardRpc: request => forwardRpcCall({ io, ...request }) });
         const input = { machineId: machine.id, subjectAccountId: actor.id,
             expectedCustodianAccountId: owner.id, expectedInstallationId: machine.installationId! };
@@ -515,7 +508,7 @@ describe("Session RPC final access admission on SQLite", () => {
         const target = { id: 'reconnect-custody-daemon', data: { clientType: 'machine-scoped', userId: owner.id,
             machineId: machine.id, verifiedMachineInstallationId: machine.installationId, accountStoredContentCompatibility }, timeout: () => ({ emitWithAck: effect }) };
         const read = async (room: string) => online && (room === target.id || room === `rpc:${owner.id}:${method}`) ? [target] : [];
-        const io = { in: (room: string) => ({ timeout: () => ({ fetchSockets: () => read(room) }), fetchSockets: () => read(room) }) } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(read);
         eventRouter.setIo(io, { forwardRpc: request => forwardRpcCall({ io, ...request }) });
         const custody = { machineId: machine.id, expectedCustodianAccountId: owner.id, expectedInstallationId: machine.installationId! };
         try {
@@ -554,15 +547,8 @@ describe("Session RPC final access admission on SQLite", () => {
             data: { clientType: "session-scoped" },
             timeout: vi.fn(() => ({ emitWithAck: targetEffect })),
         };
-        const io = {
-            in: vi.fn((room: string) => ({
-                timeout: vi.fn(() => ({
-                    fetchSockets: vi.fn(async () =>
-                        room === `rpc:${owner.id}:${method}` || room === target.id ? [target] : []),
-                })),
-                fetchSockets: vi.fn(async () => room === target.id ? [target] : []),
-            })),
-        } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async room =>
+            room === `rpc:${owner.id}:${method}` || room === target.id ? [target] : []);
 
         const unqualified = createCaller();
         const refusal = vi.fn();
@@ -603,21 +589,14 @@ describe("Session RPC final access admission on SQLite", () => {
         };
         const discoveryStarted = deferred<void>();
         const resumeDiscovery = deferred<void>();
-        const io = {
-            in: vi.fn((room: string) => ({
-                timeout: vi.fn(() => ({
-                    fetchSockets: vi.fn(async () => {
-                        if (room === `rpc:${owner.id}:${method}`) {
-                            discoveryStarted.resolve();
-                            await resumeDiscovery.promise;
-                            return [target];
-                        }
-                        return room === target.id ? [target] : [];
-                    }),
-                })),
-                fetchSockets: vi.fn(async () => room === target.id ? [target] : []),
-            })),
-        } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async room => {
+            if (room === `rpc:${owner.id}:${method}`) {
+                discoveryStarted.resolve();
+                await resumeDiscovery.promise;
+                return [target];
+            }
+            return room === target.id ? [target] : [];
+        });
         const caller = createCaller();
         const callback = vi.fn();
 
@@ -660,21 +639,14 @@ describe("Session RPC final access admission on SQLite", () => {
         };
         const discoveryStarted = deferred<void>();
         const resumeDiscovery = deferred<void>();
-        const io = {
-            in: vi.fn((room: string) => ({
-                timeout: vi.fn(() => ({
-                    fetchSockets: vi.fn(async () => {
-                        if (room === `rpc:${owner.id}:${method}`) {
-                            discoveryStarted.resolve();
-                            await resumeDiscovery.promise;
-                            return [target];
-                        }
-                        return room === target.id ? [target] : [];
-                    }),
-                })),
-                fetchSockets: vi.fn(async () => room === target.id ? [target] : []),
-            })),
-        } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async room => {
+            if (room === `rpc:${owner.id}:${method}`) {
+                discoveryStarted.resolve();
+                await resumeDiscovery.promise;
+                return [target];
+            }
+            return room === target.id ? [target] : [];
+        });
         const caller = createCaller();
         const callback = vi.fn();
 
@@ -723,12 +695,7 @@ describe("Session RPC final access admission on SQLite", () => {
             data: { clientType: "session-scoped" },
             timeout: vi.fn(() => ({ emitWithAck: targetEffect })),
         };
-        const io = {
-            in: vi.fn((room: string) => ({
-                timeout: vi.fn(() => ({ fetchSockets: vi.fn(async () => [target]) })),
-                fetchSockets: vi.fn(async () => room === target.id ? [target] : []),
-            })),
-        } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async () => [target]);
         const caller = createCaller();
         const callback = vi.fn();
 

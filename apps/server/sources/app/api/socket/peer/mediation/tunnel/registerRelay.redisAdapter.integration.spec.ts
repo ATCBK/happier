@@ -13,11 +13,15 @@ import {
 import { createAdapter } from "@socket.io/redis-streams-adapter";
 import { Redis } from "ioredis";
 import { Server } from "socket.io";
+import { ClusterAdapter, MessageType, type ClusterMessage } from 'socket.io-adapter';
 import { io as createClient, type Socket as ClientSocket } from "socket.io-client";
 import tweetnacl from "tweetnacl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startRedisAdapterRecoveryCluster } from "@/testkit/redisAdapterRecoveryCluster";
+import { createPeerMediationViewerSocketOwnershipVerifier } from '@/app/api/socket/viewerSocketOwnership';
+import { createMachineSocketOwnershipRegistry } from '@/app/api/socket/machineSocketOwnershipRegistry';
+import { registerSocketRoomDiscovery } from '@/app/api/socket/socketRoomDiscovery';
 
 import { getSocketRooms } from "@/app/api/socketRooms";
 import { readRedisStreamsAdapterOptionsFromEnv } from "@/config/socketAdapter";
@@ -35,6 +39,8 @@ vi.mock('@/storage/db', async () => {
 const ACCOUNT_ID = "relay-cluster-account";
 const MACHINE_ID = "relay-cluster-machine";
 const SOCKET_PATH = "/v1/updates";
+const ownershipByIo = new WeakMap<Server, ReturnType<typeof createMachineSocketOwnershipRegistry>>();
+const admissionRedisByIo = new WeakMap<Server, Redis>();
 const relayKeyPair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(29));
 const relayAuthorizationTrustRoots = [{
     keyId: "relay-cluster-key",
@@ -170,9 +176,29 @@ function registerRelayServer(
         socketTimeout: 2_000,
     }),
 ): PeerTcpTunnelRelayCoordinator {
+    const ownership = createMachineSocketOwnershipRegistry({ io, redis, config: { enabled: true, instanceId: String(io.httpServer.address()) } });
+    ownershipByIo.set(io, ownership);
     const coordinator = createPeerTcpTunnelRelayCoordinator({
         io,
-        config: { mode: "redis", createRelayAdmissionRedis },
+        config: { mode: "redis", createRelayAdmissionRedis: () => {
+            const client = createRelayAdmissionRedis();
+            admissionRedisByIo.set(io, client);
+            return client;
+        }, readMachineSocketOwner: ownership.readOwner },
+    });
+    io.use((socket, next) => {
+        if (socket.handshake.auth.clientType !== 'machine-scoped') return next();
+        void (async () => {
+            // The auth boundary admits secondary sockets solely for the existing injection tests;
+            // they cannot replace the real registry's chosen owner.
+            const runtimeId = socket.handshake.auth.runtimeId;
+            if (typeof runtimeId === 'string' || !await ownership.readOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID })) {
+                await ownership.claimOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID, socketId: socket.id,
+                    owner: typeof runtimeId === 'string' ? { runtimeId } : {} });
+            }
+            socket.once('disconnect', () => { void ownership.releaseOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID, socketId: socket.id }); });
+            next();
+        })().catch(next);
     });
     io.on("connection", (socket) => {
         const clientType = socket.handshake.auth.clientType === "machine-scoped"
@@ -229,6 +255,8 @@ async function startCluster(relayCaps: Readonly<{
         serveClient: false,
         adapter: createAdapter(redisB, readRedisStreamsAdapterOptionsFromEnv({})),
     });
+    registerSocketRoomDiscovery(ioA);
+    registerSocketRoomDiscovery(ioB);
     const registerRelayA = await loadIsolatedRegisterRelayModule();
     const registerRelayB = await loadIsolatedRegisterRelayModule();
     const coordinatorA = registerRelayServer(ioA, redisA, registerRelayA, relayCaps);
@@ -289,9 +317,11 @@ async function startRestartableProductCluster(): Promise<RestartableProductClust
     // Production hands the adapter its own view of the same root client so the
     // reader/subscriber duplicates are independently instrumented.
     const adapterRedisA = redisModuleA.getRedisSocketClusterAdapterClient();
+    const relayAdmissionRedisA = redisModuleA.createRedisSocketClusterRelayAdmissionClient();
     const redisModuleB = await loadProductRedisModule();
     const redisB = redisModuleB.getRedisSocketClusterClient();
     const adapterRedisB = redisModuleB.getRedisSocketClusterAdapterClient();
+    const relayAdmissionRedisB = redisModuleB.createRedisSocketClusterRelayAdmissionClient();
     if (originalRedisUrl === undefined) {
         delete process.env.REDIS_URL;
     } else {
@@ -312,6 +342,8 @@ async function startRestartableProductCluster(): Promise<RestartableProductClust
         serveClient: false,
         adapter: createAdapter(adapterRedisB, readRedisStreamsAdapterOptionsFromEnv({})),
     });
+    registerSocketRoomDiscovery(ioA);
+    registerSocketRoomDiscovery(ioB);
     const registerRelayA = await loadIsolatedRegisterRelayModule();
     const registerRelayB = await loadIsolatedRegisterRelayModule();
     const coordinatorA = registerRelayServer(
@@ -319,14 +351,14 @@ async function startRestartableProductCluster(): Promise<RestartableProductClust
         redisA,
         registerRelayA,
         {},
-        redisModuleA.createRedisSocketClusterRelayAdmissionClient,
+        () => relayAdmissionRedisA,
     );
     const coordinatorB = registerRelayServer(
         ioB,
         redisB,
         registerRelayB,
         {},
-        redisModuleB.createRedisSocketClusterRelayAdmissionClient,
+        () => relayAdmissionRedisB,
     );
     const portA = await listen(httpA);
     const portB = await listen(httpB);
@@ -399,12 +431,12 @@ async function startRestartableProductCluster(): Promise<RestartableProductClust
     };
 }
 
-async function connectClient(port: number, clientType: "user-scoped" | "machine-scoped"): Promise<ClientSocket> {
+async function connectClient(port: number, clientType: "user-scoped" | "machine-scoped", runtimeId?: string): Promise<ClientSocket> {
     const socket = createClient(`http://127.0.0.1:${port}`, {
         path: SOCKET_PATH,
         transports: ["websocket"],
         timeout: 5_000,
-        auth: { clientType },
+        auth: { clientType, ...(runtimeId ? { runtimeId } : {}) },
     });
     await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("Timed out connecting relay cluster client")), 6_000);
@@ -435,6 +467,8 @@ function createOpenEnvelope(input: Readonly<{
     relaySocketId: string;
     issuedAt?: number;
     expiresAt?: number;
+    maxIdleMs?: number;
+    maxDurationMs?: number;
 }>): PeerTcpTunnelRelayEnvelope {
     const now = input.issuedAt ?? Date.now();
     const destination = { host: "127.0.0.1", port: 3000 } as const;
@@ -453,8 +487,8 @@ function createOpenEnvelope(input: Readonly<{
         destination,
         capProfileId: "interactive",
         maxFrameBytes: 64 * 1024,
-        maxIdleMs: 30_000,
-        maxDurationMs: 300_000,
+        maxIdleMs: input.maxIdleMs ?? 30_000,
+        maxDurationMs: input.maxDurationMs ?? 300_000,
         maxTotalBytes: 64 * 1024 * 1024,
         iat: now,
         exp: input.expiresAt ?? now + 300_000,
@@ -613,8 +647,223 @@ describe("peer tunnel relay Redis adapter integration", () => {
     const clients: ClientSocket[] = [];
 
     afterEach(async () => {
+        vi.restoreAllMocks();
         while (clients.length > 0) clients.pop()?.disconnect();
         while (clusters.length > 0) await clusters.pop()?.close();
+    });
+
+    async function startSilentPeerCluster() {
+        const cluster = await startRedisAdapterRecoveryCluster({ nodeCount: 3 });
+        const [nodeA, nodeB, nodeC] = cluster.nodes;
+        const coordinatorA = registerRelayServer(nodeA.io, nodeA.redis, await loadIsolatedRegisterRelayModule());
+        const coordinatorB = registerRelayServer(nodeB.io, nodeB.redis, await loadIsolatedRegisterRelayModule());
+        clusters.push({ close: () => cluster.close(async () => {
+            await coordinatorA.close();
+            await coordinatorB.close();
+        }) });
+        const adapter = nodeC!.io.sockets.adapter;
+        if (!(adapter instanceof ClusterAdapter)) throw new Error('Expected real cluster adapter');
+        // Hold only the external transport ingress. This peer remains subscribed/countable.
+        const receiver = adapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+        const original = receiver.onMessage.bind(receiver);
+        vi.spyOn(receiver, 'onMessage').mockImplementation((message, offset) => {
+            if (message.type !== MessageType.FETCH_SOCKETS && message.type !== MessageType.SERVER_SIDE_EMIT) original(message, offset);
+        });
+        const user = await connectClient(nodeA.port, 'user-scoped');
+        const machine = await connectClient(nodeB.port, 'machine-scoped');
+        clients.push(user, machine);
+        return { nodeA, nodeB, coordinatorA, coordinatorB, user, machine };
+    }
+
+    it('accepts only the exact remote viewer with a silent unrelated peer', async () => {
+        const { nodeA, nodeB, user, machine } = await startSilentPeerCluster();
+        const verify = createPeerMediationViewerSocketOwnershipVerifier(nodeB.io);
+        expect(await verify({ accountId: ACCOUNT_ID, socketId: user.id! })).toBe(true);
+        expect(await verify({ accountId: 'wrong-account', socketId: user.id! })).toBe(false);
+        expect(await verify({ accountId: ACCOUNT_ID, socketId: machine.id! })).toBe(false);
+        const id = user.id!;
+        const disconnected = new Promise<void>(resolve => nodeA.io.sockets.sockets.get(id)!.once('disconnect', () => resolve()));
+        user.disconnect();
+        await disconnected;
+        expect(await verify({ accountId: ACCOUNT_ID, socketId: id })).toBe(false);
+    });
+
+    it('admits the exact remote machine despite a silent unrelated peer', async () => {
+        const { coordinatorA, coordinatorB } = await startSilentPeerCluster();
+        const nowMs = Date.now();
+        const disconnected = vi.fn();
+        expect(await coordinatorA.admit({ accountId: ACCOUNT_ID, machineId: MACHINE_ID,
+            expectedInstallationId: TEST_MACHINE_INSTALLATION_ID, tunnelKey: 'silent-admission', grantId: 'silent-admission-grant',
+            nowMs, grantExpiresAt: nowMs + 60_000, onMachineEnvelope: () => undefined, onMachineDisconnect: disconnected,
+        })).toEqual({ status: 'attached' });
+        let closed = false;
+        const closing = coordinatorB.close().then(() => { closed = true; });
+        await vi.waitFor(() => expect(closed).toBe(true));
+        await closing;
+        expect(disconnected).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a changed installation and retains the grant for the proven owner with a silent unrelated peer', async () => {
+        const { nodeB, machine, coordinatorA } = await startSilentPeerCluster();
+        const machineSocket = nodeB.io.sockets.sockets.get(machine.id!)!;
+        const nowMs = Date.now();
+        const request = { accountId: ACCOUNT_ID, machineId: MACHINE_ID, expectedInstallationId: TEST_MACHINE_INSTALLATION_ID,
+            tunnelKey: 'installation-check', grantId: 'installation-check-grant', nowMs, grantExpiresAt: nowMs + 60_000,
+            onMachineEnvelope: () => undefined, onMachineDisconnect: () => undefined };
+        machineSocket.data.verifiedMachineInstallationId = 'replaced-installation';
+        expect(await coordinatorA.admit(request)).toEqual({ status: 'rejected', reason: 'machine_unavailable' });
+        machineSocket.data.verifiedMachineInstallationId = TEST_MACHINE_INSTALLATION_ID;
+        expect(await coordinatorA.admit(request)).toEqual({ status: 'attached' });
+        expect(await coordinatorA.admit({ ...request, tunnelKey: 'installation-reuse' }))
+            .toEqual({ status: 'rejected', reason: 'grant_already_consumed' });
+    });
+
+    it('unwinds a late attachment reply and releases only its provisional grant with a silent unrelated peer', async () => {
+        const { nodeA, coordinatorA, coordinatorB, machine, user } = await startSilentPeerCluster();
+        const adapter = nodeA.io.sockets.adapter;
+        const receiver = adapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+        const original = receiver.onMessage.bind(receiver);
+        const held: Array<() => void> = [];
+        const hold = vi.spyOn(receiver, 'onMessage').mockImplementation((message, offset) => {
+            if (message.type === MessageType.SERVER_SIDE_EMIT && typeof message.data.packet[0] === 'string'
+                && message.data.packet[0].startsWith('happier:peer-tunnel:response:')) held.push(() => original(message, offset));
+            else original(message, offset);
+        });
+        const nowMs = Date.now();
+        const request = { accountId: ACCOUNT_ID, machineId: MACHINE_ID, expectedInstallationId: TEST_MACHINE_INSTALLATION_ID,
+            tunnelKey: 'late-attachment', grantId: 'late-grant', nowMs, grantExpiresAt: nowMs + 60_000,
+            onMachineEnvelope: () => undefined, onMachineDisconnect: () => undefined };
+        expect(await coordinatorA.admit(request)).toEqual({ status: 'rejected', reason: 'cluster_unavailable' });
+        expect(held).toHaveLength(1);
+        const envelope = createMachineDataEnvelope({ tunnelId: 'late-attachment', userSocketId: user.id!, payload: 'probe' });
+        await vi.waitFor(() => expect(coordinatorB.routeMachineEnvelope({ tunnelKey: request.tunnelKey, machineSocketId: machine.id!, envelope })).toBe('rejected'));
+        hold.mockRestore();
+        held.forEach(deliver => deliver());
+        expect(coordinatorA.routeOwnerEnvelope({ tunnelKey: request.tunnelKey, envelope })).toBe(false);
+        expect(await coordinatorA.admit(request)).toEqual({ status: 'attached' });
+    });
+
+    it('uses the registry owner among duplicate sockets and refuses owner loss during attachment with a silent unrelated peer', async () => {
+        const { nodeA, nodeB, coordinatorA, machine } = await startSilentPeerCluster();
+        const other = await connectClient(nodeB.port, 'machine-scoped');
+        clients.push(other);
+        const nowMs = Date.now();
+        const request = { accountId: ACCOUNT_ID, machineId: MACHINE_ID, expectedInstallationId: TEST_MACHINE_INSTALLATION_ID,
+            tunnelKey: 'exact-registry-owner', grantId: 'exact-registry-grant', nowMs, grantExpiresAt: nowMs + 60_000,
+            onMachineEnvelope: () => undefined, onMachineDisconnect: () => undefined };
+        expect(await coordinatorA.admit(request)).toEqual({ status: 'attached' });
+        coordinatorA.release(request.tunnelKey);
+        const registry = ownershipByIo.get(nodeB.io)!;
+        expect((await registry.readOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID }))?.socketId).toBe(machine.id);
+        // Delay the external reply until the canonical lease has been withdrawn.
+        const receiver = nodeA.io.sockets.adapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+        const original = receiver.onMessage.bind(receiver);
+        let releaseReply: (() => void) | undefined;
+        const hold = vi.spyOn(receiver, 'onMessage').mockImplementation((message, offset) => {
+            if (message.type === MessageType.SERVER_SIDE_EMIT && typeof message.data.packet[0] === 'string'
+                && message.data.packet[0].startsWith('happier:peer-tunnel:response:')) releaseReply = () => original(message, offset);
+            else original(message, offset);
+        });
+        const admission = coordinatorA.admit({ ...request, tunnelKey: 'lost-owner', grantId: 'lost-owner-grant' });
+        await vi.waitFor(() => expect(releaseReply).toBeTypeOf('function'));
+        await registry.releaseOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID, socketId: machine.id! });
+        hold.mockRestore();
+        releaseReply!();
+        expect(await admission).toEqual({ status: 'rejected', reason: 'machine_unavailable' });
+    });
+
+    it('refuses ownership withdrawn while the grant commit is in flight with a silent unrelated peer', async () => {
+        const { nodeA, nodeB, coordinatorA, coordinatorB, machine, user } = await startSilentPeerCluster();
+        const redis = admissionRedisByIo.get(nodeA.io)!;
+        const evalCommand = redis.eval.bind(redis);
+        let releaseCommit!: () => void;
+        const commitGate = new Promise<void>(resolve => { releaseCommit = resolve; });
+        let commitPending = false;
+        // Delay only the genuine Redis command response, preserving the real compare-and-commit.
+        const hold = vi.spyOn(redis, 'eval').mockImplementation(async (...args) => {
+            const result = await evalCommand(...args);
+            if (String(args[0]).includes("redis.call('SET'")) {
+                commitPending = true;
+                await commitGate;
+            }
+            return result;
+        });
+        const nowMs = Date.now();
+        const tunnelKey = 'commit-currentness';
+        const admission = coordinatorA.admit({ accountId: ACCOUNT_ID, machineId: MACHINE_ID,
+            expectedInstallationId: TEST_MACHINE_INSTALLATION_ID, tunnelKey, grantId: 'commit-currentness-grant',
+            nowMs, grantExpiresAt: nowMs + 60_000, onMachineEnvelope: () => undefined, onMachineDisconnect: () => undefined });
+        try {
+            await vi.waitFor(() => expect(commitPending).toBe(true));
+            await ownershipByIo.get(nodeB.io)!.releaseOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID, socketId: machine.id! });
+        } finally {
+            releaseCommit();
+            hold.mockRestore();
+        }
+        expect(await admission).toEqual({ status: 'rejected', reason: 'machine_unavailable' });
+        const envelope = createMachineDataEnvelope({ tunnelId: tunnelKey, userSocketId: user.id!, payload: 'withdrawn' });
+        await vi.waitFor(() => expect(coordinatorB.routeMachineEnvelope({ tunnelKey, machineSocketId: machine.id!, envelope })).toBe('rejected'));
+    });
+
+    it('opens once, streams, refuses grant reuse and settles both exact owners with a silent unrelated peer', async () => {
+        const { user, machine, coordinatorA, coordinatorB } = await startSilentPeerCluster();
+        const machineFrames: PeerTcpTunnelRelayEnvelope[] = [];
+        const userFrames: PeerTcpTunnelRelayEnvelope[] = [];
+        machine.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, frame => machineFrames.push(frame));
+        user.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, frame => userFrames.push(frame));
+        const open = async (tunnelId: string, grantId = `grant-${tunnelId}`) => {
+            user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope({ tunnelId, grantId, relaySocketId: user.id! }));
+            await waitForCondition(() => machineFrames.some(frame => frame.v === 1 && frame.frame.kind === 'open' && frame.frame.open.tunnelId === tunnelId));
+        };
+        await open('silent-stream');
+        user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createUserDataEnvelope({ tunnelId: 'silent-stream', payload: 'outbound' }));
+        machine.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createMachineDataEnvelope({ tunnelId: 'silent-stream', userSocketId: user.id!, payload: 'inbound' }));
+        await waitForCondition(() => machineFrames.some(frame => isBinaryDataEnvelopeForTunnel(frame, 'silent-stream'))
+            && userFrames.some(frame => isBinaryDataEnvelopeForTunnel(frame, 'silent-stream')));
+        machine.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createMachineTerminalEnvelope({ tunnelId: 'silent-stream', userSocketId: user.id!, kind: 'close' }));
+        await waitForCondition(() => userFrames.some(frame => isBinaryTerminalEnvelopeForTunnel(frame, 'silent-stream', 'close')));
+        user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope({ tunnelId: 'reuse-denied', grantId: 'grant-silent-stream', relaySocketId: user.id! }));
+        await waitForCondition(() => userFrames.some(frame => frame.v === 1 && frame.frame.kind === 'abort'
+            && frame.frame.tunnelId === 'reuse-denied' && frame.frame.reasonCode === 'relay_authorization_invalid'));
+        expect(machineFrames.filter(frame => frame.v === 1 && frame.frame.kind === 'open')).toHaveLength(1);
+        await open('silent-cancel');
+        user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+            v: 2, scopeUserId: ACCOUNT_ID, sender: { kind: 'user', socketId: user.id! }, recipient: { kind: 'machine', machineId: MACHINE_ID },
+            encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+            frame: encodePeerTcpTunnelBinaryFrameV2({ header: { version: 2, kind: 'abort', tunnelId: 'silent-cancel', reasonCode: 'user_cancelled', payloadLength: 0 } }),
+        } satisfies PeerTcpTunnelRelayEnvelope);
+        await waitForCondition(() => machineFrames.some(frame => isBinaryTerminalEnvelopeForTunnel(frame, 'silent-cancel', 'abort')));
+        await open('silent-detach');
+        let closed = false;
+        const closing = coordinatorA.close().then(() => { closed = true; });
+        await vi.waitFor(() => expect(closed).toBe(true));
+        await closing;
+        expect(coordinatorB.routeMachineEnvelope({ tunnelKey: `${ACCOUNT_ID}:machine:${MACHINE_ID}:user:silent-detach`, machineSocketId: machine.id!,
+            envelope: createMachineDataEnvelope({ tunnelId: 'silent-detach', userSocketId: user.id!, payload: 'closed' }) })).toBe('rejected');
+    });
+
+    it("opens through the canonical Redis owner after same-runtime reclaim on one replica", async () => {
+        const cluster = await startCluster();
+        clusters.push(cluster);
+        const user = await connectClient(cluster.portA, "user-scoped");
+        const oldMachine = await connectClient(cluster.portB, "machine-scoped", "reconnect-runtime");
+        clients.push(user, oldMachine);
+        const oldSocketId = oldMachine.id!;
+        const machine = await connectClient(cluster.portB, "machine-scoped", "reconnect-runtime");
+        clients.push(machine);
+        const ownership = ownershipByIo.get(cluster.ioB)!;
+        const identity = { accountId: ACCOUNT_ID, machineId: MACHINE_ID };
+        expect(await ownership.readOwner(identity)).toMatchObject({ socketId: machine.id, runtimeId: "reconnect-runtime" });
+        await ownership.releaseOwner({ ...identity, socketId: oldSocketId });
+        expect(await ownership.readOwner(identity)).toMatchObject({ socketId: machine.id });
+        await waitForCondition(() => !oldMachine.connected);
+        const machineFrames: PeerTcpTunnelRelayEnvelope[] = [];
+        machine.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, frame => machineFrames.push(frame));
+        user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope({
+            tunnelId: "same-runtime-reclaim", grantId: "same-runtime-reclaim-grant", relaySocketId: user.id!,
+        }));
+        await waitForCondition(() => machineFrames.some(frame => frame.v === 1 && frame.frame.kind === "open"));
+        expect(machineFrames.filter(frame => frame.v === 1 && frame.frame.kind === "open")).toHaveLength(1);
     });
 
     it.each(["restart", "silent partition"] as const)("recovers cross-node tunnel attachment and binary payloads after Redis %s", async (failure) => {
@@ -623,7 +872,7 @@ describe("peer tunnel relay Redis adapter integration", () => {
         const coordinatorA = registerRelayServer(nodeA.io, nodeA.redis, await loadIsolatedRegisterRelayModule());
         const coordinatorB = registerRelayServer(nodeB.io, nodeB.redis, await loadIsolatedRegisterRelayModule());
         const user = await connectClient(nodeA.port, "user-scoped");
-        const machine = await connectClient(nodeB.port, "machine-scoped");
+        let machine = await connectClient(nodeB.port, "machine-scoped", "recovery-runtime");
         const machineFrames: PeerTcpTunnelRelayEnvelope[] = [];
         const userFrames: PeerTcpTunnelRelayEnvelope[] = [];
         machine.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, (frame) => machineFrames.push(frame));
@@ -665,7 +914,23 @@ describe("peer tunnel relay Redis adapter integration", () => {
             await assertTunnel("before");
             await cluster.recover(failure);
             expect(user.id).toBe(userId);
-            expect(machine.id).toBe(machineId);
+            const ownership = ownershipByIo.get(nodeB.io)!;
+            const identity = { accountId: ACCOUNT_ID, machineId: MACHINE_ID };
+            if (failure === "restart") {
+                // Disposable Redis has no persistence; surviving transport is not ownership.
+                expect(await ownership.readOwner(identity)).toBeNull();
+                // Reclaim on the still-connected socket before reconnecting the same runtime.
+                await ownership.claimOwner({ ...identity, socketId: machine.id!, owner: { runtimeId: "recovery-runtime" } });
+                const replacement = await connectClient(nodeB.port, "machine-scoped", "recovery-runtime");
+                await waitForCondition(() => !machine.connected);
+                machine.disconnect();
+                machine = replacement;
+                machine.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, frame => machineFrames.push(frame));
+                expect(machine.id).not.toBe(machineId);
+            } else {
+                expect(machine.id).toBe(machineId);
+            }
+            expect(await ownership.readOwner(identity)).toMatchObject({ socketId: machine.id });
             await assertTunnel("after");
         } finally {
             user.disconnect();
@@ -781,6 +1046,8 @@ describe("peer tunnel relay Redis adapter integration", () => {
             tunnelId,
             grantId: "partition-after-attachment-grant",
             relaySocketId: user.id!,
+            maxIdleMs: 250,
+            maxDurationMs: 2_000,
         }));
         await waitForCondition(() => machineFrames.some((frame) =>
             frame.v === 1
@@ -851,11 +1118,11 @@ describe("peer tunnel relay Redis adapter integration", () => {
         ));
     });
 
-    it("routes a fresh cross-replica OPEN after Redis restarts while client sockets stay connected", async () => {
+    it("reserves before adapter recovery, refuses lost ownership, then routes OPEN after machine reconnect", async () => {
         const cluster = await startRestartableProductCluster();
         clusters.push(cluster);
         const user = await connectClient(cluster.portA, "user-scoped");
-        const machine = await connectClient(cluster.portB, "machine-scoped");
+        const machine = await connectClient(cluster.portB, "machine-scoped", "product-recovery-runtime");
         clients.push(user, machine);
 
         const machineFrames: PeerTcpTunnelRelayEnvelope[] = [];
@@ -903,16 +1170,28 @@ describe("peer tunnel relay Redis adapter integration", () => {
         }));
         await cluster.waitForGrantReservationBeforeAdapterRecovery(afterRestartGrantId);
         await cluster.waitForAdapterRecovery();
+        await waitForCondition(() => userFrames.some(frame => frame.v === 1 && frame.frame.kind === "abort"
+            && frame.frame.tunnelId === afterRestartTunnelId && frame.frame.reasonCode === "route_unavailable"));
+        expect(await ownershipByIo.get(cluster.ioB)!.readOwner({ accountId: ACCOUNT_ID, machineId: MACHINE_ID })).toBeNull();
+        const replacement = await connectClient(cluster.portB, "machine-scoped", "product-recovery-runtime");
+        clients.push(replacement);
+        replacement.on(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, frame => machineFrames.push(frame));
+        await waitForCondition(() => !machine.connected);
+        user.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope({
+            tunnelId: "redis-restart-reconnected",
+            grantId: "redis-restart-reconnected-grant",
+            relaySocketId: user.id!,
+        }));
         await waitForCondition(() => machineFrames.some((frame) =>
             frame.v === 1
             && frame.frame.kind === "open"
-            && frame.frame.open.tunnelId === afterRestartTunnelId,
+            && frame.frame.open.tunnelId === "redis-restart-reconnected",
         ), 30_000);
 
         expect(machineFrames.filter((frame) =>
             frame.v === 1
             && frame.frame.kind === "open"
-            && frame.frame.open.tunnelId === afterRestartTunnelId,
+            && frame.frame.open.tunnelId === "redis-restart-reconnected",
         )).toHaveLength(1);
         expect(userFrames.filter((frame) =>
             frame.v === 1

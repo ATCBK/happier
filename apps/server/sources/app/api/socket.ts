@@ -319,20 +319,21 @@ export function startSocket(app: Fastify) {
         redisEnabled: shouldEnableRedisAdapter,
         role,
     });
+    const machineOwnershipRegistry = createMachineSocketOwnershipRegistry({
+        io,
+        config: shouldEnableRedisAdapter ? { enabled: true, instanceId } : { enabled: false },
+    });
     const tunnelRelayCoordinator = createPeerTcpTunnelRelayCoordinator({
         io,
         config: shouldEnableRedisAdapter
             ? {
                 mode: "redis",
                 createRelayAdmissionRedis: createRedisSocketClusterRelayAdmissionClient,
+                readMachineSocketOwner: machineOwnershipRegistry.readOwner,
             }
             : { mode: "memory" },
     });
 
-    const machineOwnershipRegistry = createMachineSocketOwnershipRegistry({
-        io,
-        config: shouldEnableRedisAdapter ? { enabled: true, instanceId } : { enabled: false },
-    });
     app.forwardRpcForUser = createServerRpcForwarder({
         io,
     });
@@ -354,7 +355,14 @@ export function startSocket(app: Fastify) {
     });
     const verifyPeerMediationViewerSocketOwnership = createPeerMediationViewerSocketOwnershipVerifier(io);
     app.verifyPeerMediationViewerSocketOwnership = verifyPeerMediationViewerSocketOwnership;
-    eventRouter.setIo(io, { forwardRpc: (request) => forwardRpcCall({ io, ...request }) });
+    eventRouter.setIo(io, {
+        forwardRpc: (request) => forwardRpcCall({ io, ...request }),
+        broadcastSessionDelivery: delivery => {
+            if (shouldEnableRedisAdapter) {
+                io.serverSideEmit(CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT, delivery);
+            }
+        },
+    });
     io.on(CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT, (delivery: unknown) => {
         void eventRouter.receiveCredentialQualifiedSessionDelivery(io.local, delivery);
     });

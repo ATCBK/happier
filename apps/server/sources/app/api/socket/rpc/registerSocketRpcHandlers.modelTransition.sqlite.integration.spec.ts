@@ -11,7 +11,7 @@ import { getAccountSessionSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { createFakeSocket, triggerSocketHandler } from "../../testkit/socketHarness";
+import { createFakeSocket, createSocketRoomDiscoveryHarness, triggerSocketHandler } from "../../testkit/socketHarness";
 import { registerSocketRpcHandlers } from "./registerSocketRpcHandlers";
 
 function deferred<T>() {
@@ -84,19 +84,9 @@ describe("publisher-authoritative model-transition RPC routing on SQLite", () =>
         targetsBySocketId: ReadonlyMap<string, readonly object[]>;
     }>): Server {
         const rpcRoom = `rpc:${params.accountId}:${params.method}`;
-        return {
-            in: vi.fn((room: string) => {
-                const targets = room === rpcRoom
-                    ? params.targets
-                    : params.targetsBySocketId.get(room) ?? [];
-                return {
-                    timeout: vi.fn(() => ({
-                        fetchSockets: vi.fn(async () => targets),
-                    })),
-                    fetchSockets: vi.fn(async () => targets),
-                };
-            }),
-        } as unknown as Server;
+        return createSocketRoomDiscoveryHarness(async room => room === rpcRoom
+            ? params.targets
+            : params.targetsBySocketId.get(room) ?? []);
     }
 
     function createCaller(): ReturnType<typeof createFakeSocket> {

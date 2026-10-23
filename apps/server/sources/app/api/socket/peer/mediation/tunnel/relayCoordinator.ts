@@ -5,11 +5,14 @@ import type { Redis } from "ioredis";
 import type { Server, Socket } from "socket.io";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
+import { readSocketRoomSnapshot } from '@/app/api/socket/socketRoomDiscovery';
+import type { MachineSocketOwnerSnapshot } from '@/app/api/socket/machineSocketOwnershipRegistry';
 
-const ATTACH_EVENT = "happier:peer-tunnel:attach:v1";
-const DETACH_EVENT = "happier:peer-tunnel:detach:v1";
+const ATTACH_EVENT = "happier:peer-tunnel:attach:v2";
+const DETACH_EVENT = "happier:peer-tunnel:detach:v2";
 const FRAME_EVENT = "happier:peer-tunnel:frame:v1";
-const DISCONNECT_EVENT = "happier:peer-tunnel:disconnect:v1";
+const DISCONNECT_EVENT = "happier:peer-tunnel:disconnect:v2";
+const RESPONSE_PREFIX = 'happier:peer-tunnel:response:';
 const REDIS_GRANT_KEY_PREFIX = "peer-tunnel-relay-grant:v1:";
 const FETCH_SOCKETS_TIMEOUT_MS = 5_000;
 const REDIS_GRANT_ADMISSION_TIMEOUT_MS = 2_000;
@@ -38,6 +41,7 @@ type AttachResponse =
 type DetachRequest = Readonly<{
     attachmentId: string;
     ownerRouteId: string;
+    targetRouteId?: string;
 }>;
 
 type FrameMessage = Readonly<{
@@ -52,15 +56,12 @@ type DisconnectMessage = Readonly<{
     ownerRouteId: string;
 }>;
 
-type DisconnectResponse = Readonly<{
-    status: "delivered" | "not_owner" | "rejected";
-}>;
-
 type OwnerAttachment = Readonly<{
     attachmentId: string;
     ownerRouteId: string;
     machineSocketId: string;
     local: boolean;
+    machineRouteId?: string;
     onMachineEnvelope(envelope: PeerTcpTunnelRelayEnvelope, machineSocketId: string): void | Promise<void>;
     onMachineDisconnect(): void | Promise<void>;
 }>;
@@ -83,7 +84,11 @@ type RedisProvisionalRelayGrantClaim = Readonly<{
 
 export type PeerTcpTunnelRelayCoordinatorConfig =
     | Readonly<{ mode: "memory" }>
-    | Readonly<{ mode: "redis"; createRelayAdmissionRedis: () => Redis }>;
+    | Readonly<{
+        mode: "redis";
+        createRelayAdmissionRedis: () => Redis;
+        readMachineSocketOwner(identity: Readonly<{ accountId: string; machineId: string }>): Promise<MachineSocketOwnerSnapshot | null>;
+    }>;
 
 export type PeerTcpTunnelRelayAdmissionResult =
     | Readonly<{ status: "attached" }>
@@ -222,32 +227,41 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
         const attachmentId = readBoundedString(record.attachmentId);
         const requestOwnerRouteId = readBoundedString(record.ownerRouteId);
         return attachmentId && requestOwnerRouteId
-            ? { attachmentId, ownerRouteId: requestOwnerRouteId }
+            ? { attachmentId, ownerRouteId: requestOwnerRouteId,
+                ...(typeof record?.targetRouteId === 'string' ? { targetRouteId: record.targetRouteId } : {}) }
             : null;
     }
 
-    function parseAttachResponse(value: unknown): AttachResponse | null {
-        const record = readRecord(value);
-        if (
-            record?.status === "attached"
-            || record?.status === "not_local"
-            || record?.status === "rejected"
-        ) {
-            return { status: record.status };
-        }
-        return null;
+    function replyToPeer(value: unknown, request: DetachRequest, status: string): void {
+        const replyEvent = readRecord(value)?.replyEvent;
+        if (typeof replyEvent !== 'string' || !/^happier:peer-tunnel:response:[0-9a-f-]{36}$/.test(replyEvent)) return;
+        input.io.serverSideEmit(replyEvent, { attachmentId: request.attachmentId,
+            ownerRouteId: request.ownerRouteId, peerRouteId: ownerRouteId, status });
     }
 
-    function parseDisconnectResponse(value: unknown): DisconnectResponse | null {
-        const record = readRecord(value);
-        if (
-            record?.status === "delivered"
-            || record?.status === "not_owner"
-            || record?.status === "rejected"
-        ) {
-            return { status: record.status };
+    /** One exact peer reply replaces the adapter's all-peer ACK, with its existing 5s boundary. */
+    async function requestExactPeer(event: string, request: DetachRequest): Promise<Readonly<{ status: string; peerRouteId: string }>> {
+        const replyEvent = `${RESPONSE_PREFIX}${randomUUID()}`;
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        let onReply: ((value: unknown) => void) | undefined;
+        try {
+            return await new Promise((resolve, reject) => {
+                onReply = value => {
+                    const reply = readRecord(value);
+                    if (reply?.attachmentId !== request.attachmentId || reply.ownerRouteId !== request.ownerRouteId
+                        || typeof reply.peerRouteId !== 'string' || typeof reply.status !== 'string'
+                        || (request.targetRouteId !== undefined && reply.peerRouteId !== request.targetRouteId)) return;
+                    resolve({ status: reply.status, peerRouteId: reply.peerRouteId });
+                };
+                input.io.on(replyEvent, onReply);
+                timeout = setTimeout(() => reject(new Error('Exact relay peer acknowledgement timed out')), FETCH_SOCKETS_TIMEOUT_MS);
+                timeout.unref();
+                input.io.serverSideEmit(event, { ...request, replyEvent });
+            });
+        } finally {
+            if (timeout) clearTimeout(timeout);
+            if (onReply) input.io.off(replyEvent, onReply);
         }
-        return null;
     }
 
     function parseFrameMessage(value: unknown): FrameMessage | null {
@@ -440,6 +454,7 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
         input.io.serverSideEmit(DETACH_EVENT, {
             attachmentId,
             ownerRouteId: owner?.ownerRouteId ?? ownerRouteId,
+            ...(owner?.machineRouteId ? { targetRouteId: owner.machineRouteId } : {}),
         } satisfies DetachRequest);
     }
 
@@ -497,27 +512,23 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
         return { status: "attached" };
     }
 
-    function handleAttach(value: unknown, acknowledge: (response: AttachResponse) => void): void {
+    function handleAttach(value: unknown): void {
         const request = parseAttachRequest(value);
-        acknowledge(request ? installLocalAttachment(request) : { status: "rejected" });
+        if (!request || !input.io.sockets.sockets.has(request.machineSocketId)) return;
+        replyToPeer(value, request, installLocalAttachment(request).status);
     }
 
-    function handleDetach(
-        value: unknown,
-        acknowledge?: (response: Readonly<{ status: "detached" | "not_local" | "rejected" }>) => void,
-    ): void {
+    function handleDetach(value: unknown): void {
         const request = parseDetachRequest(value);
-        if (!request) {
-            acknowledge?.({ status: "rejected" });
-            return;
-        }
+        if (!request) return;
+        if (request.targetRouteId !== undefined && request.targetRouteId !== ownerRouteId) return;
         const current = machineAttachmentsById.get(request.attachmentId);
         if (!current || current.request.ownerRouteId !== request.ownerRouteId) {
-            acknowledge?.({ status: "not_local" });
+            if (request.targetRouteId === ownerRouteId) replyToPeer(value, request, 'not_local');
             return;
         }
         removeMachineAttachment(request.attachmentId);
-        acknowledge?.({ status: "detached" });
+        replyToPeer(value, request, 'detached');
     }
 
     function handleFrame(value: unknown): void {
@@ -529,29 +540,19 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
         void owner.onMachineEnvelope(message.envelope, message.machineSocketId);
     }
 
-    async function handleDisconnect(
-        value: unknown,
-        acknowledge?: (response: DisconnectResponse) => void,
-    ): Promise<void> {
+    async function handleDisconnect(value: unknown): Promise<void> {
         const message = parseDetachRequest(value);
-        if (!message) {
-            acknowledge?.({ status: "rejected" });
-            return;
-        }
-        if (message.ownerRouteId !== ownerRouteId) {
-            acknowledge?.({ status: "not_owner" });
-            return;
-        }
+        if (!message || message.ownerRouteId !== ownerRouteId) return;
         const owner = ownerAttachmentById.get(message.attachmentId);
         if (!owner) {
-            acknowledge?.({ status: "not_owner" });
+            replyToPeer(value, message, 'not_owner');
             return;
         }
         try {
             await owner.onMachineDisconnect();
-            acknowledge?.({ status: "delivered" });
+            replyToPeer(value, message, 'delivered');
         } catch {
-            acknowledge?.({ status: "rejected" });
+            replyToPeer(value, message, 'rejected');
         }
     }
 
@@ -563,37 +564,19 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
     async function attachExactMachine(request: AttachRequest): Promise<Readonly<{
         status: "attached";
         local: boolean;
+        machineRouteId: string;
     }> | Readonly<{ status: "rejected" | "unavailable" }>> {
         const local = installLocalAttachment(request);
-        if (local.status === "attached") return { status: "attached", local: true };
+        if (local.status === "attached") return { status: "attached", local: true, machineRouteId: ownerRouteId };
         if (local.status === "rejected") return { status: "rejected" };
         if (input.config.mode !== "redis") return { status: "rejected" };
         try {
-            const rawResponses = await input.io.serverSideEmitWithAck(ATTACH_EVENT, request) as unknown[];
-            const responses = rawResponses.map(parseAttachResponse);
-            if (responses.some((response) => response === null)) {
-                input.io.serverSideEmit(DETACH_EVENT, {
-                    attachmentId: request.attachmentId,
-                    ownerRouteId: request.ownerRouteId,
-                } satisfies DetachRequest);
-                return { status: "rejected" };
-            }
-            const parsedResponses = responses.filter((response): response is AttachResponse => response !== null);
-            const attached = parsedResponses.filter((response) => response.status === "attached");
-            const rejected = parsedResponses.some((response) => response.status === "rejected");
-            if (attached.length !== 1 || rejected) {
-                input.io.serverSideEmit(DETACH_EVENT, {
-                    attachmentId: request.attachmentId,
-                    ownerRouteId: request.ownerRouteId,
-                } satisfies DetachRequest);
-                return { status: "rejected" };
-            }
-            return { status: "attached", local: false };
+            const response = await requestExactPeer(ATTACH_EVENT, request);
+            return response.status === 'attached'
+                ? { status: 'attached', local: false, machineRouteId: response.peerRouteId }
+                : { status: 'rejected' };
         } catch {
-            input.io.serverSideEmit(DETACH_EVENT, {
-                attachmentId: request.attachmentId,
-                ownerRouteId: request.ownerRouteId,
-            } satisfies DetachRequest);
+            // Admission owns every unwind, including a reply arriving after this wait.
             return { status: "unavailable" };
         }
     }
@@ -612,13 +595,25 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
         let exactMachineSocketId: string;
         let provisionalRedisGrantClaim: RedisProvisionalRelayGrantClaim | null = null;
         let durableGrantClaimCommitted = false;
+        let pendingAttachmentId: string | undefined;
         try {
+            let expectedSocketId: string | undefined;
+            if (input.config.mode === 'redis') {
+                const reservation = await reserveRedisGrant({ grantId: params.grantId,
+                    expiresAt: params.grantExpiresAt, nowMs: params.nowMs });
+                if (reservation.status !== 'reserved') return relayAdmissionRejectionReason(reservation.status);
+                provisionalRedisGrantClaim = reservation.claim;
+                const machineOwner = await input.config.readMachineSocketOwner(params);
+                if (!machineOwner) return { status: 'rejected', reason: 'machine_unavailable' } as const;
+                expectedSocketId = machineOwner.socketId;
+            }
             // The adapter's `local.fetchSockets()` still calls its Redis-backed
             // `serverCount()` in Socket.IO 0.3.1. Admission must reserve the
             // single-use grant while that adapter is recovering, so inspect the
             // canonical local socket map directly for this local-only branch.
             const localExactSockets = [...input.io.sockets.sockets.values()].filter((socket) =>
                 socket.connected === true
+                && (expectedSocketId === undefined || socket.id === expectedSocketId)
                 && socket.data.userId === params.accountId
                 && socket.data.clientType === "machine-scoped"
                 && socket.data.machineId === params.machineId
@@ -633,43 +628,19 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
                 if (input.config.mode !== "redis") {
                     return { status: "rejected", reason: "machine_unavailable" } as const;
                 }
-                const room = input.io.in(machineRoom(params.accountId, params.machineId));
-                // Cross-replica discovery is transported by the Socket.IO adapter. Do not
-                // let its intentionally delayed restart recovery block the independent,
-                // bounded global grant reservation. It is deliberately not durable until the
-                // exact machine accepts the owner attachment below.
-                const reservation = await reserveRedisGrant({
-                    grantId: params.grantId,
-                    expiresAt: params.grantExpiresAt,
-                    nowMs: params.nowMs,
-                });
-                if (reservation.status !== "reserved") {
-                    return relayAdmissionRejectionReason(reservation.status);
-                }
-                provisionalRedisGrantClaim = reservation.claim;
-                const discoveryDeadline = Date.now() + FETCH_SOCKETS_TIMEOUT_MS;
-                let exactSockets: readonly Pick<Socket, "id" | "data">[] = [];
-                while (Date.now() < discoveryDeadline) {
-                    const remainingMs = Math.max(1, discoveryDeadline - Date.now());
-                    try {
-                        const sockets = await room.timeout(Math.min(500, remainingMs)).fetchSockets();
-                        exactSockets = sockets.filter((socket) =>
-                            socket.data.userId === params.accountId
-                            && socket.data.clientType === "machine-scoped"
-                            && socket.data.machineId === params.machineId
-                            && (params.expectedInstallationId === undefined || socket.data.verifiedMachineInstallationId === params.expectedInstallationId),
-                        );
-                    } catch {
-                        exactSockets = [];
-                    }
-                    if (exactSockets.length === 1) break;
-                    if (exactSockets.length > 1) break;
-                    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                }
-                if (exactSockets.length !== 1) {
+                exactMachineSocketId = expectedSocketId!;
+                const matches = (socket: { readonly data?: unknown; readonly id?: unknown }) => {
+                    const data = readRecord(socket.data);
+                    return socket.id === exactMachineSocketId && data?.userId === params.accountId
+                        && data.clientType === 'machine-scoped' && data.machineId === params.machineId
+                        && (params.expectedInstallationId === undefined || data.verifiedMachineInstallationId === params.expectedInstallationId);
+                };
+                const snapshot = await readSocketRoomSnapshot({ io: input.io,
+                    room: exactMachineSocketId, timeoutMs: FETCH_SOCKETS_TIMEOUT_MS,
+                    acceptPartial: async sockets => sockets.some(matches) });
+                if (!snapshot.sockets.some(matches)) {
                     return { status: "rejected", reason: "machine_unavailable" } as const;
                 }
-                exactMachineSocketId = exactSockets[0]!.id;
             }
             // The user-socket replica is the one lifecycle owner for a tunnel. Once an
             // admission has reached exact-machine attachment, a concurrent OPEN for the
@@ -679,6 +650,7 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             }
 
             const attachmentId = randomUUID();
+            pendingAttachmentId = attachmentId;
             const ownerAttachment: OwnerAttachment = {
                 attachmentId,
                 ownerRouteId,
@@ -710,9 +682,16 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             const attachedOwner = {
                 ...ownerAttachment,
                 local: attached.local,
+                machineRouteId: attached.machineRouteId,
             };
             ownerAttachmentsByTunnelKey.set(params.tunnelKey, attachedOwner);
             ownerAttachmentById.set(attachmentId, attachedOwner);
+
+            if (input.config.mode === 'redis' &&
+                (await input.config.readMachineSocketOwner(params))?.socketId !== exactMachineSocketId) {
+                detachOwnerAttachment(params.tunnelKey, attachmentId);
+                return { status: 'rejected', reason: 'machine_unavailable' } as const;
+            }
 
             if (provisionalRedisGrantClaim) {
                 const committed = await commitRedisGrantClaim(provisionalRedisGrantClaim);
@@ -732,6 +711,13 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
                     return relayAdmissionRejectionReason(consumed);
                 }
             }
+            // Grant commit yields to Redis. A lease withdrawn during that command cannot
+            // authorize OPEN, even though the grant has now been spent.
+            if (input.config.mode === 'redis' &&
+                (await input.config.readMachineSocketOwner(params))?.socketId !== exactMachineSocketId) {
+                detachOwnerAttachment(params.tunnelKey, attachmentId);
+                return { status: 'rejected', reason: 'machine_unavailable' } as const;
+            }
             if (closed) {
                 // Shutdown raced an already-spent grant. `close()` joins pending admissions
                 // before it drains the maps, so this attachment is torn down there.
@@ -742,6 +728,7 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             }
             return { status: "attached" } as const;
         } catch {
+            if (pendingAttachmentId) detachOwnerAttachment(params.tunnelKey, pendingAttachmentId);
             return { status: "rejected", reason: "cluster_unavailable" } as const;
         } finally {
             if (provisionalRedisGrantClaim && !durableGrantClaimCommitted) {
@@ -819,19 +806,9 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             }
             await Promise.all(remoteOwnerDisconnectRequests.map(async (request) => {
                 try {
-                    const rawResponses = await input.io.serverSideEmitWithAck(
-                        DISCONNECT_EVENT,
-                        request,
-                    ) as unknown[];
-                    const responses = rawResponses.map(parseDisconnectResponse);
-                    if (
-                        responses.some((response) => response === null)
-                        || responses.filter((response) => response?.status === "delivered").length !== 1
-                    ) {
-                        return;
-                    }
+                    await requestExactPeer(DISCONNECT_EVENT, { ...request, targetRouteId: request.ownerRouteId });
                 } catch {
-                    // The adapter's bounded acknowledgement timeout is the shutdown boundary.
+                    // The existing bounded peer-acknowledgement timeout is the shutdown boundary.
                 }
             }));
             const remoteDetachRequests: DetachRequest[] = [];
@@ -842,6 +819,7 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
                     remoteDetachRequests.push({
                         attachmentId: owner.attachmentId,
                         ownerRouteId: owner.ownerRouteId,
+                        targetRouteId: owner.machineRouteId,
                     });
                 }
             }
@@ -849,9 +827,9 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             ownerAttachmentById.clear();
             await Promise.all(remoteDetachRequests.map(async (request) => {
                 try {
-                    await input.io.serverSideEmitWithAck(DETACH_EVENT, request);
+                    await requestExactPeer(DETACH_EVENT, request);
                 } catch {
-                    // The adapter's bounded acknowledgement timeout is the shutdown boundary.
+                    // The existing bounded peer-acknowledgement timeout is the shutdown boundary.
                 }
             }));
             consumedGrantExpById.clear();

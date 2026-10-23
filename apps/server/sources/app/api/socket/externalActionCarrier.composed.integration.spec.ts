@@ -1,9 +1,11 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { io as ioClient } from "socket.io-client";
 import { Server } from "socket.io";
 import nacl from 'tweetnacl';
+import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
 
 const protocolSerializerSpy = vi.hoisted(() => vi.fn());
 const protocolPrepareSpy = vi.hoisted(() => vi.fn());
@@ -314,7 +316,10 @@ describe("external Action server-to-daemon request carrier", () => {
             select: { id: true },
         });
 
-        const app = createAuthenticatedTestApp();
+        const credential = await auth.createApiToken({ accountId: account.id, tokenId: randomUUID(),
+            label: 'Carrier boundary', grant: API_TOKEN_FULL_GRANT_V1 });
+        const requestHeaders = { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' };
+        const app = createAuthenticatedTestApp({ authentication: 'real' });
         const io = new Server(app.server, {
             path: "/v1/updates",
             transports: ["websocket"],
@@ -324,8 +329,8 @@ describe("external Action server-to-daemon request carrier", () => {
         const relayedRequests: RelayedRequestSummary[] = [];
         let responseResult: unknown = { accepted: true };
         const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(9) };
-        const privateBinding = { serverIdentityId: 'srv_carrier', accountId: account.id,
-            credentialId: '00000000-0000-4000-8000-000000000001', actionId: 'session.spawn_new',
+        const privateBinding = { serverIdentityId: await getOrCreateServerIdentityId(), accountId: account.id,
+            credentialId: credential.tokenId, actionId: 'session.spawn_new',
             requestId: 'carrier-response-boundary', target: { kind: 'machine' as const, machineId } };
         let privateRequestBytes = 0;
         const daemonReady = new Promise<void>((resolve) => {
@@ -402,15 +407,7 @@ describe("external Action server-to-daemon request carrier", () => {
             const exactLimitResponse = await app.inject({
                 method: "POST",
                 url: "/v1/actions/session.spawn_new",
-                headers: {
-                    authorization: "Bearer carrier-test",
-                    "content-type": "application/json",
-                    "x-test-user-id": account.id,
-                    "x-test-auth-token-kind": "api_token",
-                    "x-test-api-token-account-id": account.id,
-                    "x-test-api-token-principal-id": "carrier-principal",
-                    "x-test-api-token-credential-id": "carrier-credential",
-                },
+                headers: requestHeaders,
                 payload: exactLimitPayload,
             });
 
@@ -429,15 +426,7 @@ describe("external Action server-to-daemon request carrier", () => {
             const oneByteOverLimitResponse = await app.inject({
                 method: "POST",
                 url: "/v1/actions/session.spawn_new",
-                headers: {
-                    authorization: "Bearer carrier-test",
-                    "content-type": "application/json",
-                    "x-test-user-id": account.id,
-                    "x-test-auth-token-kind": "api_token",
-                    "x-test-api-token-account-id": account.id,
-                    "x-test-api-token-principal-id": "carrier-principal",
-                    "x-test-api-token-credential-id": "carrier-credential",
-                },
+                headers: requestHeaders,
                 payload: externalActionJsonPayloadWithByteLength(
                     EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES + 1,
                 ),
@@ -454,15 +443,7 @@ describe("external Action server-to-daemon request carrier", () => {
             const postRejectionResponse = await app.inject({
                 method: "POST",
                 url: "/v1/actions/session.spawn_new",
-                headers: {
-                    authorization: "Bearer carrier-test",
-                    "content-type": "application/json",
-                    "x-test-user-id": account.id,
-                    "x-test-auth-token-kind": "api_token",
-                    "x-test-api-token-account-id": account.id,
-                    "x-test-api-token-principal-id": "carrier-principal",
-                    "x-test-api-token-credential-id": "carrier-credential",
-                },
+                headers: requestHeaders,
                 payload: {
                     v: 1,
                     target: { kind: "machine", machineId },
@@ -477,15 +458,7 @@ describe("external Action server-to-daemon request carrier", () => {
             const responseBoundaryRequest = {
                 method: "POST" as const,
                 url: "/v1/actions/session.spawn_new",
-                headers: {
-                    authorization: "Bearer carrier-test",
-                    "content-type": "application/json",
-                    "x-test-user-id": account.id,
-                    "x-test-auth-token-kind": "api_token",
-                    "x-test-api-token-account-id": account.id,
-                    "x-test-api-token-principal-id": "carrier-principal",
-                    "x-test-api-token-credential-id": "carrier-credential",
-                },
+                headers: requestHeaders,
                 payload: {
                     v: 1,
                     requestId: "carrier-response-boundary",
@@ -552,7 +525,6 @@ describe("external Action server-to-daemon request carrier", () => {
                 material, randomBytes: (length) => new Uint8Array(length).fill(2) });
             responseResult = exactResponseResult;
             const privateResponse = await app.inject({ ...responseBoundaryRequest,
-                headers: { ...responseBoundaryRequest.headers, 'x-test-api-token-credential-id': privateBinding.credentialId },
                 payload: privateRequest });
             expect(privateResponse.statusCode).toBe(200);
             expect(privateRequestBytes).toBeGreaterThan(expectedRequestCarrierLimitBytes);

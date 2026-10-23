@@ -238,6 +238,42 @@ describe('public preview sharing and withdrawal through real routes', () => {
 });
 
 describe("preview native HTTP transport", () => {
+    it('cancels the streaming relay upstream when its viewing client stops loading', async () => {
+        let upstreamClosed = false;
+        const fixture = await upstream((_request, response) => {
+            response.once('close', () => { upstreamClosed = true; });
+            response.writeHead(200, { 'content-type': 'text/html' });
+            response.write('<html><head><title>Streaming</title></head><body>shell');
+        });
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        registerLocalServicePreviewRoutes(app as never, { ...fixture, resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: host => host === 'preview.example.test' ? fixture.preview : null,
+            hostOriginBaseDomain: 'example.test', validateAccess: ({ rawToken }) => rawToken === 'authorized'
+                ? { ok: true } : { ok: false, reasonCode: 'token_invalid' } });
+        const address = await app.listen({ host: '127.0.0.1', port: 0 });
+        const controller = new AbortController();
+        try {
+            const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+                collector: { collectorId: 'c', nonce: 'n', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+            const response = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+                const request = httpRequest(`${address}/?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`, {
+                    headers: { host: 'preview.example.test', cookie: 'happier_preview_token=authorized' }, signal: controller.signal,
+                }, resolve);
+                request.on('error', reject);
+                request.end();
+            });
+            // The client intentionally closes this response; observe the upstream rather than
+            // letting the expected downstream ECONNRESET become an unhandled harness error.
+            response.on('error', () => {});
+            expect(response.statusCode).toBe(200);
+            await once(response, 'data');
+            expect(upstreamClosed).toBe(false);
+            controller.abort();
+            await expect.poll(() => upstreamClosed).toBe(true);
+        } finally { controller.abort(); app.server.closeAllConnections(); await app.close(); }
+    });
+
     it.each(['identity', 'gzip', 'deflate', 'br'] as const)('delivers the cooperative HTML shell before upstream EOF (%s)', async (encoding) => {
         const { createGzip, createDeflate, createBrotliCompress, constants } = await import('node:zlib');
         let finish: (() => void) | undefined;
@@ -267,6 +303,14 @@ describe("preview native HTTP transport", () => {
             await expect.poll(() => shellDelivered, { timeout: 5000 }).toBe(true);
             expect(headersDelivered).toBe(true);
             expect(Buffer.concat(chunks).toString()).toContain('collector-loader.js');
+            // Stop must already have a listener while the response is streaming. A deferred
+            // loader downloads now but cannot execute until the upstream document reaches EOF.
+            const { parse } = await import('parse5');
+            const tree = parse(Buffer.concat(chunks).toString());
+            const html = tree.childNodes.find(node => 'tagName' in node && node.tagName === 'html');
+            const head = html && 'childNodes' in html ? html.childNodes.find(node => 'tagName' in node && node.tagName === 'head') : undefined;
+            const loader = head && 'childNodes' in head ? head.childNodes.find(node => 'tagName' in node && node.tagName === 'script') : undefined;
+            expect(loader && 'attrs' in loader ? loader.attrs.map(attribute => attribute.name) : []).toEqual(['src']);
             expect(Buffer.concat(chunks).toString()).not.toContain('tail');
         } finally { finish?.(); await running; }
         expect(Buffer.concat(chunks).toString()).toContain('tail');
@@ -429,7 +473,7 @@ describe("preview native HTTP transport", () => {
         expect(Buffer.concat(bytes).toString()).toContain(meta);
     });
 
-    it('serves cooperative real loader bytes behind preview access, executes the shared collector and probes CSP state', async () => {
+    it.each(['loading', 'complete'])('serves cooperative real loader bytes behind preview access and executes safely while %s', async (readyState) => {
         let requests = 0;
         const fixture = await upstream((_request, response) => {
             requests += 1;
@@ -471,9 +515,10 @@ describe("preview native HTTP transport", () => {
             button.addEventListener('click', () => { clicks += 1; });
             const parent = { postMessage: (data: string) => messages.push(JSON.parse(data)) };
             const messages: Array<Record<string, unknown>> = [];
-            const guest = Object.assign(new EventTarget(), { parent, location: { href: 'http://preview.example.test/' },
+            let stopped = false;
+            const guest = Object.assign(new EventTarget(), { parent, stop() { stopped = true; }, location: { href: 'http://preview.example.test/' },
                 localStorage: { length: 0 }, sessionStorage: { length: 0 } });
-            runInNewContext(loader.body, { window: guest, document: { title: 'Preview', readyState: 'complete',
+            runInNewContext(loader.body, { window: guest, document: { title: 'Preview', readyState,
                 documentElement: { nodeType: 1 }, querySelectorAll: (selector: string) => selector === '#button' ? [button] : [] },
                 console: { log() {}, info() {}, warn() {}, error() {}, debug() {} }, performance: { getEntriesByType: () => [] }, Event });
             expect(messages).toContainEqual({ v: 1, kind: 'browser.collector.ready', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'pane_nonce' });
@@ -489,6 +534,12 @@ describe("preview native HTTP transport", () => {
             expect(clicks).toBe(0);
             send(config.webPostMessageTargetOrigin, parent);
             expect(clicks).toBe(1);
+            const stop = new Event('message');
+            Object.defineProperties(stop, { data: { value: JSON.stringify({ v: 1, kind: 'browser.collector.navigate',
+                browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'pane_nonce', command: 'stop' }) },
+                origin: { value: config.webPostMessageTargetOrigin }, source: { value: parent } });
+            guest.dispatchEvent(stop);
+            expect(stopped).toBe(true);
             const denied = await app.inject({ method: 'GET', url: loaderUrl.pathname + loaderUrl.search, headers: { host: headers.host } });
             expect(denied.statusCode).toBe(401);
             const mismatch = new URL(loaderUrl); mismatch.searchParams.set('n', 'wrong');
@@ -518,7 +569,7 @@ describe("preview native HTTP transport", () => {
         const frame = { host: 'preview.example.test', 'sec-fetch-dest': 'iframe' };
         const authorized = 'happier_preview_token=authorized';
         const loaderOf = (html: string) => {
-            const src = /<script defer src="([^"]+)"><\/script>/.exec(html)?.[1]?.replace(/&amp;/g, '&');
+            const src = /<script\b[^>]*\bsrc="([^"]+)"><\/script>/.exec(html)?.[1]?.replace(/&amp;/g, '&');
             return src ? new URL(src, 'http://preview.example.test') : null;
         };
         // The guest realm: the loader's bytes run against a window whose Navigation API is the browser boundary.

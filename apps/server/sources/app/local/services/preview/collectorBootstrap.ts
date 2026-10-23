@@ -178,7 +178,9 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                             nextHeaders['content-type'] = 'text/html; charset=utf-8';
                             nextHeaders['cache-control'] = 'no-store';
                             if (!probe) input.response.writeHead(status, message, nextHeaders);
-                            const tag = `<script defer src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
+                            // Install the document's controls before parsing its body. `defer` would
+                            // leave a streamed page without a Stop listener until upstream EOF.
+                            const tag = `<script src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
                             return admission.allowed ? html.slice(0, admission.offset) + tag + html.slice(admission.offset) : html;
                         },
                         write: (chunk) => { if (!probe) return input.response.write(chunk); },

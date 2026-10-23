@@ -88,6 +88,7 @@ class EventRouter {
     private userConnections = new Map<string, Set<ClientConnection>>();
     private io: SocketRoomEmitter | null = null;
     private serverOwnedRpcForwarder: ServerOwnedRpcForwarder | null = null;
+    private broadcastSessionDelivery: ((delivery: CredentialQualifiedSessionDeliveryV1) => void) | null = null;
     private machineAccessLossListeners = new Set<(input: Readonly<{ accountId: string; machineId: string }>) => void>();
     private warnedNoIo = false;
 
@@ -143,14 +144,19 @@ class EventRouter {
 
     // === SOCKET.IO ADAPTER (ROOM-BASED FANOUT) ===
 
-    setIo(io: SocketRoomEmitter, options: Readonly<{ forwardRpc?: ServerOwnedRpcForwarder }> = {}): void {
+    setIo(io: SocketRoomEmitter, options: Readonly<{
+        forwardRpc?: ServerOwnedRpcForwarder;
+        broadcastSessionDelivery?: (delivery: CredentialQualifiedSessionDeliveryV1) => void;
+    }> = {}): void {
         this.io = io;
         this.serverOwnedRpcForwarder = options.forwardRpc ?? null;
+        this.broadcastSessionDelivery = options.broadcastSessionDelivery ?? null;
     }
 
     clearIo(): void {
         this.io = null;
         this.serverOwnedRpcForwarder = null;
+        this.broadcastSessionDelivery = null;
     }
 
     /** The live Socket.IO adapter only; domain owners supply their currentness guard. */
@@ -473,33 +479,25 @@ class EventRouter {
                 return;
             }
             if (this.io?.in) {
-                const sockets = await this.io.in([
-                    `session:${params.sessionId}:${params.userId}`,
-                    `user-scoped:${params.userId}`,
-                ]).fetchSockets();
-                const deliveredCount = await this.emitToQualifiedSessionSockets({
+                const delivery: CredentialQualifiedSessionDeliveryV1 = {
+                    v: 1,
                     accountId: params.userId,
                     sessionId: params.sessionId,
-                    sockets: sockets.filter(socket => socket.id !== skipSocketId
-                        && socket.data.userId === params.userId
-                        && socket.data.clientType !== "machine-scoped"
-                        && (socket.data.clientType !== "session-scoped"
-                            || socket.data.sessionId === params.sessionId
-                            || socket.data.sessionScopedBinding?.sessionId === params.sessionId)),
-                    emit: socket => {
-                        this.io!.to(socket.id).emit(params.eventName, projectPayloadForSocket(socket.data, params.payload));
-                        return true;
-                    },
-                });
-                recordEventFanoutEmit({
                     eventName: params.eventName,
-                    filterType: "all-interested-in-session",
-                    dispatchMode: "room",
-                    targetKind: "connection",
-                    targetCount: deliveredCount,
-                    payloadType,
-                    ...(payloadBytes !== undefined ? { payloadBytes } : {}),
-                });
+                    payload: params.payload,
+                    ...(skipSocketId ? { skipSocketId } : {}),
+                };
+                // Peer publication has no acknowledgement/census. Each API node
+                // qualifies only its own sockets, including this publishing node.
+                const localIo = this.io.local ?? {
+                    in: this.io.in.bind(this.io),
+                    to: this.io.to.bind(this.io),
+                };
+                try {
+                    this.broadcastSessionDelivery?.(delivery);
+                } finally {
+                    await this.receiveCredentialQualifiedSessionDelivery(localIo, delivery);
+                }
                 return;
             }
 

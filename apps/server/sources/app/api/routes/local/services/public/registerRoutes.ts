@@ -1,7 +1,7 @@
 import type { DaemonLocalServicePublicPreviewCreateRequestV1, DaemonLocalServicePublicPreviewRevokeRequestV1, DaemonLocalServicePublicPreviewStatusRequestV1, LocalServicePublicExposureModeV1, LocalServicePublicExposureV1, LocalServicePublicPreviewSnapshotV1 } from '@happier-dev/protocol/local/services/public/v1';
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { isDeepStrictEqual } from 'node:util';
-import { DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, isLocalServicePublicPreviewCreateConfirmed } from '@happier-dev/protocol/local/services/public/v1';
+import { DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, isLocalServicePublicPreviewCreateConfirmed, resolveLocalServicePublicPreviewCreateFailureV1 } from '@happier-dev/protocol/local/services/public/v1';
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 
 import {
@@ -476,7 +476,8 @@ async function handleCreateExposure(
         rateLimitProfileId: createRequest.rateLimitProfileId ?? "default",
     });
     if (!result.ok) {
-        sendError(reply, 403, "public_preview_denied", result.reasonCode);
+        const failure = resolveLocalServicePublicPreviewCreateFailureV1(result.reasonCode);
+        sendError(reply, failure.statusCode, failure.error, failure.reasonCode);
         return;
     }
 

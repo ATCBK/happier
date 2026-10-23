@@ -2,11 +2,14 @@ import Fastify from "fastify";
 import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { io as ioClient } from "socket.io-client";
+import { ClusterAdapter, MessageType, type ClusterMessage } from "socket.io-adapter";
+import type { Server } from "socket.io";
 
 import { auth } from "@/app/auth/auth";
 import { RedisStreamsRoomEmitter } from "@/app/events/createRedisStreamsRoomEmitter";
 import { eventRouter } from "@/app/events/connectionEventRouter";
-import type { CredentialQualifiedSessionDeliveryV1 } from "@/app/events/socketRoomEmitter";
+import { CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT, type CredentialQualifiedSessionDeliveryV1 } from "@/app/events/socketRoomEmitter";
+import type { ClientConnection } from "@/app/events/eventPayloadTypes";
 import { emitSessionDeletedUpdate } from "@/app/session/delete/emitSessionDeletedUpdate";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -23,7 +26,8 @@ const shutdownRuntime = vi.hoisted(() => ({
     callbacks: [] as Array<() => Promise<void>>,
 }));
 
-vi.mock("@/storage/redis/redis", () => ({
+vi.mock("@/storage/redis/redis", async (importOriginal) => ({
+    ...await importOriginal<typeof import("@/storage/redis/redis")>(),
     // Separate production replicas own separate process-local clients. This
     // in-process harness preserves that topology with two real Redis clients;
     // it does not replace the Redis Streams adapter or its transport.
@@ -168,6 +172,7 @@ describe("startSocket account revocation with the configured Redis adapter", () 
     }, 120_000);
 
     afterEach(async () => {
+        vi.restoreAllMocks();
         while (clients.length > 0) {
             clients.pop()?.disconnect();
         }
@@ -278,7 +283,7 @@ describe("startSocket account revocation with the configured Redis adapter", () 
         }
     }, 45_000);
 
-    it("re-enters credential-qualified Session fanout on the receiving node for headless publishers", async () => {
+    it.each(["worker", "api"] as const)("qualifies local and remote Session recipients from %s despite a silent unrelated peer", async (publisher) => {
         const resolvedRedis = await resolveRedisAdapterValidationRedisUrl({ env: process.env });
         redisMemory = resolvedRedis.redisMemory;
         harness.resetEnv({
@@ -291,10 +296,27 @@ describe("startSocket account revocation with the configured Redis adapter", () 
         const redisA = new Redis(resolvedRedis.redisUrl);
         const redisB = new Redis(resolvedRedis.redisUrl);
         const redisWorker = new Redis(resolvedRedis.redisUrl);
-        redisClients.push(redisA, redisB, redisWorker);
-        const replicaA = await startReplica({ instanceId: "protected-fanout-replica-a", redis: redisA });
+        const redisSilent = new Redis(resolvedRedis.redisUrl);
+        redisClients.push(redisA, redisB, redisWorker, redisSilent);
+        const silentReplica = await startReplica({ instanceId: "protected-fanout-silent", redis: redisSilent });
         const replicaB = await startReplica({ instanceId: "protected-fanout-replica-b", redis: redisB });
-        replicas.push(replicaA, replicaB);
+        // The shared in-process router publishes from the last configured API replica.
+        const replicaA = await startReplica({ instanceId: "protected-fanout-replica-a", redis: redisA });
+        replicas.push(silentReplica, replicaB, replicaA);
+        const ioA = replicaA.app.machineDaemonPresence as Server;
+        const ioB = replicaB.app.machineDaemonPresence as Server;
+        const ioSilent = silentReplica.app.machineDaemonPresence as Server;
+        await vi.waitFor(async () => expect(await ioA.of("/").adapter.serverCount()).toBe(3));
+        const silentAdapter = ioSilent.of("/").adapter;
+        if (!(silentAdapter instanceof ClusterAdapter)) throw new Error("Expected ClusterAdapter");
+        // Hold the external transport hook: the unrelated peer stays counted, but
+        // answers neither census requests nor server-side delivery packets.
+        const silentReceiver = silentAdapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+        const silentOnMessage = silentReceiver.onMessage.bind(silentReceiver);
+        vi.spyOn(silentReceiver, "onMessage").mockImplementation((message, offset) => {
+            if (message.type === MessageType.FETCH_SOCKETS || message.type === MessageType.SERVER_SIDE_EMIT) return;
+            silentOnMessage(message, offset);
+        });
 
         const owner = await db.account.create({ data: { publicKey: `pk-owner-${crypto.randomUUID()}` } });
         const actor = await db.account.create({ data: { publicKey: `pk-actor-${crypto.randomUUID()}` } });
@@ -345,40 +367,83 @@ describe("startSocket account revocation with the configured Redis adapter", () 
             authority: "present_user",
         });
         const qualified = await connectClient({ port: replicaB.port, auth: { token: qualifiedToken } });
+        const localQualified = await connectClient({ port: replicaA.port, auth: { token: qualifiedToken } });
+        const sender = await connectClient({ port: replicaA.port, auth: { token: qualifiedToken } });
         const unqualified = await connectClient({ port: replicaB.port, auth: { token: unqualifiedToken } });
+        const localUnqualified = await connectClient({ port: replicaA.port, auth: { token: unqualifiedToken } });
         const direct = await connectClient({ port: replicaB.port, auth: { token: directToken } });
-        clients.push(qualified, unqualified, direct);
+        clients.push(qualified, localQualified, sender, unqualified, localUnqualified, direct);
 
         const qualifiedUpdates: unknown[] = [];
         const unqualifiedUpdates: unknown[] = [];
         const directUpdates: unknown[] = [];
+        const localUpdates: unknown[] = [];
+        const senderUpdates: unknown[] = [];
+        const localUnqualifiedUpdates: unknown[] = [];
         qualified.on("update", (value) => qualifiedUpdates.push(value));
         unqualified.on("update", (value) => unqualifiedUpdates.push(value));
         direct.on("update", (value) => directUpdates.push(value));
+        localQualified.on("update", value => localUpdates.push(value));
+        sender.on("update", value => senderUpdates.push(value));
+        localUnqualified.on("update", value => localUnqualifiedUpdates.push(value));
 
         const workerEmitter = new RedisStreamsRoomEmitter(redisWorker, {
             maxLen: 2_000,
             streamName: "socket.io",
         });
-        eventRouter.setIo(workerEmitter);
+        if (publisher === "worker") eventRouter.setIo(workerEmitter);
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
 
         const protectedPayload = { body: { t: "update-session", id: session.id, phase: "initial" } };
+        const senderSocket = ioA.sockets.sockets.get(sender.id!);
+        if (!senderSocket) throw new Error("Missing admitted sender socket");
+        const senderConnection: ClientConnection = { connectionType: "user-scoped", userId: actor.id, socket: senderSocket };
         await eventRouter.emitUpdate({
             userId: actor.id,
             payload: protectedPayload as never,
             recipientFilter: { type: "all-interested-in-session", sessionId: session.id },
+            skipSenderConnection: senderConnection,
         });
         await eventRouter.emitUpdate({
             userId: directActor.id,
             payload: protectedPayload as never,
             recipientFilter: { type: "all-interested-in-session", sessionId: session.id },
         });
-        await waitFor(() => qualifiedUpdates.length === 1 && directUpdates.length === 1, "qualified and direct delivery");
+        await waitFor(() => qualifiedUpdates.length === 1 && localUpdates.length === 1
+            && directUpdates.length === 1, "local, remote and direct delivery");
         await expectUnchangedFor(unqualifiedUpdates);
         expect(qualifiedUpdates).toEqual([protectedPayload]);
         expect(directUpdates).toEqual([protectedPayload]);
         expect(unqualifiedUpdates).toEqual([]);
+        expect(localUnqualifiedUpdates).toEqual([]);
+        expect(senderUpdates).toEqual([]);
+        expect(localUpdates).toEqual([protectedPayload]);
+
+        if (publisher === "api") {
+            const adapter = ioB.of("/").adapter;
+            const receiver = adapter as unknown as { onMessage(message: ClusterMessage, offset?: string): void };
+            const onMessage = receiver.onMessage.bind(receiver);
+            let held: (() => void) | undefined;
+            const transport = vi.spyOn(receiver, "onMessage").mockImplementation((message, offset) => {
+                if (message.type === MessageType.SERVER_SIDE_EMIT
+                    && message.data.packet[0] === CREDENTIAL_QUALIFIED_SESSION_DELIVERY_EVENT) {
+                    held = () => onMessage(message, offset);
+                    return;
+                }
+                onMessage(message, offset);
+            });
+            await eventRouter.emitUpdate({ userId: actor.id, payload: {
+                body: { t: "update-session", id: session.id, phase: "in-flight-revocation" },
+            } as never, recipientFilter: { type: "all-interested-in-session", sessionId: session.id },
+                skipSenderConnection: senderConnection });
+            await waitFor(() => held !== undefined && localUpdates.length === 2, "held remote delivery and entitled local delivery");
+            await db.teamMembership.update({ where: { id: membership.id }, data: { status: "suspended" } });
+            transport.mockRestore();
+            held!();
+            await expectUnchangedFor(qualifiedUpdates);
+            expect(qualifiedUpdates).toEqual([protectedPayload]);
+            await db.teamMembership.update({ where: { id: membership.id }, data: { status: "active" } });
+        }
 
         await workerEmitter.forwardCredentialQualifiedSessionDelivery({
             v: 1,

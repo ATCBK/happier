@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Server, Socket } from "socket.io";
+import type { Socket } from "socket.io";
 
 import { RPC_ERROR_CODES, RPC_METHODS } from "@happier-dev/protocol/rpc";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
@@ -11,7 +11,7 @@ import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherP
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { createFakeSocket, triggerSocketHandler } from "../../testkit/socketHarness";
+import { createFakeSocket, createSocketRoomDiscoveryHarness, triggerSocketHandler } from "../../testkit/socketHarness";
 import { registerSocketRpcHandlers } from "./registerSocketRpcHandlers";
 
 describe("explicit machine stop RPC on SQLite", () => {
@@ -44,7 +44,7 @@ describe("explicit machine stop RPC on SQLite", () => {
             const daemon = Object.assign(createFakeSocket({ id: "lifecycle-daemon", data: { clientType: "machine-scoped", machineId },
                 timeout: () => ({ emitWithAck: targetEffect }) }), { join });
             // Socket.IO is the network boundary; registration, relay admission and SQLite access stay real.
-            const io = { in: () => ({ timeout: () => ({ fetchSockets: async () => [daemon] }), fetchSockets: async () => [daemon] }) } as unknown as Server;
+            const io = createSocketRoomDiscoveryHarness(async () => [daemon]);
             registerSocketRpcHandlers({ userId: owner.id, socket: daemon as unknown as Socket, io });
             await triggerSocketHandler(daemon, SOCKET_RPC_EVENTS.REGISTER, { method });
             expect(daemon.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method });
@@ -110,12 +110,7 @@ describe("explicit machine stop RPC on SQLite", () => {
             data: { clientType: "machine-scoped", machineId },
             timeout: vi.fn(() => ({ emitWithAck: targetEmitWithAck })),
         };
-        const io = {
-            in: vi.fn(() => ({
-                timeout: vi.fn(() => ({ fetchSockets: vi.fn().mockResolvedValue([target]) })),
-                fetchSockets: vi.fn().mockResolvedValue([target]),
-            })),
-        } as unknown as Server;
+        const io = createSocketRoomDiscoveryHarness(async () => [target]);
         const caller = createFakeSocket({
             id: "caller-socket",
             data: {
@@ -147,6 +142,7 @@ describe("explicit machine stop RPC on SQLite", () => {
             {
                 method,
                 params: "opaque-encrypted-stop-request",
+                callerAuthority: "present_user",
                 authorization: {
                     kind: "session.write",
                     sessionId: session.id,

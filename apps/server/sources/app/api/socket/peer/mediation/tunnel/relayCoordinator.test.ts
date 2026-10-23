@@ -6,6 +6,7 @@ import type { Server, Socket } from "socket.io";
 import { describe, expect, it, vi } from "vitest";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
+import { createMachineSocketOwnershipRegistry } from '@/app/api/socket/machineSocketOwnershipRegistry';
 import { createPeerTcpTunnelRelayCoordinator } from "./relayCoordinator";
 
 describe("createPeerTcpTunnelRelayCoordinator", () => {
@@ -90,6 +91,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const relayAdmissionRedis = Object.assign(new EventEmitter(), {
             set,
             disconnect,
+            hmget: async () => ['socket-closing'],
         });
         Object.defineProperty(relayAdmissionRedis, "status", {
             get: () => redisStatus,
@@ -131,6 +133,8 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
             config: {
                 mode: "redis",
                 createRelayAdmissionRedis: () => relayAdmissionRedis as unknown as Redis,
+                readMachineSocketOwner: createMachineSocketOwnershipRegistry({ io,
+                    config: { enabled: true, instanceId: 'closing' }, redis: relayAdmissionRedis as unknown as Redis }).readOwner,
             },
         });
         const nowMs = Date.now();
@@ -198,6 +202,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
             config: {
                 mode: "redis",
                 createRelayAdmissionRedis,
+                readMachineSocketOwner: createMachineSocketOwnershipRegistry({ io, config: { enabled: false } }).readOwner,
             },
         });
 
@@ -489,6 +494,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         let remoteAttachmentAccepted = false;
         let replaceProvisionalClaimBeforeReject = false;
         const relayAdmissionRedis = Object.assign(new EventEmitter(), {
+            hmget: async () => [machineSocketId],
             set: vi.fn(async (
                 key: string,
                 value: string,
@@ -518,32 +524,35 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         Object.defineProperty(relayAdmissionRedis, "status", {
             get: () => "ready",
         });
-        const serverSideEmitWithAck = vi.fn(async () => {
+        const serverSideEmit = vi.fn((event: string, raw: unknown) => {
+            if (event !== 'happier:peer-tunnel:attach:v2') return;
+            // Socket.IO is the transport boundary; deliver a correlated peer response.
+            const request = raw as { replyEvent: string; attachmentId: string; ownerRouteId: string };
             if (!remoteAttachmentAccepted && replaceProvisionalClaimBeforeReject) {
                 const claimKey = redisValues.keys().next().value;
                 if (claimKey) redisValues.set(claimKey, "another-owner-provisional-claim");
             }
-            return [{ status: remoteAttachmentAccepted ? "attached" : "rejected" }];
+            queueMicrotask(() => io.emit(request.replyEvent, { attachmentId: request.attachmentId,
+                ownerRouteId: request.ownerRouteId, peerRouteId: 'remote-peer', status: remoteAttachmentAccepted ? 'attached' : 'rejected' }));
         });
-        const io = {
+        const io = Object.assign(new EventEmitter(), {
             sockets: {
                 sockets: new Map(),
             },
-            on: vi.fn(),
-            off: vi.fn(),
             in: vi.fn(() => ({
                 local: { fetchSockets: vi.fn(async () => []) },
                 timeout: vi.fn(() => ({ fetchSockets: vi.fn(async () => [remoteMachineSocket]) })),
             })),
             to: vi.fn(() => ({ emit: vi.fn() })),
-            serverSideEmit: vi.fn(),
-            serverSideEmitWithAck,
-        } as unknown as Server;
+            serverSideEmit,
+        }) as unknown as Server;
         const coordinator = createPeerTcpTunnelRelayCoordinator({
             io,
             config: {
                 mode: "redis",
                 createRelayAdmissionRedis: () => relayAdmissionRedis as unknown as Redis,
+                readMachineSocketOwner: createMachineSocketOwnershipRegistry({ io,
+                    config: { enabled: true, instanceId: 'remote-test' }, redis: relayAdmissionRedis as unknown as Redis }).readOwner,
             },
         });
         const nowMs = Date.now();

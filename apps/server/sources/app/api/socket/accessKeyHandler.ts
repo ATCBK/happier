@@ -1,5 +1,5 @@
 import { Socket } from "socket.io";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { readSessionMachineBindingStateInTx, readSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { log } from "@/utils/logging/log";
 import type { ClientConnection } from "@/app/events/eventPayloadTypes";
@@ -34,12 +34,12 @@ export function accessKeyHandler(userId: string, socket: Socket, connection: Cli
             // custodian. Read admission and the exact tuple together at their
             // canonical owner; retained ciphertext alone never grants access.
             const binding = { accountId: userId, machineId, sessionId };
-            const result = await inTx(async tx => {
+            const result = await inReadSnapshot(async tx => {
                 if (await readSessionMachineBindingStateInTx(tx, binding) !== "available") {
                     return { admitted: false } as const;
                 }
                 return { admitted: true, accessKey: await readSessionMachineAccessKeyInTx(tx, binding) } as const;
-            }, { isolationLevel: "Serializable" /* Current Machine/Session binding and the disclosed AccessKey must share one snapshot. */ });
+            });
             if (!result.admitted) {
                 if (callback) {
                     callback({

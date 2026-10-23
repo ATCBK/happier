@@ -39,6 +39,7 @@ import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 import { forwardRpcCall, type RpcForwardResult } from "./rpc/forwardRpcCall";
 import { readVerifiedMachineSocketInstallationIdFromSocketData } from "./machineSocketInstallationProof";
 import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./rpc/_types";
+import { readSocketRoomSnapshot } from './socketRoomDiscovery';
 
 /**
  * Reserved to the server's external Action bridge. The corresponding daemon
@@ -379,39 +380,45 @@ export async function resolveCurrentSessionPublisherFromServer(params: Readonly<
     sessionId: string;
 }>): Promise<CurrentSessionPublisherAuthority | null> {
     if (!params.presence) return null;
-    const sockets = await runDispatchPhase('session_publishers', undefined, async () => {
+    const presence = params.presence;
+    const resolveAuthority = async (sockets: readonly SocketDataCarrier[]) => {
+        const authorities = new Map<string, CurrentSessionPublisherAuthority>();
+        for (const socket of sockets) {
+            const projection = readSessionPublisherAuthorityProjection(socket.data);
+            if (!projection) continue;
+            const authority = await runDispatchPhase('publisher_currentness', undefined, () => (
+                presence.resolveProjectedCurrentPublisher({
+                    expectedAccountId: params.accountId,
+                    expectedSessionId: params.sessionId,
+                    projection,
+                })
+            ));
+            if (authority.kind === 'ready' && authority.value) {
+                authorities.set(authority.value.machineId, authority.value);
+            }
+        }
+        return authorities.size === 1 ? [...authorities.values()][0]! : null;
+    };
+    const snapshot = await runDispatchPhase('session_publishers', undefined, async () => {
         // The per-account Session room is the exact set of this Account's
         // sockets scoped to this Session, and it is what every Session-scoped
         // client joins — including a restricted Runner, which is deliberately
         // kept out of the Account-wide `user:` room. Resolving a Session
         // target from that Account-wide room therefore missed exactly the
         // publisher a Session target names.
-        // Socket.IO's RemoteSocket has more fields than this resolver needs.
-        return await params.io
-            .in(getAccountSessionSocketRoom(params.accountId, params.sessionId))
-            .fetchSockets() as SocketDataCarrier[];
+        return await readSocketRoomSnapshot({
+            io: params.io,
+            room: getAccountSessionSocketRoom(params.accountId, params.sessionId),
+            // A room member alone cannot select placement. The canonical owner
+            // first proves its globally unique committed publisher generation,
+            // current fence and Machine access before accepting that carrier.
+            acceptPartial: async sockets => (await resolveAuthority(sockets)) !== null,
+        });
     });
-    if (sockets.kind === 'failed') return null;
-
-    const authorities = new Map<string, CurrentSessionPublisherAuthority>();
-    for (const socket of sockets.value) {
-        const projection = readSessionPublisherAuthorityProjection(socket.data);
-        if (!projection) continue;
-        const presence = params.presence;
-        const authority = await runDispatchPhase('publisher_currentness', undefined, () => (
-            presence.resolveProjectedCurrentPublisher({
-                expectedAccountId: params.accountId,
-                expectedSessionId: params.sessionId,
-                projection,
-            })
-        ));
-        // A failed currentness read cannot admit this candidate; another
-        // current publisher may still be discovered.
-        if (authority.kind === 'ready' && authority.value) {
-            authorities.set(authority.value.machineId, authority.value);
-        }
-    }
-    return authorities.size === 1 ? [...authorities.values()][0] : null;
+    if (snapshot.kind === 'failed') return null;
+    // Discovery is an asynchronous transport boundary. Revalidate its positive
+    // evidence after settlement; replacement or revocation cannot survive it.
+    return await resolveAuthority(snapshot.value.sockets);
 }
 
 /** The existing placement reader projects the same current publisher owner. */

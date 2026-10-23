@@ -65,7 +65,12 @@ async function readMetricSamples(name: string): Promise<MetricSample[]> {
 }
 
 describe("eventRouter (rooms)", () => {
+    let envSnapshot: ReturnType<typeof snapshotEnv>;
     beforeEach(() => {
+        envSnapshot = snapshotEnv();
+        // This persistence boundary models PostgreSQL transactions; SQLite
+        // snapshots use a separate real client rather than the mocked $transaction.
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPY_DB_PROVIDER: "postgres" });
         register.resetMetrics();
         transactionBoundary.failCommits = 0;
         transactionBoundary.committed = false;
@@ -74,6 +79,7 @@ describe("eventRouter (rooms)", () => {
 
     afterEach(() => {
         eventRouter.clearIo();
+        restoreEnv(envSnapshot);
         vi.restoreAllMocks();
     });
 
