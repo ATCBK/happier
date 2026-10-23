@@ -31,7 +31,7 @@ describe('resident streamed disk index', () => {
         const root = join(scratch, 'progress-root');
         const index = createStorageScanIndex({ activeServerDir: join(scratch, 'progress-state') });
         await index.initialize([], true);
-        const state = index.begin({ volumeId: 'progress', root, target: { folderPath: root }, usedBytes: 0,
+        const state = await index.begin({ volumeId: 'progress', root, target: { folderPath: root }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         try {
             index.ingest('progress', { v: 1, type: 'progress', sizedBytes: 0, items: 1, currentPath: root, stuckSinceMs: 1000 });
@@ -67,11 +67,11 @@ describe('resident streamed disk index', () => {
         const admission = { volumeId: 'resume-progress', root, target: { folderPath: root }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } } as const;
         try {
-            await index.initialize([], true); index.begin(admission);
+            await index.initialize([], true); await index.begin(admission);
             const native = startNativeDiskScan({ root }, { onRecord: record => index.ingest(admission.volumeId, record) });
             await native.done; index.finish(admission.volumeId, 'cancelled');
             const kept = index.state()!.progress;
-            index.begin({ ...admission, resume: true });
+            await index.begin({ ...admission, resume: true });
             index.ingest(admission.volumeId, { v: 1, type: 'progress', sizedBytes: 0, items: 0, currentPath: root });
             expect(index.state()!.progress).toEqual({ ...kept, currentPath: root });
             index.ingest(admission.volumeId, { v: 1, type: 'progress', sizedBytes: 4096, items: 2, currentPath: root });
@@ -93,7 +93,7 @@ describe('resident streamed disk index', () => {
         const admission = { volumeId: 'partial-parent-resume', root, target: { folderPath: root }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } } as const;
         try {
-            await index.initialize([], true); index.begin(admission);
+            await index.initialize([], true); await index.begin(admission);
             // Model the interrupted state observed live: child facts reached the
             // index before the parent's enumeration proof. Use real producer
             // records for all entry, coverage and physical-identity shapes.
@@ -111,7 +111,7 @@ describe('resident streamed disk index', () => {
                 await rename(child, join(scratch, `${fixture}-retired`));
                 await mkdir(child); await writeFile(join(child, 'replacement'), Buffer.alloc(4096));
             }
-            index.begin({ ...admission, resume: true });
+            await index.begin({ ...admission, resume: true });
             const prior = await index.writePriorProjection(admission.volumeId, { resume: true });
             let cut = false; let sawChild = false;
             try {
@@ -134,7 +134,7 @@ describe('resident streamed disk index', () => {
                 expect(page.nodes.find(node => node.nodeId === child)).toEqual(completedChild.node);
                 expect(index.readNode(child)?.scannedAt).toBe(completedChild.scannedAt);
             }
-            index.begin({ ...admission, resume: true });
+            await index.begin({ ...admission, resume: true });
             const finalPrior = await index.writePriorProjection(admission.volumeId, { resume: true });
             try {
                 const final = startNativeDiskScan({ root, resumeFrom: [], previousIndexPath: finalPrior!.path, keepMinBytes: 0 }, {
@@ -254,7 +254,7 @@ describe('resident streamed disk index', () => {
     it.each(['open', 'close'] as const)('removes prior-projection scratch and ownership after a filesystem %s failure', async phase => {
         const root = join(scratch, `projection-${phase}`); const volumeId = `projection-${phase}`;
         const index = createStorageScanIndex({ activeServerDir: join(scratch, `projection-${phase}-state`) });
-        await index.initialize([], true); index.begin({ volumeId, root, target: { folderPath: root }, usedBytes: 0,
+        await index.initialize([], true); await index.begin({ volumeId, root, target: { folderPath: root }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const failure = Object.assign(new Error(`Filesystem ${phase} failed`), { code: 'EIO' }); let ownedDirectory: string | undefined;
         const originalOpen = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open;
@@ -277,7 +277,7 @@ describe('resident streamed disk index', () => {
         await mkdir(root); const leaf = join(root, 'kept-facts'); await writeFile(leaf, 'x');
         const alias = join(root, 'alias'); if (process.platform !== 'win32') await symlink(leaf, alias);
         const volumes = [{ id: 'partial-columns', mountPath: root, usedBytes: 0 }]; const index = createStorageScanIndex({ activeServerDir });
-        await index.initialize(volumes, true); index.begin({ volumeId: volumes[0].id, root, target: { volumeId: volumes[0].id }, usedBytes: 0,
+        await index.initialize(volumes, true); await index.begin({ volumeId: volumes[0].id, root, target: { volumeId: volumes[0].id }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const native = startNativeDiskScan({ root, keepMinBytes: 0 }, { onRecord: record => index.ingest(volumes[0].id, record) });
         await native.done; const originalLeaf = index.readNode(leaf)!; index.close();
@@ -336,7 +336,7 @@ describe('resident streamed disk index', () => {
     it('persists bounded entry/fact streams without losing raw files, package facts, or facts on final rewrites', async () => {
         const root = join(scratch, 'stream-root'); const index = createStorageScanIndex({ activeServerDir: join(scratch, 'stream-state') });
         await index.initialize([], true);
-        index.begin({ volumeId: 'stream', root, target: { folderPath: root }, usedBytes: 100000,
+        await index.begin({ volumeId: 'stream', root, target: { folderPath: root }, usedBytes: 100000,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const directory: Omit<Extract<NativeDiskScanRecord, { type: 'dir-start' }>, 'type' | 'relistOnly'> = { v: 1, id: root, name: 'stream-root', allocatedBytes: 0, logicalBytes: 0, ownLogicalBytes: 0,
             items: 1, mtimeMs: 2000, flags: { atLeast: false }, children: [], files: [], allocationFacts: [],
@@ -366,7 +366,7 @@ describe('resident streamed disk index', () => {
     });
     it('commits synchronous transport batches atomically and retains the frontier when streaming replacement is interrupted', async () => {
         const root = join(scratch, 'batch-root'); const index = createStorageScanIndex({ activeServerDir: join(scratch, 'batch-state') });
-        await index.initialize([], true); index.begin({ volumeId: 'batch', root, target: { folderPath: root }, usedBytes: 0,
+        await index.initialize([], true); await index.begin({ volumeId: 'batch', root, target: { folderPath: root }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const entry: Extract<NativeDiskScanRecord, { type: 'dir-entry' }> = { v: 1, type: 'dir-entry', parent: root,
             node: { id: join(root, 'partial'), name: 'partial', kind: 'file', allocatedBytes: 0, logicalBytes: 0, items: 1, mtimeMs: 2000, flags: { atLeast: false } },
@@ -400,14 +400,14 @@ describe('resident streamed disk index', () => {
             allocatedBytes: 4096, logicalBytes: 12, items: 1, mtimeMs: 2000, flags: { atLeast: false } });
         const entry = (parent: string, id: string, kind: 'folder' | 'file', retained = false): Extract<NativeDiskScanRecord, { type: 'dir-entry' }> =>
             ({ v: 1, type: 'dir-entry', parent, node: node(id, kind), visible: true, retained, replaceFacts: !retained });
-        index.begin(admission); index.ingest('stream-relist', { ...directory(root), type: 'dir-start', relistOnly: false });
+        await index.begin(admission); index.ingest('stream-relist', { ...directory(root), type: 'dir-start', relistOnly: false });
         index.ingest('stream-relist', entry(root, child, 'folder')); index.ingest('stream-relist', entry(root, gone, 'file'));
         index.ingest('stream-relist', { ...directory(child, root), type: 'dir-start', relistOnly: false }); index.ingest('stream-relist', entry(child, nested, 'file'));
         index.ingest('stream-relist', { v: 1, type: 'fact', owner: nested, fact: { key: 'nested-key', pathId: nested, allocatedBytes: 4096, mtimeMs: 2000, ageIncluded: true } });
         index.ingest('stream-relist', { ...directory(child, root), type: 'dir', complete: true, enumerated: true });
         index.ingest('stream-relist', { ...directory(root), type: 'dir', complete: true, enumerated: true }); index.finish('stream-relist', 'complete');
         const prior = index.readNode(child)!; time = 20000;
-        index.begin({ ...admission, relistOnly: true }); index.ingest('stream-relist', { ...directory(root), type: 'dir-start', relistOnly: true });
+        await index.begin({ ...admission, relistOnly: true }); index.ingest('stream-relist', { ...directory(root), type: 'dir-start', relistOnly: true });
         index.ingest('stream-relist', entry(root, child, 'folder', true));
         index.ingest('stream-relist', { ...directory(root), type: 'dir', flags: { atLeast: true } });
         expect(index.readNode(gone)).not.toBeNull(); // Incomplete enumeration is not absence proof.
@@ -417,7 +417,7 @@ describe('resident streamed disk index', () => {
         const view = index.readView({ view: { tab: 'folders', depth: 1 } });
         expect(view.nodes.find(value => value.nodeId === child)?.deltaSincePrevious).toBeUndefined();
         expect(view.coverage.find(value => value.path === root)?.complete).toBe(false);
-        time = 30000; index.begin({ ...admission, relistOnly: true });
+        time = 30000; await index.begin({ ...admission, relistOnly: true });
         index.ingest('stream-relist', { ...directory(root), type: 'dir-start', relistOnly: true });
         index.ingest('stream-relist', entry(root, child, 'folder')); // Fresh nonretained identity cannot inherit the old nested tree.
         expect(index.readNode(nested)).toBeNull(); expect(index.readNode(child)?.complete).toBe(false);
@@ -469,19 +469,29 @@ describe('resident streamed disk index', () => {
         expect(folder.nodes.find(node => node.name === 'kept')?.deltaSincePrevious).toBe(0);
         const files = (await readdir(join(activeServerDir, 'storage', 'scans'))).filter(name => name.endsWith('.sqlite')); expect(files).toHaveLength(2);
         const previous = join(activeServerDir, 'storage', 'scans', files.find(name => name.includes('.previous'))!); const previousBefore = await stat(previous);
-        index.begin({ volumeId: 'replace', root: volume, target: { volumeId: 'replace' }, usedBytes: 1_000_000,
+        await index.begin({ volumeId: 'replace', root: volume, target: { volumeId: 'replace' }, usedBytes: 1_000_000,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } }); index.finish('replace', 'interrupted');
         expect((await stat(previous)).mtimeMs).toBe(previousBefore.mtimeMs);
         const current = openProtectedSqliteDatabaseSync(join(activeServerDir, 'storage', 'scans', files.find(name => !name.includes('.previous'))!));
         try {
-            // An interrupted replacement retains its complete baseline in separate
-            // relations, but retired current-path copies must not accumulate.
-            expect(current.prepare('SELECT COUNT(*) AS count FROM paths').get()).toEqual({ count: 0 });
-            expect(Object.values(current.prepare('SELECT COUNT(*) AS count FROM baseline_paths').get()!)[0]).toBeGreaterThan(0);
+            // Interrupted admission keeps path identities/free pages available
+            // for reuse. Repeating it must not grow those rows or lose baseline
+            // history; successful completion owns final reclamation.
+            const retained = current.prepare('SELECT COUNT(*) AS count FROM paths').get();
+            expect(retained).toEqual(current.prepare('SELECT COUNT(*) AS count FROM baseline_paths').get());
+            expect(Object.values(retained!)[0]).toBeGreaterThan(0);
+            await index.begin({ volumeId: 'replace', root: volume, target: { volumeId: 'replace' }, usedBytes: 1_000_000,
+                fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } }); index.finish('replace', 'interrupted');
+            expect(current.prepare('SELECT COUNT(*) AS count FROM paths').get()).toEqual(retained);
+            expect(current.prepare('SELECT COUNT(*) AS count FROM entries').get()).toEqual({ count: 0 });
         } finally { current.close(); }
         await runner.dispose();
         const reopened = createStorageScanIndex({ activeServerDir }); await reopened.initialize(volumes, true);
         expect(reopened.state()?.status).toBe('interrupted'); expect(reopened.frontier('replace')).toEqual([volume]);
+        reopened.finish('replace', 'complete');
+        const reclaimed = openProtectedSqliteDatabaseSync(join(activeServerDir, 'storage', 'scans', files.find(name => !name.includes('.previous'))!));
+        try { expect(reclaimed.prepare('SELECT COUNT(*) AS count FROM paths').get()).toEqual({ count: 0 }); }
+        finally { reclaimed.close(); }
         enabled = false; await reopened.initialize(volumes, enabled);
         expect((await readdir(join(activeServerDir, 'storage', 'scans'))).filter(name => name.endsWith('.sqlite'))).toEqual([]);
         reopened.close();
@@ -744,7 +754,7 @@ describe('resident streamed disk index', () => {
         const volume = join(scratch, 'frontier'); const left = join(volume, 'left'); const right = join(volume, 'right');
         await mkdir(left, { recursive: true }); await mkdir(right); await writeFile(join(left, 'shared'), Buffer.alloc(8192)); await link(join(left, 'shared'), join(right, 'shared'));
         const index = createStorageScanIndex({ activeServerDir: join(scratch, 'frontier-state') }); await index.initialize([{ id: 'frontier', mountPath: volume, usedBytes: 100_000 }], true);
-        const admitted = index.begin({ volumeId: 'frontier', root: volume, target: { volumeId: 'frontier' }, usedBytes: 100_000,
+        const admitted = await index.begin({ volumeId: 'frontier', root: volume, target: { volumeId: 'frontier' }, usedBytes: 100_000,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const first = startNativeDiskScan({ root: volume, resumeFrom: [right], keepMinBytes: 0 }, { onRecord: record => index.ingest('frontier', record) });
         await first.done; index.finish('frontier', 'interrupted');

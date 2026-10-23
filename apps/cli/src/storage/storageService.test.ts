@@ -29,6 +29,7 @@ import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProvid
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { createStorageWorktreeOperations } from './worktrees/storageWorktreeOperations';
 import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTrashStore, resolveTrashOsUserId } from './trash/trashStore';
 import { createMachineResourcesPolicyRuntime } from '@/daemon/resources/machineResourcesPolicy';
 import { startNativeDiskScan, measureNativeDisk } from './measure/nativeDiskMeasure';
@@ -207,13 +208,15 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const service = createStorageService({ homeDir: scratch, readVolumes: () => [],
             catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'no-log-temp'),
                 readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths, sessions }) } });
-        monitor.start();
+        const traceEnv = createEnvKeyScope(['HAPPIER_WEB_LATENCY_TRACE']);
         try {
+            traceEnv.patch({ HAPPIER_WEB_LATENCY_TRACE: '1' });
+            monitor.start();
             const summary = await service.summary();
             await new Promise(resolve => setTimeout(resolve, 0));
             expect(summary.categories.find(category => category.categoryId === 'logs')?.count).toBe(650);
             expect(warnings).toEqual([]);
-        } finally { monitor.stop(); service.dispose(); }
+        } finally { monitor.stop(); service.dispose(); traceEnv.restore(); }
     }, 60_000);
 
     it('reuses sized catalog facts for retained and fresh Account-qualified summary RPCs', async () => {
@@ -318,6 +321,24 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         } finally {
             routes.dispose(); nativeSpawn.mockImplementation(actualChildProcess.spawn); nativeSpawn.mockClear(); readDirectories.mockClear();
         }
+    });
+
+    it('projects an empty retained summary without gathering unused process protection facts', async () => {
+        const home = join(scratch, 'empty-summary'); await mkdir(home);
+        let reads = 0;
+        const service = createStorageService({ homeDir: scratch,
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'empty-summary-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }),
+                readInUsePaths: () => { reads++; return { reliable: true, paths: [] }; } }, readVolumes: () => [] });
+        const actor = { accountId: 'owner', custodianAccountId: 'owner', kind: 'person' as const,
+            assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
+        try {
+            expect((await service.summary()).suggestionsTop).toEqual([]);
+            const measuredReads = reads;
+            expect(measuredReads).toBeGreaterThan(0);
+            expect((await service.summary({ actor })).suggestionsTop).toEqual([]);
+            expect(reads).toBe(measuredReads);
+        } finally { service.dispose(); }
     });
 
     it.each(['linux', 'darwin', 'win32'] as const)('serves daemon-qualified %s scan shortcuts through the strict summary consumer', async platform => {
@@ -587,7 +608,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         let state: DiskScanStateV1;
         try {
             await seed.initialize([{ id: volumes[0].id, mountPath: scratch, usedBytes: 500_000 }], true);
-            state = seed.begin({ volumeId: volumes[0].id, root, target: { folderPath: root }, usedBytes: 0,
+            state = await seed.begin({ volumeId: volumes[0].id, root, target: { folderPath: root }, usedBytes: 0,
                 fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
             // Retain a real native stream prefix ending after a finished child,
             // before the parent completes, as an abrupt transport stop does.
@@ -1333,6 +1354,8 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect(declined.declinedCount).toBe(1);
             expect((await service.suggestionsList({ machineId: 'machine' }, { actor: { ...actor, kind: 'agent' } })).items.some(item => item.path === cache)).toBe(false);
             expect((await service.suggestionsList({ machineId: 'machine' }, { actor })).items.some(item => item.path === cache)).toBe(true);
+            expect((await service.summary({ actor: { ...actor, kind: 'agent' } })).suggestionsTop.some(item => item.path === cache)).toBe(false);
+            expect((await service.summary({ actor })).suggestionsTop.some(item => item.path === cache)).toBe(true);
         } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
 
@@ -1342,14 +1365,16 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         await execute('git', ['init', repo]);
         await writeFile(join(repo, 'package.json'), '{}'); await writeFile(join(repo, '.gitignore'), 'dist/\n');
         for (const name of ['dist', 'build']) { await mkdir(join(repo, name)); await writeFile(join(repo, name, 'bytes'), Buffer.alloc(4096, 1)); }
+        await mkdir(join(repo, 'empty', 'child'), { recursive: true });
         const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
         const registration = createGitScmBackendRuntimeRegistration();
         const scmRegistry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
             qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
             hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) })]);
+        let inUsePaths: string[] = []; let reliable = true; let protectedFolders: { path: string; addedAt: number }[] = [];
         const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'scan-absent-temp'),
-            readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }), readInUsePaths: () => ({ reliable: true, paths: [] }) }, homeDir: scratch, scmRegistry,
-            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }), readInUsePaths: () => ({ reliable, paths: inUsePaths }) }, homeDir: scratch, scmRegistry,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true, protectedFolders }),
             readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: repo, totalBytes: 1_000_000, availableBytes: 500_000 }],
             readStorageProtectionFacts: () => ({ cloudSyncedFolders: [repo] }),
         });
@@ -1362,6 +1387,55 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
                 .toEqual([join(repo, 'dist')]);
             expect(listed.items.find(item => item.path === join(repo, 'dist')))
                 .toMatchObject({ itemId: join(repo, 'dist'), verdict: 'caution', reason: { detail: { cloudSynced: true } }, evidence: expect.arrayContaining(['scm_ignored']) });
+            const measured = await service.summary();
+            expect(measured.suggestionsTop).toContainEqual(expect.objectContaining({ path: join(repo, 'dist') }));
+            expect(measured.suggestionsTop).toContainEqual(expect.objectContaining({ path: join(repo, 'empty'),
+                evidence: expect.arrayContaining(['empty_folder_relisted']) }));
+            const { DatabaseSync } = await import('node:sqlite');
+            const prepare = DatabaseSync.prototype.prepare;
+            let traversedRows = 0;
+            const { Session } = await import('node:inspector');
+            const profiler = process.env.STO19_SUMMARY_PROFILE ? new Session() : undefined;
+            profiler?.connect();
+            if (profiler) { await new Promise<void>((done, fail) => profiler.post('Profiler.enable', error => error ? fail(error) : done()));
+                await new Promise<void>((done, fail) => profiler.post('Profiler.start', error => error ? fail(error) : done())); }
+            // Observe the real retained-index iterator; Account projection must
+            // consume the measured suggestions, not enumerate the volume again.
+            const observe = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: InstanceType<typeof DatabaseSync>, sql) {
+                const statement = prepare.call(this, sql);
+                if (sql.includes('ORDER BY length(n.id) DESC,n.id')) {
+                    const iterate = statement.iterate.bind(statement);
+                    statement.iterate = function* (...args) {
+                        const rows: ReturnType<typeof statement.iterate> = Reflect.apply(iterate, undefined, args);
+                        for (const row of rows) { traversedRows++; yield row; }
+                    };
+                }
+                return statement;
+            });
+            try {
+                const retained = await service.summary({ actor });
+                expect(retained.suggestionsTop).toEqual(measured.suggestionsTop);
+                expect.soft(traversedRows).toBe(0);
+                // A sibling process in the repository makes build outputs
+                // ineligible even though its cwd does not overlap dist itself.
+                inUsePaths = [join(repo, 'source')];
+                expect((await service.summary({ actor })).suggestionsTop.some(item => item.path === join(repo, 'dist'))).toBe(false);
+                inUsePaths = []; reliable = false;
+                expect((await service.summary({ actor })).suggestionsTop.some(item => item.path === join(repo, 'dist'))).toBe(false);
+                reliable = true; protectedFolders = [{ path: join(repo, 'dist'), addedAt: 1 }];
+                expect((await service.summary({ actor })).suggestionsTop.some(item => item.path === join(repo, 'dist'))).toBe(false);
+                protectedFolders = [];
+                expect((await service.summary({ actor })).suggestionsTop).toEqual(measured.suggestionsTop);
+                expect.soft(traversedRows).toBe(0);
+                const recipient = { ...actor, accountId: 'recipient', sessionIds: new Set<string>() };
+                expect((await service.summary({ actor: recipient })).suggestionsTop).toEqual([]);
+            } finally {
+                observe.mockRestore();
+                if (profiler) {
+                    const profile = await new Promise<unknown>((done, fail) => profiler.post('Profiler.stop', (error, value) => error ? fail(error) : done(value.profile)));
+                    await writeFile(process.env.STO19_SUMMARY_PROFILE!, JSON.stringify(profile)); profiler.disconnect();
+                }
+            }
         } finally { service.dispose(); }
     });
 

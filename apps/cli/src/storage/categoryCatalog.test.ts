@@ -18,6 +18,7 @@ import type { ScmStatusSnapshotRequest, ScmStatusSnapshotResponse } from '@happi
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
 import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 // The real filesystem remains underneath; only one test projects an OS ownership fact.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -184,13 +185,15 @@ describe('Happier storage category catalog', () => {
             warn: (_message, data) => warnings.push(data) });
         const catalog = createStorageCategoryCatalog({ ...f, readProjects: () => ({ status: 'ready', projects: [] }),
             readInUsePaths: () => ({ reliable: true, paths: [] }) });
-        monitor.start();
+        const traceEnv = createEnvKeyScope(['HAPPIER_WEB_LATENCY_TRACE']);
         try {
+            traceEnv.patch({ HAPPIER_WEB_LATENCY_TRACE: '1' });
+            monitor.start();
             const result = await catalog.discoverSnapshot();
             await new Promise(resolve => setTimeout(resolve, 0));
             expect(result.items.filter(item => item.categoryId === 'logs')).toHaveLength(1_000);
             expect(warnings).toEqual([]);
-        } finally { monitor.stop(); }
+        } finally { monitor.stop(); traceEnv.restore(); }
     });
     it.skipIf(process.platform === 'win32')('binds a managed uv item to the same guarded Storage remover', async () => {
         const f = await fixture();

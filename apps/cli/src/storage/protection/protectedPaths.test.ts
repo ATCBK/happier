@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { classifyPath, classifyPaths, classifyPhysicalPath, type StorageProtectionFacts } from './protectedPaths';
 import { physicalPathWithoutFollowingLeaf } from '@/utils/path/physicalAncestorPath';
 import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 const fixtures: string[] = [];
 async function fixture() {
@@ -19,15 +20,17 @@ describe('storage physical path protection', () => {
     const warnings: Readonly<Record<string, unknown>>[] = [];
     const monitor = createDaemonEventLoopStallMonitor({ getActiveRpcOperations: () => [],
       warn: (_message, data) => warnings.push(data) });
-    monitor.start();
+    const traceEnv = createEnvKeyScope(['HAPPIER_WEB_LATENCY_TRACE']);
     try {
+      traceEnv.patch({ HAPPIER_WEB_LATENCY_TRACE: '1' });
+      monitor.start();
       const result = classifyPhysicalPath('/projects', { homeDir: '/people/alice', platform: 'linux',
         inUsePaths: paths, inUseSessions: paths.map((path, index) => ({ path, sessionId: `session-${index % 15}` })) });
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(result.loses).toHaveLength(15);
       expect(new Set(result.loses?.map(reason => reason.detail?.sessionId)).size).toBe(15);
       expect(warnings).toEqual([]);
-    } finally { monitor.stop(); }
+    } finally { monitor.stop(); traceEnv.restore(); }
   });
   it('shares only one read’s physical rules, preserving managed children, aliases and fresh protection', async () => {
     const { root, home } = await fixture();

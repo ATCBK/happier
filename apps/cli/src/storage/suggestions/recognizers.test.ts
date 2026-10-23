@@ -57,6 +57,40 @@ describe('verified storage recognizers', () => {
       expect(stat).toHaveBeenCalled();
     } finally { stat.mockClear(); }
   });
+  it('rejects kind-ineligible indexed files before checking every offered suggestion root', async () => {
+    const home = await fixture(); const now = Date.now();
+    const catalog: StorageItemV1[] = Array.from({ length: 22 }, (_, index) => ({
+      itemId: `cache-${index}`, path: join(home, `cache-${index}`), title: 'Cache', kind: 'category-item', categoryId: 'caches',
+      size, verdict: 'safe', reason: { code: 'reinstalls' }, evidence: ['managed_cache_root'], collectable: true,
+    }));
+    await Promise.all(catalog.map(item => mkdir(item.path)));
+    const download = join(home, 'Downloads', 'old.zip'); await mkdir(join(home, 'Downloads')); await writeFile(download, 'archive');
+    const files = 128;
+    const candidates = [...Array.from({ length: files }, (_, index) => ({ path: join(home, 'ordinary', `file-${index}`),
+      kind: 'file' as const, size, lastChangedAt: now })),
+      { path: download, kind: 'file' as const, size, lastChangedAt: now - 31 * 86_400_000 }];
+    const suggestions = createStorageSuggestions({ readCatalogItems: async () => catalog,
+      readProtectionFacts: () => ({ homeDir: home }), now: () => now,
+      readCompletedScan: async () => ({ status: 'complete', scope: 'whole-disk', candidates }) });
+    const { Session } = await import('node:inspector'); const profiler = new Session(); profiler.connect();
+    const post = (method: string, params: Record<string, unknown> = {}) => new Promise<void>((done, fail) =>
+      profiler.post(method, params, error => error ? fail(error) : done()));
+    try {
+      // V8 observes the real function executions; internal recognition and path
+      // decisions remain unmodified, and no per-entry timing threshold is used.
+      await post('Profiler.enable'); await post('Profiler.startPreciseCoverage', { callCount: true, detailed: false });
+      const result = await suggestions.list({ callerKind: 'person' });
+      const coverage = await new Promise<import('node:inspector').Profiler.TakePreciseCoverageReturnType>((done, fail) =>
+        profiler.post('Profiler.takePreciseCoverage', (error, value) => error ? fail(error) : done(value)));
+      const containment = coverage.result.filter(script => script.url.endsWith('/storage/storagePath.ts'))
+        .flatMap(script => script.functions).find(fn => fn.functionName === 'storagePathContains');
+      expect(containment).toBeDefined();
+      expect(result.items).toContainEqual(expect.objectContaining({ path: download, evidence: expect.arrayContaining(['recognizer:old-download']) }));
+      // Ordinary files have no overlap decision to make; their number cannot
+      // multiply containment work by the already-offered roots.
+      expect(containment!.ranges[0].count).toBeLessThan(files);
+    } finally { await post('Profiler.stopPreciseCoverage'); profiler.disconnect(); }
+  });
   it('requires a real sibling manifest and an unused repository for node_modules', async () => {
     const home = await fixture(); const repo = join(home, 'project'); const path = join(repo, 'node_modules'); await mkdir(path, { recursive: true });
     const facts: StorageRecognitionFacts = { protection: { homeDir: home }, now: Date.now(), suggestUnusedAfterDays: 30 };
