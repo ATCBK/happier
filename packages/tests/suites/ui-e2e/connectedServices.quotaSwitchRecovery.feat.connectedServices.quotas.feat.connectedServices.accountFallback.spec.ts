@@ -739,7 +739,7 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
             const occurredAt = Date.now();
             const issue: SessionRuntimeIssueV1 = {
                 v: 1, scope: 'primary_session', status: 'failed', code: 'provider_usage_limit',
-                source: 'usage_limit', provider: 'codex', occurredAt,
+                source: 'usage_limit', agentId: 'codex', occurredAt,
                 usageLimit: { v: 1, resetAtMs: occurredAt + 3_600_000, retryAfterMs: 3_600_000, quotaScope: 'account', recoverability: 'wait' },
             };
             const sessionId = await createPlainSession({
