@@ -368,6 +368,7 @@ describe('plugin UI domain client transport adapter', () => {
             },
             target: { kind: 'app' },
             page: { columnVisible: true },
+            requesterExecutionReady: false,
         });
         const sdkSurface: SurfaceContext = protocolSurface;
         let receive: ((message: unknown) => void) | undefined;
@@ -432,6 +433,7 @@ describe('plugin UI domain client transport adapter', () => {
             await expect(api.context()).resolves.toEqual(sdkSurface);
             expect(observed).toEqual([sdkSurface]);
             expect(observed[0]?.page).toEqual({ columnVisible: true });
+            expect(observed[0]?.requesterExecutionReady).toBe(false);
             expect(readmission).not.toHaveBeenCalled();
             watch.dispose();
         } finally {
