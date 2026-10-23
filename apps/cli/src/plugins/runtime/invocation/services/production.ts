@@ -1192,8 +1192,11 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         async prepareBackgroundServiceProcessOperationServices(seed: PluginInvocationServicesSeed, operation: PluginOperationServicesInput): Promise<PreparedBackgroundServiceProcessLocalServices> {
             const processOperation = { ...operation, executionRealm: 'background-service-process' as const };
             const admitted = createOperationServicesWithBinding(seed, processOperation);
-            const unavailableRequired = processOperation.hostAccessRequests.find(({ required, request }) => required && admitted.hostAccess.find((decision) => decision.id === request.id)?.status !== 'available');
-            if (unavailableRequired) throw new PluginError({ code: 'plugin_host_access_service_unavailable', message: 'Native reader requires a service unavailable in background process placement', details: { hostAccessId: unavailableRequired.request.id } });
+            // Consumed Agent readers receive the available operation services, just
+            // like ordinary Agent operations. Their manifest also declares runtime
+            // needs (for example a terminal) that these reads never consume.
+            // Runner admission still refuses unsupported required HostAccess;
+            // individual unavailable services retain their fail-closed bindings.
             const local = await prepareBackgroundServiceProcessLocalPolicy(admitted.seed, admitted.binding, processOperation);
             return { localPolicy: local.localPolicy, services: {
                 ...projectBackgroundServiceProcessProxiedServices(admitted.services),

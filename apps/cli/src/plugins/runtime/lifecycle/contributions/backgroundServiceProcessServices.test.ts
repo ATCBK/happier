@@ -8,8 +8,48 @@ import { createBackgroundServiceProcessServices } from './backgroundServiceProce
 import { createProductionPluginInvocationServiceOwners } from '../../invocation/services/production';
 import { createStablePluginHttpHost } from '../../fetch/service';
 import type { PluginInvocationLogRecord } from '../../invocation/services/logger';
+import { ingestPluginManifestV2 } from '@happier-dev/protocol';
+import { PLUGIN_MANIFEST as CLAUDE_PLUGIN_MANIFEST } from '@happier-dev/plugins-claude';
+import { PLUGIN_MANIFEST as CODEX_PLUGIN_MANIFEST } from '@happier-dev/plugins-codex';
+import { createBackgroundServiceProcessServiceClient, createBackgroundServiceProcessServiceHost, type BackgroundServiceProcessBridgeMessage } from './backgroundServiceProcessBridge';
 
 describe('background process invocation services', () => {
+    it.each([CLAUDE_PLUGIN_MANIFEST, CODEX_PLUGIN_MANIFEST])('binds a native reader without requiring unrelated Agent runtime services ($id)', async manifest => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-process-native-admission-'));
+        await writeFile(join(directory, 'native-transcript'), 'owned native fixture');
+        const parsed = ingestPluginManifestV2(manifest);
+        if (!parsed.ok) throw new Error('Expected the real bundled Agent manifest to be valid');
+        const controller = new AbortController();
+        const parent = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+        const plugin = { id: parsed.manifest.id, version: parsed.manifest.version };
+        const localId = parsed.manifest.contributes.agents[0]!.id;
+        const contribution = { id: localId, qualifiedId: `${plugin.id}/agents/${localId}` };
+        const roots = { prepare: () => parent.prepareBackgroundServiceProcessOperationServices({
+            plugin, contribution, occurrenceId: 'occurrence', correlationId: 'reader', surface: 'agent',
+            signal: controller.signal, isOccurrenceCurrent: () => !controller.signal.aborted,
+        }, {
+            filesystemRoots: { pluginData: directory, workspace: directory, projects: new Map() },
+            hostAccessRequests: parsed.manifest.hostAccess.required.map(request => ({ required: true, request })),
+        }) };
+        let client: ReturnType<typeof createBackgroundServiceProcessServiceClient<typeof roots>>;
+        const copy = (message: BackgroundServiceProcessBridgeMessage) => JSON.parse(JSON.stringify(message));
+        const host = createBackgroundServiceProcessServiceHost({ services: roots, send: message => queueMicrotask(() => client.receive(copy(message))) });
+        client = createBackgroundServiceProcessServiceClient<typeof roots>({ description: JSON.parse(JSON.stringify(host.description)), send: message => queueMicrotask(() => host.receive(copy(message))) });
+        try {
+            const prepared = await client.services.prepare();
+            const child = createBackgroundServiceProcessServices({ metadata: { plugin, contribution }, signal: controller.signal,
+                localPolicy: prepared.localPolicy, clientServices: prepared.services });
+            try {
+                expect(Buffer.from(await child.services.fs.readFile({ root: 'workspace', relativePath: 'native-transcript' })).toString()).toBe('owned native fixture');
+                expect(child.services.availability('managedServices').status).toBe('unavailable');
+                expect(child.services.availability('http').status).not.toBe('available');
+            } finally { await child.dispose(); }
+        } finally {
+            controller.abort(); await client.dispose(); await host.dispose(); await parent.dispose();
+            await rm(directory, { force: true, recursive: true });
+        }
+    });
+
     it('applies the daemon invocation redactor to child-local logger records', async () => {
         const records: PluginInvocationLogRecord[] = [];
         const controller = new AbortController();

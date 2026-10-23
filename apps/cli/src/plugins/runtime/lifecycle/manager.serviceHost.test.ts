@@ -62,7 +62,8 @@ describe('admitted background service host activation', () => {
             const parsed = ingestCanonicalPluginManifest({
                 schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Consumed native reader',
                 engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
-                hostAccess: { required: [{ id: 'reader-exec', capability: 'process', reason: 'Read native transcript fixture', scope: { executables: [{ kind: 'systemTool', id: 'fixture-reader' }] } }] },
+                hostAccess: { required: [{ id: 'reader-exec', capability: 'process', reason: 'Read native transcript fixture', scope: { executables: [{ kind: 'systemTool', id: 'fixture-reader' }] } },
+                    { id: 'runtime-terminal', capability: 'terminal', reason: 'Run the Agent interactive session', scope: { operations: ['open'] } }] },
                 contributes: { systemTools: [{ id: 'fixture-reader', title: 'Fixture reader', executableNames: ['fixture-reader'] }], agents: [{ id: localAgentId, title: 'Native reader',
                     capabilities: { surfaces: ['externalSessions'] },
                     surfaces: { externalSession: { sources: [{ sourceKind: 'nativeFixture',
