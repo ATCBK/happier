@@ -150,11 +150,13 @@ export function SkillAddModal(
     testID: `${TEST_ID}.registries`,
   });
   const [query, setQuery] = React.useState(params.query ?? '');
+  const [catalogDemanded, setCatalogDemanded] = React.useState((params.modeKey ?? 'browse') === 'browse');
+  const onModeChange = React.useCallback((key: string) => setCatalogDemanded(key === 'browse'), []);
   const catalog = useRegistryItems({
     kind: 'skill',
     ...(slot.sourceIds ? { sourceIds: slot.sourceIds } : {}),
     ...(query.trim() ? { query: query.trim() } : {}),
-  });
+  }, catalogDemanded);
 
   // What the details read (the pinned version the primary installs) and what the person picked for Where.
   const [reads, setReads] = React.useState<ReadonlyMap<string, RegistryItemV1>>(
@@ -375,6 +377,7 @@ export function SkillAddModal(
       title: t('capabilities.skillAdd.title'),
       testID: TEST_ID,
       initialModeKey: params.modeKey ?? 'browse',
+      onModeChange,
       modes: [
         {
           key: 'browse',
@@ -572,6 +575,7 @@ export function SkillAddModal(
       install,
       items,
       library,
+      onModeChange,
       onRead,
       params,
       props,

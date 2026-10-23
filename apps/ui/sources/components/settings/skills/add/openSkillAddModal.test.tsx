@@ -22,11 +22,13 @@ describe('Skills Add modal through the real Account and registry owners', () => 
         const screen = await renderScreen(<SkillAddModal onClose={() => {}} params={{ modeKey, sourceId, onWrite() {} }} />);
         const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
         const { flushHookEffects } = await import('@/dev/testkit');
+        const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
         await flushHookEffects();
+        await waitForHomeGovernance(() => expect(screen.findByType(CapabilityAddModalBody).props.config.catalog.loading).toBe(false));
         // The configured source is a real GitHub HTTP boundary, reached only by catalog demand.
         expect(externalRequests.filter(url => url.includes('api.github.com/repos/fixture/skills'))).toHaveLength(0);
         const { SegmentedTabBar } = await import('@/components/ui/navigation/SegmentedTabBar');
-        await React.act(async () => { screen.findByType(SegmentedTabBar).props.onSelect('browse'); });
+        await React.act(async () => { screen.findByType(SegmentedTabBar).props.onSelectTab('browse'); });
         await waitForHomeGovernance(() => expect(externalRequests.some(url => url.includes('/git/trees/'))).toBe(true));
         await waitForHomeGovernance(() => expect(screen.find(node => node.props.testID === 'skills.add:collection'
             && typeof node.props.model?.actions?.open === 'function').props.model.keys).toContain(`${sourceId}|review`));

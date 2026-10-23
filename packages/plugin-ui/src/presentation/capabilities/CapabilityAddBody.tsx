@@ -119,6 +119,8 @@ export type HappierCapabilityAddConfig<
   subtitle?: string;
   modes: readonly HappierCapabilityAddMode<Icon>[];
   initialModeKey?: string;
+  /** The person presented another mode; use this to demand only that mode's data. */
+  onModeChange?: (key: string) => void;
   /** The registry selector beside the tabs while Browse shows, and the registries view one level in. */
   sources?: Readonly<{
     renderSelect: (
@@ -348,8 +350,9 @@ export function HappierCapabilityAddBody<Item, Icon extends string = string>(
       // Details belong to the mode that opened them.
       setOpenKey(null);
       setModeKey(key);
+      config.onModeChange?.(key);
     },
-    [config.modes, onClose],
+    [config.modes, config.onModeChange, onClose],
   );
 
   const tools = (search: React.ReactNode) => (

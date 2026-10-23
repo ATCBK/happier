@@ -114,11 +114,13 @@ export function McpAddModal(
     testID: `${TEST_ID}.registries`,
   });
   const [query, setQuery] = React.useState(params.query ?? '');
+  const [catalogDemanded, setCatalogDemanded] = React.useState((params.modeKey ?? (params.installLink ? 'paste' : 'catalog')) === 'catalog');
+  const onModeChange = React.useCallback((key: string) => setCatalogDemanded(key === 'catalog'), []);
   const catalog = useRegistryItems({
     kind: 'mcpServer',
     ...(slot.sourceIds ? { sourceIds: slot.sourceIds } : {}),
     ...(query.trim() ? { query: query.trim() } : {}),
-  });
+  }, catalogDemanded);
 
   // What the open details read and the person set: the footer adds exactly what is shown.
   const [drafts, setDrafts] = React.useState<ReadonlyMap<string, McpAddDraft>>(
@@ -294,6 +296,7 @@ export function McpAddModal(
       testID: TEST_ID,
       initialModeKey:
         params.modeKey ?? (params.installLink ? 'paste' : 'catalog'),
+      onModeChange,
       modes: [
         {
           key: 'catalog',
@@ -435,6 +438,7 @@ export function McpAddModal(
       drafts,
       groups,
       items,
+      onModeChange,
       pasteBody,
       params,
       places,
