@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -22,13 +22,6 @@ describe('daemon control HTTP in the compiled runtime', () => {
       outdir: outputDir, bundle: true, splitting: true, format: 'esm', platform: 'node', target: 'node20',
       ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
       conditions: [SOURCE_CONDITION], metafile: true, logLevel: 'silent',
-      // Deliberate regression probe only: compile the original PERF import behavior.
-      plugins: [{ name: 'legacy-undici-import-probe', setup(bundler) {
-        bundler.onLoad({ filter: /[/\\]daemon[/\\]controlHttp\.ts$/ }, async ({ path }) => ({
-          contents: (await readFile(path, 'utf8')).replace('await loadUndici()', "await import('undici')"),
-          loader: 'ts',
-        }));
-      } }],
       banner: { js: "import { createRequire as __artifactCreateRequire } from 'node:module'; import { fileURLToPath as __artifactFileURLToPath } from 'node:url'; import { dirname as __artifactDirname } from 'node:path'; const require = __artifactCreateRequire(import.meta.url); const __artifactFilename = __artifactFileURLToPath(import.meta.url); const __artifactDirectory = __artifactDirname(__artifactFilename);" },
       define: { __dirname: '__artifactDirectory', __filename: '__artifactFilename' },
     });
@@ -56,6 +49,7 @@ describe('daemon control HTTP in the compiled runtime', () => {
       throw new Error('Missing server address');
     try {
       const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+        try {
         const { readDaemonControlHttpResponse: read } = await import(process.argv[1]);
         const input = { httpPort: Number(process.argv[2]), body: { hello: 'bundle' }, headers: {} };
         const accepted = await read({ ...input, path: '/ping' });
@@ -66,6 +60,10 @@ describe('daemon control HTTP in the compiled runtime', () => {
         try { await read({ ...input, path: '/cancelled', signal: cancellation.signal }); }
         catch (error) { cancelled = error.name; }
         console.log(JSON.stringify({ accepted, refused, cancelled }));
+        } catch (error) {
+          console.error(error);
+          process.exitCode = 1;
+        }
       `, pathToFileURL(resolve(entryOutput![0])).href, String(address.port)], { encoding: 'utf8' });
       expect(JSON.parse(stdout)).toEqual({
         accepted: { ok: true, status: 200, body: '{"ok":true}' },
