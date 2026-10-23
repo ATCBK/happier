@@ -1,5 +1,5 @@
 import { pick } from 'zod/mini';
-import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactKindCoverageV1Schema, type ArtifactCoarseKindV1, type ArtifactKindCoverageV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
@@ -7,7 +7,7 @@ import { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, ArtifactUpdateR
 import { HappyError } from '@/utils/errors/errors';
 import { createServerFetchForActiveServer, serverFetch, type ServerFetch } from '@/sync/http/client';
 import { encodeBase64 } from '@/encryption/base64';
-import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1,
+import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, iterateArtifactUploadFrameV1,
     type ArtifactUploadDestinationV1 } from '@happier-dev/transfers';
 import { ArtifactAccessErrorCodeV1Schema, ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, ArtifactRecipientKeyEnvelopeCommitResponseV1Schema, type ArtifactAccessGrantsListInputV1, type ArtifactAccessGrantSetInputV1, type ArtifactAccessGrantRemoveInputV1, type ArtifactRecipientKeyEnvelopeCommitInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
@@ -24,6 +24,7 @@ import { createScopedBatchResolutionSingleFlight, createScopedResolutionSingleFl
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { invalidateHomeAccountReadJoins, readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
+import { createBinaryUploadBody } from '@/sync/runtime/files/binaryUploadBody';
 /** The /v1/artifacts transport cursor; shared by complete sync and Action paging. */
 export function encodeArtifactListCursor(row: Readonly<{ artifactId: string; updatedAt: number }>): string {
     return encodeBase64(new TextEncoder().encode(JSON.stringify({ updatedAt: row.updatedAt, id: row.artifactId })), 'base64url');
@@ -32,12 +33,14 @@ export function encodeArtifactListCursor(row: Readonly<{ artifactId: string; upd
 async function uploadArtifactContent(credentials: AuthCredentials, destination: ArtifactUploadDestinationV1,
     content: ArtifactBlobStoredContentV1, opts: Pick<ArtifactApiOptions, 'request' | 'signal'>): Promise<Response> {
     throwIfAborted(opts.signal);
-    const frame = encodeArtifactUploadFrameV1(destination, content);
-    return (opts.request ?? serverFetch)(ARTIFACT_UPLOAD_PATH_V1, {
-        method: 'POST', body: frame.buffer,
+    const upload = await createBinaryUploadBody(iterateArtifactUploadFrameV1(destination, content), { signal: opts.signal });
+    try {
+        return await (opts.request ?? serverFetch)(ARTIFACT_UPLOAD_PATH_V1, {
+        method: 'POST', body: upload.body,
         headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
         ...(opts.signal ? { signal: opts.signal } : {}),
-    }, { includeAuth: false, retry: 'none' });
+        }, { includeAuth: false, retry: 'none' });
+    } finally { await upload.dispose(); }
 }
 
 export async function stageArtifactBlobAccountEncryptionConversion(credentials: AuthCredentials,
@@ -125,7 +128,7 @@ export type ArtifactApiOptions = Readonly<{
 type ArtifactReadBatchItem = ArtifactReadBatchResponseV1['items'][number] | ArtifactReadHeadersBatchResponseV1['items'][number];
 type ArtifactReadBatchOptions = Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'>;
 type PreparedArtifactReadBatch<T> = Readonly<{ release: () => void; read: (artifactIds: readonly string[]) => Promise<T> }>;
-type ArtifactListPage = Readonly<{ items: Artifact[]; hasUnclassified?: boolean }>;
+type ArtifactListPage = Readonly<{ items: Artifact[]; hasUnclassified?: boolean; kindCoverage?: ArtifactKindCoverageV1 }>;
 const artifactDetailReads = createScopedBatchResolutionSingleFlight<ArtifactReadBatchItem>();
 const artifactOpaqueReads = createScopedResolutionSingleFlight<Artifact>();
 const artifactInventoryReads = createScopedResolutionSingleFlight<ArtifactListPage>();
@@ -430,6 +433,7 @@ export async function fetchArtifactListPage(credentials: AuthCredentials, opts: 
     if (opts.coarseKind) query.set('kind', opts.coarseKind);
     if (opts.kinds !== undefined) query.set('kinds', JSON.stringify(opts.kinds));
     if (opts.unclassified) query.set('unclassified', String(opts.unclassified));
+    if (opts.ownerAccountId !== undefined) query.set('ownerAccountId', opts.ownerAccountId);
     const search = query.toString();
     const key = JSON.stringify(['artifact-inventory', binding.key, resolveAuthCredentialsScopeKey(credentials), search, opts.ownerAccountId, opts.retry ?? 'default']);
     const result = await artifactInventoryReads.run(key, async sharedSignal => {
@@ -453,12 +457,14 @@ export async function fetchArtifactListPage(credentials: AuthCredentials, opts: 
                 throwIfAborted(sharedSignal);
                 const items: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'items') : value;
                 const hasUnclassified: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'hasUnclassified') : undefined;
+                const rawCoverage: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'coverage') : undefined;
+                const kindCoverage = rawCoverage === undefined ? undefined : ArtifactKindCoverageV1Schema.parse(rawCoverage);
                 if (!Array.isArray(items) || (filtered && typeof hasUnclassified !== 'boolean')) {
                     throw new HappyError('Artifact content is unavailable', false, { code: 'artifact_content_unavailable' });
                 }
                 const data = items.map(readArtifactResponse);
                 return { items: opts.ownerAccountId === undefined ? data : data.filter(artifact => artifact.ownerAccountId === opts.ownerAccountId),
-                    ...(filtered ? { hasUnclassified: hasUnclassified as boolean } : {}) };
+                    ...(filtered ? { hasUnclassified: hasUnclassified as boolean } : {}), ...(kindCoverage ? { kindCoverage } : {}) };
             });
         };
         return opts.retry === 'none' ? run() : backoff(run);
