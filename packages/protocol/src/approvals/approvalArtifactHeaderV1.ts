@@ -1,6 +1,6 @@
 import { StoredApprovalRequestSchema, type ApprovalRequest } from './approvalRequestV1.js';
 import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
-import { ActionIdSchema } from '../actions/actionIds.js';
+import { ActionIdSchema, type ActionId } from '../actions/actionIds.js';
 import type { ApprovalQueueListItemV1, ApprovalQueueListResultV1 } from '../actions/executor/types.js';
 export { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import {
@@ -220,6 +220,8 @@ type ApprovalListArtifactV1 = Readonly<{
 /** One strict private queue projection for keyholding Account Artifact stores. */
 export async function listApprovalArtifactsV1(params: Readonly<{
   status?: ApprovalRequest['status'] | null;
+  actionId?: ActionId | null;
+  cursor?: string | null;
   limit?: number | null;
   serverId?: string | null;
   readPage: (options: Readonly<{ limit: number; includeBody: true; cursor?: string }>) => Promise<Readonly<{
@@ -233,9 +235,11 @@ export async function listApprovalArtifactsV1(params: Readonly<{
   // Preserve the approval.request.list input contract and incumbent default.
   const maxItems = typeof params.limit === 'number' && Number.isFinite(params.limit)
     ? Math.max(1, Math.min(100, Math.trunc(params.limit))) : 32;
-  let cursor: string | undefined;
+  let cursor = params.cursor ?? undefined;
   do {
-    const page = await params.readPage({ limit: maxItems, includeBody: true, ...(cursor ? { cursor } : {}) });
+    // A source page must fit the remaining result capacity. Advancing its
+    // cursor after consuming only a prefix would silently skip valid matches.
+    const page = await params.readPage({ limit: maxItems - items.length, includeBody: true, ...(cursor ? { cursor } : {}) });
     for (const artifact of page.items) {
       if (items.length >= maxItems) break;
       if (artifact.header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn
@@ -254,14 +258,15 @@ export async function listApprovalArtifactsV1(params: Readonly<{
       if (parsed.family === 'built_in' && request.v === 1 && serverId && headerServerId !== serverId) continue;
       const actionId = ActionIdSchema.safeParse(parsed.family === 'target_action' ? 'action.invoke' : parsed.request.actionId);
       if (!actionId.success || !request.summary) continue;
+      if (params.actionId && actionId.data !== params.actionId) continue;
       const sessionId = typeof hydrated.header.sessionId === 'string' ? hydrated.header.sessionId.trim() : '';
       items.push({ artifactId: artifact.artifactId, status: request.status, actionId: actionId.data, summary: request.summary,
         ...(sessionId ? { sessionId } : {}), ...(headerServerId ? { serverId: headerServerId } : {}),
         updatedAtMs: Number.isFinite(hydrated.updatedAt) ? hydrated.updatedAt : 0 });
     }
-    cursor = items.length < maxItems ? page.nextCursor : undefined;
-  } while (cursor);
-  return { items, queryPlan: { kind: 'approval_artifact_header_scan', backingStore: 'ArtifactStore',
+    cursor = page.nextCursor;
+  } while (cursor && items.length < maxItems);
+  return { items, nextCursor: cursor ?? null, queryPlan: { kind: 'approval_artifact_header_scan', backingStore: 'ArtifactStore',
     boundedBy: items.length >= maxItems ? 'requested matching approval count' : 'ArtifactStore source exhaustion',
     serverLimit: maxItems, hydratedTranscripts: false } };
 }

@@ -15,6 +15,9 @@ export const TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS: readonly ApprovalSettled
     (approval) => readCapabilityEnableApproval(approval) !== null,
     // An approved Browser open stays while its operation is still preparing, connecting or failed.
     (approval) => readBrowserOpenAcceptance(approval) !== null,
+    // A declined request keeps its review at its originating call; failures retain their attention owner.
+    (approval) => (approval.status === 'rejected' || approval.status === 'canceled')
+        && approval.origin?.kind === 'transcript_tool_call',
 ];
 
 /** Settled requests that remain actionable attention above the composer instead of moving rows. */

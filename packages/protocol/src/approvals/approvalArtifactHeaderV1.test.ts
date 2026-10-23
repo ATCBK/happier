@@ -6,6 +6,7 @@ import {
   buildApprovalRequestArtifactHeaderV1,
   buildExecutionRunHostActionApprovalArtifactHeaderV1,
   buildTargetActionApprovalArtifactHeaderV1,
+  listApprovalArtifactsV1,
 } from './approvalArtifactHeaderV1.js';
 import { ExecutionRunHostActionApprovalRequestV1Schema } from './executionRunHostActionApprovalRequestV1.js';
 import { TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1.js';
@@ -70,6 +71,29 @@ describe('approval Artifact header correspondence', () => {
     },
     summary: 'Publish',
     decision: { kind: 'approve', decidedAtMs: 2 },
+  });
+
+  it('resumes a bounded approval page and filters plugin approvals through their canonical Action id', async () => {
+    const rows = [
+      { artifactId: 'built-in', updatedAt: 2, header: buildApprovalRequestArtifactHeaderV1(builtIn), body: JSON.stringify(builtIn) },
+      { artifactId: 'plugin-target', updatedAt: 1, header: buildTargetActionApprovalArtifactHeaderV1(target), body: JSON.stringify(target) },
+    ];
+    // The persistent Artifact page is the boundary; correspondence and queue
+    // projection use the production reader and real schema-built bodies.
+    const readPage = async ({ limit, cursor }: { limit: number; cursor?: string }) => {
+      const start = cursor ? rows.findIndex(row => row.artifactId === cursor) + 1 : 0;
+      const items = rows.slice(start, start + limit);
+      return { items, ...(start + items.length < rows.length ? { nextCursor: items.at(-1)!.artifactId } : {}) };
+    };
+    const store = { readPage, read: async () => null };
+    const first = await listApprovalArtifactsV1({ ...store, limit: 1 });
+    expect(first.items.map(item => item.artifactId)).toEqual(['built-in']);
+    expect(first.nextCursor).toBe('built-in');
+    const second = await listApprovalArtifactsV1({ ...store, limit: 1, cursor: first.nextCursor });
+    expect(second.items.map(item => item.artifactId)).toEqual(['plugin-target']);
+    expect(second.nextCursor).toBeNull();
+    const filtered = await listApprovalArtifactsV1({ ...store, limit: 1, actionId: 'action.invoke' });
+    expect(filtered.items.map(item => item.artifactId)).toEqual(['plugin-target']);
   });
 
   const host = ExecutionRunHostActionApprovalRequestV1Schema.parse({

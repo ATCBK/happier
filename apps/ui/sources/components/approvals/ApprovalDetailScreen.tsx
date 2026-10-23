@@ -64,7 +64,7 @@ import { useComputerApprovalChoice } from './useComputerApprovalChoice';
 import { openComputerTargetPickerForSession } from '@/components/computer/openComputerTargetPickerForSession';
 
 import { SessionStoredImageThumbnail } from '@/components/sessions/media/SessionStoredImageThumbnail';
-import { readApprovalSessionEndpointLabels, readApprovalTargetEndpointLabels } from './approvalEndpointLabels';
+import { readApprovalOriginMachineId, readApprovalSessionEndpointLabels, readApprovalTargetEndpointLabels } from './approvalEndpointLabels';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
@@ -302,7 +302,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   const machineId = readDisplayMachineIdForSession({
     sessionId: null,
     metadata: ownerMetadata,
-  });
+  }) || readApprovalOriginMachineId(matchedBody);
   const machine = useServerScopedMachine(approvalServerId, approvalServerId ? machineId : '');
   // Context currentness is source-owned. Its relative age subscribes only at the context-line leaf.
   const contextServerProfile = approvalServerId ? getServerProfileById(approvalServerId) : null;

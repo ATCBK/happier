@@ -23,6 +23,8 @@ import {
 } from '@happier-dev/protocol';
 
 import { createCliApprovalsArtifactStore } from './artifactStore';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { encodeAccountArtifactListCursor } from '@/api/artifacts/accountArtifactStore';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createProjectServiceDeclarationTargetIdV1 } from '@happier-dev/protocol/local/services/actions/v1';
@@ -1167,6 +1169,49 @@ describe('createCliApprovalsArtifactStore', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
+  it('pages the real approval-list Action beyond 100 rows and filters without dropping matches at a source-page boundary', async () => {
+    const store = createStore({ token: 'token-only', encryption: null }, 'plain');
+    const rows = Array.from({ length: 105 }, (_, index) => {
+      const request = ApprovalRequestV1Schema.parse({
+        v: 1, actionId: index === 0 || index >= 102 ? 'session.message.send' : 'automation.event.source.status.report',
+        status: 'open', summary: 'Approval metadata', createdAtMs: 1, updatedAtMs: 200 - index,
+        createdBy: { surface: 'cli' }, actionArgs: {},
+      });
+      return { id: `approval-${index}`, ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain',
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
+        seq: index + 1, createdAt: 1, updatedAt: 200 - index,
+        header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request, { legacyServerId: 'server-1' })),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }) };
+    });
+    mockGet.mockImplementation(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname !== '/v1/artifacts') throw new Error(`Unexpected read ${parsed.pathname}`);
+      const cursor = parsed.searchParams.get('cursor');
+      const start = cursor ? rows.findIndex(row => encodeAccountArtifactListCursor({ artifactId: row.id, updatedAt: row.updatedAt }) === cursor) + 1 : 0;
+      if (cursor && start === 0) throw new Error('Unknown source cursor');
+      const limit = Number(parsed.searchParams.get('limit'));
+      return { status: 200, data: rows.slice(start, start + limit) };
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...store });
+    const list = async (input: Record<string, unknown>) => {
+      const result = await executor.execute('approval.request.list', input, { surface: 'cli', serverId: 'server-1' });
+      if (!result.ok) throw new Error(result.errorCode);
+      return result.result as { items: Array<{ artifactId: string }>; nextCursor: string | null };
+    };
+    const first = await list({ status: 'open', limit: 100 });
+    expect(first.items).toHaveLength(100);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const second = await list({ status: 'open', limit: 100, cursor: first.nextCursor });
+    expect(second.items.map(item => item.artifactId)).toEqual(rows.slice(100).map(row => row.id));
+    expect(second.nextCursor).toBeNull();
+    const filtered = await list({ status: 'open', actionId: 'session.message.send', limit: 3 });
+    expect(filtered.items.map(item => item.artifactId)).toEqual(['approval-0', 'approval-102', 'approval-103']);
+    expect(filtered.nextCursor).toEqual(expect.any(String));
+    const tail = await list({ status: 'open', actionId: 'session.message.send', limit: 3, cursor: filtered.nextCursor });
+    expect(tail.items.map(item => item.artifactId)).toEqual(['approval-104']);
+    expect(tail.nextCursor).toBeNull();
+  });
+
   it('scans Artifact cursors until it finds the requested matching approval', async () => {
     const store = createStore({ token: 'token-only', encryption: null }, 'plain');
     const encodedHeader = (value: Record<string, unknown>) => encodeBase64(
@@ -1358,6 +1403,7 @@ describe('createCliApprovalsArtifactStore', () => {
     const listed = await store.approvalsList({ status: 'open', limit: 10, serverId: 'server-1' });
 
     expect(listed).toEqual({
+      nextCursor: null,
       items: [
         {
           artifactId: created.artifactId,

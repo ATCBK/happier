@@ -245,18 +245,22 @@ describe('useOpenApprovalSessionReferences', () => {
 });
 
 describe('session detail scoped projections', () => {
-    it('reprojects a hydrated legacy approval when its exact session membership arrives', async () => {
+    it('reprojects a hydrated legacy approval only for its linked Session when same-Home membership arrives', async () => {
         const previousState = storage.getState();
         try {
             storage.setState({ isDataReady: true, sessions: {}, ordinarySessionListMembershipByServerId: {}, artifacts: {
                 open: artifact('open', { v: 1, kind: 'approval_request.v1', title: 'Approve' }, approvalBody('session-a', 'session.list')),
             } });
-            const hook = await renderHook(() => useOpenApprovalArtifactsForSession({ serverId: 'legacy-home', sessionId: 'session-a' }));
-            expect(hook.getCurrent()).toEqual([]);
+            const hook = await renderHook(() => ({
+                sessionA: useOpenApprovalArtifactsForSession({ serverId: 'legacy-home', sessionId: 'session-a' }),
+                sessionB: useOpenApprovalArtifactsForSession({ serverId: 'legacy-home', sessionId: 'session-b' }),
+            }));
+            expect(hook.getCurrent()).toEqual({ sessionA: [], sessionB: [] });
             const artifactsBefore = storage.getState().artifacts;
-            await act(async () => { storage.setState({ ordinarySessionListMembershipByServerId: { 'legacy-home': ['session-a'] } }); });
+            await act(async () => { storage.setState({ ordinarySessionListMembershipByServerId: { 'legacy-home': ['session-a', 'session-b'] } }); });
             expect(storage.getState().artifacts).toBe(artifactsBefore);
-            expect(hook.getCurrent().map(entry => entry.artifact.id)).toEqual(['open']);
+            expect(hook.getCurrent().sessionA.map(entry => entry.artifact.id)).toEqual(['open']);
+            expect(hook.getCurrent().sessionB).toEqual([]);
             await hook.unmount();
         } finally { storage.setState(previousState); }
     });

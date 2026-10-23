@@ -70,11 +70,17 @@ export function presentActionApproval(input: ActionApprovalPresentationInput): R
         && (summary === titleSource || summary === `${titleSource}.`) ? null : summary;
     // Backup authority follows the Action into both confirmation and Inbox, including authored previews.
     const disclosure = spec.id === 'relay.runtime.personal_home.backup' ? t('personalHome.settings.backupDisclosureBody') : null;
+    const title = t('actionPresentation.title', { actionId: spec.id, source: titleSource,
+        subject: roleIdentity ? `${roleIdentity.name} · ${roleIdentity.kind}` : input.subject });
+    // The Action declares no confirm verb of its own: the button names the Action only when the title is about
+    // its subject; a title that already is the Action's words gets the generic approval verb, never an echo.
+    const confirmLabel = title === titleSource ? t('approvals.approve') : titleSource;
+    // A danger effect the user is asked about by default is the Action's declaration of an irreversible effect.
+    const irreversible = spec.sideEffectClass === 'danger' && spec.approvalPolicy?.uiConfirmation === 'policy';
     return {
-        // The confirm button names the Action itself ("Open machine terminal"), never a bare OK.
-        confirmLabel: titleSource,
-        title: t('actionPresentation.title', { actionId: spec.id, source: titleSource,
-            subject: roleIdentity ? `${roleIdentity.name} · ${roleIdentity.kind}` : input.subject }),
+        confirmLabel,
+        title,
         summary: disclosure ? [visibleSummary, disclosure].filter(Boolean).join('\n\n') : visibleSummary,
+        ...(irreversible ? { destructive: true } : {}),
     };
 }

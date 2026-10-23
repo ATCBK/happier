@@ -132,14 +132,33 @@ describe('the shared Action approval presentation owner', () => {
         expect(presentActionApproval({ actionId: 'workspace.sync.relationship.flush', actionArgs }).title).toBe('Sync workspace now');
     });
 
-    it('names the Action on its confirm button instead of a bare OK', async () => {
-        const open = presentActionApproval({ actionId: 'machines.terminal.open', actionArgs: { serverId: 'home-1', machineId: 'machine-1', terminalKey: 'k', cols: 80, rows: 24 } });
-        expect(open.confirmLabel).toBe(getActionSpec('machines.terminal.open').title);
+    it('never repeats the dialog title on the confirm button, and names the Action when the title names a subject', async () => {
+        // No subject: the title is the Action's own words, so the button is the generic approval verb.
+        for (const language of ['en', 'fr'] as const) {
+            await preloadTranslations(language);
+            setPreferredLanguageFromSettings(language);
+            for (const actionId of ['machines.terminal.open', 'session.draft.delete', 'discussion.owner.transfer'] as const) {
+                const presentation = presentActionApproval({ actionId });
+                expect(presentation.confirmLabel).toBe(t('approvals.approve'));
+                expect(presentation.confirmLabel).not.toBe(presentation.title);
+            }
+        }
+        setPreferredLanguageFromSettings('en');
+        // With a subject the title reads about the subject, so the button may still name the Action.
+        const withSubject = presentActionApproval({ actionId: 'machines.terminal.open', subject: 'Devbox' });
+        expect(withSubject.title).not.toBe(withSubject.confirmLabel);
+        expect(withSubject.confirmLabel).toBe(getActionSpec('machines.terminal.open').title);
         // An id the catalog does not know has no Action title to borrow: the caller keeps its own default.
         expect(presentActionApproval({ actionId: 'plugin.unknown', authoredTitle: 'Do it' }).confirmLabel).toBeNull();
-        await preloadTranslations('fr');
-        setPreferredLanguageFromSettings('fr');
-        expect(presentActionApproval({ actionId: 'machines.terminal.open' }).confirmLabel).toBe(resolveActionTitle('machines.terminal.open', getActionSpec('machines.terminal.open')));
+    });
+
+    it('marks the confirm button destructive for an Action declared irreversible, and only for those', () => {
+        // The draft delete declares a danger effect that the user is asked about by default.
+        expect(presentActionApproval({ actionId: 'session.draft.delete' }).destructive).toBe(true);
+        expect(presentActionApproval({ actionId: 'plugins.uninstall' }).destructive).toBe(true);
+        for (const actionId of ['machines.terminal.open', 'session.draft.open', 'discussion.owner.transfer'] as const) {
+            expect(presentActionApproval({ actionId }).destructive, actionId).toBeFalsy();
+        }
     });
 
     it('omits a title-only fallback while retaining a distinct authored consequence', async () => {
@@ -160,7 +179,7 @@ describe('the shared Action approval presentation owner', () => {
         const input = { actionId: spec.id, actionArgs };
         const confirmation = presentActionApproval(input);
         expect(confirmation.title).toBe(spec.title);
-        expect(confirmation.confirmLabel).toBe(spec.title);
+        expect(confirmation.confirmLabel).toBe(t('approvals.approve'));
         expect(confirmation.summary).toBeTruthy();
         expect(confirmation.summary).not.toBe(`${confirmation.title}.`);
         expect(JSON.stringify(confirmation)).not.toContain(target.discussionId);

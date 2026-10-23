@@ -7,6 +7,7 @@ import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/ac
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { DiscussionReplyInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
 import type { ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetActionApprovalRequestV1, PromptLibraryArtifactStore } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
@@ -94,8 +95,22 @@ function readDiscussionReplyApprovalSubject(request: ApprovalRequest) {
   const origin = request.executionOriginV1;
   const returned = origin.discussionReplyReturn!;
   const input = DiscussionReplyInputV1Schema.safeParse(request.actionArgs);
+  if ('kind' in returned) {
+    const localId = deriveWorkflowDiscussionReplyLocalIdV1(returned.producer);
+    if (!origin.accountId || !origin.machineId || origin.caller.kind !== 'workflowRun' || origin.caller.runId !== returned.producer.runId || !input.success
+      || input.data.localId !== localId || origin.requestId !== localId
+      || input.data.discussionId !== returned.origin.discussion.discussionId
+      || input.data.replyTarget.kind !== 'message' || input.data.replyTarget.messageId !== returned.origin.messageId) {
+      throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+    }
+    return { identity: [origin.serverIdentityId, origin.accountId, origin.machineId, 'workflow_invocation',
+      returned.producer.runId, returned.producer.invocationRecordId, returned.producer.invocationAttempt],
+      discussionId: input.data.discussionId, replyTarget: input.data.replyTarget,
+      producer: returned.producer, origin: returned.origin, workflowAuthorization: origin.caller.authorization,
+      requesterConfirmation: request.requesterConfirmation };
+  }
   if (!origin.accountId || !origin.machineId || !origin.sessionId
-    || (origin.caller.kind !== 'host' && origin.caller.kind !== 'session') || !input.success) {
+    || (origin.caller.kind !== 'host' && origin.caller.kind !== 'session' && origin.caller.kind !== 'workflowRun') || !input.success) {
     throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
   }
   const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: origin.sessionId,
@@ -112,6 +127,7 @@ function readDiscussionReplyApprovalSubject(request: ApprovalRequest) {
     discussionId: input.data.discussionId,
     replyTarget: input.data.replyTarget,
     sessionInputSource: origin.sessionInputSource,
+    ...(origin.caller.kind === 'workflowRun' ? { workflowAuthorization: origin.caller.authorization } : {}),
     requesterConfirmation: request.requesterConfirmation,
   };
 }

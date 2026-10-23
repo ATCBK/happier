@@ -242,8 +242,10 @@ describe('createDefaultActionExecutor approvals', () => {
         try {
             await Promise.race([reached, pending.then(result => { throw new Error(`Claim not reached: ${JSON.stringify(result)}`); })]);
             if (retired) {
-                const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-                retireActiveServerAccountScopeLifetime();
+                const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+                const profile = (await import('@/sync/domains/server/serverProfiles')).getServerProfileById(homeId);
+                if (!profile) throw new Error('Expected original Home fixture');
+                await TokenStorage.removeCredentialsForServerUrl(profile.serverUrl, { serverId: homeId });
             }
         } finally { releaseClaim(); }
         await pending;

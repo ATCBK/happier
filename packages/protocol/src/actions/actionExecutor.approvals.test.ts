@@ -32,6 +32,25 @@ const securityTokenSummary = {
 };
 const securityToken = `hap_v1_${securityTokenSummary.tokenId}_${'a'.repeat(43)}`;
 
+describe('approval Machine origin defaults', () => {
+  it.each([undefined, 'explicit-machine'] as const)('uses the admitted plugin Machine only behind explicit custody (%s)', explicitMachineId => {
+    const context: ActionExecutorContext = {
+      surface: 'plugin', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_home',
+      runtimeAccountId: 'account', actionRequestId: 'request',
+      actionCaller: { kind: 'plugin', pluginId: 'example.observer', contributionLocalId: 'observer',
+        sourceCustody: { kind: 'development', registeredRootId: 'observer-root' },
+        materialization: { pluginId: 'example.observer', machineId: 'source-machine', materializationId: 'materialization' } },
+      ...(explicitMachineId ? { externalActionTarget: { kind: 'machine', machineId: explicitMachineId } } : {}),
+    };
+    const origin = buildApprovalExecutionOriginV1({ actionId: 'automation.event.sources.list',
+      input: { transport: { kind: 'checkpointedPull' } }, context, targetSessionId: null });
+    expect(origin?.machineId).toBe(explicitMachineId ?? 'source-machine');
+    expect(origin?.target).toEqual(context.externalActionTarget);
+    expect(origin?.authority).toBe('account_automation');
+    expect(context.defaultSessionMachineId).toBeUndefined();
+  });
+});
+
 describe('Session public link approval narrowing', () => {
   it('admits only turning public networking off while preserving the original share operands', () => {
     const narrowing = getActionSpec('session.public_link.create').approvalNarrowing;

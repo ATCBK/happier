@@ -82,6 +82,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
             ...(operation?.executionRunLaunchOrigin ? { executionRunLaunchOrigin: operation.executionRunLaunchOrigin } : {}),
             ...(operation?.externalActionTarget ? { externalActionTarget: operation.externalActionTarget } : {}),
             ...(operation?.openRoute ? { openRoute: operation.openRoute } : {}),
+            ...(operation?.reviewPublicProfilePreparedAction ? { reviewPublicProfilePreparedAction: operation.reviewPublicProfilePreparedAction } : {}),
         });
         if (!result.ok) return result;
         const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);

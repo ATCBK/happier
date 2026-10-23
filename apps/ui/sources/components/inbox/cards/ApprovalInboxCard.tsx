@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { useSession } from '@/sync/domains/state/storage';
+import { useServerScopedMachine, useSession } from '@/sync/domains/state/storage';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -20,6 +20,7 @@ import {
   resolveApprovalHomeSentenceName,
 } from '@/components/approvals/approvalRequesterLabels';
 import { readApprovalSessionName, useApprovalSessionReading } from '@/components/approvals/useApprovalSessionReading';
+import { readApprovalOriginMachineId, readApprovalSessionEndpointLabels } from '@/components/approvals/approvalEndpointLabels';
 import { InboxWorkRow } from '../InboxWorkRow';
 import { InboxRelativeTime } from '../InboxRelativeTime';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -157,6 +158,8 @@ export const ApprovalInboxCard = React.memo(
         ),
       [props.artifact],
     );
+    const originMachine = useServerScopedMachine(serverId || null, sessionId ? '' : readApprovalOriginMachineId(parsedApproval));
+    const originMachineLabel = readApprovalSessionEndpointLabels({ session: null, machine: originMachine }).machineLabel;
 
     // The one title rule shared with the approval page and its tab.
     const { title, actionTitle } = useApprovalRequestTitle(
@@ -193,8 +196,8 @@ export const ApprovalInboxCard = React.memo(
     }, [parsedApproval]);
     // Where it comes from leads the row (lab coordination P4): the session that asked, above the title,
     // unless the title already names it as the request's own subject.
-    const source =
-      askingSession && !title.includes(askingSession) ? askingSession : null;
+    const requester = askingSession ?? originMachineLabel;
+    const source = requester && !title.includes(requester) ? requester : null;
     const distinguishingFacts = [
       proposalFacts,
       actionTitle && actionTitle !== title && !proposalFacts

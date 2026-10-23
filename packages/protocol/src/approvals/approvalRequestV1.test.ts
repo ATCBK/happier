@@ -165,6 +165,27 @@ it.each(['session', 'host'] as const)('preserves a protected pre-admission Discu
       targetSessionId: null, context: { ...context, discussionReplyReturn: undefined } })).not.toHaveProperty('sessionId');
   }
 });
+it('retains exact Machine approval custody for a non-Session Workflow return', () => {
+  const returned = { kind: 'workflow_invocation', serverId: 'srv_actual_home',
+    producer: { v: 1, kind: 'workflow', runId: 'run', invocationRecordId: 'invocation', invocationAttempt: '0',
+      execution: { kind: 'action', actionId: 'plugin:external/check' }, outcome: 'answer' },
+    origin: { discussion: { serverId: 'profile', discussionId: 'discussion' }, messageId: 'question', throughSeq: 1 } };
+  const origin = { v: 1, serverId: 'profile', serverIdentityId: 'srv_actual_home', accountId: 'alice', machineId: 'machine',
+    actionId: 'discussion.reply', requestId: 'publication', authority: 'account_automation', surface: 'agent',
+    caller: { kind: 'workflowRun', runId: 'run', authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } }, discussionReplyReturn: returned };
+  expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+  for (const patch of [{ machineId: undefined }, { accountId: undefined }, { serverIdentityId: 'another-home' },
+    { sessionId: 'fabricated-session' }, { caller: { kind: 'host' } },
+    { caller: { ...origin.caller, runId: 'other-run' } },
+    { caller: { kind: 'session', sessionId: 'fabricated-session', starterDepth: 0, turnDepth: 0 } }]) {
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, ...patch }).success).toBe(false);
+  }
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent' }, actionId: 'discussion.reply', summary: 'Review Workflow result',
+    actionArgs: { discussionId: 'discussion', replyTarget: { kind: 'message', messageId: 'question' },
+      content: { v: 1, parts: [{ t: 'text', text: 'Accepted result' }] } }, executionOriginV1: origin });
+  expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+});
 it('preserves an addressed Discussion cutoff through the canonical approval execution origin', () => {
   const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
   const context = { serverId: 'home', actionRequestId: 'read-question', authority: 'account_automation' as const, surface: 'agent' as const,

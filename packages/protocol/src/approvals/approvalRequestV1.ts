@@ -13,14 +13,15 @@ import {
   SessionCreationDirectoryApprovalV1Schema,
 } from '../sessions/creation/sessionCreationTargetPreparationV1.js';
 import { HandoffTargetReplacementApprovalV1Schema } from '../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
-import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
+import { ActionRequiredAuthoritySchema, ActionSurfaceSchema } from '../actions/metadata.js';
 import { computeActionInputApprovalDigestV1, isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
 import type { ActionId } from '../actions/actionIds.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
 import { ActionRequestAttributionV1Schema, isSharedRequesterActionV1 } from '../actions/actionRequestAttributionV1.js';
 import { ActionOperationCredentialUseV1Schema } from '../actions/actionExecutionResult.js';
 import { SessionMessageRefV1Schema } from '../sessions/messages/sessionMessageRefV1.js';
-import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { DiscussionReplyReturnV1Schema } from '../workflows/workflowDiscussionPublicationV1.js';
+import { DiscussionIdSchema } from '../discussions/references.js';
 import { SessionMessageAccountActorV1Schema } from '../sessions/messages/sessionMessageAccountActorV1.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import {
@@ -203,6 +204,10 @@ export const ApprovalExecutionOriginCallerV1Schema = lazyZodSchema(() => z.discr
     kind: z.literal('workflowRun'),
     runId: z.string().check(z.trim(), z.minLength(1)),
     authorization: WorkflowAcceptedAuthorizationV1Schema,
+    discussionModelReservation: z.optional(z.strictObject({
+      discussionId: DiscussionIdSchema, participantSlotId: DiscussionIdSchema,
+      policySurface: z.optional(z.keyof(ActionSurfaceSchema)),
+    })),
   }),
 ]));
 export type ApprovalExecutionOriginCallerV1 = z.infer<typeof ApprovalExecutionOriginCallerV1Schema>;
@@ -242,20 +247,32 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
   sessionAgentSpawnPolicyV1: zMini.optional(SessionAgentSpawnPolicyV1StrictSchema),
   causalPermissionAuthority: zMini.optional(zMini.nullable(SessionInputCausalPermissionAuthorityV1Schema)),
   sessionInputSource: zMini.optional(zMini.nullable(SessionInputSourceSessionV1Schema)),
-  discussionReplyReturn: z.optional(SessionMessageDiscussionReplyReturnV1Schema),
+  discussionReplyReturn: z.optional(DiscussionReplyReturnV1Schema),
   /** Exact admitted cause; never itself a deciding-person credential. */
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
   target: zMini.optional(ExternalActionTargetV1Schema),
   actionId: ActionIdSchema,
   requestId: z.string().check(z.trim(), z.minLength(1)),
 }).check(z.superRefine((value, ctx) => {
+  if (value.caller.kind === 'workflowRun' && value.caller.discussionModelReservation
+    && value.actionId !== 'discussion.invite') {
+    ctx.addIssue({ code: 'custom', path: ['caller', 'discussionModelReservation'], message: 'Reservation scope requires an invitation' });
+  }
+  const returned = value.discussionReplyReturn;
+  const workflowCaller = value.caller.kind === 'workflowRun' && returned
+    && value.caller.runId === ('kind' in returned ? returned.producer.runId : returned.workflow?.runId);
   const discussionReturnSessionId = value.caller.kind === 'session' ? value.caller.sessionId
-    : value.caller.kind === 'host' && value.machineId ? value.sessionId : undefined;
-  if (value.discussionReplyReturn && (value.actionId !== 'discussion.reply' || !discussionReturnSessionId
-    || value.sessionId !== undefined && value.sessionId !== discussionReturnSessionId || value.discussionReplyReturn.serverId !== value.serverIdentityId
+    : (value.caller.kind === 'host' || workflowCaller) && value.machineId ? value.sessionId : undefined;
+  if (returned && 'kind' in returned) {
+    if (value.actionId !== 'discussion.reply' || !workflowCaller || !value.machineId || !value.accountId
+      || value.sessionId !== undefined || value.sessionInputSource != null || returned.serverId !== value.serverIdentityId) {
+      ctx.addIssue({ code: 'custom', path: ['discussionReplyReturn'], message: 'Workflow return must retain its exact Machine, Account and Home' });
+    }
+  } else if (returned && (value.actionId !== 'discussion.reply' || !discussionReturnSessionId
+    || value.sessionId !== undefined && value.sessionId !== discussionReturnSessionId || returned.serverId !== value.serverIdentityId
     || value.sessionInputSource && (value.sessionInputSource.sourceSessionId !== discussionReturnSessionId
-      || value.sessionInputSource.sourceInputId !== value.discussionReplyReturn.requestLocalId
-      || value.sessionInputSource.sourceTurnId !== value.discussionReplyReturn.acceptedTurnId))) {
+      || value.sessionInputSource.sourceInputId !== returned.requestLocalId
+      || value.sessionInputSource.sourceTurnId !== returned.acceptedTurnId))) {
     ctx.addIssue({ code: 'custom', path: ['discussionReplyReturn'], message: 'Discussion return must retain its exact original Session and Home' });
   }
   if (value.sessionTargetsV1) {
@@ -386,17 +403,20 @@ export function buildApprovalRequesterConfirmationV1(params: Readonly<{
   return parsed.success ? parsed.data : null;
 }
 
+export const APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1 =
+  'This action needs confirmation, but the person who requested it could not be identified. Send a new request from your signed-in Happier app.';
+
 /** Required requester consent never falls back to the executor's Account owner. */
 export function resolveApprovalRequesterConfirmationV1(params: Readonly<{
   context?: ActionExecutorContext; actionId: ActionId; input: unknown; required: boolean;
 }>): Readonly<{ ok: true; requesterConfirmation: ApprovalRequesterConfirmationV1 | null }>
-  | Readonly<{ ok: false; errorCode: 'approval_requester_unavailable'; error: 'approval_requester_unavailable' }> {
+  | Readonly<{ ok: false; errorCode: 'approval_requester_unavailable'; error: typeof APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1 }> {
   if (!params.required) return { ok: true, requesterConfirmation: null };
   const requesterConfirmation = params.context
     ? buildApprovalRequesterConfirmationV1({ ...params, context: params.context }) : null;
   return requesterConfirmation
     ? { ok: true, requesterConfirmation }
-    : { ok: false, errorCode: 'approval_requester_unavailable', error: 'approval_requester_unavailable' };
+    : { ok: false, errorCode: 'approval_requester_unavailable', error: APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1 };
 }
 
 export function isApprovalRequesterConfirmationBoundToOriginV1(
@@ -426,7 +446,7 @@ export async function admitApprovalRequesterDecisionV1(params: Readonly<{
   context: ActionExecutorContext;
 }>): Promise<Readonly<{ ok: true }> | Readonly<{
   ok: false; errorCode: 'present_user_required' | 'approval_stale' | 'approval_requester_unavailable';
-  error: 'present_user_required' | 'approval_stale' | 'approval_requester_unavailable';
+  error: 'present_user_required' | 'approval_stale' | typeof APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1;
 }>> {
   const { request, context } = params;
   const subject = request.requesterConfirmation;
@@ -441,7 +461,7 @@ export async function admitApprovalRequesterDecisionV1(params: Readonly<{
         && (!origin.accountId || isSharedRequesterActionV1({
           actionRequestAttributionV1: origin.actionRequestAttributionV1, runtimeAccountId: origin.accountId,
         }))) {
-      return { ok: false, errorCode: 'approval_requester_unavailable', error: 'approval_requester_unavailable' };
+      return { ok: false, errorCode: 'approval_requester_unavailable', error: APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1 };
     }
     return { ok: true };
   }
@@ -749,12 +769,13 @@ export function isMountedPluginBlockingApprovalEligibleForLiveClient(approval: A
     && (origin.target === undefined || origin.target.kind === 'machine' && origin.target.machineId === origin.machineId);
 }
 
-/** Session publication custody and its replay witness share this one classification. */
+/** Session and accepted Workflow publication custody share this replay classification. */
 export function isSessionDiscussionApprovalPublicationV1(approval: ApprovalRequest): boolean {
   if (approval.v !== 2) return false;
   const origin = approval.executionOriginV1;
-  if (origin.caller.kind !== 'session' && !(origin.caller.kind === 'host'
-    && origin.discussionReplyReturn && origin.sessionId && origin.machineId)) return false;
+  if (origin.caller.kind !== 'session' && !((origin.caller.kind === 'host' || origin.caller.kind === 'workflowRun')
+    && origin.discussionReplyReturn && origin.machineId
+    && ('kind' in origin.discussionReplyReturn || origin.sessionId))) return false;
   let publicationActionId = approval.actionId;
   if (approval.actionId === 'doc.comment.reply' || approval.actionId === 'doc.edit.propose') {
     const serverId = approval.executionOriginV1.serverId;

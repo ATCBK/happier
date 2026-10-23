@@ -1,4 +1,5 @@
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
+import type { ParsedApprovalArtifactBodyV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
@@ -15,6 +16,17 @@ export type ApprovalEndpointLabels = {
     machineLabel: string | null;
     pathLabel: string | null;
 };
+
+/** Presentation default from an already validated body, never execution authority. */
+export function readApprovalOriginMachineId(body: ParsedApprovalArtifactBodyV1 | null): string {
+    if (body?.family === 'built_in') {
+        return body.request.v === 2 ? body.request.executionOriginV1.machineId ?? '' : '';
+    }
+    if (body?.family === 'target_action') {
+        return body.request.executionOriginV1?.machineId ?? body.request.replayPlacement?.machineId ?? '';
+    }
+    return '';
+}
 
 /** Where a session currently runs, as the canonical session/machine state describes it. */
 export function readApprovalSessionEndpointLabels(input: Readonly<{

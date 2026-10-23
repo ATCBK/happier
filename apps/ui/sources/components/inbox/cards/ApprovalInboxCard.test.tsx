@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
 import type { Artifact, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useArtifacts } from '@/sync/domains/state/storage';
@@ -60,6 +60,27 @@ afterEach(async () => {
 });
 
 describe('ApprovalInboxCard', () => {
+  it('names the origin Machine of a sessionless daemon approval from its exact Home', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const machine = createMachineFixture({ id: 'daemon-machine', metadata: {
+      ...createMachineFixture().metadata!, displayName: 'Build Mac', host: 'build.test',
+    } });
+    const otherHomeMachine = { ...machine, metadata: { ...machine.metadata!, displayName: 'Other Home machine' } };
+    storage.setState({ machines: { [machine.id]: otherHomeMachine }, machineListByServerId: { [serverIdB]: [machine] } });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system', pluginId: 'example.observer', contributionLocalId: 'observer' },
+      actionId: 'automation.event.sources.list', actionArgs: { transport: { kind: 'checkpointedPull' } }, summary: 'Read sources',
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'plugin', serverId: serverIdB,
+        serverIdentityId: 'srv_approval_home_b', machineId: machine.id, actionId: 'automation.event.sources.list', requestId: 'request',
+        caller: { kind: 'plugin', pluginId: 'example.observer', contributionLocalId: 'observer',
+          sourceCustody: { kind: 'development', registeredRootId: 'observer-root' } } } });
+    const artifact = { ...createApprovalArtifact(), header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const screen = await renderScreen(<ApprovalInboxCard artifact={artifact} onPress={() => {}} />);
+    expect(screen.getTextContent()).toContain('Build Mac');
+    expect(screen.getTextContent()).not.toContain('Other Home machine');
+    expect(String(screen.findByTestId('inbox.approval.artifact-1')?.props.accessibilityLabel)).toContain('Build Mac');
+  });
+
   it('mounts unclassified and stale-kind approvals while inventory sync repairs only their kind metadata', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

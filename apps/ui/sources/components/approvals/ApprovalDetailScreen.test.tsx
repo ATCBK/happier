@@ -1069,6 +1069,23 @@ describe('ApprovalDetailScreen', () => {
     currentArtifact = createApprovalArtifact();
   });
 
+  it('names the origin Machine of a sessionless daemon approval in its existing requester context', async () => {
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system', pluginId: 'example.observer', contributionLocalId: 'observer' },
+      actionId: 'automation.event.sources.list', actionArgs: { transport: { kind: 'checkpointedPull' } }, summary: 'Read sources',
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'plugin', serverId: 'ui-A',
+        serverIdentityId: 'srv_approval_home_a', machineId: 'machine-daemon', actionId: 'automation.event.sources.list', requestId: 'request',
+        caller: { kind: 'plugin', pluginId: 'example.observer', contributionLocalId: 'observer',
+          sourceCustody: { kind: 'development', registeredRootId: 'observer-root' } } } });
+    currentArtifact = { id: 'artifact-1', fixtureHomeKey: 'ui-A',
+      header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    sessionFixturesByServerId = { 'ui-A': {} };
+    machineFixturesByServerId = { 'ui-A': { 'machine-daemon': createMachineFixture({ id: 'machine-daemon',
+      metadata: { ...createMachineFixture().metadata!, displayName: 'Build Mac', host: 'build.test' } }) } };
+    const screen = await renderScreen(<approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />);
+    expect(await readRenderedTextWithRowContent(screen)).toContain('Build Mac');
+  });
+
   it('keeps a CLI delete target readable when the target is also the requesting Session', async () => {
     const artifact = await createBuiltInApprovalArtifact({
       actionId: 'session.delete',
