@@ -280,6 +280,26 @@ not redirect the clear to the page's newly selected target.
 
 ## Memory index and native ingestion (0.3 development)
 
+The daemon's `memoryWorker.ts` owns saved settings, Account/Session revisions,
+shared native observation demands, hint Execution Runs and record commits,
+fresh document admission, and status/search reads. `memoryIndexer.ts` owns
+transcript decoding, native readers, the shared source scheduler, FTS/deep
+writes, pruning, and embedding models. Its production binding registers a
+host-owned `process` + `demand` service with the existing background-service
+lifecycle. The generic service bridge carries requests, cancellation and
+status; the child loads only daemon-admitted Agent readers. Query embeddings
+return vectors and native verification returns pages through that boundary.
+
+A run drains admitted work and continuations, closes its writer handles and
+exits. The daemon retains wake sources and starts a fresh child for later
+demand; hint idle/rate/backoff deadlines come from the existing hint admission
+owner. Settings retirement and Clear index join terminal process settlement
+before deleting files. Daemon SQLite readers do no schema setup or migration;
+the indexer is the writer. A failed child remains visible as an error, and an
+absent child does not erase retained coverage. This describes development
+source wiring; the composed daemon RSS/latency and child-exit replay remains
+an integration validation requirement, not a measured performance claim.
+
 Restarting the daemon reuses retained summary, deep and native index data when
 its saved indexing policy is unchanged. The cursor database retains the policy
 baseline; older indexes are qualified using their existing row policy keys,
