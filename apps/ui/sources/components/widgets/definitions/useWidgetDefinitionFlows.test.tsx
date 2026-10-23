@@ -677,9 +677,9 @@ describe('widget definition flows', () => {
                 ? React.createElement(SessionCompanionItemFrame, { label: 'Installed checks', testID: 'card', actions: [],
                     instanceControls: { instance, scope: { ...account, owner: { kind: 'companion', sessionId: 'session-a' } }, context: {},
                         setInputs: async () => ({ ok: true as const }), rename: () => {} },
-                    children: (accessory, instanceView) => React.createElement(PluginGlance, { instance, sessionId: 'session-a',
+                    children: (accessory, instanceView, bodyPresented) => React.createElement(PluginGlance, { instance, sessionId: 'session-a',
                         session: createSessionFixture({ id: 'session-a', serverId }), serverId, frameStyle: 'card', menu: accessory,
-                        instanceView, measurementOnly: true, testID: 'saved-frame' }),
+                        instanceView, bodyPresented: bodyPresented !== false, measurementOnly: true, testID: 'saved-frame' }),
                 })
                 : React.createElement(WidgetArea, { port, context: {}, geometry: 'grid', title: 'Pinned widgets',
                     surfaceName: 'Checks', testID: 'saved-area' });
