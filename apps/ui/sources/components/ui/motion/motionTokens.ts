@@ -103,6 +103,16 @@ export const motionTokens = {
      * after a push, `solidifyStaggerMs` top-down after a pull). Reduced motion: a `reducedCrossFadeMs` cross-fade
      * to the end state, no travel, no ring, no stagger.
      */
+    /**
+     * A page header entering from the row that opened it (MPG-32, lab `MO` 3): the mark and name travel from the
+     * row's rect over `travelMs` on the strong ease-out; the sentence, facts and actions fade in over its last
+     * `contentFadeMs`. Reduced motion: a `reducedCrossFadeMs` cross-fade, nothing travels.
+     */
+    headerEnter: {
+        travelMs: 320,
+        contentFadeMs: 140,
+        reducedCrossFadeMs: 160,
+    },
     successMoment: {
         gatherMs: 140,
         travelMs: 200,

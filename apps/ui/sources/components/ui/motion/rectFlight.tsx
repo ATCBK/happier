@@ -164,8 +164,8 @@ export function RectFlightLayer(props: Readonly<{ style: ReturnType<typeof useRe
 }
 
 /** The enter's timing (MPG-32): the travel, then the trailing content's fade over its last part. */
-export const ENTER_FROM_RECT_MS = 320;
-export const ENTER_FROM_RECT_CONTENT_FADE_MS = 140;
+export const ENTER_FROM_RECT_MS = motionTokens.headerEnter.travelMs;
+export const ENTER_FROM_RECT_CONTENT_FADE_MS = motionTokens.headerEnter.contentFadeMs;
 
 const IDENTITY_FLIP_RECT: WindowFlightRect = { x: 0, y: 0, width: 1, height: 1 };
 
@@ -280,46 +280,170 @@ export function useRectFlip(options: Readonly<{ reducedMotion?: boolean; initial
     return { progress, style, clipStyle, clippedImageStyle, frame, openFrom, closeTo, from, to, backdropFrom };
 }
 
-/**
- * A destination that enters from where its origin was (a popover row → the machine page's header, lab
- * `MO` 3): FLIP on the destination only, no cross-surface element. Given the origin's window rect, the
- * target is measured (`onTarget`) and starts at the origin's top-left at the origin's scale, then runs to
- * identity on the travel timing with a strong ease-out, compositor-only. A `null` origin, or reduced
- * motion, applies no transform (reduced motion cross-fades instead). `ready` stays false only while an
- * origin waits for its target's measure, so the caller can hold the first frame at opacity 0.
- */
-export function useEnterFromRect(origin: WindowFlightRect | null, options: Readonly<{ reducedMotion: boolean }>): Readonly<{
-    style: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
-    contentStyle: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
-    onTarget: (target: WindowFlightRect | null) => void;
-    ready: boolean;
-}> {
-    const travels = origin !== null && !options.reducedMotion;
-    const { progress, style, openFrom } = useRectFlip({ ...options, initialProgress: origin !== null ? 0 : 1 });
-    const [ready, setReady] = React.useState(!travels);
-    const started = React.useRef(false);
-    React.useEffect(() => {
-        if (origin === null || !options.reducedMotion || started.current) return;
-        started.current = true;
-        openFrom(IDENTITY_FLIP_RECT, IDENTITY_FLIP_RECT);
-    }, [openFrom, options.reducedMotion, origin]);
-    const onTarget = React.useCallback((target: WindowFlightRect | null) => {
-        if (!travels || started.current) return;
-        started.current = true;
-        if (!target || target.height <= 0) {
-            progress.value = 1;
-            setReady(true);
-            return;
-        }
-        // The header's established contract scales uniformly by height; media flights use both axes.
-        openFrom({ ...origin!, width: target.width * origin!.height / target.height }, target);
-        setReady(true);
-    }, [openFrom, progress, origin, travels]);
-    const reducedMotion = options.reducedMotion;
-    const contentStyle = useAnimatedStyle<ViewStyle>(() => {
-        const fadeFrom = 1 - ENTER_FROM_RECT_CONTENT_FADE_MS / ENTER_FROM_RECT_MS;
-        return { opacity: reducedMotion ? progress.value : Math.max(0, Math.min(1, (progress.value - fadeFrom) / (1 - fadeFrom))) };
-    });
-    return { style, contentStyle, onTarget, ready };
+/** How a destination enters: from its origin's rect, cross-faded in place (reduced motion), or not at all. */
+export type EnterFromRectMode = 'travel' | 'fade' | 'none';
+type EnterOffset = Readonly<{ x: number; y: number }>;
+const NO_OFFSET: EnterOffset = { x: 0, y: 0 };
+
+/** The smallest window rectangle holding every measured one; `null` when none was measured. */
+export function unionWindowFlightRects(rects: readonly (WindowFlightRect | null)[]): WindowFlightRect | null {
+    const union = unionFlightRects(rects.map((rect) => rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height } : null));
+    return union ? { x: union.x, y: union.y, width: union.w, height: union.h } : null;
 }
 
+/**
+ * One member of a group that enters together (a header's mark and its title). The group's FLIP transform is
+ * about the group's top-left; each member carries it about its own top-left, corrected by its offset in the
+ * group, so the members move and scale as one rigid piece. Unarmed members are unseen: no frame paints at
+ * the final position before the move.
+ */
+export function enterFromRectMemberStyle(input: Readonly<{
+    mode: EnterFromRectMode;
+    armed: boolean;
+    progress: number;
+    from: WindowFlightRect;
+    target: WindowFlightRect;
+    offset: EnterOffset;
+}>) {
+    'worklet';
+    // A web frame can land before the timing's own start time and read a progress outside 0…1 (observed live:
+    // -3.6 on the first armed frame); the group never travels past its ends.
+    const k = Math.max(0, Math.min(1, input.progress));
+    let translateX = 0;
+    let translateY = 0;
+    let scaleX = 1;
+    let scaleY = 1;
+    if (input.mode === 'travel' && input.target.width > 0 && input.target.height > 0) {
+        const rect = {
+            x: input.from.x + (input.target.x - input.from.x) * k,
+            y: input.from.y + (input.target.y - input.from.y) * k,
+            width: input.from.width + (input.target.width - input.from.width) * k,
+            height: input.from.height + (input.target.height - input.from.height) * k,
+        };
+        const group = rectFlipTransform(rect, input.target);
+        scaleX = group.scaleX;
+        scaleY = group.scaleY;
+        translateX = group.translateX + (scaleX - 1) * input.offset.x;
+        translateY = group.translateY + (scaleY - 1) * input.offset.y;
+    }
+    return {
+        opacity: !input.armed ? 0 : input.mode === 'fade' ? k : 1,
+        transformOrigin: 'left top',
+        transform: [{ translateX }, { translateY }, { scaleX }, { scaleY }],
+    };
+}
+
+/** The supporting lines and controls: in over the travel's last part, with the cross-fade, or simply there. */
+export function enterFromRectContentOpacity(mode: EnterFromRectMode, armed: boolean, progress: number): number {
+    'worklet';
+    if (mode === 'none') return 1;
+    if (!armed) return 0;
+    if (mode === 'fade') return Math.max(0, Math.min(1, progress));
+    const fadeFrom = 1 - ENTER_FROM_RECT_CONTENT_FADE_MS / ENTER_FROM_RECT_MS;
+    return Math.max(0, Math.min(1, (progress - fadeFrom) / (1 - fadeFrom)));
+}
+
+/**
+ * A destination group that enters from where its origin was (a popover row's mark + name → the machine page
+ * header's mark + name, lab `MO` 3): FLIP on the destination only, no cross-surface element. The members are
+ * measured in window coordinates (`onTargets`); the group starts at the origin's top-left at the origin's
+ * height scale and runs to identity on the travel timing with a strong ease-out, compositor-only. Reduced
+ * motion cross-fades in place; a `null` origin applies nothing. Members render through
+ * `useEnterFromRectMember`; supporting content takes `contentStyle`.
+ */
+export function useEnterFromRect(origin: WindowFlightRect | null, options: Readonly<{ reducedMotion: boolean }>) {
+    const mode: EnterFromRectMode = origin === null ? 'none' : options.reducedMotion ? 'fade' : 'travel';
+    const progress = useSharedValue(mode === 'none' ? 1 : 0);
+    const armed = useSharedValue(mode === 'none');
+    const from = useSharedValue<WindowFlightRect>(IDENTITY_FLIP_RECT);
+    const target = useSharedValue<WindowFlightRect>(IDENTITY_FLIP_RECT);
+    const offsets = useSharedValue<readonly EnterOffset[]>([]);
+    const started = React.useRef(false);
+    const onTargets = React.useCallback((rects: readonly (WindowFlightRect | null)[]) => {
+        if (mode === 'none' || started.current) return;
+        started.current = true;
+        const union = unionWindowFlightRects(rects);
+        if (mode === 'travel' && (!union || union.height <= 0 || origin === null)) {
+            // Nothing to travel to: the destination simply shows where it is.
+            progress.value = 1;
+            armed.value = true;
+            return;
+        }
+        if (mode === 'travel' && union && origin) {
+            target.value = union;
+            offsets.value = rects.map((rect) => rect ? { x: rect.x - union.x, y: rect.y - union.y } : NO_OFFSET);
+            // Uniform by height: the header's contract (a row's name and the page's title differ in size, not shape).
+            from.value = { x: origin.x, y: origin.y, width: union.width * origin.height / union.height, height: origin.height };
+        }
+        progress.value = 0;
+        armed.value = true;
+        progress.value = withTiming(1, {
+            duration: mode === 'fade' ? motionTokens.headerEnter.reducedCrossFadeMs : ENTER_FROM_RECT_MS,
+            easing: reanimatedMotionTokens.easing.stageCamera,
+        });
+    }, [armed, from, mode, offsets, origin, progress, target]);
+    // The members moved while travelling (the page still placing itself): the group lands where they now are.
+    const retarget = React.useCallback((rects: readonly (WindowFlightRect | null)[]) => {
+        if (mode !== 'travel' || !started.current) return;
+        const union = unionWindowFlightRects(rects);
+        if (!union || union.height <= 0) return;
+        target.value = union;
+        offsets.value = rects.map((rect) => rect ? { x: rect.x - union.x, y: rect.y - union.y } : NO_OFFSET);
+    }, [mode, offsets, target]);
+    const contentStyle = useAnimatedStyle<ViewStyle>(() => ({ opacity: enterFromRectContentOpacity(mode, armed.value, progress.value) }));
+    const group = React.useMemo(() => ({ mode, progress, armed, from, target, offsets }), [armed, from, mode, offsets, progress, target]);
+    return { group, onTargets, retarget, contentStyle };
+}
+
+function sameWindowRects(a: readonly (WindowFlightRect | null)[], b: readonly (WindowFlightRect | null)[]): boolean {
+    return a.length === b.length && a.every((rect, index) => {
+        const other = b[index];
+        if (!rect || !other) return rect === other;
+        return Math.abs(rect.x - other.x) < 0.5 && Math.abs(rect.y - other.y) < 0.5
+            && Math.abs(rect.width - other.width) < 0.5 && Math.abs(rect.height - other.height) < 0.5;
+    });
+}
+
+/**
+ * Measures the members (`read`, their untransformed layout rects in window coordinates) and starts the move, then
+ * keeps reading them each frame while it travels: a page can still be placing itself on its first frames (a list
+ * column arriving narrows the pane and recentres the header), and the move retargets to where the members now
+ * are instead of landing with a jump. Returns a cancel.
+ */
+export function trackEnterFromRectTargets(
+    read: () => Promise<readonly (WindowFlightRect | null)[]>,
+    enter: Pick<ReturnType<typeof useEnterFromRect>, 'onTargets' | 'retarget'>,
+): () => void {
+    let cancelled = false;
+    let frame: ReturnType<typeof requestAnimationFrame> | null = null;
+    let startedAt = 0;
+    let previous: readonly (WindowFlightRect | null)[] = [];
+    const follow = () => {
+        frame = null;
+        void read().then((rects) => {
+            if (cancelled) return;
+            if (!sameWindowRects(previous, rects)) enter.retarget(rects);
+            previous = rects;
+            if (Date.now() - startedAt < ENTER_FROM_RECT_MS) frame = requestAnimationFrame(follow);
+        });
+    };
+    void read().then((rects) => {
+        if (cancelled) return;
+        startedAt = Date.now();
+        previous = rects;
+        enter.onTargets(rects);
+        frame = requestAnimationFrame(follow);
+    });
+    return () => {
+        cancelled = true;
+        if (frame !== null) cancelAnimationFrame(frame);
+    };
+}
+
+/** The animated style of the group's `index`-th member (the order `onTargets` measured them in). */
+export function useEnterFromRectMember(group: ReturnType<typeof useEnterFromRect>['group'], index: number) {
+    const { mode, armed, progress, from, target, offsets } = group;
+    return useAnimatedStyle<ViewStyle>(() => enterFromRectMemberStyle({
+        mode, armed: armed.value, progress: progress.value, from: from.value, target: target.value, offset: offsets.value[index] ?? NO_OFFSET,
+    }) as ViewStyle);
+}
