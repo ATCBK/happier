@@ -5,6 +5,33 @@ import { readDatabaseTransactionConfigFromEnv } from "@/config/databaseTransacti
 import { db, initDbPostgres } from "@/storage/db";
 import { afterTx, inTx, TransactionConflictExhaustedError, type Tx } from "@/storage/inTx";
 import { createDbMaintenanceClient, getDbProviderFromEnv, type PrismaClientType } from "@/storage/prisma";
+import { observeLazyPrismaQuery } from "@/app/changes/accountPublicationContention.testkit";
+
+/** Count ORM operations at the real disposable PostgreSQL transport, including controls. */
+async function measureTransactionOperations<T>(run: () => Promise<T>) {
+    const counts = { operations: 0, refreshes: 0 };
+    const original = db.$transaction;
+    db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+        const callback = args[0];
+        if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+        return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, {
+            get(owner, property) {
+                const method: unknown = Reflect.get(owner, property, owner);
+                if (typeof property !== "string" || !property.startsWith("$") || typeof method !== "function") return method;
+                return (...values: unknown[]) => observeLazyPrismaQuery(Reflect.apply(method, owner, values), () => ({
+                    started() {
+                        counts.operations++;
+                        if (property === "$executeRawUnsafe" && typeof values[0] === "string"
+                            && values[0].startsWith("SET LOCAL statement_timeout = ")) counts.refreshes++;
+                    },
+                    settled() {},
+                }));
+            },
+        })), ...args.slice(1)]);
+    } });
+    try { return { result: await run(), ...counts }; }
+    finally { db.$transaction = original; }
+}
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("PostgreSQL transaction connection lifetime", () => {
     let observer: PrismaClientType;
@@ -40,6 +67,35 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         else process.env.HAPPIER_DB_TX_MAX_RETRIES = originalMaxRetries;
     });
 
+    it.each([
+        { queries: 1, configuredMs: 0 }, { queries: 16, configuredMs: 0 },
+        { queries: 1, configuredMs: 1_000 }, { queries: 16, configuredMs: 1_000 },
+    ])("refreshes only a changed SQL constraint for Q=$queries reads (existing timeout: $configuredMs ms)", async ({ queries, configuredMs }) => {
+        const [{ setting: original }] = await db.$queryRaw<Array<{ setting: string }>>`SELECT current_setting('statement_timeout') AS setting`;
+        try {
+            // This suite owns one disposable backend. An existing SQL limit
+            // protects each query without reapplying the identical LOCAL value.
+            await db.$executeRaw`SELECT set_config('statement_timeout', ${`${configuredMs}ms`}, false)`;
+            const measured = await measureTransactionOperations(() => inTx(async tx => {
+                for (let index = 0; index < queries; index++) {
+                    const [row] = await tx.$queryRaw<Array<{ value: number; readOnly: string; milliseconds: number }>>`
+                        SELECT 1::int AS value, current_setting('transaction_read_only') AS "readOnly",
+                            (EXTRACT(EPOCH FROM current_setting('statement_timeout')::interval) * 1000)::int AS milliseconds
+                        FROM pg_sleep(0.005)
+                    `;
+                    expect(row).toMatchObject({ value: 1, readOnly: "on" });
+                    expect(row.milliseconds).toBeGreaterThan(0);
+                    expect(row.milliseconds).toBeLessThanOrEqual(configuredMs || 10_000);
+                }
+            }, { readOnly: true, timeoutMs: 10_000, transactionClass: "test-unchanged-sql-budget-cost" }));
+            const expectedRefreshes = configuredMs === 0 ? queries : 0;
+            expect(measured.refreshes).toBe(expectedRefreshes);
+            expect(measured.operations).toBe(queries + 2 + expectedRefreshes);
+        } finally {
+            await db.$executeRaw`SELECT set_config('statement_timeout', ${original}, false)`;
+        }
+    });
+
     it("charges completed SQL time to the next raw statement", async () => {
         const readBudget = (tx: Tx) => tx.$queryRaw<Array<{ milliseconds: number }>>`
             SELECT (EXTRACT(EPOCH FROM current_setting('statement_timeout')::interval) * 1000)::int AS milliseconds
@@ -54,7 +110,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         expect(budgets.after).toBeLessThan(budgets.before);
     });
 
-    it.each([false, true])("charges earlier SQL to the transaction budget before a later lock wait (Promise.all: %s)", async concurrent => {
+    it.each([
+        { concurrent: false, refresh: "remaining" }, { concurrent: true, refresh: "remaining" },
+        { concurrent: false, refresh: "once" }, { concurrent: true, refresh: "once" },
+    ])("charges earlier SQL before a later lock wait (Promise.all: $concurrent, refresh: $refresh)", async ({ concurrent, refresh }) => {
         const account = await db.account.create({ data: { publicKey: randomUUID() } });
         const budget = readDatabaseTransactionConfigFromEnv(process.env, "postgres");
         let release!: () => void;
@@ -79,6 +138,25 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         let snapshot: { settled: boolean; activeTransaction: boolean } | undefined;
         const workMs = Math.floor(budget.timeoutMs * 2 / 3);
         let startedAtMs = 0;
+        const transaction = db.$transaction;
+        let appliedRefreshes = 0;
+        if (refresh === "once") {
+            // Negative control at the actual SQL transport: simulate setting
+            // the budget once without altering inTx, Prisma or the lock owner.
+            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, {
+                    get(owner, property) {
+                        if (property !== "$executeRawUnsafe") return Reflect.get(owner, property, owner);
+                        return (sql: string, ...values: unknown[]) => {
+                            if (sql.startsWith("SET LOCAL statement_timeout = ") && ++appliedRefreshes > 1) return Promise.resolve(0);
+                            return owner.$executeRawUnsafe(sql, ...values);
+                        };
+                    },
+                })), ...args.slice(1)]);
+            } });
+        }
         try {
             const holderPid = await Promise.race([holderReady, holder.then(() => { throw new Error("Holder exited before rendezvous"); })]);
             startedAtMs = Date.now();
@@ -114,7 +192,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
             `;
             snapshot = { settled: transactionSettled, activeTransaction: active };
             console.info("transaction-budget-observation", {
-                concurrent, timeoutMs: budget.timeoutMs, earlierSqlMs: workMs,
+                concurrent, refresh, timeoutMs: budget.timeoutMs, earlierSqlMs: workMs,
                 observedAfterMs: Date.now() - startedAtMs, settledAfterMs, ...snapshot,
             });
             if (snapshot.settled && !snapshot.activeTransaction) {
@@ -123,12 +201,15 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                 expect(await db.$queryRaw<Array<{ value: number }>>`SELECT 1::int AS value`).toEqual([{ value: 1 }]);
             }
         } finally {
+            db.$transaction = transaction;
             release();
             await holderOutcome;
             if (waitingOutcome) await waitingOutcome;
         }
         try {
-            expect(snapshot).toEqual({ settled: true, activeTransaction: false });
+            expect(snapshot).toEqual(refresh === "once"
+                ? { settled: false, activeTransaction: true }
+                : { settled: true, activeTransaction: false });
             expect((await waitingOutcome!)[0].status).toBe("rejected");
             expect(committedCallback).toBe(false);
             expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual({ seq: 0 });

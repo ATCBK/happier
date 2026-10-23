@@ -224,12 +224,12 @@ describe("inTx", () => {
         expect(transaction.mock.calls[0]![1]).toEqual(expect.objectContaining({ isolationLevel: "ReadCommitted" }));
     });
 
-    it.each([0, 60])("sets the SQL budget only when the first lazy query executes, retaining the stricter existing timeout (callback work: %s ms)", async callbackWorkMs => {
+    it.each([0, 60])("changes the SQL budget only when the remaining budget crosses the existing timeout (callback work: %s ms)", async callbackWorkMs => {
         applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres" });
         let clock = 1_000;
         vi.spyOn(Date, "now").mockImplementation(() => clock);
         const budgets: number[] = [];
-        let appliedBudget: number | undefined;
+        let appliedBudget = 50;
         let queryBudget: number | undefined;
         transaction.mockImplementation(async fn => fn({
             ...transactionBoundary(),
@@ -254,7 +254,7 @@ describe("inTx", () => {
             return await tx.$queryRawUnsafe("SELECT 1 AS value");
         }, { timeoutMs: 100, readOnly: true })).resolves.toEqual([{ value: 1 }]);
         const expectedBudget = Math.min(50, 98 - callbackWorkMs);
-        expect(budgets).toEqual([expectedBudget]);
+        expect(budgets).toEqual(expectedBudget === 50 ? [] : [expectedBudget]);
         expect(queryBudget).toBe(expectedBudget);
     });
 

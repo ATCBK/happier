@@ -291,7 +291,9 @@ async function withPostgresStatementBudget(tx: Tx, timeoutMs: number, startedAtM
     const multiplier = match[2] === "d" ? 86_400_000 : match[2] === "h" ? 3_600_000
         : match[2] === "min" ? 60_000 : match[2] === "s" ? 1_000 : 1;
     const configuredMs = Number(match[1]) * multiplier;
-    let appliedTimeoutMs: number | undefined;
+    // SHOW observed the already-enforced limit. Reapply only when the remaining
+    // attempt budget becomes stricter; zero still needs a finite first setting.
+    let appliedTimeoutMs = configuredMs;
     const readStatementTimeoutMs = () => {
         const remainingMs = Math.floor(timeoutMs - (Date.now() - startedAtMs));
         if (remainingMs < 1) throw new TransactionAttemptDeadlineExceededError();
