@@ -7429,6 +7429,7 @@ class Sync {
             sessionListMaxPages: 1,
             sessionListAttentionMaxPages: page.attentionCursor ? 1 : 0,
             requiredHydrationSessionIds: page.hydration === 'required' ? 'all' : undefined,
+            candidateStartedBy: page.candidateStartedBy,
             awaitSessionListHydration: page.hydration === 'required',
             credentials,
             encryption: this.encryption,
