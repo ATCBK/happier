@@ -808,14 +808,15 @@ function UserTextBlock(props: {
     return true;
   }, []);
 
-  const selectableMessage = isDiscarded ? null : (() => {
+  const selectableMessage = React.useMemo(() => {
+    if (isDiscarded) return null;
     const base = resolveSelectableMessageText({
       message: props.message,
       isStructuredOnly,
       hasAttachmentBlockToStrip: attachmentsMeta != null,
     });
     return base && unsupportedContentText != null ? { ...base, text: unsupportedContentText } : base;
-  })();
+  }, [attachmentsMeta, isDiscarded, isStructuredOnly, props.message, props.messageRevision, unsupportedContentText]);
   const selectionEnabled = props.messageDisplayCommon.transcriptMessageSelectionEnabled === true && selectableMessage != null;
   const selectionRow = useOptionalTranscriptSelectionRow(props.message.id);
   const selectionModeActionsVisible = selectionEnabled && selectionRow.isSelectionMode;

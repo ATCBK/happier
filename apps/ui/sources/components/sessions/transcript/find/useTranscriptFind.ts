@@ -168,8 +168,10 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
     }
     function select(match: TranscriptFindMatch | null) {
         current = match;
-        recompute(false);
+        // Stepping changes selection, not the admitted corpus. Source changes
+        // rematch through refresh; reveal publishes the changed rows once.
         revealSelected();
+        if (snapshot.status.kind === 'results') emit({ ...snapshot.status, current: current ? matches.indexOf(current) + 1 : null });
     }
     function search(direction: 'older' | 'newer', stepFrom: TranscriptFindMatch | null) {
         if (!input.loadPage || searching || !snapshot.open || snapshot.query === '' || snapshot.status.kind === 'invalidPattern') return;

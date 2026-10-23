@@ -12,6 +12,40 @@ function message(id: string, text: string, seq = 1): Message {
 const noJump = async (): Promise<TranscriptJumpResult> => ({ status: 'not-found', reason: 'unsupported' });
 
 describe('transcript Find model', () => {
+    it('steps through admitted matches without rereading the corpus or republishing unaffected rows', async () => {
+        let messages = Array.from({ length: 2000 }, (_, index) => message(`row-${index}`, 'needle', index + 1));
+        let corpusReads = 0;
+        const model = createTranscriptFindModel({
+            readCorpus: () => {
+                corpusReads += 1;
+                return { messages, history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } };
+            },
+            loadPage: null, jumpToTarget: noJump, reveal: async () => {},
+        });
+        model.setQuery('needle');
+        await model.settled();
+        const changed: string[] = [];
+        const subscriptions = messages.map(row => model.rowStore.subscribe(row.id, () => changed.push(row.id)));
+        corpusReads = 0;
+        try {
+            model.step(1);
+            await model.settled();
+            expect(model.status).toMatchObject({ current: 2, total: 2000, coverage: 'complete' });
+            expect({ corpusReads, changed }).toEqual({ corpusReads: 0, changed: ['row-0', 'row-1'] });
+
+            // Source changes still enter through refresh, so navigation cannot keep an obsolete match set.
+            messages = [messages[0]!, ...messages.slice(2), message('appended', 'needle', 2001)];
+            model.refresh();
+            expect(model.status).toMatchObject({ current: 1, total: 2000 });
+            model.step(1);
+            await model.settled();
+            expect(model.getOverview().currentMessageId).toBe('row-2');
+        } finally {
+            subscriptions.forEach(stop => stop());
+            model.dispose();
+        }
+    });
+
     it('re-seats the current selection without stepping and leaves stopped or closed Find alone', async () => {
         const landed: string[] = [];
         const model = createTranscriptFindModel({
