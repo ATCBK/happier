@@ -535,7 +535,9 @@ pub struct MachineTunnelConfig {
 /// Supplies the admission handshake for one newly accepted local stream.
 /// The provider is invoked after the local capability is authenticated and
 /// before a QUIC stream is opened. Dropping its future cancels that one
-/// connection without changing tunnel custody.
+/// connection without changing tunnel custody. A trusted local provider can
+/// instead return `{"kind":"http_refusal","responseBody":"<JSON>"}` to answer
+/// that HTTP connection locally; this outcome is never a machine handshake.
 pub type MachineHandshakeProvider =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
@@ -1034,12 +1036,22 @@ impl MachineHttpTunnel {
                                 buffered,
                                 initial_request,
                             );
-                            let responses = tokio::io::copy(&mut secured_read, &mut application_write);
+                            let responses = async {
+                                let result = tokio::io::copy(&mut secured_read, &mut application_write).await;
+                                let _ = application_write.shutdown().await;
+                                result
+                            };
                             tokio::pin!(requests);
                             tokio::pin!(responses);
                             let request_result = tokio::select! {
                                 result = &mut requests => Some(result),
-                                _ = &mut responses => None,
+                                result = &mut responses => {
+                                    // Preserve the response FIN while an early
+                                    // refusal's request body is still uploading.
+                                    // Dropping unread TCP input would reset it.
+                                    if result.is_ok() { let _ = requests.await; }
+                                    None
+                                },
                             };
                             if matches!(request_result, Some(Ok(()))) {
                                 let _ = responses.await;
@@ -1287,8 +1299,40 @@ async fn pump_local(
         let Ok(handshake) = provider().await else {
             return;
         };
+        if handshake.is_empty() || handshake.len() > MAX_MACHINE_HANDSHAKE_BYTES {
+            return;
+        }
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&handshake) else {
+            return;
+        };
+        if parsed.get("kind").and_then(serde_json::Value::as_str) == Some("http_refusal") {
+            let Some(outcome) = parsed.as_object().filter(|outcome| outcome.len() == 2) else {
+                return;
+            };
+            let Some(body) = outcome.get("responseBody").and_then(serde_json::Value::as_str) else {
+                return;
+            };
+            if serde_json::from_str::<serde_json::Value>(body).is_err() {
+                return;
+            }
+            // Only the trusted local admission owner chooses the failure body.
+            // Fixed framing prevents it from supplying status or HTTP headers.
+            let head = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len(),
+            );
+            if socket.write_all(head.as_bytes()).await.is_ok() {
+                let _ = socket.write_all(body.as_bytes()).await;
+            }
+            let _ = socket.shutdown().await;
+            // Finish the HTTP response before discarding the caller's upload.
+            // Reading through EOF avoids a reset from unread local input; the
+            // tunnel's stream task still owns cancellation of both directions.
+            let _ = tokio::io::copy(&mut socket, &mut tokio::io::sink()).await;
+            return;
+        }
         if !matches!(
-            validate_handshake(&handshake),
+            validate_handshake_purpose(&parsed),
             Ok(MachineTunnelPurpose::ProviderBroker)
         ) {
             return;
@@ -1341,6 +1385,10 @@ fn validate_handshake(value: &str) -> Result<MachineTunnelPurpose> {
     }
     let parsed: serde_json::Value =
         serde_json::from_str(value).map_err(|_| IrohError::InvalidDescriptor)?;
+    validate_handshake_purpose(&parsed)
+}
+
+fn validate_handshake_purpose(parsed: &serde_json::Value) -> Result<MachineTunnelPurpose> {
     if !parsed.is_object() {
         return Err(IrohError::InvalidDescriptor);
     }
@@ -1433,5 +1481,6 @@ mod handshake_tests {
     #[test]
     fn rejects_unknown_machine_handshake_kinds() {
         assert!(validate_handshake(r#"{"v":1,"kind":"unknown"}"#).is_err());
+        assert!(validate_handshake(r#"{"kind":"http_refusal","responseBody":"{}"}"#).is_err());
     }
 }

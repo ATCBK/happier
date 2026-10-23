@@ -1185,6 +1185,127 @@ async fn machine_http_tunnel_keeps_http_source_reads_alive_beyond_control_window
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn machine_http_tunnel_provider_refusal_returns_http_without_opening_a_stream() {
+    let server = endpoint(IrohCapProfile::MachineBulk).await;
+    let client = endpoint(IrohCapProfile::MachineBulk).await;
+    let contacts = Arc::new(AtomicUsize::new(0));
+    let application_addr = echo_server(Arc::clone(&contacts)).await;
+    let handshakes = Arc::new(Mutex::new(Vec::new()));
+    let admission_target = recording_admission_server(
+        client.id().to_string(),
+        application_addr.port(),
+        Arc::clone(&handshakes),
+    )
+    .await;
+    let acceptor = MachineAcceptor::start(&server, MachineAcceptorConfig { admission_target })
+        .expect("machine acceptor");
+    let response_body = serde_json::json!({
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "code": "broker_unavailable",
+            "resourceId": "resource-é",
+            "message": "Happier refused this request: broker_unavailable.",
+        },
+    })
+    .to_string();
+    let refusal = serde_json::json!({
+        "kind": "http_refusal",
+        "responseBody": response_body,
+    })
+    .to_string();
+    let invalid_outcomes = [
+        serde_json::json!({"kind": "http_refusal", "responseBody": response_body, "status": 200})
+            .to_string(),
+        serde_json::json!({"kind": "http_refusal", "responseBody": "not JSON"}).to_string(),
+        serde_json::json!({"kind": "http_refusal", "responseBody": {}}).to_string(),
+    ];
+    let invalid_outcome_count = invalid_outcomes.len();
+    let sequence = Arc::new(AtomicUsize::new(0));
+    let provider: MachineHandshakeProvider = Arc::new(move || {
+        let attempt = sequence.fetch_add(1, Ordering::SeqCst);
+        let outcome = if attempt == 0 {
+            refusal.clone()
+        } else {
+            invalid_outcomes.get(attempt - 1).cloned().unwrap_or_else(|| {
+                r#"{"v":1,"kind":"provider_broker","witness":"recovered"}"#.to_owned()
+            })
+        };
+        Box::pin(async move { Ok(outcome) })
+    });
+    let tunnel = MachineHttpTunnel::start_with_handshake_provider(
+        &client,
+        MachineTunnelConfig {
+            endpoint_id: server.id().to_string(),
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            direct_addresses: vec![direct_addr(&server).await],
+            relay_urls: vec![],
+            handshake_json: r#"{"v":1,"kind":"provider_broker"}"#.to_owned(),
+            cap_profile: IrohCapProfile::MachineBulk,
+        },
+        provider,
+    )
+    .await
+    .expect("machine HTTP tunnel");
+    let request = format!(
+        "POST / HTTP/1.1\r\n{}: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        IROH_MACHINE_HTTP_LOCAL_CAPABILITY_HEADER,
+        tunnel.local_capability(),
+    );
+    let request_body = serde_json::json!({"input": "prompt".repeat(16 * 1024)}).to_string();
+    let refused_request = format!(
+        "POST / HTTP/1.1\r\n{}: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        IROH_MACHINE_HTTP_LOCAL_CAPABILITY_HEADER,
+        tunnel.local_capability(),
+        request_body.len(),
+        request_body,
+    );
+    let mut refused = TcpStream::connect(tunnel.local_addr().expect("HTTP addr"))
+        .await
+        .expect("refused HTTP connect");
+    refused
+        .write_all(refused_request.as_bytes())
+        .await
+        .expect("upload request");
+    // Real HTTP clients await the response without first sending a TCP FIN.
+    let mut first = Vec::new();
+    refused
+        .read_to_end(&mut first)
+        .await
+        .expect("HTTP refusal response");
+    drop(refused);
+    let expected = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        response_body,
+    );
+    assert_eq!(first, expected.as_bytes());
+    assert_eq!(tunnel.status().streams_opened, 0);
+    assert!(tunnel.status().connection_active);
+    assert_eq!(contacts.load(Ordering::Relaxed), 0);
+    assert!(handshakes.lock().expect("handshakes").is_empty());
+
+    for _ in 0..invalid_outcome_count {
+        let rejected =
+            exchange_echo(tunnel.local_addr().expect("HTTP addr"), request.as_bytes()).await;
+        assert!(rejected.is_empty());
+        assert_eq!(tunnel.status().streams_opened, 0);
+        assert_eq!(contacts.load(Ordering::Relaxed), 0);
+        assert!(handshakes.lock().expect("handshakes").is_empty());
+    }
+
+    let second = exchange_echo(tunnel.local_addr().expect("HTTP addr"), request.as_bytes()).await;
+    assert!(second.starts_with(b"app-reply:"));
+    assert_eq!(tunnel.status().streams_opened, 1);
+    assert_eq!(contacts.load(Ordering::Relaxed), 1);
+    assert_eq!(handshakes.lock().expect("handshakes").len(), 1);
+    tunnel.stop_and_wait().await;
+    acceptor.stop_and_wait().await;
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn machine_http_tunnel_provider_failure_closes_only_that_connection() {
     let server = endpoint(IrohCapProfile::MachineBulk).await;
     let client = endpoint(IrohCapProfile::MachineBulk).await;
@@ -1936,6 +2057,7 @@ async fn malformed_machine_control_never_reaches_admission_or_app() {
     let acceptor = MachineAcceptor::start(&server, MachineAcceptorConfig { admission_target })
         .expect("acceptor");
     let server_addr = direct_addr(&server).await;
+    let local_only_refusal = br#"{"kind":"http_refusal","responseBody":"{}"}"#;
     let cases: Vec<Vec<u8>> = vec![
         vec![],
         vec![0x02],
@@ -1948,6 +2070,12 @@ async fn malformed_machine_control_never_reaches_admission_or_app() {
         .concat(),
         [vec![0x01], 2u32.to_be_bytes().to_vec(), vec![0xff, 0xfe]].concat(),
         [vec![0x01], 1u32.to_be_bytes().to_vec(), b"[".to_vec()].concat(),
+        [
+            vec![0x01],
+            (local_only_refusal.len() as u32).to_be_bytes().to_vec(),
+            local_only_refusal.to_vec(),
+        ]
+        .concat(),
     ];
     for bytes in cases {
         let connection = client
@@ -1974,7 +2102,7 @@ async fn malformed_machine_control_never_reaches_admission_or_app() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(admission_contacts.load(Ordering::Relaxed), 0);
     assert_eq!(app_contacts.load(Ordering::Relaxed), 0);
-    assert_eq!(acceptor.status().streams_rejected, 5);
+    assert_eq!(acceptor.status().streams_rejected, 6);
     assert_eq!(
         acceptor.status().last_failure,
         Some(crate::MachineFailureCode::InvalidControl)

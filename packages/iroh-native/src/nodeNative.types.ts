@@ -106,8 +106,18 @@ export type IrohNodeStartMachineTunnelRequest = Readonly<{
   nativeHttpLease?: Readonly<{ openJson: string }>;
 }>;
 
+/** Trusted local callback outcome; serialized as JSON, never sent to the peer. */
+export type IrohNodeMachineHttpHandshakeRefusal = Readonly<{
+  kind: 'http_refusal';
+  /** JSON serialized by the application admission owner and returned as HTTP 403. */
+  responseBody: string;
+}>;
+
 export type IrohNodeStartMachineHttpTunnelRequest = IrohNodeStartMachineTunnelRequest & Readonly<{
-  /** Called once for each newly accepted local HTTP connection, before its QUIC stream opens. */
+  /**
+   * Called once for each authenticated local HTTP connection, before its QUIC
+   * stream opens. Resolves to a handshake or JSON-serialized local HTTP refusal.
+   */
   handshakeProvider?: () => Promise<string>;
 }>;
 
