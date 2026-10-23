@@ -268,7 +268,7 @@ describe('public managed Provider runtime start coordinator', () => {
       launchResourceScope: createProviderLaunchResourceScope(),
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       code: 'managed_provider_runtime_unavailable',
     });
@@ -296,7 +296,7 @@ describe('public managed Provider runtime start coordinator', () => {
       launchResourceScope: createProviderLaunchResourceScope(),
     });
 
-    expect(result).toEqual({ ok: false, code: 'managed_provider_runtime_unavailable' });
+    expect(result).toMatchObject({ ok: false, code: 'managed_provider_runtime_unavailable' });
   });
 
   it.each([
@@ -322,7 +322,31 @@ describe('public managed Provider runtime start coordinator', () => {
       launchResourceScope: createProviderLaunchResourceScope(),
     });
 
-    expect(result).toEqual({ ok: false, code: 'managed_provider_start_failed' });
+    expect(result).toMatchObject({ ok: false, code: 'managed_provider_start_failed' });
+  });
+
+  it.each([
+    { error: new PluginError({ code: 'plugin_managed_service_establishment_failed', message: 'private stderr', details: {
+      establishmentFailure: { cause: 'process_exited', exitCode: 17, signal: 'SIGTERM', lastStderrLine: 'private stderr' },
+    } }), expected: { phase: 'runtime_start', errorClass: 'Error', errorCode: 'plugin_managed_service_establishment_failed', exitCode: 17, signal: 'SIGTERM' } },
+    { error: Object.assign(new Error('private message'), { name: 'private name', code: 'private code',
+      details: { establishmentFailure: { exitCode: 'private exit', signal: 'private signal' } },
+    }), expected: { phase: 'runtime_start', errorClass: 'Error' } },
+  ])('retains only content-free runtime startup cause ($expected.errorCode)', async ({ error, expected }) => {
+    const runtime = resolvedRuntime(Object.freeze({ start: async () => { throw error; } }));
+    const result = await startPublicManagedProviderRuntime({
+      identity: Object.freeze({ pluginId: 'cliproxyapi', localId: 'cliproxyapi' }),
+      request: Object.freeze({ reason: 'explicitStartLocal' as const, endpointTemplateIds: Object.freeze(['responses']) }),
+      acquireRuntime: async () => runtime,
+      connectedAccounts: connectedAccounts(),
+      custody: Object.freeze({ managedServices: managedServices(), projectEndpointAccess: vi.fn() }),
+      isAuthorizationCurrent: () => true,
+      revalidateAuthorization: async () => true,
+      signal: new AbortController().signal,
+      launchResourceScope: createProviderLaunchResourceScope(),
+    });
+    expect(result).toEqual({ ok: false, code: 'managed_provider_start_failed', startupFailure: expected });
+    expect(JSON.stringify(result)).not.toContain('private');
   });
 
   it('reports cancellation after Provider admission without misclassifying it as authorization drift', async () => {

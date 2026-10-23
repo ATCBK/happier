@@ -192,7 +192,7 @@ describe('CLIProxyAPI composed public managed Provider start', () => {
       launchResourceScope: createProviderLaunchResourceScope(),
     });
 
-    expect(result).toEqual({ ok: false, code: 'managed_provider_start_failed' });
+    expect(result).toMatchObject({ ok: false, code: 'managed_provider_start_failed' });
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       pathAndQuery: '/healthz',
       method: 'GET',
@@ -391,7 +391,7 @@ describe('CLIProxyAPI composed public managed Provider start', () => {
       launchResourceScope: createProviderLaunchResourceScope(),
     });
 
-    expect(result).toEqual({ ok: false, code: 'managed_provider_start_failed' });
+    expect(result).toMatchObject({ ok: false, code: 'managed_provider_start_failed' });
     expect(supervise).not.toHaveBeenCalled();
     expect(projectEndpointAccess).not.toHaveBeenCalled();
   });

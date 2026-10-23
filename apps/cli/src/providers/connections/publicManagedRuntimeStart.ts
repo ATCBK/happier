@@ -10,6 +10,7 @@ import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtim
 import {
   startPublicManagedProviderRuntime,
   type PublicManagedProviderRuntimeStartFailureCode,
+  type PublicManagedProviderRuntimeStartupFailure,
 } from '@/providers/lifecycle/publicManagedProviderRuntimeStart';
 import type {
   ManagedProviderEndpointAccessProjection,
@@ -62,9 +63,11 @@ function failForCoordinatorCode(
   code: PublicManagedProviderRuntimeStartFailureCode,
   machineId: string,
   authorizationFailure?: ProviderErrorV1,
+  startupFailure?: PublicManagedProviderRuntimeStartupFailure,
 ): never {
   try {
-    logger.warnLocalFile('[Provider] Managed runtime start refused', { startFailureCode: code });
+    logger.warnLocalFile('[Provider] Managed runtime start refused', { startFailureCode: code,
+      ...(startupFailure ? { startupFailure } : {}) });
   } catch {
     // Preserve the original closed Provider outcome if file logging fails.
   }
@@ -220,7 +223,7 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
               launchResourceScope,
             });
             if (!started.ok) {
-              return failForCoordinatorCode(started.code, input.machineId, authorizationFailure);
+              return failForCoordinatorCode(started.code, input.machineId, authorizationFailure, started.startupFailure);
             }
 
             const cleanup = launchResourceScope.transfer();

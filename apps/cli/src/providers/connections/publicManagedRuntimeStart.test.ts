@@ -49,6 +49,29 @@ import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settin
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { logger } from '@/ui/logger';
 
+it('retains the runtime startup cause in the explicit-start refusal log through the real registry', async () => {
+  const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+  onTestFinished(() => diagnostic.mockRestore());
+  await withConfiguredDaemonTestHome({ prefix: 'managed-start-cause-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir, controller });
+    try {
+      const start = createPublicManagedProviderRuntimeStartOperation({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+      await expect(start({ contributionKey: 'acme.managed-run/gateway',
+        identity: { pluginId: 'acme.managed-run', localId: 'gateway' },
+        request: { reason: 'explicitStartLocal', endpointTemplateIds: ['responses'] },
+        purposeBindings: { v: 1, bindings: [] }, isAuthorizationCurrent: () => true,
+        revalidateAuthorization: async () => true,
+      })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable' });
+      expect(diagnostic).toHaveBeenCalledWith('[Provider] Managed runtime start refused', {
+        startFailureCode: 'managed_provider_start_failed',
+        startupFailure: { phase: 'runtime_start', errorClass: 'Error' },
+      });
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('Worker must not start');
+    } finally { await fixture.cleanup(); }
+  });
+});
+
 it.each(['cold', 'activated'] as const)('acquires connected-account broker custody from a %s runtime without inventing a Provider Connection gateway', async (activation) => {
   const diagnostic = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
   onTestFinished(() => diagnostic.mockRestore());
