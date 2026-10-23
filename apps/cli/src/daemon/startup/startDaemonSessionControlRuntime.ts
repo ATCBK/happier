@@ -20432,8 +20432,6 @@ export async function startDaemonSessionControlRuntime(
     },
     onChildExited,
     onTrackedSessionHealthy: async (tracked: TrackedSession): Promise<void> => {
-      // Re-observe exact work, but process health alone does not restart aggregate idle.
-      sessionLiveWorkProducer.notifyChanged('observation');
       await superviseTrackedOptionalTerminalPresentation({
         tracked,
         happyHomeDir: configuration.happyHomeDir,
