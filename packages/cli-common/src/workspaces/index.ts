@@ -33,6 +33,7 @@ import {
   findUnservableBundledPluginPackageResources,
   readBundledPluginPackageResourceRelativePaths,
 } from '../../bundledPluginResources.mjs';
+import { WORKSPACE_PACKAGE_BUILD_INPUT_RECORD } from '../../packageBuildOutputTargets.mjs';
 
 const PLUGINS_PACKAGE_PREFIX = '@happier-dev/plugins-';
 const INTERNAL_PACKAGE_PREFIX = '@happier-dev/';
@@ -1354,6 +1355,7 @@ function isRuntimePackageContentPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, '/');
   return !(
     isTypeScriptIncrementalMetadataPath(normalized)
+    || normalized === `dist/${WORKSPACE_PACKAGE_BUILD_INPUT_RECORD}`
     || normalized.endsWith('.d.ts')
     || normalized.endsWith('.d.ts.map')
     || normalized.endsWith('.map')

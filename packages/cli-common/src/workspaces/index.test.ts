@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { WORKSPACE_PACKAGE_BUILD_INPUT_RECORD } from '../../packageBuildOutputTargets.mjs';
 
 import {
   atomicReplaceDirSync,
@@ -305,7 +306,7 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
   });
 
-  it('publishes source entrypoint dependencies and detects their content drift', () => {
+  it('publishes source entrypoint dependencies and detects runtime content drift independently of build receipts', () => {
     const root = createTempRoot('workspace-package-source-closure-');
     const sourceDir = join(root, 'packages', 'sdk');
     const hostDir = join(root, 'apps', 'cli');
@@ -316,6 +317,7 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
       exports: { '.': { 'happier-source': './src/index.js', default: './dist/index.js' } },
     }, {
       'dist/index.js': 'export const selected = "dist";\n',
+      [`dist/${WORKSPACE_PACKAGE_BUILD_INPUT_RECORD}`]: JSON.stringify({ builtAt: 1, outputs: [] }),
       'src/index.js': 'export { selected } from "./private/value.js";\n',
       'src/private/value.js': 'export const selected = "source";\n',
     });
@@ -331,6 +333,9 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     publish();
     expect(readSource()).toBe('dist');
     expect(readFileSync(join(destinationDir, 'src/private/value.js'), 'utf8')).toContain('source');
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    writeFileSync(join(sourceDir, 'dist', WORKSPACE_PACKAGE_BUILD_INPUT_RECORD),
+      JSON.stringify({ builtAt: 2, outputs: [] }));
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
     writeFileSync(join(sourceDir, 'src/private/value.js'), 'export const selected = "updated";\n');
     expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
