@@ -25,7 +25,9 @@ import {
   ProviderConnectionsRowMutationV1Schema,
   type ProviderSettingsV1,
 } from '@happier-dev/protocol';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { TeamCredentialProviderModelCatalogEntryV1Schema, TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
@@ -53,6 +55,7 @@ import {
 } from '@/providers/probe/client';
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
 import { createRuntimeProviderServices } from '@/providers/probe/runtimeServices';
+import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { PROVIDER_PROBE_DEFAULT_MAX_CONCURRENT_OPERATIONS } from '@/providers/probe/scheduler';
 import type { ProviderModelSettingsMutationIntent } from '@/providers/connections';
@@ -330,6 +333,103 @@ function providerSnapshot(
     scopeKey: resolveAccountSettingsScopeKeyForToken('provider-model-snapshot-account'),
   };
 }
+
+async function registeredProviderProjectionFixture() {
+  const fixture = await createManagedRunLaunchFixture({ acceptedCredentialFormats: ['raw', 'bearer'] });
+  const credentials = { token: 'custodian-projection', encryption: null };
+  let snapshotReads = 0;
+  let leaseRequests = 0;
+  let snapshotAvailable = true;
+  const services = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId,
+    featureGate: { isEnabled: () => true },
+    getAccountSettingsSnapshot: () => { snapshotReads += 1; return snapshotAvailable ? fixture.snapshot : null; },
+    acquireRuntimeLease: async () => { leaseRequests += 1; return fixture.lease; },
+    resolveAddresses: async () => ['1.1.1.1'],
+    modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during projection'); } });
+  const connections = createRuntimeProviderConnectionServices({ machineId: fixture.machineId, credentials,
+    featureGate: { isEnabled: () => true }, runtimeSummary: services.summary });
+  const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: () => {} });
+  registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
+    featureGate: { isEnabled: () => true },
+    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }) } });
+  const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, refreshPolicy: 'current_only' as const };
+  const envelope = { v: 1 as const, requestId: 'foreign-projection', target: { kind: 'machine' as const, machineId: fixture.machineId }, input: request };
+  const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
+    serverIdentityId: 'srv_home', accountId: 'requester', custodianAccountId: 'custodian',
+    authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+    machineId: fixture.machineId, installationId: 'installation', actionId: 'providers.models.projection',
+    requestId: envelope.requestId, target: envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+  } });
+  const admission = { actorAccountId: 'requester', custodianAccountId: 'custodian', machineId: fixture.machineId,
+    installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const };
+  const carriers = {
+    machine: { rpcContext: { machineAdmission: admission } },
+    httpRoot: { rpcContext: { callerInputAuthorization: authorization } },
+    localRoot: { localActionContext: { externalActionExecutionAuthorization: authorization } },
+  } satisfies Record<string, NonNullable<Parameters<RpcHandlerManager['invokeLocal']>[2]>>;
+  const teamCredentialModel = TeamCredentialProviderModelCatalogEntryV1Schema.parse({
+    selection: { kind: 'team_credential_provider_model', resourceId: 'resource', teamId: 'team',
+      expectedResourceRevision: 1, deliveryMode: 'brokered', agentTargetKey: fixture.agentTargetKey, modelId: 'team-model' },
+    descriptor: { id: 'team-model', name: 'Team model' },
+    application: { agentTargetKey: fixture.agentTargetKey, implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
+      endpointTemplateId: 'responses', protocol: 'openai-responses' },
+    sourceFacts: { endpoint: { id: 'responses', protocol: 'openai-responses', capabilities: {
+      streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'supported', reasoningControls: 'supported' } },
+      compatibilityOverrides: [{ agentTargetKey: fixture.agentTargetKey, protocol: 'openai-responses', status: 'verified',
+        reason: 'Fixture endpoint contract', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-23' } }] },
+    confirmationSource: { connectionId: 'connected-source:recipient', catalogSourceKey: 's'.repeat(43) },
+    sourceRevision: 'team-source', availability: 'available',
+  });
+  return { ...fixture, services, rpc, request, carriers, admission, teamCredentialModel,
+    costs: () => ({ snapshotReads, leaseRequests }), retireAmbientSnapshot: () => { snapshotAvailable = false; } };
+}
+
+it.each(['machine', 'httpRoot', 'localRoot'] as const)(
+  'refuses foreign private or competing Provider projection before Account work (%s)', async carrier => {
+    const fixture = await registeredProviderProjectionFixture();
+    const http = vi.spyOn(axios, 'get').mockRejectedValue(new Error('No Home read for a foreign projection'));
+    try {
+      for (const input of [fixture.request, { ...fixture.request, teamCredentialModel: fixture.teamCredentialModel,
+        sourceConnectionId: 'run-gateway' }]) {
+        await expect(fixture.rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, input, fixture.carriers[carrier]))
+          .resolves.toMatchObject({ status: 'error', error: { code: 'provider_authorization_changed' } });
+      }
+      expect(fixture.costs()).toEqual({ snapshotReads: 0, leaseRequests: 0 });
+      expect(http).not.toHaveBeenCalled();
+    } finally { await fixture.cleanup(); }
+  },
+);
+
+it('projects only the foreign Team model without custodian Account readiness and preserves owned reads', async () => {
+  const fixture = await registeredProviderProjectionFixture();
+  const http = vi.spyOn(axios, 'get').mockRejectedValue(new Error('No Home read for a worker Team projection'));
+  try {
+    fixture.retireAmbientSnapshot();
+    for (const status of ['verified', 'experimental'] as const) {
+      const teamCredentialModel = TeamCredentialProviderModelCatalogEntryV1Schema.parse({ ...fixture.teamCredentialModel,
+        sourceFacts: { ...fixture.teamCredentialModel.sourceFacts, compatibilityOverrides: [{
+          agentTargetKey: fixture.agentTargetKey, protocol: 'openai-responses', status,
+          reason: 'Fixture endpoint contract', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-23' },
+        }] } });
+      await expect(fixture.rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
+        { ...fixture.request, teamCredentialModel }, fixture.carriers.machine))
+        .resolves.toMatchObject({ status: 'success', groups: [{ connectionId: 'connected-source:recipient', rows: [{
+          ref: { modelId: 'team-model' }, compatibility: { result: { status }, confirmed: status === 'verified' },
+        }] }] });
+    }
+    expect(fixture.costs()).toEqual({ snapshotReads: 0, leaseRequests: 2 });
+    expect(http).not.toHaveBeenCalled();
+  } finally { await fixture.cleanup(); }
+  const owned = await registeredProviderProjectionFixture();
+  try {
+    for (const options of [undefined, { rpcContext: { machineAdmission: { ...owned.admission, actorAccountId: 'custodian' } } }]) {
+      const snapshotReads = owned.costs().snapshotReads;
+      await expect(owned.rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, owned.request, options))
+        .resolves.toMatchObject({ status: 'success' });
+      expect(owned.costs().snapshotReads).toBeGreaterThan(snapshotReads);
+    }
+  } finally { await owned.cleanup(); }
+});
 
 describe('runtime provider model-management composition', () => {
   const unexpectedModelSettingsMutation = async (

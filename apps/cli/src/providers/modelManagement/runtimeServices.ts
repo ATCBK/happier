@@ -3,6 +3,7 @@ import { logProviderUnexpectedFailure } from '@/providers/diagnostics';
 
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
+import { DEFAULT_PROVIDER_SETTINGS_V1 } from '@happier-dev/protocol/providers/settings/v1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
@@ -185,6 +186,7 @@ export type RuntimeProviderModelManagementServices = Readonly<{
   projectModels(
     request: DaemonProviderModelProjectionRequestV1,
     signal?: AbortSignal,
+    context?: RpcHandlerContext,
   ): Promise<DaemonProviderModelProjectionResponseV1>;
   projectModelsForAccount(
     request: DaemonProviderModelProjectionRequestV1,
@@ -357,7 +359,19 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     accountContext?: RuntimeProviderAccountModelProjectionContext,
     signal?: AbortSignal,
     observeSnapshot?: (signal?: AbortSignal) => ReturnType<typeof readAdmittedSnapshot>,
+    rpcContext?: RpcHandlerContext,
   ): Promise<DaemonProviderModelProjectionResponseV1> => {
+    const admission = rpcContext?.machineAdmission;
+    const foreignRequester = Boolean(admission && admission.actorAccountId !== admission.custodianAccountId)
+      || [rpcContext?.callerInputAuthorization, rpcContext?.localActionContext?.externalActionExecutionAuthorization]
+        .some(authorization => authorization && authorization.binding.accountId !== authorization.binding.custodianAccountId);
+    // Shared workers supply Agent compatibility, never their custodian's
+    // private Provider catalog. Source selectors must not reach an earlier
+    // catalog branch or silently fall back to ambient Account authority.
+    if (foreignRequester && (!request.teamCredentialModel || request.providerConnection || request.connectedAccountTarget
+      || request.sourceCatalog || request.sourceConnectionId || request.application || request.includeDirectMaterialization)) {
+      return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
+    }
     if (!input.featureGate.isEnabled('providers')) {
       return DaemonProviderModelProjectionResponseV1Schema.parse({
         status: 'error',
@@ -389,12 +403,12 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       && await awaitWithinProviderOperation(Promise.resolve(accountContext.isCurrent()), operationLifetime)
       && !accountContext.signal.aborted
     );
-    let snapshot;
+    let snapshot: Awaited<ReturnType<typeof readAdmittedSnapshot>> = null;
     try {
       if (!await isAccountCurrent()) {
         return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
       }
-      snapshot = await awaitWithinProviderOperation(observeSnapshot
+      if (!foreignRequester) snapshot = await awaitWithinProviderOperation(observeSnapshot
         ? observeSnapshot(operationLifetime.signal) : readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
@@ -402,7 +416,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       }
       throw error;
     }
-    if (!snapshot) {
+    if (!snapshot && !foreignRequester) {
       return { status: 'error', error: createProviderErrorV1('provider_settings_invalid', { machineId: request.machineId }) };
     }
     const pendingLease = input.acquireRuntimeLease
@@ -434,7 +448,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           }),
         };
       }
-      if (request.sourceCatalog && request.providerConnection) {
+      if (request.sourceCatalog && request.providerConnection && snapshot) {
         const registry = resolveProviderContributionRegistryView(lease.registry.contributes,
           lease.registry.generation, lease.registry.readPluginOccurrenceId);
         const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
@@ -486,7 +500,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       }
       const adapter = agentId ? readLeasedAgentProviderBindingAdapter({ lease, agentId }) : null;
       if (!adapter && !sourceProjection) return { status: 'success', agentTargetKey: request.agentTargetKey, groups: [] };
-      const settingsRead = readProviderSettingsForCli(snapshot);
       const registry = resolveProviderContributionRegistryView(
         lease.registry.contributes,
         lease.registry.generation,
@@ -497,7 +510,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         const confirmationSource = model.confirmationSource;
         if (!confirmationSource || model.availability !== 'available') return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable') };
         const compatibility = await resolveTeamCredentialModelCompatibility({ model: { ...model, deliveryMode: model.selection.deliveryMode },
-          lease, agentId: agentId!, providerSettings: settingsRead.settings });
+          lease, agentId: agentId!, providerSettings: snapshot ? readProviderSettingsForCli(snapshot).settings : DEFAULT_PROVIDER_SETTINGS_V1 });
         return DaemonProviderModelProjectionResponseV1Schema.parse({ status: 'success', agentTargetKey: request.agentTargetKey,
           groups: [{ connectionId: confirmationSource.connectionId, providerName: model.application.implementationIdentity.localId,
             connectionName: model.selection.resourceId, connectionRole: 'named', connectionDisplayNameMode: 'custom',
@@ -511,6 +524,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }],
           }], currentSelectionRecovery: null });
       }
+      if (!snapshot) return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
+      const settingsRead = readProviderSettingsForCli(snapshot);
       // A Connected Account/Pool catalog belongs to its declared upstream
       // purpose, independently of any saved Gateway configuration. Taking this
       // branch before connection resolution prevents a second competing
@@ -1074,9 +1089,9 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     }
   };
 
-  const projectModels: typeof projectModelsFromCurrentSource = async (request, accountContext, signal, observeSnapshot) => {
+  const projectModels: typeof projectModelsFromCurrentSource = async (request, accountContext, signal, observeSnapshot, rpcContext) => {
     try {
-      return await projectModelsFromCurrentSource(request, accountContext, signal, observeSnapshot);
+      return await projectModelsFromCurrentSource(request, accountContext, signal, observeSnapshot, rpcContext);
     } catch (error) {
       const typed = ProviderErrorV1Schema.safeParse(error);
       if (typed.success) return { status: 'error', error: typed.data };
@@ -1642,7 +1657,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     models: sharedRuntime.models,
     summary: sharedRuntime.summary,
     resolveCatalogContext: sharedRuntime.resolveCatalogContext,
-    projectModels: (request: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal) => projectModels(request, undefined, signal),
+    projectModels: (request: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal, context?: RpcHandlerContext) =>
+      projectModels(request, undefined, signal, undefined, context),
     projectModelsForAccount,
     resolveTeamCredentialRequestPolicySupport,
     resolveTeamCredentialResourceTestCandidate: resolveResourceTestCandidate,

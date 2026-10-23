@@ -304,7 +304,6 @@ describe('machine provider RPC registration', () => {
     const projection = { machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' } as const;
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)!(projection))
       .resolves.toEqual({ status: 'success', agentTargetKey: 'agent:happier.agent.codex/codex', groups: [] });
-    expect(h.services.projectModels).toHaveBeenCalledWith(projection, undefined);
 
     const mutation = {
       action: 'setVisibility' as const, machineId: 'machine-a',

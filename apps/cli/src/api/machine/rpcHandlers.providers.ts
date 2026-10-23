@@ -35,7 +35,7 @@ export type MachineProviderRpcServices = Readonly<{
   cancelModelLoad(input: ProviderModelLoadRequest): Promise<ProviderModelLoadResult>;
   describeConnections(input: DaemonProviderConnectionsDescribeRequestV1, signal?: AbortSignal): Promise<DaemonProviderConnectionsDescribeResponseV1>;
   mutateConnection(input: DaemonProviderConnectionMutationRequestV1): Promise<DaemonProviderConnectionMutationResponseV1>;
-  projectModels(input: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal): Promise<DaemonProviderModelProjectionResponseV1>;
+  projectModels(input: DaemonProviderModelProjectionRequestV1, signal?: AbortSignal, context?: RpcHandlerContext): Promise<DaemonProviderModelProjectionResponseV1>;
   resolveTeamCredentialRequestPolicySupport(
     input: DaemonProviderTeamCredentialRequestPolicySupportRequestV1,
     signal?: AbortSignal,
@@ -225,7 +225,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
           ? { status: 'error' as const, error: createProviderErrorV1('provider_not_enabled_on_machine', {
               machineId: request.machineId,
             }) }
-          : await input.services.projectModels(request, context?.signal);
+          : await input.services.projectModels(request, context?.signal, context);
       return DaemonProviderModelProjectionResponseV1Schema.parse(result);
     },
   );
