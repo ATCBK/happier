@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { t } from '@/text';
-import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
@@ -24,7 +24,7 @@ import { projectMcpServerCatalogSnapshot } from '@/sync/store/settings/mcpServer
 import { getPromptLibraryCatalogValue } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { readCurrentProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
+import { readCurrentProjectAccountRows, useProjectAccountWorkspaceRef, type ProjectAccountRowsSnapshot, type ProjectOrganizationRow } from '@/sync/domains/workspaces/projectAccountRows';
 import { useApprovalSessionReading } from './useApprovalSessionReading';
 import { useWorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
 import { endpointFor, type WorkspaceSyncRelationshipEndpoint, type WorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
@@ -54,6 +54,13 @@ function readApprovalArtifactReference(reference: ApprovalReference, artifact: D
     return { text: title || reference.id, named: Boolean(title) };
 }
 
+function readApprovalProject(reference: ApprovalReference | undefined, rows: ProjectAccountRowsSnapshot | null,
+    viewer: ApprovalReferenceSources['viewer'], approvalServerId: string | null): ProjectOrganizationRow | null {
+    return reference?.kind === 'project' && rows && viewer && rows.scope.accountId === viewer.accountId
+        && isSameApprovalHome(viewer.serverId, approvalServerId) && isSameApprovalHome(rows.scope.serverId, approvalServerId)
+        ? rows.organizations.find(row => row.key.projectKey === reference.id) ?? null : null;
+}
+
 /** An invocation has captured its Account; references are read there, never on the focused Home. */
 export async function readApprovalReferenceForConfirmation(reference: ApprovalReference | undefined,
     account: LazyActionAccountContext, signal?: AbortSignal): Promise<ApprovalReferenceReading> {
@@ -64,6 +71,7 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         ? findApprovalProviderSource(reference, readTeamCredentialResourceCatalogs(teamScope)) : undefined;
     const teamResources = teamSource ? [teamSource] : [];
     const state = storage.getState();
+    const projects = readCurrentProjectAccountRows(state);
     const sources: ApprovalReferenceSources = {
         serverId: reference.kind === 'session' ? reference.serverId ?? account.serverId : account.serverId,
         viewer: scope, ownHome: true, sessionReading: { name: null, machineId: '', status: 'unavailable' },
@@ -71,7 +79,8 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         declarations: readAccountProviderDeclarations({ kind: 'account' }),
         machine: reference.kind === 'machine' ? resolveServerScopedMachine(state, account.serverId, reference.id) : null,
         registries: getPromptLibraryCatalogValue(scope, 'registry-sources'),
-        projects: readCurrentProjectAccountRows(state),
+        project: readApprovalProject(reference, projects, scope, account.serverId),
+        projectCensusComplete: projects?.status === 'ready' && projects.coverage === 'complete',
         providerCatalog: getProviderCatalogSnapshot(scope),
         teamResources,
         teamNameById: reference.kind === 'providerConnection' && teamSource
@@ -116,7 +125,10 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const sessionMachine = useServerScopedMachine(serverId, reference?.kind === 'session' ? sessionReading.machineId : '');
     const mcp = useMcpServerCatalogForServer(reference?.kind === 'mcpServer' ? approvalServerId : null, reference?.kind === 'mcpServer');
     const registries = usePromptLibraryCatalogValue('registry-sources', reference?.kind === 'registrySource' && ownHome ? viewer : null);
-    const projects = useProjectAccountRows();
+    const project = useProjectAccountRows(rows => readApprovalProject(reference, rows, viewer, approvalServerId),
+        reference?.kind === 'project' && ownHome);
+    const projectCensusComplete = useProjectAccountRows(rows => rows?.status === 'ready' && rows.coverage === 'complete',
+        reference?.kind === 'workspaceSyncRelationship');
     const agents = useAgentCatalogIdentities({ agentIds: reference?.kind === 'agent' ? [reference.id] : [], machineId: null,
         serverId: reference?.kind === 'agent' ? approvalServerId : null });
     const providerConnectionId = reference?.kind === 'providerConnection' ? reference.id
@@ -128,11 +140,11 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
         enabled: Boolean(providerConnectionId && !providerCatalog?.data?.connections.some(row => row.id === providerConnectionId)) });
     const declarations = readAccountProviderDeclarations({ kind: 'account' });
     const syncLink = useWorkspaceSyncRelationshipSummary(reference?.kind === 'workspaceSyncRelationship' ? reference.id : null, approvalServerId ?? undefined);
-    const workspaceRefs = useWorkspaceRefs();
     const workspaceRefId = reference?.kind === 'workspace' ? reference.id : null;
-    const workspaceMachineId = workspaceRefId ? workspaceRefs.find((ref) => ref.id === workspaceRefId)?.machineId ?? '' : '';
+    const workspaceRef = useProjectAccountWorkspaceRef(workspaceRefId, approvalServerId ?? undefined);
+    const workspaceMachineId = workspaceRef?.machineId ?? '';
     const workspaceMachineNames = useMachineDisplayNamesById(workspaceMachineId ? [workspaceMachineId] : []);
-    const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRefs, workspaceMachineNames, approvalServerId ?? undefined) : null;
+    const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRef ? [workspaceRef] : [], workspaceMachineNames, approvalServerId ?? undefined) : null;
     const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
     const connectedAccountTargets = React.useMemo((): readonly ProjectedQualifiedConnectedAccountTarget[] => {
         const service = reference?.kind === 'connectedAccount' ? parseQualifiedPluginContributionKey(reference.service) : null;
@@ -144,7 +156,7 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const connectedAccount = useProjectedQualifiedConnectedAccountTargetPresentations(approvalServerId, connectedAccountTargets)
         .presentationsByKey[CONNECTED_ACCOUNT_KEY];
     return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine, connectedAccount,
-        managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
+        managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, project, projectCensusComplete, agents, providerCatalog, declarations,
         syncLink, workspace, teamResources: teamCatalog.resources, teamNameById: teamCatalog.teamNameById,
         teamCatalogLoading: teamCatalog.condition?.reason === 'loading' });
 }
@@ -192,7 +204,8 @@ type ApprovalReferenceSources = {
     sessionMachine?: ReturnType<typeof useServerScopedMachine>;
     mcp?: ReturnType<typeof useMcpServerCatalogForServer>;
     registries?: Pick<ReturnType<typeof usePromptLibraryCatalogValue<'registry-sources'>>, 'value'>;
-    projects?: ReturnType<typeof useProjectAccountRows>;
+    project?: ProjectOrganizationRow | null;
+    projectCensusComplete?: boolean;
     agents?: ReturnType<typeof useAgentCatalogIdentities>;
     providerCatalog?: ReturnType<typeof useProviderCatalogForServer>;
     teamResources?: readonly TeamCredentialResourceCatalogEntryV1[];
@@ -204,7 +217,7 @@ type ApprovalReferenceSources = {
 };
 
 function resolveApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null, sources: ApprovalReferenceSources): ApprovalReferenceReading {
-    const { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations } = sources;
+    const { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, agents, providerCatalog, declarations } = sources;
     if (reference?.kind === 'managedMachine') {
         const title = readManagedMachineName(sources);
         return { text: title || t('contextBar.machine'), named: true, subject: 'managedMachine',
@@ -223,7 +236,7 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
             alphaLabel: describeApprovalWorkspaceEndpoint(link.alpha), betaLabel: describeApprovalWorkspaceEndpoint(link.beta),
             mode: link.relationship.mode }), named: true }
             // A link the complete census no longer lists is gone; until it is read, the id is not copy either.
-            : projects?.status === 'ready' && projects.coverage === 'complete' ? { text: t('approvals.linkRemoved'), named: true }
+            : sources.projectCensusComplete ? { text: t('approvals.linkRemoved'), named: true }
             : { text: t('common.loading'), named: true, resolving: true };
     }
     if (reference?.kind === 'workspace') {
@@ -240,9 +253,7 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         return { text: source?.title ?? reference.id, named: Boolean(source) };
     }
     if (reference?.kind === 'project') {
-        const title = ownHome && projects && projects.scope.accountId === viewer?.accountId
-            && isSameApprovalHome(projects.scope.serverId, approvalServerId)
-            ? projects.organizations.find(row => row.key.projectKey === reference.id)?.value.label : null;
+        const title = sources.project?.value.label;
         return { text: title ?? reference.id, named: Boolean(title) };
     }
     if (reference?.kind === 'agent') {

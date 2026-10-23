@@ -72,7 +72,7 @@ export const storage = observeStoragePerformance(create<StorageState>()((set, ge
 }), syncPerformanceTelemetry);
 
 registerStorageStateReader(() => storage.getState());
-registerStorageStateSubscribe((listener) => storage.subscribe((state) => listener(state)));
+registerStorageStateSubscribe((listener) => storage.subscribe(listener));
 registerStorageMachineUpdateSubscribe(subscribeMachineUpdates);
 
 export function getStorage() {

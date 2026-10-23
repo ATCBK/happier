@@ -1,7 +1,7 @@
 import type { StorageState } from '@/sync/store/types';
 
 type StorageStateReader = () => StorageState;
-type StorageStateSubscribe = (listener: (state: StorageState) => void) => () => void;
+type StorageStateSubscribe = (listener: (state: StorageState, previousState?: StorageState) => void) => () => void;
 type MachineUpdateSubscribe = (listener: (serverId: string, machineIds: readonly string[]) => void) => () => void;
 
 let storageStateReader: StorageStateReader | null = null;
@@ -20,7 +20,7 @@ export function registerStorageStateSubscribe(subscribe: StorageStateSubscribe):
     storageStateSubscribe = subscribe;
 }
 
-export function subscribeRegisteredStorageState(listener: (state: StorageState) => void): (() => void) | null {
+export function subscribeRegisteredStorageState(listener: (state: StorageState, previousState?: StorageState) => void): (() => void) | null {
     return storageStateSubscribe ? storageStateSubscribe(listener) : null;
 }
 

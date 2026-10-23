@@ -1,9 +1,11 @@
-import * as React from 'react';
+import { useStoreWithEqualityFn } from 'zustand/traditional';
+import type { StoreApi } from 'zustand/vanilla';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
 import type { ProjectAccountOrganizationV1, ProjectAccountRowKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { readRegisteredStorageState, subscribeRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
+import { resolveWorkspaceRefById } from './workspaceRefs';
 
 export type ProjectAccountRowsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'locked' | 'refused';
 export type ProjectOrganizationRow = Readonly<{
@@ -28,30 +30,48 @@ export function readCurrentProjectAccountRows(state: Readonly<{
     return state.projectAccountRows;
 }
 
-const subscribe = (listener: () => void) => subscribeRegisteredStorageState(listener) ?? (() => {});
 const read = () => {
     const state = readRegisteredStorageState();
     return state ? readCurrentProjectAccountRows(state) : null;
 };
-/** Opened row projection through the registered sync owner's captured Account/Home. */
-export function useProjectAccountRows() {
-    return React.useSyncExternalStore(subscribe, read, read);
+type ProjectRowsReader = Pick<StoreApi<ProjectAccountRowsSnapshot | null>, 'getState' | 'getInitialState' | 'subscribe'>;
+// Select from the producer's stable Project snapshot, not the changing storage root.
+// Zustand's standard selector owns selection; this bridge retains the single storage subscription path.
+const projectRowsReader: ProjectRowsReader = {
+    getState: read,
+    getInitialState: read,
+    subscribe: listener => subscribeRegisteredStorageState((state, previous) => listener(
+        readCurrentProjectAccountRows(state), previous ? readCurrentProjectAccountRows(previous) : null,
+    )) ?? (() => {}),
+};
+const unavailableProjectRowsReader: ProjectRowsReader = {
+    getState: () => null,
+    getInitialState: () => null,
+    subscribe: () => () => {},
+};
+/** Select demanded facts from the opened Account/Home; disabled readers own no subscription. */
+export function useProjectAccountRows(): ProjectAccountRowsSnapshot | null;
+export function useProjectAccountRows<T>(select: (rows: ProjectAccountRowsSnapshot | null) => T, enabled?: boolean): T;
+export function useProjectAccountRows<T>(select?: (rows: ProjectAccountRowsSnapshot | null) => T, enabled = true) {
+    return useStoreWithEqualityFn(enabled ? projectRowsReader : unavailableProjectRowsReader,
+        rows => select ? select(rows) : rows);
 }
 
-const doNotSubscribe = () => () => {};
-const readUnavailableWorkspaceRefs = () => undefined;
 /** The complete opened checkout census, shared by subscriptions and pure projections. */
 export function readProjectAccountWorkspaceRefs(state: Parameters<typeof readCurrentProjectAccountRows>[0]): readonly WorkspaceRefV1[] | undefined {
     const rows = readCurrentProjectAccountRows(state);
     return rows?.status === 'ready' && rows.coverage === 'complete' ? rows.workspaceRefs : undefined;
 }
-const readWorkspaceRefs = () => {
-    const state = readRegisteredStorageState();
-    return state ? readProjectAccountWorkspaceRefs(state) : undefined;
-};
-
 /** Demand only the opened checkout facts; unrelated Project records retain the selected identity. */
 export function useProjectAccountWorkspaceRefs(enabled: boolean): readonly WorkspaceRefV1[] | undefined {
-    const snapshot = enabled ? readWorkspaceRefs : readUnavailableWorkspaceRefs;
-    return React.useSyncExternalStore(enabled ? subscribe : doNotSubscribe, snapshot, snapshot);
+    return useProjectAccountRows(rows => readProjectAccountWorkspaceRefs({ projectAccountRows: rows }), enabled);
+}
+
+/** Exact checkout demand uses the same qualified, ambiguity-preserving resolver as the census. */
+export function useProjectAccountWorkspaceRef(id: string | null, serverId?: string): WorkspaceRefV1 | null {
+    return useProjectAccountRows(rows => {
+        if (!id || !rows) return null;
+        const result = resolveWorkspaceRefById(rows.workspaceRefs, id, serverId);
+        return result.kind === 'resolved' ? result.ref : null;
+    }, id !== null);
 }

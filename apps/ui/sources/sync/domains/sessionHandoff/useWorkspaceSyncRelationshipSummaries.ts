@@ -14,6 +14,8 @@ import {
     type WorkspaceSyncStatusScope,
 } from './workspaceSyncStatusStore';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
+import { useProjectAccountRows, useProjectAccountWorkspaceRef } from '@/sync/domains/workspaces/projectAccountRows';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 function scopeFor(summary: WorkspaceSyncRelationshipSummary): WorkspaceSyncStatusScope {
     const controllerEndpoint = [summary.alpha, summary.beta].find(
@@ -29,12 +31,12 @@ function scopeFor(summary: WorkspaceSyncRelationshipSummary): WorkspaceSyncStatu
 }
 
 /** Relationship definitions with their endpoints named, before any daemon status: the one projection every reader shares. */
-function useWorkspaceSyncBaseSummaries(serverId?: string, enabled = true): readonly WorkspaceSyncRelationshipSummary[] {
+function useWorkspaceSyncBaseSummaries(serverId?: string): readonly WorkspaceSyncRelationshipSummary[] {
     const rawRelationships = useWorkspaceSyncRelationships();
     const workspaceRefs = useWorkspaceRefs();
     const relationshipModel = React.useMemo(
-        () => projectWorkspaceSyncRelationships(enabled ? rawRelationships : null),
-        [enabled, rawRelationships],
+        () => projectWorkspaceSyncRelationships(rawRelationships),
+        [rawRelationships],
     );
     const machineIds = React.useMemo(() => {
         return relationshipModel.all.flatMap((relationship) => [relationship.alphaWorkspaceRefId, relationship.betaWorkspaceRefId]
@@ -56,8 +58,16 @@ export function useWorkspaceSyncRelationshipSummary(
     relationshipId: string | null,
     serverId?: string,
 ): WorkspaceSyncRelationshipSummary | null {
-    const baseSummaries = useWorkspaceSyncBaseSummaries(serverId, relationshipId !== null);
-    return relationshipId ? baseSummaries.find((summary) => summary.relationshipId === relationshipId) ?? null : null;
+    const relationship = useProjectAccountRows(rows => rows?.relationships.find(row => row.relationshipId === relationshipId) ?? null,
+        relationshipId !== null);
+    const alpha = useProjectAccountWorkspaceRef(relationship?.alphaWorkspaceRefId ?? null, serverId);
+    const beta = useProjectAccountWorkspaceRef(relationship?.betaWorkspaceRefId ?? null, serverId);
+    const workspaceRefs = [...(alpha ? [alpha] : []), ...(beta && beta !== alpha ? [beta] : [])];
+    const machineNamesById = useMachineDisplayNamesById(workspaceRefs.map(ref => ref.machineId));
+    return projectWorkspaceSyncRelationshipSummaries({
+        relationships: projectWorkspaceSyncRelationships(relationship ? [relationship] : null),
+        workspaceRefs, statuses: [], machineNamesById, serverId,
+    })[0] ?? null;
 }
 
 export function useWorkspaceSyncRelationshipSummaries(
@@ -72,8 +82,10 @@ export function useWorkspaceSyncRelationshipSummaries(
         [baseSummaries, workspaceRefId],
     );
     const [revision, incrementRevision] = React.useReducer((value: number) => value + 1, 0);
+    const activelyViewed = useHostActivelyViewed();
 
     React.useEffect(() => {
+        if (!activelyViewed) return;
         const idleScopes: WorkspaceSyncStatusScope[] = [];
         const unsubscribers = scopedBaseSummaries.map((summary) => {
             if (!summary.relationship.enabled) return () => {};
@@ -87,7 +99,7 @@ export function useWorkspaceSyncRelationshipSummaries(
         });
         if (idleScopes.length > 0) void refreshWorkspaceSyncStatuses(idleScopes).catch(() => undefined);
         return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-    }, [scopedBaseSummaries]);
+    }, [activelyViewed, scopedBaseSummaries]);
 
     return React.useMemo(() => {
         return scopedBaseSummaries.map((summary) => ({
