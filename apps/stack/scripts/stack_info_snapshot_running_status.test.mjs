@@ -14,6 +14,74 @@ import { resolvePreferredStackDaemonStatePaths } from './utils/auth/credentials_
 import { applyStackDaemonLifecycleScopeEnv } from './utils/auth/stable_scope_id.mjs';
 import { captureStackRuntimeStopSnapshot, finalizeStackRuntimeStop, recordStackRuntimeStart, recordStackRuntimeStopRequest, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 
+for (const mode of ['owned', 'remote-owned', 'borrowed', 'remote-borrowed', 'dev-borrowed']) {
+  const borrowed = mode.endsWith('borrowed');
+  test(`stack info observes Expo status with stale records for ${mode} UI`, async t => {
+    const tmp = await mkdtemp(join(tmpdir(), 'hstack-info-expo-status-'));
+    t.after(() => rm(tmp, { recursive: true, force: true }));
+    withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: tmp });
+    const producer = 'expo-producer';
+    const stackName = borrowed ? 'expo-consumer' : producer;
+    let serving = true;
+    const requests = [];
+    const metro = http.createServer((req, res) => {
+      requests.push(req.url);
+      // HTML alone must not make a failed status probe look ready.
+      if (req.url !== '/status') {
+        res.writeHead(200, { 'content-type': 'text/html' }).end('<html></html>');
+        return;
+      }
+      res.writeHead(serving ? 200 : 503).end(serving ? 'packager-status:running' : 'unavailable');
+    });
+    await new Promise(resolve => metro.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise(resolve => { metro.closeAllConnections(); metro.close(resolve); }));
+    const port = metro.address().port;
+    for (const name of new Set([producer, stackName])) {
+      await mkdir(join(tmp, name), { recursive: true });
+      await writeFile(join(tmp, name, 'env'), [
+        'HAPPIER_STACK_RUNTIME_MODE=source', 'HAPPIER_STACK_DAEMON=0',
+        ...(name !== producer ? [`HAPPIER_STACK_EXPO_SOURCE_STACK=${producer}`] : []), '',
+      ].join('\n'));
+    }
+    const statePath = join(tmp, producer, 'stack.runtime.json');
+    const state = { stackName: producer, script: 'dev.mjs', sourceRuntimeIdentities: {},
+      expo: { webPort: port, mobilePort: port, webEnabled: true }, processes: {},
+      ...(mode.startsWith('remote-') ? { placement: { expo: 'worker' }, remoteTargets: {
+        worker: { services: { expo: true }, status: 'retrying', serviceStatus: { expo: 'retrying' } },
+      } } : {}),
+    };
+    if (borrowed) await writeFile(join(tmp, stackName, 'stack.runtime.json'), JSON.stringify({
+      stackName, sourceRuntimeIdentities: {}, ...(mode === 'dev-borrowed' ? { script: 'dev.mjs' } : { sourceUi: 'borrowed' }), processes: {},
+    }));
+    // Missing, absent and unrelated live PIDs must not override HTTP readiness.
+    for (const pid of [undefined, 2147483647, process.pid]) {
+      state.processes = pid === undefined ? {} : { expoPid: pid };
+      await writeFile(statePath, JSON.stringify(state));
+      const out = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName });
+      assert.equal(out.runtime.components.ui.running, true);
+      assert.equal(out.runtime.health.issues.includes('ui_down'), false);
+      assert.equal(out.ports.ui, port);
+      assert.equal(out.runtime.components.ui.ownership, borrowed ? 'borrowed' : 'owned');
+      assert.equal(out.runtime.components.ui.source, borrowed ? 'borrowed_expo' : mode === 'remote-owned' ? 'remote_target' : 'local');
+      if (!borrowed) assert.equal(out.runtime.borrowedExpo, null);
+    }
+    assert.deepEqual(requests, ['/status', '/status', '/status'], 'one status request per snapshot; no page or bundle fetch');
+    serving = false;
+    requests.length = 0;
+    const down = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName });
+    assert.equal(down.runtime.components.ui.running, false);
+    assert.equal(down.runtime.health.issues.includes('ui_down'), true);
+    assert.equal(down.ports.ui, null);
+    assert.ok(requests.length > 0);
+    assert.ok(requests.every(path => path === '/status'), 'failed readiness must not fetch HTML or a bundle');
+    if (borrowed) assert.equal(down.runtime.components.ui.status, 'waiting for dev Expo');
+    serving = true;
+    const recovered = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName });
+    assert.equal(recovered.runtime.components.ui.running, true);
+    assert.equal(recovered.runtime.health.issues.includes('ui_down'), false);
+  });
+}
+
 test('Info reports retained native retirement as incomplete after successful local finalization', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-info-pending-retirement-'));
   t.after(() => rm(tmp, { recursive: true, force: true }));
@@ -232,8 +300,12 @@ async function withListeningServer() {
   };
 }
 
-async function withHappierHealthServer({ host = '127.0.0.1', healthDelayMs = 0, onHealthResponse = null } = {}) {
+async function withHappierHealthServer({ host = '127.0.0.1', healthDelayMs = 0, onHealthResponse = null, metroStatus = false } = {}) {
   const server = http.createServer((req, res) => {
+    if (metroStatus && req.url === '/status') {
+      res.writeHead(200).end('packager-status:running');
+      return;
+    }
     if (req.url === '/health' || req.url === '/ready') {
       const respond = () => {
         onHealthResponse?.();
@@ -1497,6 +1569,7 @@ test('readStackInfoSnapshot treats running target-hosted Expo and daemon service
   const stackName = 'dev-remote-daemon';
   const baseDir = join(storageDir, stackName);
   const serverListener = await withHappierHealthServer();
+  const metroListener = await withHappierHealthServer({ metroStatus: true });
 
   await mkdir(baseDir, { recursive: true });
   await writeFile(
@@ -1513,8 +1586,8 @@ test('readStackInfoSnapshot treats running target-hosted Expo and daemon service
       processes: { serverPid: null, daemonPid: 111, daemonPids: [111] },
       ports: { server: serverListener.port },
       expo: {
-        port: 24203,
-        webPort: 24203,
+        port: metroListener.port,
+        webPort: metroListener.port,
         webEnabled: true,
         remoteTarget: 'mac',
       },
@@ -1555,6 +1628,7 @@ test('readStackInfoSnapshot treats running target-hosted Expo and daemon service
   } finally {
     restore();
     await serverListener.close();
+    await metroListener.close();
     await rm(tmp, { recursive: true, force: true });
   }
 });

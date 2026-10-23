@@ -193,13 +193,17 @@ export async function readStackInfoSnapshot({
   const runtimeSnapshotId = String(runtimeState?.runtimeSnapshotId ?? '').trim();
   const sourceSnapshot = Boolean(runtimeState?.sourceRuntimeIdentities)
     || resolveStackRuntimeMode({ env: stackEnv }).mode === 'source-snapshot';
-  const sourceUi = sourceSnapshot ? resolveSourceQaUiMode({
+  // Dev producers also publish source identities; they own their Expo rather
+  // than consuming the source-QA borrowed/export selection.
+  const devExpoUi = sourceSnapshot && runtimeState?.script === 'dev.mjs';
+  const sourceUi = sourceSnapshot && !devExpoUi ? resolveSourceQaUiMode({
     uiMode: runtimeState?.sourceUi === 'disabled' ? undefined : runtimeState?.sourceUi ?? undefined,
     noUi: runtimeState?.sourceUi === 'disabled' || (runtimeState?.sourceUi == null && !serveUiConfigured),
     consumerStackName: stackName, producerStackName: borrowedExpoProducerStackName,
   }) : null;
-  const serveUiWanted = sourceSnapshot ? sourceUi === 'export' : serveUiConfigured;
+  const serveUiWanted = sourceUi !== null ? sourceUi === 'export' : serveUiConfigured;
   const runtimeBackedStart = Boolean(runtimeSnapshotId || sourceSnapshot);
+  const serverServedUi = runtimeBackedStart && !devExpoUi;
   const componentEnv = { ...process.env, ...stackEnv };
   const repoDir = getEnvValueAny(stackEnv, ['HAPPIER_STACK_REPO_DIR']) || resolveDefaultRepoEnv({ rootDir }).HAPPIER_STACK_REPO_DIR;
   const uiDir = getComponentDir(rootDir, 'happier-ui', componentEnv);
@@ -341,9 +345,10 @@ export async function readStackInfoSnapshot({
     serverPort: activeServerPort,
     serverRunning,
     serveUiWanted,
-    runtimeBackedStart,
+    runtimeBackedStart: serverServedUi,
+    requireExpoOwnership: false,
   });
-  const borrowedExpo = (!sourceSnapshot || sourceUi === 'borrowed') && isBorrowedExpoConsumer({
+  const borrowedExpo = (sourceUi === null || sourceUi === 'borrowed') && isBorrowedExpoConsumer({
     consumerStackName: stackName,
     producerStackName: borrowedExpoProducerStackName,
   })
@@ -355,12 +360,12 @@ export async function readStackInfoSnapshot({
     : null;
   const borrowedUi = sourceUi === 'borrowed' || Boolean(borrowedExpo);
   const uiExpected = borrowedUi ? true : uiEndpoint.expected;
-  const uiRunning = borrowedUi ? borrowedExpo?.running === true : (uiEndpoint.running || remoteExpo.running);
+  const uiRunning = borrowedUi ? borrowedExpo?.running === true : uiEndpoint.running;
   const uiPortListening = borrowedUi ? uiRunning : uiEndpoint.running;
   const uiPort = borrowedExpo?.running ? borrowedExpo.port : borrowedUi ? null : uiEndpoint.port;
   const mobilePort = borrowedExpo?.running ? borrowedExpo.mobilePort : borrowedUi ? null : ownedMobilePort;
-  const uiPid = borrowedUi ? null : runtimeBackedStart ? (serveUiWanted ? serverPid : null) : expoPid;
-  const uiPidAlive = borrowedUi ? false : runtimeBackedStart ? (serveUiWanted ? serverPidAlive : false) : expoPidAlive;
+  const uiPid = borrowedUi ? null : serverServedUi ? (serveUiWanted ? serverPid : null) : expoPid;
+  const uiPidAlive = borrowedUi ? false : serverServedUi ? (serveUiWanted ? serverPidAlive : false) : expoPidAlive;
   const runningPid =
     [
       { pid: ownerPid, running: ownerAlive },
@@ -540,7 +545,7 @@ export async function readStackInfoSnapshot({
           pidAlive: uiPidAlive,
           portListening: uiPortListening,
           ...(borrowedUi ? { status: uiRunning ? 'running' : 'waiting for dev Expo' } : {}),
-          source: borrowedUi ? 'borrowed_expo' : remoteExpo.running || (sourceUi === 'export' && remoteServer.target) ? 'remote_target' : 'local',
+          source: borrowedUi ? 'borrowed_expo' : remoteExpo.target || (sourceUi === 'export' && remoteServer.target) ? 'remote_target' : 'local',
           ownership: borrowedUi ? 'borrowed' : 'owned',
           producerStackName: borrowedExpo?.producerStackName ?? null,
           remoteTarget: borrowedExpo?.remoteTarget ?? (sourceUi === 'export' ? remoteServer.target : remoteExpo.target),

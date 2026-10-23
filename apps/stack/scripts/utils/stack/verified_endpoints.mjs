@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import { findRunningExpoStateInRoot } from '../expo/expo.mjs';
+import { findRunningExpoStateInRoot, looksLikeExpoMetro } from '../expo/expo.mjs';
 import { isTcpPortListening } from '../net/ports.mjs';
 import { resolveLocalhostHost } from '../paths/localhost_host.mjs';
 import { fetchHappierHealth } from '../server/server.mjs';
@@ -43,12 +43,27 @@ export async function resolveVerifiedStackUiEndpoint({
   acceptExpoState = serveUiWanted,
   requireWeb = true,
   runtimeBackedStart = false,
-} = {}) {
+  requireExpoOwnership = true,
+} = {}, { looksLikeExpoMetroImpl = looksLikeExpoMetro } = {}) {
   const host = resolveLocalhostHost({ stackMode: true, stackName });
   const runtimeExpoWebPort =
     runtimeState?.expo && typeof runtimeState.expo === 'object'
       ? toPort(runtimeState.expo.webPort ?? runtimeState.expo.port)
       : null;
+
+  // Runtime metadata selects the endpoint; HTTP observes whether it serves.
+  // A stale wrapper PID (or remote lifecycle record) cannot veto live Metro.
+  if (!requireExpoOwnership && acceptExpoState && !runtimeBackedStart && runtimeExpoWebPort && (!requireWeb || runtimeState.expo.webEnabled !== false)) {
+    const running = await looksLikeExpoMetroImpl({ port: runtimeExpoWebPort, statusOnly: true }).catch(() => false);
+    return {
+      expected: Boolean(serveUiWanted),
+      running,
+      port: running ? runtimeExpoWebPort : null,
+      url: running && serveUiWanted ? `http://${host}:${runtimeExpoWebPort}` : null,
+      source: running ? 'runtime_expo' : 'stale_runtime_expo',
+      state: null,
+    };
+  }
 
   if (acceptExpoState && !runtimeBackedStart && String(baseDir ?? '').trim()) {
     const runningExpoState = await findRunningExpoStateInRoot({

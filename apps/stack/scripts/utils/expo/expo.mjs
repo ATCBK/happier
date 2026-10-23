@@ -18,7 +18,7 @@ function resolveMetroStatusTimeoutMsFromEnv(env = process.env) {
   return STACK_LISTENER_OBSERVATION_TIMEOUT_MS;
 }
 
-export async function looksLikeExpoMetro({ port, timeoutMs = null } = {}) {
+export async function looksLikeExpoMetro({ port, timeoutMs = null, statusOnly = false } = {}) {
   const p = Number(port);
   if (!Number.isFinite(p) || p <= 0) return false;
   const ms = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : resolveMetroStatusTimeoutMsFromEnv();
@@ -56,9 +56,11 @@ export async function looksLikeExpoMetro({ port, timeoutMs = null } = {}) {
         return true;
       }
     } catch {
-      // Fall back to the next host and then to the root document probes below.
+      // Try the next loopback host within the same observation deadline.
     }
   }
+
+  if (statusOnly) return false;
 
   for (const host of probeHosts) {
     try {

@@ -70,7 +70,7 @@ export function projectBorrowedExpoRuntime({
   const mobilePort = toPort(expo.mobilePort ?? runtimePort);
   const localRunning = localEndpoint?.running === true;
   const port = remote.target ? runtimePort : toPort(localEndpoint?.port ?? runtimePort);
-  const remoteRunning = Boolean(remote.target && remote.running && port && remoteEndpointRunning === true);
+  const remoteRunning = Boolean(remote.target && port && remoteEndpointRunning === true);
   const running = remote.target ? remoteRunning : Boolean(localRunning && port);
 
   return {
@@ -118,23 +118,14 @@ export async function resolveBorrowedExpoRuntime(
     acceptExpoState: true,
     requireWeb: true,
     runtimeBackedStart: false,
-  });
-  const remote = resolveRuntimeRemoteServiceObservation(runtimeState, 'expo');
-  const remotePort = toPort(runtimeState?.expo?.webPort ?? runtimeState?.expo?.port);
-  let remoteEndpointRunning = false;
-  if (remote.target && remote.running && remotePort) {
-    try {
-      remoteEndpointRunning = await looksLikeExpoMetroImpl({ port: remotePort });
-    } catch {
-      // A borrowed consumer must fail closed when its forwarded Metro endpoint cannot be verified.
-    }
-  }
+    requireExpoOwnership: false,
+  }, { looksLikeExpoMetroImpl });
 
   return projectBorrowedExpoRuntime({
     producerStackName: normalizedProducer,
     runtimeState,
     localEndpoint,
-    remoteEndpointRunning,
+    remoteEndpointRunning: localEndpoint.running,
   });
 }
 
