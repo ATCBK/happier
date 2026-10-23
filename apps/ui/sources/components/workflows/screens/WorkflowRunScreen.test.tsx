@@ -26,11 +26,12 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { workflowRunRowFromSummary, workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
-import { clearMachineRequestReachabilityForMachine, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForMachine, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen as renderTestScreen, invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
@@ -1166,10 +1167,13 @@ describe('WorkflowRunScreen', () => {
         expect(actionTransport.mock.calls.some(([action]) => action === 'workflow.definition.create')).toBe(false);
     });
 
-    it.each(['builtin:review-and-converge', 'plugin:com.example/workflow'])('opens catalog source %s through the existing source route', async (ref) => {
+    function serveCatalogSourceMachine() {
         const machine = createMachineFixture({ id: 'machine-1', storageMode: 'plain', activeAt: Date.now(),
             daemonState: { status: 'running', pid: 17, contributionRegistryProjectionRevision: 0 } });
         getStorage().getState().applyMachines([machine], true, { sourceServerId: servedHomeId });
+        // Withdraw after publication so its real ingress observers cannot
+        // supply presence to the deliberately misbound case below.
+        withdrawMachinePresenceForScope({ serverId: servedHomeId, accountId: 'account-a' });
         // Plugin catalogs are daemon facts, not Artifact HTTP list fields.
         machineRpcSpy.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
             ? { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1,
@@ -1180,6 +1184,13 @@ describe('WorkflowRunScreen', () => {
                         definition: { id: 'workflow', title: 'Example workflow', definition: DEFINITION } },
                 } } },
             }) } : { ok: true });
+    }
+
+    it.each(['builtin:review-and-converge', 'plugin:com.example/workflow'])('opens catalog source %s through the existing source route', async (ref) => {
+        serveCatalogSourceMachine();
+        // A fresh ingress observes this Home's presence after connection setup.
+        // A retained row alone no longer admits a catalog carrier (079bd4e056).
+        observeMachinePresenceForTest({ serverId: servedHomeId, accountId: 'account-a' }, ['machine-1']);
         await renderRunScreen({ acceptedContext: {
             ...ACCEPTED_CONTEXT, source: { kind: 'catalog', ref, version: 1 },
         } });
@@ -1188,6 +1199,29 @@ describe('WorkflowRunScreen', () => {
         act(() => readContentProps()?.sourceAction?.onPress());
         expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${encodeURIComponent(ref)}`);
         expect(sourceAccessResponse).not.toHaveBeenCalled();
+    });
+
+    it('keeps a plugin catalog source unavailable when only another Home has fresh Machine presence', async () => {
+        serveCatalogSourceMachine();
+        observeMachinePresenceForTest({ serverId: 'other-home', accountId: 'account-a' }, ['machine-1']);
+        await renderRunScreen({ acceptedContext: {
+            ...ACCEPTED_CONTEXT, source: { kind: 'catalog', ref: 'plugin:com.example/workflow', version: 1 },
+        } });
+        // Drain the public Action's real saved/plugin phases so an unfinished
+        // first page cannot make an incorrectly bound source look unavailable.
+        const { listWorkflowDefinitions } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        await act(async () => {
+            let page = await listWorkflowDefinitions();
+            expect(page.pluginWorkflows ?? []).toEqual([]);
+            while (page.nextCursor) {
+                page = await listWorkflowDefinitions({ cursor: page.nextCursor });
+                expect(page.pluginWorkflows ?? []).toEqual([]);
+            }
+        });
+        expect(readContentProps()?.hasSource).toBe(true);
+        expect(readContentProps()?.sourceAction).toBeNull();
+        expect(machineRpcSpy.mock.calls.filter(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(0);
     });
 
     it.each(['builtin:removed', 'plugin:com.example/removed'])('hides the action for unavailable catalog source %s', async (ref) => {
