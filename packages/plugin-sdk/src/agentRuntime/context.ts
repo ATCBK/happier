@@ -490,6 +490,8 @@ export type AgentSessionModesSource = Readonly<{
 
 export type AgentSessionModesService = Readonly<{
   bind(source: AgentSessionModesSource): Disposable;
+  /** Accepted native completion clears only the matching saved mode selection. Catalog binding remains observational. */
+  complete?(request: Readonly<{ modeId: string }>): Promise<void>;
 }>;
 
 export type AgentSessionInFlightConfigurationOutcome = Readonly<

@@ -8,9 +8,14 @@ import type {
   AgentSessionModesSource,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
+import { readAcpSessionModeIntentFromMetadata } from '@happier-dev/agents';
+import { applyAcpSessionModeIntentSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
+import type { Metadata } from '@/api/types';
+
 import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
 
 type PublicationSession = Readonly<{
+  updateMetadataAsCurrentPublisher?(updater: (current: Metadata) => Metadata): Promise<void> | void;
   updateAgentState(updater: Parameters<typeof updateAgentStateBestEffort>[1]): Promise<void> | void;
 }>;
 
@@ -180,7 +185,30 @@ export function createNativeAgentSessionPublications(params: Readonly<{
   else params.signal.addEventListener('abort', dispose, { once: true });
 
   return Object.freeze({
-    services: Object.freeze({ models: modelPublication.service, modes: modePublication.service, activeInput }),
+    services: Object.freeze({
+      models: modelPublication.service,
+      modes: Object.freeze({
+        ...modePublication.service,
+        async complete(request: Readonly<{ modeId: string }>): Promise<void> {
+          assertAvailable();
+          if (typeof request?.modeId !== 'string' || !request.modeId.trim() || Object.keys(request).length !== 1) {
+            throw new Error('Native mode completion requires only a mode id');
+          }
+          if (!params.session?.updateMetadataAsCurrentPublisher) {
+            throw new Error('Native mode completion requires the current Session publisher');
+          }
+          await params.session.updateMetadataAsCurrentPublisher((metadata) => {
+            assertAvailable();
+            const intent = readAcpSessionModeIntentFromMetadata(metadata);
+            if (intent?.modeId !== request.modeId) return metadata;
+            return applyAcpSessionModeIntentSessionMetadata(metadata, {
+              v: 1, modeId: null, updatedAt: Date.now(),
+            });
+          });
+        },
+      }),
+      activeInput,
+    }),
     modelsSource: modelPublication.source,
     modesSource: modePublication.source,
     readActiveInputBinding: () => isAvailable() ? activeInputBinding : null,

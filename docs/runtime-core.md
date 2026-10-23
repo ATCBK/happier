@@ -452,6 +452,16 @@ is never replayed.
 
 The engine registry's [`runtimeCore.ts`](../apps/cli/src/agent/runtime/registry/engineRegistry/runtimeCore.ts) resolves the admitted Agent runtime and composes host services. Agent code receives the scoped public context, not raw host lifecycle controls. Agent-native configuration in `RuntimeDescriptorV1.agent` is interpreted by its Agent; generic host code must not infer its meaning from an Agent id.
 
+In 0.3 development source, an Agent's accepted native mode completion uses the
+optional `session.services.modes.complete({ modeId })` operation. The host clears
+only a matching saved mode selection through the canonical Session intent writer,
+under the current runtime and publisher authority. `modes.bind` continues to
+publish observed inventory and current-mode facts. Claude invokes completion for
+Plan after an approved SDK permission or exact main-session native ExitPlanMode
+acceptance; denial, feedback and failed native hooks do not clear Plan. The native
+follow-up permission choice keeps its existing owner. A failed completion emits
+a warning without changing the accepted tool result.
+
 In 0.3 development source, daemon engine resolution carries the executable catalog
 entry already acquired from its runtime lease into native-home and authentication
 service composition. A declaration-only projection cannot supply those executable
