@@ -8,6 +8,7 @@ import { computeAccountEncryptionMigrateKeyFingerprintV1, convertContentPublicKe
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { sealRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { encodeBase64 } from '@/encryption/base64';
@@ -70,10 +71,12 @@ it.each([
     let authorityAtFirstSettings: number | undefined;
     let settingsReads = 0;
     const finalAuthority: string[] = [];
+    const afterCommitRequests: string[] = [];
     const record = ProfileRecordV1Schema.parse({ v: 1, id: 'private-profile', enabled: true, promptStack: [], secretBindings: {},
         definition: { kind: 'inline', profile: { v: 2, id: 'private-profile', name: 'Privately opened', createdAt: 1, updatedAt: 1 } } });
     setRuntimeFetch(async (rawUrl, init) => {
         const path = new URL(String(rawUrl)).pathname;
+        if (committed) afterCommitRequests.push(`${init?.method ?? 'GET'} ${path}`);
         if (path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness') {
             authorityReads++;
             if (committed) finalAuthority.push(path);
@@ -98,6 +101,11 @@ it.each([
             diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } });
         if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 1 });
         if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+        if (path === '/v1/account/saved-secrets/resources/materials') {
+            // A missing materials route would stop on HTTP404 before reaching
+            // the fresh authority refusal this held-source test protects.
+            return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [] }));
+        }
         return home.request(rawUrl, init);
     });
     let socket: Socket | undefined;
@@ -124,9 +132,13 @@ it.each([
                 : { catalog: { status: 'unavailable' }, artifactsById: new Map(), source: null });
             expect(finalAuthority).toEqual(Array(authority === 'matching' ? 2 : 1).fill('/v1/account/encryption/currentness'));
         } else {
-            expect(result).toEqual({ status: 'pending', reason: 'source-unavailable' });
+            expect(finalAuthority, JSON.stringify(afterCommitRequests)).toEqual(['/v1/account/encryption/currentness']);
+            // Explicit maintenance reaches its final fresh proof in the history
+            // owner. A refusal there is pending history, never a completed import.
+            expect(result).toEqual({ status: 'pending', reason: 'history-pending' });
             expect(settingsReads).toBe(1);
-            expect(finalAuthority).toEqual(['/v1/account/encryption/currentness']);
+            expect(afterCommitRequests.filter(request => request.includes('/v2/account/settings/history'))).toEqual([]);
+            expect(afterCommitRequests.filter(request => !request.startsWith('GET '))).toEqual([]);
         }
         // The projection keeps its write-bearing outer admission. Only its
         // nested discovery borrows; a pinned import must still admit afresh.
