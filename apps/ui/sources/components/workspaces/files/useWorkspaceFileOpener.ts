@@ -28,6 +28,8 @@ export type WorkspaceFileOpenOptions = Readonly<Pick<WorkspaceFileOpenInput, 'an
     find?: z.infer<typeof WorkspaceFindSeedSchema>;
     signal?: AbortSignal;
     origin?: WorkspaceFileOpenOrigin;
+    /** Placement succeeded, not just a deferred approval: a caller may now reveal the retained pane. */
+    onOpened?: () => void;
 }>;
 /** True accepts the request (including deferred approval); false refuses it; null cancels it. */
 export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean | null>;
@@ -72,6 +74,7 @@ export function useWorkspaceFileOpener() {
             ...(options?.find ? { find: options.find } : {}),
         }, ...(options?.signal ? { signal: options.signal } : {}) }, openApproval);
         const opened = result.ok && !ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success;
+        if (opened) options?.onOpened?.();
         const origin = options?.origin;
         const transcript = origin?.transcript;
         // A transcript knows its exact retained instance. Cross-session/project callers
