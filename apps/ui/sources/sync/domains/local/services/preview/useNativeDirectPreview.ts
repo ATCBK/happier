@@ -5,7 +5,8 @@ import { subscribeRegisteredStorageState } from '@/sync/domains/state/storageSta
 import { readHomeApplicationCarrierEligibility } from '@/sync/runtime/homeCarrierPolicy';
 import { isRuntimeActive, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { acquireNativeDirectPreviewAccess, acquireServerPreviewAccess, hasNativePreviewRenderer, type NativeDirectPreviewLease } from './nativeDirectAccess';
+import type { BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
+import { acquireNativeDirectPreviewAccess, acquireServerPreviewAccess, hasNativePreviewRenderer, type NativeDirectPreviewLease, type ServerPreviewAccessResult } from './nativeDirectAccess';
 import { PREVIEW_ADMISSION_QUERY, withoutPreviewAdmission } from './url';
 
 export type NativeDirectPreviewInput = Readonly<{
@@ -24,7 +25,7 @@ const subscribeCarrierEligibility = (notify: () => void) => subscribeRegisteredS
 
 type LeaseState = Readonly<{ key: string; lease: NativeDirectPreviewLease | null; settled: boolean }>;
 type PreviousOrigin = Readonly<{ key: string; origin: string; initialPath: string }>;
-type FallbackState = Readonly<{ key: string; url: string | null; settled: boolean }>;
+type FallbackState = Readonly<{ key: string; result: ServerPreviewAccessResult | null }>;
 
 function readUrl(value: string | null | undefined, base?: string): URL | null {
     if (!value) return null;
@@ -76,6 +77,7 @@ export function useNativeDirectPreview(input: NativeDirectPreviewInput): Readonl
     url: string | null;
     localOrigin: string | null;
     acquiring: boolean;
+    reasonCode: BrowserPreviewRefusalReasonCode | null;
 }> {
     const eligibility = useSyncExternalStore(subscribeCarrierEligibility, readHomeApplicationCarrierEligibility, readHomeApplicationCarrierEligibility);
     const runtimeActive = useSyncExternalStore(subscribeToRuntimeActiveChange, isRuntimeActive, isRuntimeActive);
@@ -145,24 +147,26 @@ export function useNativeDirectPreview(input: NativeDirectPreviewInput): Readonl
         }
         const controller = new AbortController();
         let cancelled = false;
-        setFallbackState({ key, url: null, settled: false });
+        setFallbackState({ key, result: null });
         void acquireServerPreviewAccess({
             previewId, machineId, serverId, signal: controller.signal,
             scope: scope.current?.key === key ? scope.current.value : undefined,
             onScopeCaptured: (value) => { if (!cancelled) scope.current = { key, value }; },
-        }).then((url) => {
-            if (!cancelled) setFallbackState({ key, url, settled: true });
+        }).then((result) => {
+            if (!cancelled) setFallbackState({ key, result });
         });
         return () => { cancelled = true; controller.abort(); };
     }, [needsFallback, key, previewId, machineId, serverId]);
 
     const fallback = needsFallback && fallbackState?.key === key ? fallbackState : null;
-    const fallbackPending = needsFallback && !fallback?.settled;
+    const fallbackPending = needsFallback && !fallback?.result;
+    const serverAccess = fallback?.result;
     return {
         url: needsFallback
-            ? fallback?.url ? resolveViewerUrl({ ...input, fallbackUrl: fallback.url }, null, prior) : null
+            ? serverAccess?.ok ? resolveViewerUrl({ ...input, fallbackUrl: serverAccess.url }, null, prior) : null
             : resolveViewerUrl(input, lease, prior),
         localOrigin: lease?.localOrigin ?? null,
         acquiring: nativePending || fallbackPending,
+        reasonCode: serverAccess && !serverAccess.ok ? serverAccess.reasonCode : null,
     };
 }

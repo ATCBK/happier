@@ -31,7 +31,7 @@ import {
     type CooperativeNavigationCommand,
 } from '@happier-dev/peer-mediation/browser/collector/cooperative';
 import { withoutPreviewAdmission } from '@/sync/domains/local/services/preview/url';
-import type { BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
+import { resolveBrowserPreviewRefusal, type BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 
 const iframeStyle: React.CSSProperties = {
     border: 0,
@@ -131,14 +131,6 @@ function NavigationContainedIframe(props: WebIframeEngineProps): React.ReactElem
             onLoad={event => setShellDocument(event.currentTarget.contentDocument)} />
         {shellDocument?.body ? createPortal(<WebIframeGuest {...props} />, shellDocument.body) : null}
     </View>;
-}
-
-/** The relay proxy's typed refusals; an application's own error bodies never reach the probe. */
-function resolvePreviewRefusal(status: number, result: unknown): BrowserPreviewRefusalReasonCode | null {
-    const error = result && typeof result === 'object' && 'error' in result ? result.error : undefined;
-    if (status === 503 && error === 'preview_transport_unavailable') return 'preview_transport_unavailable';
-    if ((status === 404 && error === 'preview_not_found') || (status === 401 && error === 'preview_access_denied')) return 'preview_ended';
-    return null;
 }
 
 function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
@@ -323,7 +315,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         void fetch(url.href, { credentials: 'include', signal: controller.signal }).then(async (response) => {
             if (new URL(response.url).origin !== url.origin) { rejectUnavailable(); return; }
             const result: unknown = await response.json();
-            const refusal = resolvePreviewRefusal(response.status, result);
+            const refusal = resolveBrowserPreviewRefusal(response.status, result);
             if (!controller.signal.aborted && refusal) {
                 setPreviewRefusal(refusal);
                 onPreviewRefusedRef.current?.(refusal);

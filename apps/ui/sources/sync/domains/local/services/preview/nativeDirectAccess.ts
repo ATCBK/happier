@@ -15,6 +15,7 @@ import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runti
 import { desktopHostKind } from '@/utils/platform/desktopHost';
 import { isRuntimeActive } from '@/utils/runtime/isRuntimeActive';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolveBrowserPreviewRefusal, type BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 
 export type NativeDirectPreviewLease = Readonly<{
     localOrigin: string;
@@ -27,6 +28,10 @@ export function hasNativePreviewRenderer(): boolean {
     return Platform.OS !== 'web' || desktopHostKind() !== null;
 }
 
+export type ServerPreviewAccessResult = Readonly<
+    { ok: true; url: string } | { ok: false; reasonCode: BrowserPreviewRefusalReasonCode }
+>;
+
 export async function acquireServerPreviewAccess(input: Readonly<{
     previewId: string;
     machineId: string;
@@ -34,29 +39,34 @@ export async function acquireServerPreviewAccess(input: Readonly<{
     scope?: ServerAccountScope;
     signal?: AbortSignal;
     onScopeCaptured?: (scope: ServerAccountScope) => void;
-}>): Promise<string | null> {
+}>): Promise<ServerPreviewAccessResult> {
     // Standard HTTPS admission is shareable and available to web viewers too.
     // Only the device-local iroh lease below requires a native renderer.
     const eligible = () => !input.signal?.aborted && isRuntimeActive();
+    const unavailable = { ok: false, reasonCode: 'preview_transport_unavailable' } as const;
     try {
         const server = resolveTargetServer(input.serverId ?? input.scope?.serverId);
-        if (!server || !eligible() || input.scope && input.scope.serverId !== server.serverId) return null;
+        if (!server || !eligible() || input.scope && input.scope.serverId !== server.serverId) return unavailable;
         return await runWithServerRequestAuthorityForServerAccountScope({
             ...(input.scope ? { scope: input.scope } : { serverId: server.serverId }),
             activeRequest: (path, init) => serverFetch(path, init),
         }, async (authority) => {
             input.onScopeCaptured?.(authority.scope);
-            if (!eligible()) return null;
+            if (!eligible()) return unavailable;
             const response = await authority.request(`/v1/local-services/preview/${encodeURIComponent(input.previewId)}/access`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(LocalServicePreviewServerAccessRequestV1Schema.parse({ v: 1, kind: 'server_preview' })),
                 signal: input.signal,
             });
-            if (!response.ok) return null;
+            if (!response.ok) return {
+                ok: false,
+                reasonCode: resolveBrowserPreviewRefusal(response.status, await response.json()) ?? unavailable.reasonCode,
+            } satisfies ServerPreviewAccessResult;
             const access = LocalServicePreviewServerAccessV1Schema.parse(await response.json());
-            return eligible() && access.previewId === input.previewId && access.machineId === input.machineId ? access.accessUrl : null;
+            return eligible() && access.previewId === input.previewId && access.machineId === input.machineId
+                ? { ok: true, url: access.accessUrl } satisfies ServerPreviewAccessResult : unavailable;
         });
-    } catch { return null; }
+    } catch { return unavailable; }
 }
 
 export async function acquireNativeDirectPreviewAccess(input: Readonly<{

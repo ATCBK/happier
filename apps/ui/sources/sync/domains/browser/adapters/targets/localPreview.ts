@@ -71,3 +71,11 @@ export type BrowserPreviewRefusalReasonCode = 'preview_transport_unavailable' | 
 export function isBrowserPreviewRefusalReasonCode(value: string): value is BrowserPreviewRefusalReasonCode {
     return value === 'preview_transport_unavailable' || value === 'preview_ended';
 }
+
+/** Typed refusals from preview admission and the preview proxy, not application error bodies. */
+export function resolveBrowserPreviewRefusal(status: number, result: unknown): BrowserPreviewRefusalReasonCode | null {
+    const error = result && typeof result === 'object' && 'error' in result ? result.error : undefined;
+    if (status === 503 && error === 'preview_transport_unavailable') return 'preview_transport_unavailable';
+    if ((status === 404 && error === 'preview_not_found') || (status === 401 && error === 'preview_access_denied')) return 'preview_ended';
+    return null;
+}

@@ -236,9 +236,10 @@ describe('native preview viewer access', () => {
             return Response.json({ error: 'preview_access_denied' }, { status: 403 });
         });
         expect(await acquireServerPreviewAccess({ previewId: 'preview-1', machineId: 'machine-1', serverId }))
-            .toBe('https://preview.example.test/start?previewToken=web-viewer-admission');
+            .toEqual({ ok: true, url: 'https://preview.example.test/start?previewToken=web-viewer-admission' });
         expect(authenticatedViewerReached).toBe(true);
-        expect(await acquireServerPreviewAccess({ previewId: 'preview-1', machineId: 'another-machine', serverId })).toBeNull();
+        expect(await acquireServerPreviewAccess({ previewId: 'preview-1', machineId: 'another-machine', serverId }))
+            .toEqual({ ok: false, reasonCode: 'preview_transport_unavailable' });
     });
     it('mints fresh preview access and binds the native handshake and inner open to the same proof', async () => {
         const lease = await acquireNativeDirectPreviewAccess({ ...baseInput, previewId: 'preview-1', machineId: 'machine-1', serverId });
@@ -514,7 +515,7 @@ describe('native preview viewer access', () => {
             access = useNativeDirectPreview({ ...baseInput, serverId, nativeDirectEnabled: Boolean(preview?.nativeDirect) });
             return null;
         }
-        const render = (active: boolean) => React.createElement(RetainedPanelSurface, { isActive: active }, React.createElement(Custody));
+        const render = (active: boolean) => React.createElement(RetainedPanelSurface, { isActive: active, children: React.createElement(Custody) });
         const screen = await renderScreen(render(false));
         expect(snapshotClient).not.toHaveBeenCalled();
         expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_start_machine_tunnel')).toHaveLength(0);
